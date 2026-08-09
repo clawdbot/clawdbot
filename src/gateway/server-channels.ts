@@ -221,6 +221,7 @@ type ChannelManagerOptions = {
   deferStartupAccountStartsUntil?: Promise<void>;
   getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
   ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
+  tryRecoverAutostartSuppression?: () => boolean;
 };
 
 type StopChannelOptions = {
@@ -259,6 +260,7 @@ export type ChannelManager = {
   stopChannel: (channel: ChannelId, accountId?: string, opts?: StopChannelOptions) => Promise<void>;
   setAutostartSuppression: (suppression: ChannelAutostartSuppression | null) => void;
   getAutostartSuppression: () => ChannelAutostartSuppression | null;
+  recoverAutostartSuppression: () => Promise<boolean>;
   setAmbientAutostartSuppressedChannelIds: (channelIds: ReadonlySet<string>) => void;
   isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
@@ -387,13 +389,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   ): ChannelAccountSnapshot => {
     const store = getStore(channelId);
     const current = getRuntime(channelId, accountId);
+    // Terminal channel diagnosis survives task cleanup and late status patches.
+    // Only the gateway-owned start transition proves a new lifecycle began.
     const lifecycle =
-      patch.lifecycle ??
-      (patch.restartPending === true
-        ? "recovering"
-        : patch.connected === true
-          ? "ready"
-          : undefined);
+      current.lifecycle === "blocked" &&
+      current.terminalDisconnect === true &&
+      patch.lifecycle !== "starting"
+        ? "blocked"
+        : (patch.lifecycle ??
+          (patch.restartPending === true
+            ? "recovering"
+            : patch.connected === true
+              ? "ready"
+              : undefined));
     const next = { ...current, ...patch, ...(lifecycle ? { lifecycle } : {}), accountId };
     store.runtimes.set(accountId, next);
     return next;
@@ -471,7 +479,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
     const { preserveRestartAttempts = false, preserveManualStop = false } = optsValue;
     const cfg = getRuntimeConfig();
-    resetDirectoryCache({ channel: channelId, accountId });
+    resetDirectoryCache({ cfg, channel: channelId, accountId });
     const store = getStore(channelId);
     const accountIds = accountId
       ? [accountId]
@@ -787,7 +795,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                           ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
                           : getRuntime(channelId, id),
                       invalidateDirectoryCache: () =>
-                        resetDirectoryCache({ channel: channelId, accountId: id }),
+                        resetDirectoryCache({ cfg, channel: channelId, accountId: id }),
                       ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
                     }),
                   ).finally(recordDuration);
@@ -1173,7 +1181,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
-  const startChannels = async () => {
+  const startChannelsWithOptions = async (startOptions: StartChannelOptions = {}) => {
     let releaseAccountStarts: (() => void) | undefined;
     const deferAccountStartUntil =
       opts.deferStartupAccountStartsUntil ??
@@ -1191,11 +1199,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         tasks: [...listChannelPlugins()].map((plugin) => async () => {
           try {
             await measureStartup(`channels.${plugin.id}.start`, () =>
-              startChannelInternal(
-                plugin.id,
-                undefined,
-                deferAccountStartUntil ? { deferAccountStartUntil } : {},
-              ),
+              startChannelInternal(plugin.id, undefined, {
+                ...startOptions,
+                ...(deferAccountStartUntil ? { deferAccountStartUntil } : {}),
+              }),
             );
           } catch (err) {
             ensureChannelLog(plugin.id).error?.(
@@ -1207,6 +1214,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     } finally {
       releaseAccountStarts?.();
     }
+  };
+
+  const startChannels = async () => await startChannelsWithOptions();
+
+  const recoverAutostartSuppression = async (): Promise<boolean> => {
+    if (!autostartSuppression || !opts.tryRecoverAutostartSuppression?.()) {
+      return false;
+    }
+    autostartSuppression = null;
+    // Recovery resumes the autostart attempt that safe mode deferred. Preserve
+    // explicit operator stops while still covering health-monitor opt-outs.
+    await startChannelsWithOptions({ preserveManualStop: true });
+    return true;
   };
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {
@@ -1299,6 +1319,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       autostartSuppression = suppression;
     },
     getAutostartSuppression: () => autostartSuppression,
+    recoverAutostartSuppression,
     setAmbientAutostartSuppressedChannelIds: (channelIds) => {
       ambientAutostartSuppressedChannelIds = new Set(channelIds);
     },

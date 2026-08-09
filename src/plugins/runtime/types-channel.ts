@@ -33,6 +33,10 @@ import type {
 type DispatchReplyWithBufferedBlockDispatcher =
   import("../../auto-reply/reply/provider-dispatcher.types.js").DispatchReplyWithBufferedBlockDispatcher;
 type RecordInboundSession = import("../../channels/session.types.js").RecordInboundSession;
+type RuntimeResetSessionEntryLifecycleParams =
+  import("../../plugin-sdk/session-store-lifecycle-runtime.js").ResetSessionEntryLifecycleParams & {
+    channelId: string;
+  };
 
 type RuntimeThreadBindingLifecycleRecord =
   | import("../../infra/outbound/session-binding.types.js").SessionBindingRecord
@@ -150,6 +154,10 @@ export type PluginRuntimeChannel = {
     recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     recordInboundSession: RecordInboundSession;
+    /** Rotate a session only after the scoped runtime proves channel ownership. */
+    resetSessionEntryLifecycle: (
+      params: RuntimeResetSessionEntryLifecycleParams,
+    ) => Promise<import("../../config/sessions/types.js").SessionEntry | null>;
     updateLastRoute: UpdateLastRoute;
   };
   mentions: {

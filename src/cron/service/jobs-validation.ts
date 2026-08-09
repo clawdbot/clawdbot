@@ -4,9 +4,10 @@ import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
-import type { CronDelivery, CronJob } from "../types.js";
+import type { CronDelivery, CronJob, CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 
 /** Validates that session target and payload kind form a supported cron job shape. */
@@ -237,6 +238,46 @@ export function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "deli
   if (!isIsolatedLike) {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
   }
+}
+
+export function assertAnnounceDeliveryChannelSupport(
+  job: CronJob,
+  configuredChannels?: readonly string[],
+  patch?: CronJobPatch,
+) {
+  if (patch && !cronPatchTouchesDeliveryResolution(patch)) {
+    return;
+  }
+  const plan = resolveCronDeliveryPlan(job);
+  const channels = [...new Set(configuredChannels ?? [])].toSorted();
+  // Provider-prefix recognition is plugin-backed and may not be loaded at this
+  // seam. A prefixed target can still select its channel at runtime, so accept.
+  const targetMaySelectChannel = /^[a-z][a-z0-9_-]*:/i.test(plan.to ?? "");
+  if (
+    job.sessionTarget !== "isolated" ||
+    job.sessionKey?.trim() ||
+    plan.mode !== "announce" ||
+    (plan.channel !== undefined && plan.channel !== "last") ||
+    targetMaySelectChannel ||
+    job.delivery?.bestEffort === true ||
+    channels.length < 2
+  ) {
+    return;
+  }
+  throw new Error(
+    `cron announce delivery requires an explicit channel when multiple channels are configured (${channels.join(", ")}): set --channel <id> or use --best-effort-deliver`,
+  );
+}
+
+export function cronPatchTouchesDeliveryResolution(patch: CronJobPatch): boolean {
+  // Legacy ambiguous jobs must remain disableable and renameable. Only fields
+  // that can change the delivery identity opt a patch back into validation.
+  return (
+    patch.delivery !== undefined ||
+    patch.sessionTarget !== undefined ||
+    "agentId" in patch ||
+    "sessionKey" in patch
+  );
 }
 
 export function hasConcreteFailureDestination(

@@ -194,8 +194,8 @@ export async function sendMessageMatrix(
   message: string | undefined,
   opts: MatrixSendOpts,
 ): Promise<MatrixSendResult> {
-  const trimmedMessage = message?.trim() ?? "";
-  if (!trimmedMessage && !opts.mediaUrl) {
+  const messageText = message?.trimEnd() ?? "";
+  if (!messageText.trim() && !opts.mediaUrl) {
     throw new Error("Matrix send requires text or media");
   }
   const durableIdentity = resolveMatrixDurableDeliveryIdentity({
@@ -229,9 +229,10 @@ export async function sendMessageMatrix(
         : null;
       let plannedEvents: MatrixPreparedEvent[] | undefined = storedPlan?.events;
       if (!plannedEvents) {
-        const { chunks, tableMode } = chunkMatrixText(trimmedMessage, {
+        const { chunks, tableMode } = chunkMatrixText(messageText, {
           cfg,
           accountId: opts.accountId,
+          preserveWhitespace: true,
         });
         const relation = threadId
           ? buildThreadRelation(threadId, opts.replyToId)
@@ -524,11 +525,12 @@ export async function sendSingleTextMessageMatrix(
     eventTextLength,
     fitsInSingleEvent,
     tableMode,
-  } = prepareMatrixSingleText(text, {
+  } = prepareMatrixSingleText(text.trimEnd(), {
     cfg: opts.cfg,
     accountId: opts.accountId,
+    preserveWhitespace: true,
   });
-  if (!trimmedText) {
+  if (!trimmedText.trim()) {
     throw new Error("Matrix single-message send requires text");
   }
   if (!fitsInSingleEvent) {

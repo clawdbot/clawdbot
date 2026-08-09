@@ -41,10 +41,6 @@ import type {
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
-  resetSessionEntryLifecycleImpl,
-  type ResetSessionEntryLifecycleParams,
-} from "./session-store-lifecycle-runtime.js";
-import {
   activeRecoveryFieldsForSameSession,
   clearRecoveryStateForRotatedSessionPatch,
   projectPluginSessionEntry,
@@ -463,15 +459,6 @@ export async function patchSessionEntry(
     },
   );
   return entry ? projectPluginSessionEntry(entry) : null;
-}
-
-/** Rotates one session through the canonical lifecycle owner and active-work fence. */
-export async function resetSessionEntryLifecycle(
-  params: ResetSessionEntryLifecycleParams,
-): Promise<SessionEntry | null> {
-  return await resetSessionEntryLifecycleImpl(params, (sessionId, options) =>
-    resolveSessionFilePath(sessionId, undefined, options),
-  );
 }
 
 /** Reads the last activity timestamp for one session entry. */

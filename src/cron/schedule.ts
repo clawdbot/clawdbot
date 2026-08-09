@@ -1,6 +1,7 @@
 /** Computes at/every/cron schedule timestamps with bounded Croner caching. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Cron } from "croner";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import type { CronSchedule } from "./types.js";
@@ -27,14 +28,8 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
     cronEvalCache.set(key, cached);
     return cached;
   }
-  if (cronEvalCache.size >= CRON_EVAL_CACHE_MAX) {
-    // Expression parsing is expensive enough to cache, but cron jobs can be
-    // edited dynamically; keep the cache bounded and LRU-like.
-    const oldest = cronEvalCache.keys().next().value;
-    if (oldest) {
-      cronEvalCache.delete(oldest);
-    }
-  }
+  // Expression parsing is expensive, so retain the most recently promoted entries.
+  pruneMapToMaxSize(cronEvalCache, CRON_EVAL_CACHE_MAX - 1);
   const next = new Cron(expr, { timezone, catch: false });
   cronEvalCache.set(key, next);
   return next;

@@ -138,6 +138,13 @@ vi.mock("../config/config.js", () => ({
   mutateConfigFile: mockConfig.mutateConfigFile,
   readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
 }));
+
+vi.mock("../state/local-onboarding-state.js", () => ({
+  readLocalOnboardingState: () => undefined,
+  readLocalOnboardingStateForConfig: () => undefined,
+  completeLocalOnboarding: () => false,
+}));
+
 const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("parseSystemAgentOperation", () => {
@@ -170,6 +177,8 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: true,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/work"],
     }));
     const deps = {
@@ -339,6 +348,8 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: [],
     }));
 
@@ -410,6 +421,8 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: false,
+      workspaceReady: true,
+      gateway: { status: "ready" as const, action: "reused" as const },
       lines: ["Workspace: /tmp/work"],
     }));
 

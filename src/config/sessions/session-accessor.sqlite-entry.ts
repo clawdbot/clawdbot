@@ -553,6 +553,7 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
     runOpenClawAgentWriteTransaction((writeDatabase) => {
       const fresh = params.readSnapshot(writeDatabase);
       params.assertSnapshotUnchanged(prepared, fresh);
+      options.assertCommitAllowed?.();
       if (!patch) {
         result = cloneSessionEntry(writeBase);
         return;

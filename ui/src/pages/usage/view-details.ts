@@ -12,7 +12,7 @@ import "../../components/tooltip.ts";
 import { formatDateTimeMs, formatMs, formatTimeMs } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { parseToolSummary } from "./helpers.ts";
-import { charsToTokens, formatCost, formatTokens } from "./metrics.ts";
+import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import type {
   SessionLogEntry,
   SessionLogRole,
@@ -134,8 +134,8 @@ function renderSessionSummary(
   const modelItems =
     usage.modelUsage?.slice(0, 6).map((entry) => ({
       label: entry.model ?? t("usage.common.unknown"),
-      value: formatCost(entry.totals.totalCost),
-      sub: formatTokens(entry.totals.totalTokens),
+      value: formatUsageCost(entry.totals.totalCost),
+      sub: formatUsageTokens(entry.totals.totalTokens),
     })) ?? [];
   const cards = [
     {
@@ -306,12 +306,15 @@ function renderSessionDetailPanel(
           ${usage
             ? html`
                 <span
-                  ><strong>${formatTokens(headerStats.totalTokens)}</strong>
+                  ><strong>${formatUsageTokens(headerStats.totalTokens)}</strong>
                   ${normalizeLowercaseStringOrEmpty(
                     t("usage.metrics.tokens"),
                   )}${cursorIndicator}</span
                 >
-                <span><strong>${formatCost(headerStats.totalCost)}</strong>${cursorIndicator}</span>
+                <span
+                  ><strong>${formatUsageCost(headerStats.totalCost)}</strong
+                  >${cursorIndicator}</span
+                >
               `
             : nothing}
         </div>
@@ -572,7 +575,7 @@ function renderTimeSeriesCompact(
               svg`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--border)" />`,
           )}
           ${[
-            { y: padding.top + 5, text: formatTokens(maxValue) },
+            { y: padding.top + 5, text: formatUsageTokens(maxValue) },
             { y: padding.top + chartHeight, text: "0" },
           ].map(
             ({ y, text }) =>
@@ -603,12 +606,12 @@ function renderTimeSeriesCompact(
                 },
                 "",
               ),
-              `${formatTokens(val)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
+              `${formatUsageTokens(val)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
             ];
             if (breakdownByType) {
               tooltipLines.push(
                 ...USAGE_TOKEN_CATEGORIES.map(
-                  ({ key, short }) => `${short} ${formatTokens(p[key])}`,
+                  ({ key, short }) => `${short} ${formatUsageTokens(p[key])}`,
                 ),
               );
             }
@@ -750,11 +753,11 @@ function renderTimeSeriesCompact(
                 { hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
                 "",
               )}
-              · ${formatTokens(totalTypeTokens)} ·
-              ${formatCost(filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
+              · ${formatUsageTokens(totalTypeTokens)} ·
+              ${formatUsageCost(filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
             `
-          : html`${points.length} ${t("usage.overview.messagesAbbrev")} · ${formatTokens(cumTokens)}
-            · ${formatCost(cumCost)}`}
+          : html`${points.length} ${t("usage.overview.messagesAbbrev")} ·
+            ${formatUsageTokens(cumTokens)} · ${formatUsageCost(cumCost)}`}
       </div>
       ${breakdownByType
         ? html`
@@ -775,13 +778,13 @@ function renderTimeSeriesCompact(
                   ({ key, className, labelKey, hintKey }) => html`
                     <div class="legend-item" title=${t(hintKey)}>
                       <span class="legend-dot ${className}"></span>${t(labelKey)}
-                      ${formatTokens(filteredTokens[key])}
+                      ${formatUsageTokens(filteredTokens[key])}
                     </div>
                   `,
                 )}
               </div>
               <div class="cost-breakdown-total">
-                ${t("usage.breakdown.total")}: ${formatTokens(totalTypeTokens)}
+                ${t("usage.breakdown.total")}: ${formatUsageTokens(totalTypeTokens)}
               </div>
             </div>
           `
@@ -875,7 +878,7 @@ function renderContextPanel(
             <div
               class="context-segment ${className}"
               style="width: ${pct(tokens, totalContextTokens).toFixed(1)}%"
-              title="${t(labelKey)}: ~${formatTokens(tokens)}"
+              title="${t(labelKey)}: ~${formatUsageTokens(tokens)}"
             ></div>
           `,
         )}
@@ -887,13 +890,13 @@ function renderContextPanel(
               ><span class="legend-dot ${className}"></span>${t(
                 className === "system" ? "usage.details.systemShort" : labelKey,
               )}
-              ~${formatTokens(tokens)}</span
+              ~${formatUsageTokens(tokens)}</span
             >
           `,
         )}
       </div>
       <div class="context-total">
-        ${t("usage.breakdown.total")}: ~${formatTokens(totalContextTokens)}
+        ${t("usage.breakdown.total")}: ~${formatUsageTokens(totalContextTokens)}
       </div>
       <div class="context-breakdown-grid">
         ${groups
@@ -909,7 +912,7 @@ function renderContextPanel(
                     ({ name, chars }) => html`
                       <div class="context-breakdown-item">
                         <span class="mono" title=${name}>${name}</span>
-                        <span class="muted">~${formatTokens(charsToTokens(chars))}</span>
+                        <span class="muted">~${formatUsageTokens(charsToTokens(chars))}</span>
                       </div>
                     `,
                   )}
@@ -1110,7 +1113,7 @@ function renderSessionLogsCompact(
               <div class="session-log-meta">
                 <span class="session-log-role">${roleLabel}</span>
                 <span>${formatMs(log.timestamp)}</span>
-                ${log.tokens ? html`<span>${formatTokens(log.tokens)}</span>` : nothing}
+                ${log.tokens ? html`<span>${formatUsageTokens(log.tokens)}</span>` : nothing}
               </div>
               <div class="session-log-content">${cleanContent}</div>
               ${toolInfo.tools.length > 0

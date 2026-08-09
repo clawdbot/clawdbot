@@ -48,13 +48,37 @@ describe("smsPlugin status", () => {
       },
     });
 
-    expect(snapshot).toEqual({
+    expect(snapshot).toMatchObject({
       accountId: "support",
       name: "+15557654321",
       enabled: true,
       configured: true,
       statusState: "configured",
     });
+  });
+
+  it("projects lifecycle from the runtime status record", async () => {
+    const snapshot = await smsPlugin.status?.buildAccountSnapshot?.({
+      cfg: {},
+      account: {
+        accountId: "support",
+        enabled: true,
+        accountSid: "AC123",
+        authToken: "secret",
+        fromNumber: "+15557654321",
+        messagingServiceSid: "",
+        defaultTo: "",
+        webhookPath: "/webhooks/sms",
+        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
+        dangerouslyDisableSignatureValidation: false,
+        dmPolicy: "pairing",
+        allowFrom: [],
+        textChunkLimit: 1500,
+      },
+      runtime: { accountId: "support", lifecycle: "blocked", terminalDisconnect: true },
+    });
+
+    expect(snapshot).toMatchObject({ lifecycle: "blocked", terminalDisconnect: true });
   });
 });
 

@@ -81,6 +81,14 @@ import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.
 import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
+  const resetSessionEntryLifecycle = async (
+    params: Parameters<PluginRuntime["channel"]["session"]["resetSessionEntryLifecycle"]>[0],
+  ) => {
+    const { channelId: _channelId, ...request } = params;
+    return await import("../../plugin-sdk/session-store-lifecycle-runtime.js").then((runtime) =>
+      runtime.resetSessionEntryLifecycle(request),
+    );
+  };
   const sessionRuntime = {
     resolveStorePath,
     readSessionUpdatedAt,
@@ -88,6 +96,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     // route through the session accessor boundary.
     recordSessionMetaFromInbound: recordInboundSessionMeta,
     recordInboundSession,
+    resetSessionEntryLifecycle,
     updateLastRoute: updateSessionLastRoute,
     resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
   };

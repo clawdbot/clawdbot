@@ -3318,6 +3318,57 @@ describe("browser tool extract", () => {
   beforeEach(resetBrowserToolMocks);
   afterEach(() => vi.restoreAllMocks());
 
+  const runToolBinding = {
+    kind: "tab" as const,
+    tabId: 17,
+    target: "host" as const,
+    profile: "openclaw",
+    targetId: "target-a",
+  };
+
+  it("extracts from the trusted tab in a tab-bound run", async () => {
+    const tool = createBrowserTool({ agentId: "work", runToolBinding });
+
+    const result = await tool.execute?.("call-bound-extract", {
+      action: "extract",
+      query: "When does the release ship?",
+    });
+
+    expect(browserActionsMocks.browserPageContent).toHaveBeenCalledWith(undefined, {
+      targetId: "target-a",
+      profile: "openclaw",
+      timeoutMs: 60_000,
+      signal: undefined,
+    });
+    expect(toolCommonMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "work",
+        useUtilityModel: true,
+        allowMissingApiKeyModes: ["aws-sdk"],
+      }),
+    );
+    expect(result?.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Friday."),
+    });
+  });
+
+  it("rejects extraction from a foreign tab before browser or model access", async () => {
+    const tool = createBrowserTool({ agentId: "work", runToolBinding });
+
+    await expect(
+      tool.execute?.("call-bound-extract-escape", {
+        action: "extract",
+        query: "When does the release ship?",
+        targetId: "target-b",
+      }),
+    ).rejects.toThrow("cannot override its run-bound tab target");
+
+    expect(browserActionsMocks.browserPageContent).not.toHaveBeenCalled();
+    expect(toolCommonMocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(toolCommonMocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+  });
+
   it("captures, converts, and answers with the configured agent model", async () => {
     toolCommonMocks.sanitizeHtml.mockResolvedValueOnce("<main>Ships Friday.</main>");
     toolCommonMocks.htmlToMarkdown.mockReturnValueOnce({ text: "Ships **Friday**." });

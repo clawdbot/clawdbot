@@ -12,6 +12,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
 
@@ -26,7 +27,6 @@ const mocks = vi.hoisted(() => ({
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
   drainRetainedEmbeddingProviders: vi.fn(async () => undefined),
   clearSessionSuspensionTimers: vi.fn(() => 0),
-  clearPluginBindingPendingRequests: vi.fn(),
 }));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
@@ -84,10 +84,6 @@ vi.mock("./embeddings-http.js", () => ({
 
 vi.mock("../agents/session-suspension.js", () => ({
   clearSessionSuspensionTimers: mocks.clearSessionSuspensionTimers,
-}));
-
-vi.mock("../plugins/conversation-binding.js", () => ({
-  clearPluginBindingPendingRequests: mocks.clearPluginBindingPendingRequests,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -191,7 +187,6 @@ describe("createGatewayCloseHandler", () => {
     mocks.drainRetainedEmbeddingProviders.mockResolvedValue(undefined);
     mocks.clearSessionSuspensionTimers.mockReset();
     mocks.clearSessionSuspensionTimers.mockReturnValue(0);
-    mocks.clearPluginBindingPendingRequests.mockClear();
   });
 
   afterEach(() => {
@@ -240,12 +235,17 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("clears the process-root plugin registry after teardown", async () => {
+    const lifecycleSlot = resolveGlobalMap<string, number>(
+      Symbol.for("openclaw.test.gatewayCloseLifecycleSlot"),
+      (state) => state.clear(),
+    );
+    lifecycleSlot.set("stale", 1);
     setActivePluginRegistry(createEmptyPluginRegistry());
     const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
 
     await close({ reason: "test" });
 
-    expect(mocks.clearPluginBindingPendingRequests).toHaveBeenCalledOnce();
+    expect(lifecycleSlot.size).toBe(0);
     expect(getActivePluginRegistry()).toBeNull();
   });
 

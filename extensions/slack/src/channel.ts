@@ -484,6 +484,11 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       accountId,
       payload,
     }),
+  // Core sees this facade, not its lazy owner; forward finalization or question cards stay live.
+  afterDeliverPayload: async (ctx) => {
+    const { slackOutbound } = await loadSlackOutboundAdapterModule();
+    await slackOutbound.afterDeliverPayload!(ctx);
+  },
   presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
   ...createRuntimeOutboundDelegates({
     getRuntime: loadSlackOutboundAdapterModule,

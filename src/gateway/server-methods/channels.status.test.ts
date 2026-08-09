@@ -520,6 +520,30 @@ describe("channelsHandlers channels.status", () => {
     expect(firstChannelAccount(payload, "whatsapp").healthState).toBe("reconnecting");
   });
 
+  it("preserves channel-authored conflict when recorded blocked lifecycle is unhealthy", async () => {
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      linked: true,
+      running: false,
+      connected: false,
+      terminalDisconnect: true,
+      lifecycle: "blocked",
+      healthState: "conflict",
+      lastError: "status=440",
+    });
+
+    const payload = await runChannelsStatus({ probe: false, timeoutMs: 2000 });
+
+    expect(firstChannelAccount(payload, "whatsapp")).toMatchObject({
+      lifecycle: "blocked",
+      healthState: "conflict",
+      terminalDisconnect: true,
+    });
+  });
+
   it("derives blocked health from recorded lifecycle", async () => {
     mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
     mocks.buildChannelAccountSnapshot.mockResolvedValue({

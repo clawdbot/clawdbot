@@ -26,8 +26,10 @@ type RegistryTestApi = {
   addSubagentRunForTests(entry: SubagentRunRecord): void;
   finalizeInterruptedSubagentRun(params: {
     runId: string;
+    expectedEntry?: SubagentRunRecord;
     error: string;
     endedAt?: number;
+    suppressSessionEffects?: boolean;
   }): Promise<number>;
   releaseSubagentRun(runId: string): void;
   resetSubagentRegistryForTests(opts?: { persist?: boolean }): void;
@@ -86,6 +88,7 @@ export function releaseSubagentRun(runId: string) {
 
 export async function finalizeInterruptedSubagentRun(params: {
   runId: string;
+  expectedEntry?: SubagentRunRecord;
   error: string;
   endedAt?: number;
 }) {

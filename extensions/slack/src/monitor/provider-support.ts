@@ -196,7 +196,23 @@ export function publishSlackConnectedStatus(
   setStatus({
     connected: true,
     lastConnectedAt: Date.now(),
+    terminalDisconnect: undefined,
     ...identityHealth,
+  });
+}
+
+export function publishSlackBlockedStatus(
+  setStatus: ((next: Record<string, unknown>) => void) | undefined,
+  error: unknown,
+) {
+  if (!setStatus) {
+    return;
+  }
+  setStatus({
+    connected: false,
+    lifecycle: "blocked",
+    terminalDisconnect: true,
+    lastError: formatUnknownError(error),
   });
 }
 

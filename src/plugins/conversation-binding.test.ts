@@ -1,11 +1,12 @@
 // Covers plugin conversation binding persistence and lookup behavior.
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type {
   ConversationRef,
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import * as openClawStateDb from "../state/openclaw-state-db.js";
 import {
@@ -13,10 +14,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import {
-  resetPluginConversationBindingCachesForTest,
-  seedPluginConversationBindingApprovalForTest,
-} from "./conversation-binding.test-fixtures.js";
+import { seedPluginConversationBindingApprovalForTest } from "./conversation-binding.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -118,7 +116,6 @@ vi.mock("./runtime.js", async () => {
 });
 
 let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
-let clearPluginBindingPendingRequests: typeof import("./conversation-binding.js").clearPluginBindingPendingRequests;
 let bindPluginSessionConversation: typeof import("./session-conversation-binding.js").bindPluginSessionConversation;
 let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
 let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
@@ -176,7 +173,6 @@ afterAll(() => {
 beforeAll(async () => {
   ({
     buildPluginBindingApprovalCustomId,
-    clearPluginBindingPendingRequests,
     detachPluginConversationBinding,
     getCurrentPluginConversationBinding,
     parsePluginBindingApprovalCustomId,
@@ -187,6 +183,11 @@ beforeAll(async () => {
   ({ registerSessionBindingAdapter, unregisterSessionBindingAdapter } =
     await import("../infra/outbound/session-binding-service.js"));
   ({ setActivePluginRegistry } = await import("./runtime.js"));
+});
+
+afterEach(async () => {
+  await drainGlobalSingletonLifecycleState();
+  vi.useRealTimers();
 });
 
 function createDiscordCodexBindRequest(
@@ -289,7 +290,7 @@ async function approveBindingRequest(
 async function importDuplicateConversationBindingModules() {
   const first = await importConversationBindingModule(`first-${Date.now()}`);
   const second = await importConversationBindingModule(`second-${Date.now()}`);
-  resetPluginConversationBindingCachesForTest();
+  await drainGlobalSingletonLifecycleState();
   return { first, second };
 }
 
@@ -459,12 +460,11 @@ function insertPluginBindingApprovalRow(params: {
 }
 
 describe("plugin conversation binding approvals", () => {
-  beforeEach(() => {
-    clearPluginBindingPendingRequests();
+  beforeEach(async () => {
+    await drainGlobalSingletonLifecycleState();
     process.env.OPENCLAW_STATE_DIR = tempRoot;
     clearPluginBindingApprovalRows();
     sessionBindingState.reset();
-    resetPluginConversationBindingCachesForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "work" });
@@ -567,6 +567,50 @@ describe("plugin conversation binding approvals", () => {
     expect(parsePluginBindingApprovalCustomId(allowAlways)).toEqual({
       approvalId: "abcdefghijkl",
       decision: "allow-always",
+    });
+  });
+
+  it("fails closed when a pending bind approval reaches its 30-minute deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const request = await requestPendingBinding(
+      createDiscordCodexBindRequest("channel:ttl", "Bind this conversation to Codex."),
+    );
+
+    // The deadline check is authoritative even when the event loop has not dispatched the timer.
+    vi.setSystemTime(1_000 + 30 * 60_000);
+    await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
+      status: "expired",
+    });
+    expect(sessionBindingState.bind).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("evicts the oldest pending bind approval after 512 requests", async () => {
+    vi.useFakeTimers();
+    const requests = [];
+    for (let index = 0; index < 513; index += 1) {
+      requests.push(
+        await requestPendingBinding(
+          createDiscordCodexBindRequest(
+            `channel:bounded-${index}`,
+            `Bind this conversation to Codex thread ${index}.`,
+          ),
+        ),
+      );
+    }
+
+    expect(vi.getTimerCount()).toBe(512);
+    const oldest = requests[0];
+    const newest = requests[512];
+    if (!oldest || !newest) {
+      throw new Error("expected bounded pending requests");
+    }
+    await expect(approveBindingRequest(oldest.approvalId, "allow-once")).resolves.toEqual({
+      status: "expired",
+    });
+    await expect(approveBindingRequest(newest.approvalId, "deny")).resolves.toMatchObject({
+      status: "denied",
     });
   });
 
@@ -762,7 +806,7 @@ describe("plugin conversation binding approvals", () => {
 
     expect(rebound.status).toBe("bound");
 
-    resetPluginConversationBindingCachesForTest();
+    await drainGlobalSingletonLifecycleState();
     clearPluginBindingApprovalRows();
   });
 
@@ -775,7 +819,7 @@ describe("plugin conversation binding approvals", () => {
       ),
     );
 
-    clearPluginBindingPendingRequests();
+    await drainGlobalSingletonLifecycleState();
 
     await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
       status: "expired",

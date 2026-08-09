@@ -14,7 +14,6 @@ import {
 } from "../infra/session-delivery-queue-runtime.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
-import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
@@ -208,8 +207,11 @@ function startPendingSessionDeliveryRuntime(params: {
   // request routing before replaying restart-sentinel deliveries.
   const timer = setTimeout(() => {
     void runWithGatewayIndependentRootWorkAdmission(async () => {
-      const { deliverQueuedSessionDelivery, recoverPendingRestartContinuationDeliveries } =
-        await import("./server-restart-sentinel.js");
+      const {
+        deliverQueuedSessionDelivery,
+        recoverPendingRestartContinuationDeliveries,
+        settleQueuedSessionDelivery,
+      } = await import("./server-restart-sentinel.js");
       if (stopped) {
         return;
       }
@@ -222,7 +224,7 @@ function startPendingSessionDeliveryRuntime(params: {
             ...(context.stateDir !== undefined ? { stateDir: context.stateDir } : {}),
           }),
         log: logRecovery,
-        onSettled: (entry) => removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id),
+        onSettled: settleQueuedSessionDelivery,
       });
       try {
         await recoverPendingRestartContinuationDeliveries({

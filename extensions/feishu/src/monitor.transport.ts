@@ -255,6 +255,8 @@ export async function monitorWebSocket({
         const connectedAt = Date.now();
         statusSink?.({
           connected: true,
+          lifecycle: "ready",
+          terminalDisconnect: undefined,
           lastConnectedAt: connectedAt,
           lastEventAt: connectedAt,
           lastError: null,
@@ -264,6 +266,7 @@ export async function monitorWebSocket({
         const reconnectingAt = Date.now();
         statusSink?.({
           connected: false,
+          lifecycle: "recovering",
           lastEventAt: reconnectingAt,
         });
       };
@@ -302,7 +305,10 @@ export async function monitorWebSocket({
       const disconnectedAt = Date.now();
       statusSink?.({
         connected: false,
+        lifecycle: "blocked",
+        terminalDisconnect: true,
         lastEventAt: disconnectedAt,
+        lastError: formatFeishuWsErrorForLog(cycleEnd),
       });
 
       attempt += 1;
@@ -323,9 +329,15 @@ export async function monitorWebSocket({
 
       // WS start failed (e.g. handshake / auth) — publish disconnected.
       const failedAt = Date.now();
+      // The SDK classifier is the only terminal contract here. App-secret/auth refinement is
+      // deferred until Feishu exposes a structured authentication failure at this boundary.
+      const terminal = err instanceof Error && isFeishuWsTerminalError(err);
       statusSink?.({
         connected: false,
+        lifecycle: terminal ? "blocked" : "recovering",
+        ...(terminal ? { terminalDisconnect: true } : {}),
         lastEventAt: failedAt,
+        lastError: formatFeishuWsErrorForLog(err),
       });
 
       attempt += 1;
@@ -515,6 +527,8 @@ export async function monitorWebhook({
       const webhookConnectedAt = Date.now();
       statusSink?.({
         connected: true,
+        lifecycle: "ready",
+        terminalDisconnect: undefined,
         lastConnectedAt: webhookConnectedAt,
         lastEventAt: webhookConnectedAt,
         lastError: null,
@@ -523,6 +537,11 @@ export async function monitorWebhook({
 
     server.on("error", (err) => {
       error(`feishu[${accountId}]: Webhook server error: ${err}`);
+      statusSink?.({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: formatFeishuWsErrorForLog(err),
+      });
       abortSignal?.removeEventListener("abort", handleAbort);
       reject(err);
     });

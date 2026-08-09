@@ -33,6 +33,7 @@ import type {
   GoogleChatCoreRuntime,
   GoogleChatMonitorOptions,
   GoogleChatRuntimeEnv,
+  GoogleChatStatusSink,
   WebhookTarget,
 } from "./monitor-types.js";
 import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
@@ -186,7 +187,7 @@ async function processMessageWithPipeline(params: {
   config: OpenClawConfig;
   runtime: GoogleChatRuntimeEnv;
   core: GoogleChatCoreRuntime;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: GoogleChatStatusSink;
   mediaMaxMb: number;
   turnAdoptionLifecycle?: GoogleChatIngressLifecycle;
 }): Promise<void> {
@@ -528,6 +529,13 @@ async function monitorGoogleChatProvider(
   let unregisterTarget: (() => void) | undefined;
   try {
     unregisterTarget = registerGoogleChatWebhookTarget(target);
+    options.statusSink?.({
+      connected: true,
+      lifecycle: "ready",
+      lastConnectedAt: Date.now(),
+      lastError: null,
+      terminalDisconnect: undefined,
+    });
   } catch (error) {
     await ingress.stop();
     throw error;

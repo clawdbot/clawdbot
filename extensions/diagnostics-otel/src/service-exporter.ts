@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import nodePath from "node:path";
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
-import { lowCardinalityAttr } from "./service-attributes.js";
 import {
   OTEL_EXPORTER_OTLP_CERTIFICATE_ENV,
   OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE_ENV,
@@ -119,10 +119,7 @@ export function resolveOtelHttpAgentOptions(params: {
     const agent = createNodeProxyAgent({ mode: "env", targetUrl: url, agentOptions });
     return agent ? () => agent : undefined;
   } catch {
-    logger.warn(
-      `diagnostics-otel: env proxy agent unavailable for OTLP ${signalIdentifier.toLowerCase()} exporter; falling back to default Node agent`,
-    );
-    return undefined;
+    throw new Error("Configured telemetry proxy is invalid or unsupported; refusing direct export");
   }
 }
 
@@ -153,9 +150,9 @@ export function formatError(err: unknown): string {
 export function errorCategory(err: unknown): string {
   try {
     if (err instanceof Error && typeof err.name === "string" && err.name.trim()) {
-      return lowCardinalityAttr(err.name, "Error");
+      return normalizeDiagnosticValue(err.name, "Error");
     }
-    return lowCardinalityAttr(typeof err, "unknown");
+    return normalizeDiagnosticValue(typeof err, "unknown");
   } catch {
     return "unknown";
   }

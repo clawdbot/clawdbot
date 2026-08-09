@@ -164,6 +164,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   };
   const explicitSetPaths: string[][] = [];
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
+  let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
@@ -410,6 +411,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       blockedCodexProviderPlan,
     });
     state = repairSequence.state;
+    openAICodexAuthProfileIdMap = repairSequence.openAICodexAuthProfileIdMap;
     if (repairSequence.authProfilesRepaired) {
       await refreshGatewayAuthStateAfterAuthProfileRepair();
     }
@@ -520,5 +522,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(blockedCodexProviderPlan.blockedModelIdentities.length > 0
       ? { blockedCodexModelIdentities: blockedCodexProviderPlan.blockedModelIdentities }
       : {}),
+    ...(openAICodexAuthProfileIdMap?.size ? { openAICodexAuthProfileIdMap } : {}),
   };
 }

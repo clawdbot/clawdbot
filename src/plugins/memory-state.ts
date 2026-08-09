@@ -266,8 +266,15 @@ export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return getMemoryCapability()?.capability.runtime;
 }
 
+let standaloneMemoryManagerActive = false;
+
+// Standalone managers are intentionally absent from the active plugin registry.
+export function setStandaloneMemoryManagerActive(active: boolean): void {
+  standaloneMemoryManagerActive = active;
+}
+
 export function hasMemoryRuntime(): boolean {
-  return getMemoryRuntime() !== undefined;
+  return standaloneMemoryManagerActive || getMemoryRuntime() !== undefined;
 }
 
 function cloneMemoryPublicArtifact(

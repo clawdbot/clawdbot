@@ -72,7 +72,7 @@ type ZaloMonitorOptions = {
   webhookSecret?: string;
   webhookPath?: string;
   fetcher?: ZaloFetch;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: ZaloStatusSink;
 };
 
 const ZALO_TEXT_LIMIT = 2000;
@@ -82,7 +82,15 @@ const ZALO_TYPING_TIMEOUT_MS = 5_000;
 const UNIX_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
-type ZaloStatusSink = (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+type ZaloStatusSink = (patch: {
+  connected?: boolean;
+  lifecycle?: "ready" | "recovering";
+  terminalDisconnect?: boolean;
+  lastConnectedAt?: number;
+  lastError?: string | null;
+  lastInboundAt?: number;
+  lastOutboundAt?: number;
+}) => void;
 type ZaloProcessingContext = {
   token: string;
   account: ResolvedZaloAccount;
@@ -276,6 +284,15 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
       if (isStopped() || abortSignal.aborted) {
         return undefined;
       }
+      if (response.ok) {
+        statusSink?.({
+          connected: true,
+          lifecycle: "ready",
+          terminalDisconnect: undefined,
+          lastConnectedAt: Date.now(),
+          lastError: null,
+        });
+      }
       if (response.ok && response.result) {
         statusSink?.({ lastInboundAt: Date.now() });
         await processUpdate({
@@ -287,7 +304,9 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
       if (err instanceof ZaloApiError && err.isPollingTimeout) {
         // no updates
       } else if (!isStopped() && !abortSignal.aborted) {
-        runtime.error?.(`[${account.accountId}] Zalo polling error: ${formatZaloError(err)}`);
+        const error = formatZaloError(err);
+        runtime.error?.(`[${account.accountId}] Zalo polling error: ${error}`);
+        statusSink?.({ connected: false, lifecycle: "recovering", lastError: error });
         // Abort-aware backoff; bottom poll reschedule already checks stopped/aborted.
         await sleepWithAbort(5000, abortSignal).catch(() => undefined);
       }
@@ -988,6 +1007,13 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         { url: effectiveWebhookUrl, secret_token: webhookSecret }, // pragma: allowlist secret
         fetcher,
       );
+      statusSink?.({
+        connected: true,
+        lifecycle: "ready",
+        terminalDisconnect: undefined,
+        lastConnectedAt: Date.now(),
+        lastError: null,
+      });
       let webhookCleanupPromise: Promise<void> | undefined;
       cleanupWebhook = async () => {
         if (!webhookCleanupPromise) {
@@ -1061,9 +1087,11 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
 
     await waitForAbortSignal(abortSignal);
   } catch (err) {
-    runtime.error?.(
-      `[${account.accountId}] Zalo provider startup failed mode=${mode}: ${formatZaloError(err)}`,
-    );
+    const error = formatZaloError(err);
+    runtime.error?.(`[${account.accountId}] Zalo provider startup failed mode=${mode}: ${error}`);
+    // Zalo does not expose a stable structured auth-terminal contract at this boundary yet;
+    // keep startup failures recovering until that owner-specific classifier exists.
+    statusSink?.({ connected: false, lifecycle: "recovering", lastError: error });
     throw err;
   } finally {
     abortSignal.removeEventListener("abort", stopOnAbort);

@@ -1,4 +1,6 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { parseSessionDeliveryRoute } from "../sessions/session-key-utils.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
@@ -33,6 +35,9 @@ export const PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS = new Set([
 ]);
 
 type ResetParams = Parameters<PluginRuntime["agent"]["session"]["resetSessionEntryLifecycle"]>[0];
+type ChannelResetParams = Parameters<
+  PluginRuntime["channel"]["session"]["resetSessionEntryLifecycle"]
+>[0];
 type ResetContext = {
   agentId?: string;
   entry: SessionEntry;
@@ -63,6 +68,62 @@ type LockedHarnessResolution =
     }
   | undefined;
 
+function resolveChannelSessionKeyOwner(sessionKey: string): string | undefined {
+  const delivery = parseSessionDeliveryRoute(sessionKey);
+  if (delivery) {
+    return delivery.channel;
+  }
+  const normalized = normalizeOptionalLowercaseString(sessionKey);
+  if (!normalized || normalized.startsWith("agent:")) {
+    return undefined;
+  }
+  const [channelId, peerKind, peerId] = normalized.split(":");
+  return channelId && peerId && ["channel", "direct", "dm", "group"].includes(peerKind ?? "")
+    ? channelId
+    : undefined;
+}
+
+async function releaseLockedSessionPhysicalOwner(params: {
+  context: ResetContext;
+  expectedOwnerPluginId?: string;
+  resolveLockedSessionHarnessRegistration: (
+    sessionKey: string,
+    entry: SessionEntry,
+    action: string,
+  ) => LockedHarnessResolution;
+}): Promise<void> {
+  const locked = params.resolveLockedSessionHarnessRegistration(
+    params.context.sessionKey,
+    params.context.entry,
+    "reset",
+  );
+  const registration = locked?.registration;
+  if (
+    !locked ||
+    (params.expectedOwnerPluginId !== undefined &&
+      locked.ownerPluginId !== params.expectedOwnerPluginId) ||
+    !registration
+  ) {
+    throw new Error(
+      `Locked session "${params.context.sessionKey}" is owned by plugin "${locked?.ownerPluginId ?? "unknown"}"${params.expectedOwnerPluginId ? `, not "${params.expectedOwnerPluginId}"` : ""}.`,
+    );
+  }
+  if (!registration.harness.reset) {
+    throw new Error(
+      `Agent harness "${locked.harnessId}" must implement reset before locked sessions can be reset.`,
+    );
+  }
+  await registration.harness.reset({
+    ...(params.context.agentId !== undefined ? { agentId: params.context.agentId } : {}),
+    reason: params.context.reason,
+    ...(params.context.sessionFile !== undefined
+      ? { sessionFile: params.context.sessionFile }
+      : {}),
+    sessionId: params.context.sessionId,
+    sessionKey: params.context.sessionKey,
+  });
+}
+
 export async function resetPluginSessionEntryLifecycle(params: {
   assertStoredSessionEntryOwned: (params: {
     action: string;
@@ -90,30 +151,51 @@ export async function resetPluginSessionEntryLifecycle(params: {
   });
   return await params.reset({
     ...request,
-    releasePhysicalOwner: async (context: ResetContext) => {
-      const locked = params.resolveLockedSessionHarnessRegistration(
-        context.sessionKey,
-        context.entry,
-        "reset",
-      );
-      const registration = locked?.registration;
-      if (!locked || locked.ownerPluginId !== params.pluginId || !registration) {
-        throw new Error(
-          `Locked session "${context.sessionKey}" is owned by plugin "${locked?.ownerPluginId ?? "unknown"}", not "${params.pluginId}".`,
-        );
-      }
-      if (!registration.harness.reset) {
-        throw new Error(
-          `Agent harness "${locked.harnessId}" must implement reset before locked sessions can be reset.`,
-        );
-      }
-      await registration.harness.reset({
-        ...(context.agentId !== undefined ? { agentId: context.agentId } : {}),
-        reason: context.reason,
-        ...(context.sessionFile !== undefined ? { sessionFile: context.sessionFile } : {}),
-        sessionId: context.sessionId,
-        sessionKey: context.sessionKey,
-      });
-    },
+    releasePhysicalOwner: async (context: ResetContext) =>
+      await releaseLockedSessionPhysicalOwner({
+        context,
+        expectedOwnerPluginId: params.pluginId,
+        resolveLockedSessionHarnessRegistration: params.resolveLockedSessionHarnessRegistration,
+      }),
+  });
+}
+
+export async function resetPluginChannelSessionEntryLifecycle(params: {
+  channelIds: readonly string[];
+  pluginId: string;
+  request: ChannelResetParams;
+  reset: (params: ResetWithOwnerParams) => Promise<SessionEntry | null>;
+  resolveLockedSessionHarnessRegistration: (
+    sessionKey: string,
+    entry: SessionEntry,
+    action: string,
+  ) => LockedHarnessResolution;
+}): Promise<SessionEntry | null> {
+  const requestedChannelId = normalizeOptionalLowercaseString(params.request.channelId);
+  const ownedChannelIds = new Set(
+    params.channelIds.flatMap((channelId) => {
+      const normalized = normalizeOptionalLowercaseString(channelId);
+      return normalized ? [normalized] : [];
+    }),
+  );
+  if (!requestedChannelId || !ownedChannelIds.has(requestedChannelId)) {
+    throw new Error(
+      `Plugin "${params.pluginId}" does not own channel "${requestedChannelId ?? params.request.channelId}".`,
+    );
+  }
+  const sessionChannelId = resolveChannelSessionKeyOwner(params.request.sessionKey);
+  if (sessionChannelId !== requestedChannelId) {
+    throw new Error(
+      `Channel "${requestedChannelId}" cannot reset session "${params.request.sessionKey}" owned by channel "${sessionChannelId ?? "unknown"}".`,
+    );
+  }
+  const { channelId: _channelId, ...request } = params.request;
+  return await params.reset({
+    ...request,
+    releasePhysicalOwner: async (context: ResetContext) =>
+      await releaseLockedSessionPhysicalOwner({
+        context,
+        resolveLockedSessionHarnessRegistration: params.resolveLockedSessionHarnessRegistration,
+      }),
   });
 }

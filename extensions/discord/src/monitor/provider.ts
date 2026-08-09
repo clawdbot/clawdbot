@@ -213,12 +213,29 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       ? discordCfg.applicationId.trim()
       : undefined;
   const parsedApplicationId = configuredApplicationId ?? parseApplicationIdFromToken(token);
-  const applicationId =
-    parsedApplicationId ??
-    (await discordProviderRuntime.fetchDiscordApplicationId(token, 4000, discordRestFetch));
-  if (!applicationId) {
-    throw new Error("Failed to resolve Discord application id");
+  const applicationIdProbe = parsedApplicationId
+    ? ({ kind: "resolved", applicationId: parsedApplicationId } as const)
+    : await discordProviderRuntime.probeDiscordApplicationId(token, 4000, discordRestFetch);
+  if (applicationIdProbe.kind !== "resolved") {
+    const at = Date.now();
+    const terminal = applicationIdProbe.kind === "rejected";
+    const probeError = formatErrorMessage(applicationIdProbe.error);
+    const message = `Failed to resolve Discord application id: ${probeError}`;
+    opts.setStatus?.({
+      connected: false,
+      lifecycle: terminal ? "blocked" : "recovering",
+      terminalDisconnect: terminal ? true : undefined,
+      lastEventAt: at,
+      lastDisconnect: {
+        at,
+        ...(applicationIdProbe.status !== null ? { status: applicationIdProbe.status } : {}),
+        error: probeError,
+      },
+      lastError: message,
+    });
+    throw new Error(message, { cause: applicationIdProbe.error });
   }
+  const applicationId = applicationIdProbe.applicationId;
   logDiscordStartupPhase({
     runtime,
     accountId: account.accountId,

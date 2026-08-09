@@ -1123,6 +1123,9 @@ printf 'status=%s\\n' "$status"
     expect(script).toContain("print_pack_delta_audit");
     expect(script).toContain("==> Pack audit");
     expect(script).toContain("==> Pack audit delta");
+    expect(script).toContain("normalize_npm_pack_json_file");
+    expect(script).toContain('normalize_npm_pack_json_file "$pack_json_file"');
+    expect(script).toContain('normalize_npm_pack_json_file "$baseline_pack_json_file"');
   });
 
   it("fails the update smoke when the candidate npm pack exceeds the release budget", () => {

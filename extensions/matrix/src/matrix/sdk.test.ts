@@ -1615,6 +1615,22 @@ describe("MatrixClient event bridge", () => {
     await expect(client.start()).resolves.toBeUndefined();
   });
 
+  it("rejects structured invalid-token ERROR during startup without waiting for timeout", async () => {
+    const invalidToken = Object.assign(new Error("Invalid access token"), {
+      statusCode: 401,
+      data: { errcode: "M_UNKNOWN_TOKEN" },
+    });
+    matrixJsClient.startClient = vi.fn(async () => {
+      queueMicrotask(() => {
+        matrixJsClient.emit("sync", "ERROR", null, { error: invalidToken });
+      });
+    });
+
+    const client = new MatrixClient("https://matrix.example.org", "invalid-token");
+
+    await expect(client.start()).rejects.toBe(invalidToken);
+  });
+
   it("aborts startup when the readiness wait is canceled", async () => {
     matrixJsClient.startClient = vi.fn(async () => {});
 

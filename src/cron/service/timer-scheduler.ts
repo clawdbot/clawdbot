@@ -28,8 +28,8 @@ import {
   runWithCronAdmission,
   updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
-import { type CronServiceState, emit } from "./state.js";
-import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
+import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryCreateCronTaskRun } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
@@ -208,12 +208,15 @@ async function onAdmittedTimer(state: CronServiceState) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
         // values without execution. This prevents jobs from being silently skipped
         // when the timer wakes up but findDueJobs returns empty (see #13992).
+        const rollbackSnapshot = snapshotStoreForRollback(state);
+        const postPersistNotifications: DeferredCronNotifications = [];
         const changed = recomputeNextRunsForMaintenance(state, {
           recomputeExpired: true,
           nowMs: dueCheckNow,
+          deferredNotifications: postPersistNotifications,
         });
         if (changed) {
-          await persist(state);
+          await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
         }
         return [];
       }
@@ -262,8 +265,11 @@ async function onAdmittedTimer(state: CronServiceState) {
               releaseQueuedCronRun(state, candidate.id, candidate.reservationIdentity);
             }
           }
-          recomputeNextRunsForMaintenance(state);
-          await persistOrRestore(state, rollbackSnapshot);
+          const postPersistNotifications: DeferredCronNotifications = [];
+          recomputeNextRunsForMaintenance(state, {
+            deferredNotifications: postPersistNotifications,
+          });
+          await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
           for (const candidate of pendingReleases) {
             releaseQueuedCronRun(state, candidate.id, candidate.reservationIdentity);
           }
@@ -380,8 +386,9 @@ async function onAdmittedTimer(state: CronServiceState) {
             releaseQueuedCronRun(state, due.id, due.reservationIdentity);
           }
         }
-        recomputeNextRunsForMaintenance(state);
-        await persistOrRestore(state, rollbackSnapshot);
+        const postPersistNotifications: DeferredCronNotifications = [];
+        recomputeNextRunsForMaintenance(state, { deferredNotifications: postPersistNotifications });
+        await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
         for (const due of pendingReleases) {
           releaseQueuedCronRun(state, due.id, due.reservationIdentity);
         }

@@ -274,6 +274,13 @@ const QA_CHANNEL_DTS_INPUTS = [
 ];
 const QA_CHANNEL_DTS_STAMP = "dist/plugin-sdk/extensions/qa-channel/.boundary-dts.stamp";
 const QA_CHANNEL_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/qa-channel/api.d.ts"];
+const MEMORY_CORE_DTS_INPUTS = [
+  "extensions/memory-core/api.ts",
+  "extensions/memory-core/src",
+  "extensions/memory-core/tsconfig.json",
+];
+const MEMORY_CORE_DTS_STAMP = "dist/plugin-sdk/extensions/memory-core/.boundary-dts.stamp";
+const MEMORY_CORE_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/memory-core/api.d.ts"];
 const MATRIX_DTS_INPUTS = [
   "extensions/matrix/test-api.ts",
   "extensions/matrix/src",
@@ -768,6 +775,12 @@ async function main(argv = process.argv.slice(2)) {
         outputPaths: [QA_CHANNEL_DTS_STAMP, ...QA_CHANNEL_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(QA_CHANNEL_DTS_REQUIRED_OUTPUTS);
+    const memoryCoreDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: MEMORY_CORE_DTS_INPUTS,
+        outputPaths: [MEMORY_CORE_DTS_STAMP, ...MEMORY_CORE_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(MEMORY_CORE_DTS_REQUIRED_OUTPUTS);
     const matrixDtsFresh =
       isArtifactSetFresh({
         inputPaths: MATRIX_DTS_INPUTS,
@@ -861,6 +874,36 @@ async function main(argv = process.argv.slice(2)) {
         });
       } else {
         process.stdout.write("[qa-channel boundary dts] fresh; skipping\n");
+      }
+      if (!memoryCoreDtsFresh) {
+        removeStaleIncrementalState({
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/memory-core/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "memory-core boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/memory-core/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/memory-core",
+            "--rootDir",
+            "extensions/memory-core",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/memory-core/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: MEMORY_CORE_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[memory-core boundary dts] fresh; skipping\n");
       }
       if (!matrixDtsFresh) {
         removeStaleIncrementalState({

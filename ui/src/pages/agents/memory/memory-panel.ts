@@ -7,6 +7,10 @@ import {
   type ApplicationGateway,
   type ApplicationGatewaySnapshot,
 } from "../../../app/context.ts";
+import {
+  showConfirmDialog,
+  type ConfirmDialogOptions,
+} from "../../../components/confirm-dialog.ts";
 import { renderSettingsDefaultState } from "../../../components/settings-ui.ts";
 import { t } from "../../../i18n/index.ts";
 import { currentConfigObject } from "../../../lib/config/index.ts";
@@ -270,6 +274,17 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         this.requestUpdate();
       }
     }
+  }
+
+  private async confirmDreamingTask(
+    task: (state: DreamingState) => Promise<boolean>,
+    confirmation: ConfirmDialogOptions,
+  ) {
+    const scope = this.captureTaskScope();
+    if (!scope || !(await showConfirmDialog(confirmation)) || !this.isTaskScopeCurrent(scope)) {
+      return;
+    }
+    await this.runDreamingTask(task, scope);
   }
 
   private async loadAll(refreshConfig = false) {
@@ -540,10 +555,21 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         onOpenWikiPage: (lookup) => this.openWikiPage(lookup),
         onBackfillDiary: () => void this.runDreamingTask(backfillDreamDiary),
         onCopyDreamingArchivePath: () => void this.runDreamingTask(copyDreamingArchivePath),
-        onDedupeDreamDiary: () => void this.runDreamingTask(dedupeDreamDiary),
+        onDedupeDreamDiary: () =>
+          void this.confirmDreamingTask(dedupeDreamDiary, {
+            title: t("dreaming.scene.dedupeDiary"),
+            message: t("dreaming.actions.confirmDedupeDescription"),
+            confirmLabel: t("dreaming.scene.dedupeDiary"),
+            danger: true,
+          }),
         onResetDiary: () => void this.runDreamingTask(resetDreamDiary),
         onResetGroundedShortTerm: () => void this.runDreamingTask(resetGroundedShortTerm),
-        onRepairDreamingArtifacts: () => void this.runDreamingTask(repairDreamingArtifacts),
+        onRepairDreamingArtifacts: () =>
+          void this.confirmDreamingTask(repairDreamingArtifacts, {
+            title: t("dreaming.scene.repairCache"),
+            message: t("dreaming.actions.confirmRepairDescription"),
+            confirmLabel: t("dreaming.scene.repairCache"),
+          }),
         onViewStateChange: () => this.requestUpdate(),
       })}
       ${renderDreamingToggleConfirmation({

@@ -11,7 +11,7 @@ const stages = [
 /**
  * Renders CLI usage for the verification wrapper.
  */
-export function usage() {
+function usage() {
   return [
     "Usage: node scripts/verify.mjs",
     "",
@@ -55,7 +55,7 @@ async function runStage(stage) {
 /**
  * Runs verification stages in order and stops at the first failure.
  */
-export async function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   let args;
   try {
     args = parseVerifyArgs(argv);

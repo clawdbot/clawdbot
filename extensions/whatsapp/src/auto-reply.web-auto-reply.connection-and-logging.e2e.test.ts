@@ -571,58 +571,45 @@ describe("web auto-reply connection", () => {
     },
   );
 
-  it("retries inbox attach when auth state is still stabilizing", async () => {
+  it.each([
+    ["retries inbox attach when auth state is still stabilizing", true, 3],
+    ["stops retrying inbox attach when auth stays unstable past max attempts", false, 2],
+  ] as const)("%s", async (_name, recovers, maxAttempts) => {
     const sleep = vi.fn(async () => {});
     const listenerFactory = vi.fn(async () => {
-      if (listenerFactory.mock.calls.length === 1) {
-        throw new WhatsAppAuthUnstableError(
-          "WhatsApp auth state is still stabilizing; retrying inbox attach.",
-        );
+      if (recovers && listenerFactory.mock.calls.length > 1) {
+        return createMockWebListener();
       }
-      return createMockWebListener();
+      throw new WhatsAppAuthUnstableError(
+        "WhatsApp auth state is still stabilizing; retrying inbox attach.",
+      );
     });
     const { runtime, controller, run } = startWebAutoReplyMonitor({
       monitorWebChannelFn: monitorWebChannel as never,
       listenerFactory,
       sleep,
-      reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 3, factor: 1.1 },
+      reconnect: { initialMs: 5, maxMs: 5, maxAttempts, factor: 1.1 },
     });
 
-    await vi.waitFor(
-      () => {
-        expect(listenerFactory).toHaveBeenCalledTimes(2);
-      },
-      { timeout: 250, interval: 2 },
-    );
-
-    controller.abort();
-    await run;
-
-    expect(typeof mockCallArg(sleep, 0, 0)).toBe("number");
-    expect(mockCallArg(sleep, 0, 1)).toBeInstanceOf(AbortSignal);
-    expectErrorContaining(runtime.error, "inbox attach");
-  });
-
-  it("stops retrying inbox attach when auth stays unstable past max attempts", async () => {
-    const sleep = vi.fn(async () => {});
-    const listenerFactory = vi.fn(async () => {
-      throw new WhatsAppAuthUnstableError(
-        "WhatsApp auth state is still stabilizing; retrying inbox attach.",
-      );
-    });
-    const { runtime, run } = startWebAutoReplyMonitor({
-      monitorWebChannelFn: monitorWebChannel as never,
-      listenerFactory,
-      sleep,
-      reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
-    });
-
+    if (recovers) {
+      await vi.waitFor(() => expect(listenerFactory).toHaveBeenCalledTimes(2), {
+        timeout: 250,
+        interval: 2,
+      });
+      controller.abort();
+    }
     await run;
 
     expect(listenerFactory).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledTimes(1);
-    expectErrorContaining(runtime.error, "Retry 1/2");
-    expectErrorContaining(runtime.error, "Stopping web monitoring");
+    if (recovers) {
+      expect(typeof mockCallArg(sleep, 0, 0)).toBe("number");
+      expect(mockCallArg(sleep, 0, 1)).toBeInstanceOf(AbortSignal);
+      expectErrorContaining(runtime.error, "inbox attach");
+    } else {
+      expect(sleep).toHaveBeenCalledTimes(1);
+      expectErrorContaining(runtime.error, "Retry 1/2");
+      expectErrorContaining(runtime.error, "Stopping web monitoring");
+    }
   });
 
   type WatchdogCaseContext = {

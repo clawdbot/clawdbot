@@ -83,6 +83,32 @@ function stringProperty(object, key) {
   return undefined;
 }
 
+function collectMethodSpec(element, sourceFile, fileName) {
+  const line = sourceFile.getLineAndCharacterOfPosition(element.getStart(sourceFile)).line + 1;
+  if (ts.isObjectLiteralExpression(element)) {
+    const name = stringProperty(element, "name");
+    if (!name) {
+      throw new Error(
+        `${fileName}:${line} core method spec names must be string literals so additions can be compared with origin/main.`,
+      );
+    }
+    return { name, since: stringProperty(element, "since"), line };
+  }
+  if (ts.isArrayLiteralExpression(element)) {
+    const name = element.elements[0];
+    const since = element.elements[3];
+    if (!ts.isStringLiteralLike(name) || !ts.isStringLiteralLike(since)) {
+      throw new Error(
+        `${fileName}:${line} core method spec rows must use string literal names and vintage metadata.`,
+      );
+    }
+    return { name: name.text, since: since.text, line };
+  }
+  throw new Error(
+    `${fileName}:${line} core method specs must be inline object literals or labeled rows so vintage metadata can be enforced.`,
+  );
+}
+
 function collectMethodSpecs(sourceText, fileName) {
   const sourceFile = ts.createSourceFile(fileName, sourceText, ts.ScriptTarget.Latest, true);
   let specs;
@@ -96,26 +122,9 @@ function collectMethodSpecs(sourceText, fileName) {
     ) {
       const initializer = unwrapExpression(node.initializer);
       if (ts.isArrayLiteralExpression(initializer)) {
-        specs = initializer.elements.map((element) => {
-          const line =
-            sourceFile.getLineAndCharacterOfPosition(element.getStart(sourceFile)).line + 1;
-          if (!ts.isObjectLiteralExpression(element)) {
-            throw new Error(
-              `${fileName}:${line} core method specs must be inline object literals so vintage metadata can be enforced.`,
-            );
-          }
-          const name = stringProperty(element, "name");
-          if (!name) {
-            throw new Error(
-              `${fileName}:${line} core method spec names must be string literals so additions can be compared with origin/main.`,
-            );
-          }
-          return {
-            name,
-            since: stringProperty(element, "since"),
-            line,
-          };
-        });
+        specs = initializer.elements.map((element) =>
+          collectMethodSpec(element, sourceFile, fileName),
+        );
       }
     }
     ts.forEachChild(node, visit);

@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
@@ -660,9 +661,10 @@ async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
   try {
     parsed = JSON.parse(packOutput);
   } catch {}
-  if (Array.isArray(parsed)) {
+  if (parsed !== undefined) {
     const packedFilename =
-      parsed.find((entry) => typeof entry?.filename === "string")?.filename ?? "";
+      resolveNpmJsonEntries(parsed).find((entry) => typeof entry?.filename === "string")
+        ?.filename ?? "";
     if (packedFilename) {
       filename = resolvePackedOpenClawTarballFilename(packedFilename);
     }

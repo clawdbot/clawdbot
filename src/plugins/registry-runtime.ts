@@ -31,6 +31,7 @@ import {
 import {
   PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS,
   PLUGIN_GATEWAY_SESSION_MUTATION_METHODS,
+  resetPluginChannelSessionEntryLifecycle,
   resetPluginSessionEntryLifecycle,
 } from "./registry-runtime-session-policy.js";
 import type { PluginRegistryState } from "./registry-state.js";
@@ -483,6 +484,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
     };
     let scopedAgentRuntime: PluginRuntime["agent"] | undefined;
+    let scopedChannelRuntime: PluginRuntime["channel"] | undefined;
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
         const runWithPluginScope = <T>(run: () => T): T => {
@@ -638,6 +640,39 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             list: (params) => runWithPluginScope(() => nodes.list(params)),
             invoke: (params) => runWithPluginScope(() => nodes.invoke(params)),
           } satisfies PluginRuntime["nodes"];
+        }
+        if (prop === "channel") {
+          if (scopedChannelRuntime) {
+            return scopedChannelRuntime;
+          }
+          const channel: PluginRuntime["channel"] = getRuntimeProperty();
+          const scopedSession = {
+            ...channel.session,
+            resetSessionEntryLifecycle: async (params) =>
+              await runWithPluginScope(() => {
+                const record =
+                  pluginRuntimeRecordById.get(pluginId) ??
+                  registry.plugins.find((entry) => entry.id === pluginId);
+                return resetPluginChannelSessionEntryLifecycle({
+                  channelIds: record?.channelIds ?? [],
+                  pluginId,
+                  request: params,
+                  reset: registryParams.runtime.agent.session.resetSessionEntryLifecycle,
+                  resolveLockedSessionHarnessRegistration,
+                });
+              }),
+          } satisfies PluginRuntime["channel"]["session"];
+          const scopedChannel = Object.create(
+            Object.getPrototypeOf(channel),
+            Object.getOwnPropertyDescriptors(channel),
+          ) as PluginRuntime["channel"];
+          Object.defineProperty(scopedChannel, "session", {
+            configurable: true,
+            enumerable: true,
+            value: scopedSession,
+          });
+          scopedChannelRuntime = scopedChannel;
+          return scopedChannelRuntime;
         }
         if (prop === "agent") {
           if (scopedAgentRuntime) {

@@ -314,13 +314,30 @@ function isUnconfiguredConfigSnapshot(
   return isUnconfiguredConfigSource(snapshot.sourceConfig);
 }
 
+async function shouldStartLocalOnboarding(
+  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig" | "path">,
+): Promise<boolean> {
+  if (isUnconfiguredConfigSnapshot(snapshot)) {
+    return true;
+  }
+  if (!snapshot.valid || snapshot.sourceConfig.gateway?.mode === "remote") {
+    return false;
+  }
+  // Inference persists before setup finishes; only its owning receipt can
+  // distinguish interrupted local onboarding from an authored model-only config.
+  const { readLocalOnboardingStateForConfig } = await import("../state/local-onboarding-state.js");
+  return (
+    readLocalOnboardingStateForConfig(snapshot.path, snapshot.sourceConfig)?.status === "pending"
+  );
+}
+
 export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
   if (!shouldHandleBareRoot(argv)) {
     return false;
   }
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
-  return isUnconfiguredConfigSnapshot(snapshot);
+  return shouldStartLocalOnboarding(snapshot);
 }
 
 type BareRootLaunchTarget =
@@ -349,7 +366,7 @@ async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaun
   }
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
-  if (isUnconfiguredConfigSnapshot(snapshot)) {
+  if (await shouldStartLocalOnboarding(snapshot)) {
     return { kind: "onboarding" };
   }
   if (!snapshot.valid) {

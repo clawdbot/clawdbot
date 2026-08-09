@@ -18874,6 +18874,11 @@
       "translated": "クリア"
     },
     {
+      "id": "native.apple.3b776a593deeab22",
+      "source": "These settings changed outside the app while you were editing: \\(fieldList). Choose which version to keep.",
+      "translated": "編集中にこれらの設定がアプリの外部で変更されました: \\(fieldList)。保持するバージョンを選択してください。"
+    },
+    {
       "id": "native.apple.9cd2ced909f0952d",
       "source": "\\(user)@\\(host)",
       "translated": "\\(user)@\\(host)"
@@ -20597,6 +20602,51 @@
       "id": "native.apple.1b8ba1cf6f9dfdc9",
       "source": "missing:\\(hash)",
       "translated": "missing:\\(hash)"
+    },
+    {
+      "id": "native.apple.52b517452a108b59",
+      "source": "Gateway location",
+      "translated": "Gatewayの場所"
+    },
+    {
+      "id": "native.apple.2961fe211d71d35a",
+      "source": "Transport",
+      "translated": "トランスポート"
+    },
+    {
+      "id": "native.apple.3dfb5eefb5f66202",
+      "source": "Gateway URL",
+      "translated": "Gateway URL"
+    },
+    {
+      "id": "native.apple.d771ae993a61fdf7",
+      "source": "SSH target",
+      "translated": "SSHターゲット"
+    },
+    {
+      "id": "native.apple.e817b77dd5751910",
+      "source": "Identity file",
+      "translated": "IDファイル"
+    },
+    {
+      "id": "native.apple.1d7afbe829a31e8d",
+      "source": "SSH host key policy",
+      "translated": "SSHホストキーポリシー"
+    },
+    {
+      "id": "native.apple.ba3cf88d2dadb205",
+      "source": "Gateway token",
+      "translated": "Gatewayトークン"
+    },
+    {
+      "id": "native.apple.83779c40a38ec48e",
+      "source": "Use file version",
+      "translated": "ファイルのバージョンを使用"
+    },
+    {
+      "id": "native.apple.eab4dbc3ca4a9352",
+      "source": "Keep my edits",
+      "translated": "自分の編集内容を保持"
     },
     {
       "id": "native.apple.db0fa6b60bd859f8",
@@ -23479,14 +23529,14 @@
       "translated": "このデバイスにはペアリングの承認が必要です"
     },
     {
-      "id": "native.apple.b52cb4aae7ca6573",
-      "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`.",
-      "translated": "Paste the token configured on the gateway host. On the gateway host, run `openclaw config get gateway.auth.token`. If the gateway uses an environment variable instead, use `OPENCLAW_GATEWAY_TOKEN`."
+      "id": "native.apple.90b00f3f5418b439",
+      "source": "Paste the token configured on the gateway host. On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then paste its output.",
+      "translated": "Gatewayホストで設定されたトークンを貼り付けてください。Gatewayホストで、対話型ターミナルで `openclaw gateway auth-token --show` を実行し、その出力を貼り付けてください。"
     },
     {
-      "id": "native.apple.bbb87d21ce8a291e",
-      "source": "Check `gateway.auth.token` or `OPENCLAW_GATEWAY_TOKEN` on the gateway host and try again.",
-      "translated": "Gateway ホストで `gateway.auth.token` または `OPENCLAW_GATEWAY_TOKEN` を確認して、もう一度お試しください。"
+      "id": "native.apple.b79d3c42bd5438d5",
+      "source": "On the gateway host, run `openclaw gateway auth-token --show` in an interactive terminal, then replace the token and try again.",
+      "translated": "Gatewayホストで、対話型ターミナルで `openclaw gateway auth-token --show` を実行し、トークンを置き換えてから再試行してください。"
     },
     {
       "id": "native.apple.c26f61d639591f81",
@@ -23509,14 +23559,14 @@
       "translated": "Approve this device from an already-paired OpenClaw client. In your OpenClaw chat, run `/pair approve`, then click **Check connection** again."
     },
     {
-      "id": "native.apple.e73170e4ab1dbe8f",
-      "source": "This gateway requires an auth token from the gateway host.",
-      "translated": "この Gateway には Gateway ホストからの認証トークンが必要です。"
+      "id": "native.apple.a1cb5542806f0ec9",
+      "source": "This gateway requires an auth token. Run openclaw gateway auth-token --show on the gateway host.",
+      "translated": "このGatewayには認証トークンが必要です。Gatewayホストで openclaw gateway auth-token --show を実行してください。"
     },
     {
-      "id": "native.apple.e3f983b8c517da29",
-      "source": "Gateway token mismatch. Check gateway.auth.token or OPENCLAW_GATEWAY_TOKEN on the gateway host.",
-      "translated": "Gateway トークンが一致しません。Gateway ホストで gateway.auth.token または OPENCLAW_GATEWAY_TOKEN を確認してください。"
+      "id": "native.apple.e12c96574b97ed4a",
+      "source": "Gateway token mismatch. Run openclaw gateway auth-token --show on the gateway host.",
+      "translated": "Gatewayトークンが一致しません。Gatewayホストで openclaw gateway auth-token --show を実行してください。"
     },
     {
       "id": "native.apple.cd96754a96e5aa35",

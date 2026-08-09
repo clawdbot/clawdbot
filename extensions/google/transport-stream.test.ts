@@ -1197,74 +1197,136 @@ describe("google transport stream", () => {
     expect(cancelCalled).toBe(true);
   });
 
-  it("retries Gemini 3 requests with lean thinking when the first attempt has no first response", async () => {
-    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
-    guardedFetchMock
-      .mockImplementationOnce(
-        (_url: string, init?: RequestInit) =>
-          new Promise<Response>((_resolve, reject) => {
-            init?.signal?.addEventListener("abort", () => {
-              reject(
-                toLintErrorObject(
-                  init.signal?.reason ?? new Error("aborted"),
-                  "Non-Error rejection",
-                ),
-              );
-            });
-          }),
-      )
-      .mockResolvedValueOnce(
-        buildSseResponse([
-          {
-            candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
-          },
-        ]),
-      );
-
-    const model = buildGeminiModel({
-      id: "gemini-3.1-pro-preview",
-      name: "Gemini 3.1 Pro Preview",
-    });
-    const streamFn = createGoogleGenerativeAiTransportStreamFn();
-    const stream = await Promise.resolve(
-      streamFn(
-        model,
-        {
-          messages: [{ role: "user", content: "hello", timestamp: 0 }],
-          tools: [
+  it.each(["request headers", "response body"] as const)(
+    "retries Gemini 3 requests with lean thinking when the first %s stalls",
+    async (stalledPhase) => {
+      vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+      guardedFetchMock
+        .mockImplementationOnce((_url: string, init?: RequestInit) =>
+          stalledPhase === "response body"
+            ? Promise.resolve(
+                new Response(new ReadableStream<Uint8Array>(), {
+                  headers: { "content-type": "text/event-stream" },
+                }),
+              )
+            : new Promise<Response>((_resolve, reject) => {
+                init?.signal?.addEventListener("abort", () => {
+                  reject(
+                    toLintErrorObject(
+                      init.signal?.reason ?? new Error("aborted"),
+                      "Non-Error rejection",
+                    ),
+                  );
+                });
+              }),
+        )
+        .mockResolvedValueOnce(
+          buildSseResponse([
             {
-              name: "lookup",
-              description: "Look up a value",
-              parameters: {
-                type: "object",
-                properties: { q: { type: "string" } },
-              },
+              candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
             },
-          ],
-        } as never,
-        { reasoning: "high" } as never,
+          ]),
+        );
+
+      const model = buildGeminiModel({
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+      });
+      const streamFn = createGoogleGenerativeAiTransportStreamFn();
+      const stream = await Promise.resolve(
+        streamFn(
+          model,
+          {
+            messages: [{ role: "user", content: "hello", timestamp: 0 }],
+            tools: [
+              {
+                name: "lookup",
+                description: "Look up a value",
+                parameters: {
+                  type: "object",
+                  properties: { q: { type: "string" } },
+                },
+              },
+            ],
+          } as never,
+          { reasoning: "high" } as never,
+        ),
+      );
+      const result = await stream.result();
+
+      expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+      expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+      const firstBody = parseRequestJsonBody(
+        requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
+      );
+      const retryBody = parseRequestJsonBody(
+        requireRequestInit(requireMockCall(guardedFetchMock, 1, "guarded fetch"), "guarded fetch"),
+      );
+      const firstGenerationConfig = requireGenerationConfig(firstBody);
+      const retryGenerationConfig = requireGenerationConfig(retryBody);
+      expect(firstGenerationConfig.thinkingConfig).toEqual({
+        includeThoughts: true,
+        thinkingLevel: "HIGH",
+      });
+      expect(retryGenerationConfig.thinkingConfig).toEqual({
+        thinkingLevel: "LOW",
+      });
+      expect(retryBody.tools).toEqual(firstBody.tools);
+    },
+  );
+
+  it("does not retry a genuinely empty Gemini 3 response", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
+    guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse(""));
+
+    const result = await runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+      options: { reasoning: "high" },
+    });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorCode: "STREAM_INCOMPLETE",
+    });
+    expect(guardedFetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry when an external abort interrupts a stalled Gemini 3 response body", async () => {
+    vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "1000");
+    const controller = new AbortController();
+    let resolveBodyRead!: () => void;
+    const bodyRead = new Promise<void>((resolve) => {
+      resolveBodyRead = resolve;
+    });
+    const cancel = vi.fn();
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull() {
+            resolveBodyRead();
+          },
+          cancel,
+        }),
+        { headers: { "content-type": "text/event-stream" } },
       ),
     );
-    const result = await stream.result();
 
-    expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
-    expect(guardedFetchMock).toHaveBeenCalledTimes(2);
-    const firstBody = parseRequestJsonBody(
-      requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
-    );
-    const retryBody = parseRequestJsonBody(
-      requireRequestInit(requireMockCall(guardedFetchMock, 1, "guarded fetch"), "guarded fetch"),
-    );
-    const firstGenerationConfig = requireGenerationConfig(firstBody);
-    const retryGenerationConfig = requireGenerationConfig(retryBody);
-    expect(firstGenerationConfig.thinkingConfig).toEqual({
-      includeThoughts: true,
-      thinkingLevel: "HIGH",
+    const result = runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+      options: { reasoning: "high", signal: controller.signal },
     });
-    expect(retryGenerationConfig.thinkingConfig).toEqual({
-      thinkingLevel: "LOW",
+    await bodyRead;
+    controller.abort(
+      Object.assign(new Error("operator canceled the request"), { code: "OPERATOR_CANCELLED" }),
+    );
+
+    await expect(result).resolves.toMatchObject({
+      stopReason: "aborted",
+      errorCode: "OPERATOR_CANCELLED",
+      errorMessage: "operator canceled the request",
     });
-    expect(retryBody.tools).toEqual(firstBody.tools);
+    expect(guardedFetchMock).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("keeps streaming after the first Gemini 3 chunk arrives before the retry deadline", async () => {

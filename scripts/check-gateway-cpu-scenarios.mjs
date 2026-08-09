@@ -411,8 +411,6 @@ async function runGatewayCpuScenarios(options, params = {}) {
             "concurrency bench",
             process.execPath,
             [
-              "--import",
-              "tsx",
               "scripts/bench-gateway-concurrency.ts",
               "--concurrency",
               String(DEFAULT_GATEWAY_CONCURRENCY),

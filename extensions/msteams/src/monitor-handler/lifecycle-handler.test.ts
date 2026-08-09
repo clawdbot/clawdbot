@@ -21,7 +21,6 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   return {
     ...actual,
     listSessionEntries: hoisted.listSessionEntries,
-    resetSessionEntryLifecycle: hoisted.resetSessionEntryLifecycle,
     resolveStorePath: hoisted.resolveStorePath,
   };
 });
@@ -108,7 +107,9 @@ describe("handleMSTeamsLifecycleRemove", () => {
   });
 
   beforeEach(() => {
-    installMSTeamsTestRuntime();
+    installMSTeamsTestRuntime({
+      resetSessionEntryLifecycle: hoisted.resetSessionEntryLifecycle,
+    });
     hoisted.listSessionEntries.mockReset();
     hoisted.resetSessionEntryLifecycle.mockReset();
     hoisted.resolveStorePath.mockClear();

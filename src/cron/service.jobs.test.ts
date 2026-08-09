@@ -558,6 +558,108 @@ function createMockState(
   } as unknown as CronServiceState;
 }
 
+describe("announce delivery channel validation", () => {
+  const now = Date.parse("2026-08-02T12:00:00.000Z");
+  const configuredChannels = ["reef", "discord"];
+  const input = (delivery: CronJob["delivery"], overrides?: { sessionKey?: string }) => ({
+    name: "multi-channel announce",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget: "isolated" as const,
+    wakeMode: "now" as const,
+    payload: { kind: "agentTurn" as const, message: "report" },
+    delivery,
+    ...overrides,
+  });
+
+  it("rejects creation when an isolated announce has no deterministic channel", () => {
+    expect(() =>
+      createJob(createMockState(now), input({ mode: "announce", channel: "last" }), {
+        configuredChannels,
+      }),
+    ).toThrow(
+      "cron announce delivery requires an explicit channel when multiple channels are configured (discord, reef): set --channel <id> or use --best-effort-deliver",
+    );
+  });
+
+  it("accepts creation with an explicit channel", () => {
+    expect(() =>
+      createJob(createMockState(now), input({ mode: "announce", channel: "discord" }), {
+        configuredChannels,
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts creation when best-effort delivery is explicit", () => {
+    expect(() =>
+      createJob(
+        createMockState(now),
+        input({ mode: "announce", channel: "last", bestEffort: true }),
+        { configuredChannels },
+      ),
+    ).not.toThrow();
+  });
+
+  it("accepts creation when only one channel is configured", () => {
+    expect(() =>
+      createJob(createMockState(now), input({ mode: "announce", channel: "last" }), {
+        configuredChannels: ["discord"],
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    [
+      "a preserved session route",
+      input(
+        { mode: "announce", channel: "last" },
+        { sessionKey: "agent:main:discord:channel:ops" },
+      ),
+    ],
+    [
+      "a provider-prefixed target",
+      input({ mode: "announce", channel: "last", to: "telegram:123" }),
+    ],
+  ])("accepts creation with %s", (_name, jobInput) => {
+    expect(() => createJob(createMockState(now), jobInput, { configuredChannels })).not.toThrow();
+  });
+
+  it("keeps enabled-only patches working for stored ambiguous jobs", () => {
+    const job = createJob(createMockState(now), input({ mode: "announce", channel: "discord" }), {
+      configuredChannels,
+    });
+    // Simulate a job persisted before service-level ambiguity validation shipped.
+    job.delivery = { mode: "announce", channel: "last" };
+
+    expect(() => applyJobPatch(job, { enabled: false }, { configuredChannels })).not.toThrow();
+    expect(job.enabled).toBe(false);
+  });
+
+  it("revalidates patches that change delivery resolution", () => {
+    const job = createJob(createMockState(now), input({ mode: "announce", channel: "discord" }), {
+      configuredChannels,
+    });
+
+    expect(() =>
+      applyJobPatch(job, { delivery: { channel: "last" } }, { configuredChannels }),
+    ).toThrow("cron announce delivery requires an explicit channel");
+  });
+
+  it("rejects ambiguous declarative convergence", () => {
+    const job = createJob(createMockState(now), input({ mode: "announce", channel: "discord" }), {
+      configuredChannels,
+    });
+
+    expect(() =>
+      applyDeclarativeJobSpec(job, input({ mode: "announce", channel: "last" }), {
+        enabledExplicit: true,
+        nowMs: now,
+        configuredChannels,
+      }),
+    ).toThrow("cron announce delivery requires an explicit channel");
+  });
+});
+
 describe("cron tool authority defaults", () => {
   const now = Date.parse("2026-07-21T12:00:00.000Z");
 

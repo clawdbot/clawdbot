@@ -6,7 +6,10 @@ function isActiveTaskStatus(status: string | undefined): boolean {
   return status === "queued" || status === "running";
 }
 
-export function countUntrackedActiveAcpRunsForOwner(ownerKey: string | undefined): number {
+export function countUntrackedActiveAcpRunsForOwner(
+  ownerKey: string | undefined,
+  pendingChildSessionKeys?: ReadonlySet<string>,
+): number {
   const normalizedOwnerKey = normalizeOptionalString(ownerKey);
   if (!normalizedOwnerKey) {
     return 0;
@@ -32,6 +35,7 @@ export function countUntrackedActiveAcpRunsForOwner(ownerKey: string | undefined
       return task.runtime === "acp" &&
         isActiveTaskStatus(task.status) &&
         childSessionKey !== undefined &&
+        !pendingChildSessionKeys?.has(childSessionKey) &&
         !hasActiveRegistryRun &&
         !trackedChildSessionKeys.has(childSessionKey)
         ? [childSessionKey]

@@ -77,6 +77,8 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  /** List enabled, configured channel ids without exposing channel machinery to cron core. */
+  listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
   evaluateCronTrigger?: (params: {
     job: CronJob;
     script: string;

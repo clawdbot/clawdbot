@@ -1,6 +1,7 @@
 /** Scheduling state and next-run computation for cron jobs. */
 import crypto from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
@@ -99,14 +100,8 @@ function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   }
   const digest = crypto.createHash("sha256").update(jobId).digest();
   const offset = digest.readUInt32BE(0) % staggerMs;
-  if (staggerOffsetCache.size >= STAGGER_OFFSET_CACHE_MAX) {
-    // The offset is deterministic, so the cache can evict oldest entries
-    // without changing scheduling semantics for future lookups.
-    const first = staggerOffsetCache.keys().next();
-    if (!first.done) {
-      staggerOffsetCache.delete(first.value);
-    }
-  }
+  // The offset is deterministic, so FIFO eviction does not change future scheduling semantics.
+  pruneMapToMaxSize(staggerOffsetCache, STAGGER_OFFSET_CACHE_MAX - 1);
   staggerOffsetCache.set(cacheKey, offset);
   return offset;
 }
@@ -540,6 +535,7 @@ function recomputeJobNextRunAtMs(params: {
   job: CronJob;
   nowMs: number;
   deferredNotifications?: DeferredCronNotifications;
+  skipScheduleErrorHandling?: boolean;
 }) {
   let changed = false;
   try {
@@ -567,6 +563,9 @@ function recomputeJobNextRunAtMs(params: {
       changed = true;
     }
   } catch (err) {
+    if (params.skipScheduleErrorHandling) {
+      return false;
+    }
     if (
       recordScheduleComputeError({
         state: params.state,
@@ -616,6 +615,7 @@ export function recomputeNextRunsForMaintenance(
     repairFutureCronNextRunAtMs?: boolean;
     preserveExpiredPacedNextRunJobId?: string;
     deferredNotifications?: DeferredCronNotifications;
+    skipScheduleErrorHandling?: boolean;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
@@ -626,6 +626,7 @@ export function recomputeNextRunsForMaintenance(
       job,
       nowMs,
       deferredNotifications: opts?.deferredNotifications,
+      skipScheduleErrorHandling: opts?.skipScheduleErrorHandling,
     });
   return walkSchedulableJobs(
     state,

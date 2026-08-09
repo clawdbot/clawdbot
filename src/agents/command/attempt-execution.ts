@@ -50,6 +50,7 @@ import {
 } from "../../tasks/task-status-access.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
+import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import {
@@ -384,7 +385,7 @@ async function persistTextTurnTranscript(
   return { kind: "persisted", sessionEntry: turn.sessionEntry };
 }
 
-function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
+export function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
   const visibleText = result.meta.finalAssistantVisibleText?.trim();
   if (visibleText) {
     return visibleText;
@@ -952,6 +953,7 @@ export function runAgentAttempt(params: {
             runTimeoutOverrideMs: params.runTimeoutOverrideMs,
             runId: params.runId,
             lifecycleGeneration: params.lifecycleGeneration,
+            onExecutionStarted: params.opts.onExecutionStarted,
             lane: params.opts.lane,
             extraSystemPrompt: params.opts.extraSystemPrompt,
             inputProvenance: params.opts.inputProvenance,
@@ -1228,6 +1230,7 @@ export function runAgentAttempt(params: {
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     onUserMessagePersisted: params.onUserMessagePersisted,
     onExecutionStarted: (info) => {
+      params.opts.onExecutionStarted?.();
       if (info?.lifecycleGeneration) {
         params.onLifecycleGenerationChanged?.(info.lifecycleGeneration);
       }
@@ -1246,6 +1249,7 @@ export function runAgentAttempt(params: {
 
 export function buildAcpResult(params: {
   payloadText: string;
+  terminalReply?: AgentRunTerminalReplySnapshot;
   startedAt: number;
   stopReason?: string;
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
@@ -1263,6 +1267,7 @@ export function buildAcpResult(params: {
       durationMs: Date.now() - params.startedAt,
       aborted: abortFields.aborted ?? resultCancelled,
       stopReason: abortFields.stopReason ?? (resultCancelled ? "stop" : params.stopReason),
+      ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
     },
   };
 }
@@ -1625,6 +1630,7 @@ export function emitAcpLifecycleEnd(params: {
   abortSignal?: AbortSignal;
   stopReason?: string;
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
+  terminalReply?: AgentRunTerminalReplySnapshot;
   auditOnly?: boolean;
 }) {
   finalizeAcpToolsForRun(
@@ -1648,6 +1654,7 @@ export function emitAcpLifecycleEnd(params: {
       phase: "end",
       endedAt: Date.now(),
       ...resolveAcpLifecycleEndFields(params.abortSignal, params.stopReason, params.resultStatus),
+      ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
     },
   });
 }

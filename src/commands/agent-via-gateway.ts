@@ -32,6 +32,10 @@ import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
+  startOneShotDiagnosticsExporters,
+  type OneShotDiagnosticsHandle,
+} from "../plugins/one-shot-diagnostics.js";
+import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
@@ -139,6 +143,52 @@ function resolveGatewayAbortRetryDelaysMs(): readonly number[] {
 }
 
 const loadAgentSessionModule = agentSessionModuleCache.load;
+
+type EmbeddedAgentCommandOpts = Parameters<
+  Awaited<ReturnType<typeof embeddedAgentCommandLoader.load>>
+>[0];
+type EmbeddedRunDiagnosticsOptions = {
+  suppressStdoutDiagnosticLogs: boolean;
+};
+
+async function startEmbeddedRunDiagnosticsExporters(
+  runtime: RuntimeEnv,
+  options: EmbeddedRunDiagnosticsOptions,
+): Promise<OneShotDiagnosticsHandle | null> {
+  try {
+    return await startOneShotDiagnosticsExporters({
+      config: await loadRuntimeConfig(),
+      suppressStdoutDiagnosticLogs: options.suppressStdoutDiagnosticLogs,
+    });
+  } catch (err) {
+    // Exporter startup must never break the agent run itself.
+    runtime.error?.(`diagnostics exporter startup failed for embedded run: ${String(err)}`);
+    return null;
+  }
+}
+
+/**
+ * Run the embedded agent command with OTel diagnostics export for this
+ * one-shot process: the Gateway only starts diagnostics exporters in its own
+ * process, so embedded runs start one here and flush it before the CLI exits
+ * (including signal exits, which happen after this returns).
+ */
+async function runEmbeddedAgentCommand(
+  opts: EmbeddedAgentCommandOpts,
+  runtime: RuntimeEnv,
+  deps: AgentCliDeps | undefined,
+  diagnosticsOptions: EmbeddedRunDiagnosticsOptions,
+) {
+  const agentCommand = await measureAgentStartup("command-import", () =>
+    embeddedAgentCommandLoader.load(),
+  );
+  const diagnostics = await startEmbeddedRunDiagnosticsExporters(runtime, diagnosticsOptions);
+  try {
+    return await agentCommand(opts, runtime, deps);
+  } finally {
+    await diagnostics?.stop();
+  }
+}
 
 async function loadRuntimeConfig(): Promise<OpenClawConfig> {
   const { getRuntimeConfig } = await runtimeConfigModuleLoader.load();
@@ -920,10 +970,7 @@ export async function agentCliCommand(
   const signalBridge = createAgentCliSignalBridge(resolveAgentCliProcessLike(deps));
   try {
     if (dispatchOpts.local === true) {
-      const agentCommand = await measureAgentStartup("command-import", () =>
-        embeddedAgentCommandLoader.load(),
-      );
-      const result = await agentCommand(
+      const result = await runEmbeddedAgentCommand(
         {
           ...gatewayDispatchOpts,
           agentId: gatewayDispatchOpts.agent,
@@ -935,6 +982,7 @@ export async function agentCliCommand(
         },
         runtime,
         deps,
+        { suppressStdoutDiagnosticLogs: dispatchOpts.json === true },
       );
       return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
     }

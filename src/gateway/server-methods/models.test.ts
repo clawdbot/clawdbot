@@ -3,7 +3,6 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -14,7 +13,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
 
@@ -1518,18 +1516,14 @@ describe("models.list", () => {
     );
   });
 
-  it("preserves catalog load errors before the timeout fallback wins", async () => {
+  it("propagates catalog load errors to the dispatch backstop", async () => {
     const { request, respond } = requestModelsList({
       view: "configured",
       loadGatewayModelCatalog: vi.fn(() => Promise.reject(new Error("catalog failed"))),
       reqId: "req-models-list-catalog-error",
     });
-    await request;
-
-    expectGatewayErrorResponse(respond, {
-      code: ErrorCodes.UNAVAILABLE,
-      message: "Error: catalog failed",
-    });
+    await expect(request).rejects.toThrow("catalog failed");
+    expect(respond).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

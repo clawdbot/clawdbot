@@ -48,6 +48,11 @@ type ConversationTurnReplyClaim = {
 const pendingTurns = resolveGlobalSingleton(
   Symbol.for("openclaw.pendingConversationTurns"),
   () => new Map<string, PendingConversationTurn>(),
+  (turns) => {
+    for (const pending of turns.values()) {
+      pending.settle(undefined);
+    }
+  },
 );
 function normalize(value: string | undefined): string | undefined {
   const normalized = value?.trim();

@@ -168,6 +168,40 @@ describe("Google image-generation provider", () => {
     });
   });
 
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])(
+    "uses the default Gemini API root when the configured base URL is %s",
+    async (_label, baseUrl) => {
+      mockGoogleApiKeyAuth();
+      const fetchMock = installGoogleFetchMock();
+
+      const provider = buildGoogleImageGenerationProvider();
+      await provider.generateImage({
+        provider: "google",
+        model: "gemini-3.1-flash-image",
+        prompt: "draw a cat",
+        cfg: {
+          models: {
+            providers: {
+              google: {
+                baseUrl,
+                models: [],
+              },
+            },
+          },
+        },
+      });
+
+      const request = fetchRequest(fetchMock);
+      expect(request.url).toBe(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent",
+      );
+      expect(new Headers(request.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
+    },
+  );
+
   it("passes request SSRF policy to the provider HTTP helper", async () => {
     mockGoogleApiKeyAuth();
     const postJsonRequest = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({

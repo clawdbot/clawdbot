@@ -35,7 +35,7 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
   return [...resolveGatewayStartupPluginPlanFromRegistry(params).pluginIds];
 }
 
-export function loadGatewayStartupPluginPlan(params: {
+type GatewayStartupPluginPlanParams = {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
@@ -45,7 +45,12 @@ export function loadGatewayStartupPluginPlan(params: {
   workerProviderIds?: readonly string[];
   platform?: NodeJS.Platform;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-}): GatewayStartupPluginPlan {
+};
+
+export function loadGatewayStartupPluginPlanWithMetadata(params: GatewayStartupPluginPlanParams): {
+  plan: GatewayStartupPluginPlan;
+  metadataSnapshot: PluginMetadataSnapshot;
+} {
   const snapshotConfig = params.activationSourceConfig ?? params.config;
   const pluginIdScope = createGatewayStartupMetadataPluginIdScope({
     config: params.config,
@@ -82,7 +87,7 @@ export function loadGatewayStartupPluginPlan(params: {
           ...(params.index ? { index: params.index } : {}),
           pluginIdScope,
         });
-  return resolveGatewayStartupPluginPlanFromRegistry({
+  const plan = resolveGatewayStartupPluginPlanFromRegistry({
     config: params.config,
     ...(params.activationSourceConfig !== undefined
       ? { activationSourceConfig: params.activationSourceConfig }
@@ -94,6 +99,13 @@ export function loadGatewayStartupPluginPlan(params: {
     platform: params.platform,
     ambientEnvTriggers: params.ambientEnvTriggers,
   });
+  return { plan, metadataSnapshot };
+}
+
+export function loadGatewayStartupPluginPlan(
+  params: GatewayStartupPluginPlanParams,
+): GatewayStartupPluginPlan {
+  return loadGatewayStartupPluginPlanWithMetadata(params).plan;
 }
 
 export function resolveGatewayStartupPluginIds(params: {

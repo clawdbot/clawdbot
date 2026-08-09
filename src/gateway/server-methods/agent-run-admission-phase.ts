@@ -19,7 +19,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { claimAgentRunContext } from "../../infra/agent-events.js";
+import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
@@ -138,7 +138,6 @@ export async function prepareAgentRunDispatch(params: {
     return undefined;
   }
 
-  const now = Date.now();
   const timeoutMs = resolveAgentTimeoutMs({
     cfg: params.cfgForAgent ?? params.cfg,
     overrideSeconds:
@@ -191,6 +190,7 @@ export async function prepareAgentRunDispatch(params: {
     await params.acquireGatewayWorkAdmission(lifecycleStorePath);
     params.assertGatewayWorkAdmissionAllowed();
     if (!params.hasGatewayAdmissionOutcome()) {
+      const now = Date.now();
       params.setAdmittedRunAbort(
         registerChatAbortController({
           chatAbortControllers: params.context.chatAbortControllers,
@@ -308,7 +308,7 @@ export async function prepareAgentRunDispatch(params: {
     }),
     modelRun: params.isOneShotModelRun,
   });
-  let dispatchTaskTrackingMode: PreparedAgentRunDispatch["dispatchTaskTrackingMode"] =
+  const dispatchTaskTrackingMode: PreparedAgentRunDispatch["dispatchTaskTrackingMode"] =
     taskTrackingMode === "cli" ? "cli" : "none";
   if (taskTrackingMode === "plugin_subagent" && params.resolvedSessionKey) {
     try {
@@ -322,9 +322,19 @@ export async function prepareAgentRunDispatch(params: {
       });
     } catch (err) {
       params.context.logGateway.warn(
-        `failed to register plugin subagent run ${params.runId}; falling back to cli task tracking: ${formatForLog(err)}`,
+        `failed to register plugin subagent run ${params.runId}; rejecting untracked dispatch: ${formatForLog(err)}`,
       );
-      dispatchTaskTrackingMode = "cli";
+      activeRunAbort.cleanup({ force: true });
+      activeGatewayWorkAdmission.release();
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `plugin subagent registry persistence failed; run was not started: ${formatForLog(err)}`,
+        ),
+      );
+      return undefined;
     }
   }
   let restoreAdmittedRestartRecoveryInterrupted:

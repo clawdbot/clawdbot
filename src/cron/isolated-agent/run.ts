@@ -5,13 +5,15 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
-  claimAgentRunContext,
-  consumeCronNextCheckProposal,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
-  releaseAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  consumeCronNextCheckProposal,
+  getAgentRunContext,
+  releaseAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";

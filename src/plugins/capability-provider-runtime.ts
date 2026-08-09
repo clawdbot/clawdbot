@@ -1,6 +1,6 @@
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveVoiceModelRefs } from "../../packages/speech-core/voice-models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveVoiceModelRefs } from "../tts/voice-models.js";
 import {
   getLoadedRuntimePluginRegistry,
   registryContainsRuntimePluginIds,

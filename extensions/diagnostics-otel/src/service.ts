@@ -175,12 +175,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           path: "v1/metrics",
         });
         const traceHttpAgentOptions = resolveOtelHttpAgentOptions({
-          url: traceUrl,
+          url: tracesEnabled ? traceUrl : undefined,
           signalIdentifier: "TRACES",
           logger: ctx.logger,
         });
         const metricHttpAgentOptions = resolveOtelHttpAgentOptions({
-          url: metricUrl,
+          url: metricsEnabled ? metricUrl : undefined,
           signalIdentifier: "METRICS",
           logger: ctx.logger,
         });

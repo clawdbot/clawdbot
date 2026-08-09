@@ -4,12 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import {
-  getSessionEntry,
-  resetSessionEntryLifecycle,
-  upsertSessionEntry,
-  type SessionEntry,
-} from "./session-store-runtime.js";
+import { resetSessionEntryLifecycle } from "./session-store-lifecycle-runtime.js";
+import { getSessionEntry, upsertSessionEntry, type SessionEntry } from "./session-store-runtime.js";
 
 describe("session-store lifecycle runtime", () => {
   let tempDir: string;

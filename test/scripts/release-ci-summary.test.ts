@@ -1321,7 +1321,7 @@ describe("release CI summary child correlation", () => {
       runId: "29090000000",
     });
     const selected = requiredChildKeysForRerunGroup(manifest.rerunGroup, manifest.validationInputs);
-    expect([...selected].sort()).toEqual([
+    expect([...selected].toSorted()).toEqual([
       "normalCi",
       "npmTelegram",
       "pluginPrerelease",

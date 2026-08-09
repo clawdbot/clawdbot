@@ -24,9 +24,14 @@ const taskRuntimeMocks = vi.hoisted(() => ({
 const sessionAccessorMocks = vi.hoisted(() => ({
   loadSessionEntryReadOnly: vi.fn(),
 }));
+const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
+  deliverSubagentAnnouncement: vi.fn(),
+  loadRequesterSessionEntry: vi.fn(),
+}));
 
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskRuntimeMocks);
+vi.mock("../subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntryReadOnly,
@@ -372,6 +377,14 @@ describe("createImageGenerateTool", () => {
     taskRuntimeMocks.completeTaskRunByRunId.mockReset();
     taskRuntimeMocks.failTaskRunByRunId.mockReset();
     sessionAccessorMocks.loadSessionEntryReadOnly.mockReset();
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+      delivered: true,
+      path: "direct",
+      disposition: "delivered",
+    });
+    subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReset();
+    subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({ entry: undefined });
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
     taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();

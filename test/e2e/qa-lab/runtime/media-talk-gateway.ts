@@ -50,7 +50,7 @@ const SCENARIOS = {
     docsRefs: ["docs/tools/tts.md", "docs/tools/media-overview.md"],
     codeRefs: [
       SOURCE_PATH,
-      "packages/speech-core/src/tts.ts",
+      "src/tts/runtime-api.ts",
       "src/gateway/managed-image-attachments.ts",
       "src/gateway/server-methods/artifacts.ts",
     ],

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expandHomePrefix } from "../infra/home-dir.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   openOpenClawStateDatabase,
@@ -50,12 +51,7 @@ function noteCronJobsStoreCommit(storeKey: string): void {
   // polling SQLite or discarding the current scheduler's transient run state.
   cronStoreRevisions.delete(storeKey);
   cronStoreRevisions.set(storeKey, ++nextCronStoreRevision);
-  if (cronStoreRevisions.size > MAX_TRACKED_CRON_STORE_REVISIONS) {
-    const oldestStoreKey = cronStoreRevisions.keys().next().value;
-    if (oldestStoreKey !== undefined) {
-      cronStoreRevisions.delete(oldestStoreKey);
-    }
-  }
+  pruneMapToMaxSize(cronStoreRevisions, MAX_TRACKED_CRON_STORE_REVISIONS);
 }
 
 function resolveDefaultCronDir(env: NodeJS.ProcessEnv): string {

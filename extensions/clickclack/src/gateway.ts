@@ -204,6 +204,7 @@ export async function startClickClackGatewayAccount(
   ctx.setStatus({
     accountId: account.accountId,
     running: true,
+    lifecycle: "starting",
     configured: true,
     enabled: account.enabled,
     baseUrl: account.baseUrl,
@@ -287,6 +288,16 @@ export async function startClickClackGatewayAccount(
         };
         ctx.abortSignal.addEventListener("abort", abort, { once: true });
         removeAbortListener = () => ctx.abortSignal.removeEventListener("abort", abort);
+        socket.on("open", () => {
+          ctx.setStatus({
+            accountId: account.accountId,
+            connected: true,
+            lifecycle: "ready",
+            lastConnectedAt: Date.now(),
+            lastError: null,
+            terminalDisconnect: undefined,
+          });
+        });
         socket.on("message", (data) => {
           if (closing || settled) {
             return;
@@ -308,6 +319,13 @@ export async function startClickClackGatewayAccount(
         });
         socket.on("close", () => {
           closing = true;
+          if (!ctx.abortSignal.aborted) {
+            ctx.setStatus({
+              accountId: account.accountId,
+              connected: false,
+              lifecycle: "recovering",
+            });
+          }
           finishAfterQueuedMessages();
         });
         socket.on("error", (error) => {
@@ -323,6 +341,12 @@ export async function startClickClackGatewayAccount(
               error instanceof Error ? error.message : String(error)
             }`,
           );
+          ctx.setStatus({
+            accountId: account.accountId,
+            connected: false,
+            lifecycle: "recovering",
+            lastError: error instanceof Error ? error.message : String(error),
+          });
           closing = true;
           socket.close();
         });
@@ -340,6 +364,11 @@ export async function startClickClackGatewayAccount(
       }
     }
   } finally {
-    ctx.setStatus({ accountId: account.accountId, running: false });
+    ctx.setStatus({
+      accountId: account.accountId,
+      running: false,
+      connected: false,
+      lifecycle: "stopped",
+    });
   }
 }

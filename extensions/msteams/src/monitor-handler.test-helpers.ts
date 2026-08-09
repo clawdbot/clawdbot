@@ -17,6 +17,7 @@ type MSTeamsTestRuntimeOptions = {
   readAllowFromStore?: ReturnType<typeof vi.fn>;
   upsertPairingRequest?: ReturnType<typeof vi.fn>;
   recordInboundSession?: ReturnType<typeof vi.fn>;
+  resetSessionEntryLifecycle?: PluginRuntime["channel"]["session"]["resetSessionEntryLifecycle"];
   resolveAgentRoute?: (params: RuntimeRoutePeer) => unknown;
   hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
   isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
@@ -177,6 +178,7 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
       },
       session: {
         recordInboundSession,
+        resetSessionEntryLifecycle: options.resetSessionEntryLifecycle ?? vi.fn(async () => null),
         resolveStorePath,
       },
       inbound: {

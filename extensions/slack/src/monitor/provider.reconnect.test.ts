@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   gracefulStopSlackApp,
+  publishSlackBlockedStatus,
   publishSlackConnectedStatus,
   publishSlackDisconnectedStatus,
   startSlackSocketAndWaitForDisconnect,
@@ -82,8 +83,22 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: 1_711_406_400_500,
+      terminalDisconnect: undefined,
       lifecycle: "blocked",
       lastError: "auth.test returned no user_id",
+    });
+  });
+
+  it("marks non-recoverable socket authentication failures blocked", () => {
+    const setStatus = vi.fn();
+
+    publishSlackBlockedStatus(setStatus, new Error("invalid_auth"));
+
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: false,
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+      lastError: "invalid_auth",
     });
   });
 

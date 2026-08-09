@@ -4,6 +4,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSessionCreateRequest } from "../realtime-transcription/provider-types.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import { getUnifiedTalkSession, rememberUnifiedTalkSession } from "./talk-session-registry.js";
 import {
   cancelTalkTranscriptionRelayTurn,
@@ -14,7 +17,12 @@ import {
 } from "./talk-transcription-relay.js";
 import { expectRecordFields, isRecord, requireRecord } from "./test-helpers.assertions.js";
 
-type BroadcastEvent = { event: string; payload: unknown; connIds: string[] };
+type BroadcastEvent = {
+  event: string;
+  payload: unknown;
+  connIds: string[];
+  opts?: { dropIfSlow?: boolean };
+};
 
 function createSttSessionMock(connect: () => Promise<void> = async () => {}) {
   return {
@@ -46,8 +54,13 @@ function createBroadcastContext() {
   const context = {
     getRuntimeConfig: () => ({}),
     logGateway,
-    broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
-      events.push({ event, payload, connIds: [...connIds] });
+    broadcastToConnIds: (
+      event: string,
+      payload: unknown,
+      connIds: ReadonlySet<string>,
+      opts?: { dropIfSlow?: boolean },
+    ) => {
+      events.push({ event, payload, connIds: [...connIds], opts });
     },
   } as never;
   return { context, events, logGateway };
@@ -214,6 +227,119 @@ describe("talk transcription gateway relay", () => {
       type: "session.closed",
       final: true,
     });
+    for (const { payload, opts } of events) {
+      const { type } = requireRecord(payload, "transcription relay event");
+      expect(opts, `${String(type)} delivery`).toEqual({
+        dropIfSlow: type === "partial" || type === "inputAudio",
+      });
+    }
+  });
+
+  it("keeps provider errors and terminal close events durable", async () => {
+    let sttRequest: RealtimeTranscriptionSessionCreateRequest | undefined;
+    const { events } = await createStartedRelaySession(createSttSessionMock(), {}, (request) => {
+      sttRequest = request;
+    });
+
+    sttRequest?.onError?.(new Error("transcription provider disconnected"));
+
+    for (const type of ["error", "close"]) {
+      const payload = findPayloadByType(events, type);
+      expect(events.find((event) => event.payload === payload)?.opts).toEqual({
+        dropIfSlow: false,
+      });
+    }
+  });
+
+  it("closes a backpressured owner for final transcripts while healthy owners still receive them", async () => {
+    const createSocket = () => ({
+      bufferedAmount: 0,
+      send: vi.fn<(payload: string) => void>(),
+      close: vi.fn<(code: number, reason: string) => void>(),
+    });
+    const slowSocket = createSocket();
+    const healthySocket = createSocket();
+    const createClient = (
+      connId: string,
+      socket: ReturnType<typeof createSocket>,
+    ): GatewayWsClient =>
+      ({
+        connId,
+        socket: socket as unknown as GatewayWsClient["socket"],
+        connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+        usesSharedGatewayAuth: false,
+      }) satisfies GatewayWsClient;
+    const clients = new Set([
+      createClient("conn-slow", slowSocket),
+      createClient("conn-healthy", healthySocket),
+    ]);
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients });
+    const context = { broadcastToConnIds, getRuntimeConfig: () => ({}) } as never;
+    const requests = new Map<string, RealtimeTranscriptionSessionCreateRequest>();
+    const createSession = (connId: string) =>
+      createTalkTranscriptionRelaySession({
+        context,
+        connId,
+        provider: createTranscriptionProvider(createSttSessionMock(), (request) => {
+          requests.set(connId, request);
+        }),
+        providerConfig: {},
+      });
+    const slowSession = createSession("conn-slow");
+    const healthySession = createSession("conn-healthy");
+    await Promise.resolve();
+    const slowRequest = requests.get("conn-slow");
+    const healthyRequest = requests.get("conn-healthy");
+    if (!slowRequest || !healthyRequest) {
+      throw new Error("expected transcription providers for both browser connections");
+    }
+
+    try {
+      slowRequest.onSpeechStart?.();
+      healthyRequest.onSpeechStart?.();
+      slowSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+      const slowFramesBeforePartial = slowSocket.send.mock.calls.length;
+
+      slowRequest.onPartial?.("slow draft");
+      healthyRequest.onPartial?.("healthy draft");
+
+      expect(slowSocket.send).toHaveBeenCalledTimes(slowFramesBeforePartial);
+      expect(slowSocket.close).not.toHaveBeenCalled();
+
+      slowRequest.onTranscript?.("slow final");
+      healthyRequest.onTranscript?.("healthy final");
+
+      expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
+      const healthyFrames = healthySocket.send.mock.calls.map(
+        ([frame]) => JSON.parse(frame) as { event: string; payload: unknown },
+      );
+      expect(healthyFrames).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "talk.event",
+            payload: expect.objectContaining({ type: "partial", text: "healthy draft" }),
+          }),
+          expect.objectContaining({
+            event: "talk.event",
+            payload: expect.objectContaining({
+              type: "transcript",
+              text: "healthy final",
+              final: true,
+            }),
+          }),
+        ]),
+      );
+    } finally {
+      slowSocket.bufferedAmount = 0;
+      stopTalkTranscriptionRelaySession({
+        transcriptionSessionId: slowSession.transcriptionSessionId,
+        connId: "conn-slow",
+      });
+      stopTalkTranscriptionRelaySession({
+        transcriptionSessionId: healthySession.transcriptionSessionId,
+        connId: "conn-healthy",
+      });
+    }
   });
 
   it("closes only transcription relays owned by the disconnected connection", async () => {

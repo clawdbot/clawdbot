@@ -1159,6 +1159,7 @@ elements.input.addEventListener("input", () => {
   updateSendButton();
 });
 elements.input.addEventListener("keydown", (event) => {
+  // oxlint-disable-next-line unicorn/prefer-keyboard-event-key -- keyCode 229 covers WebView IME events when isComposing/key are unreliable.
   if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
     return;
   }

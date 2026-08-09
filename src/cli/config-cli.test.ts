@@ -35,6 +35,31 @@ const mockReadBestEffortRuntimeConfigSchema = vi.fn();
 const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
   createPluginMetadataSnapshot(),
 );
+const mockLoadChannelSecretContractApi = vi.hoisted(() =>
+  vi.fn(({ channelId }: { channelId: string }) => {
+    const fields: Record<string, readonly string[]> = {
+      discord: ["token"],
+      slack: ["appToken", "botToken"],
+      telegram: ["botToken"],
+    };
+    return {
+      secretTargetRegistryEntries: (fields[channelId] ?? []).map((field) => {
+        const pathPattern = `channels.${channelId}.${field}`;
+        return {
+          id: pathPattern,
+          targetType: pathPattern,
+          configFile: "openclaw.json" as const,
+          pathPattern,
+          secretShape: "secret_input" as const,
+          expectedResolvedValue: "string" as const,
+          includeInPlan: true,
+          includeInConfigure: true,
+          includeInAudit: true,
+        };
+      }),
+    };
+  }),
+);
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: (...args: Parameters<typeof mockReadConfigFileSnapshot>) =>
@@ -109,6 +134,15 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
   resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
     mockLoadPluginMetadataSnapshot(params.config),
+}));
+
+vi.mock("../plugins/bundled-plugin-metadata.js", () => ({
+  listBundledPluginMetadata: () => [],
+}));
+
+vi.mock("../secrets/channel-contract-api.js", () => ({
+  loadChannelSecretContractApi: mockLoadChannelSecretContractApi,
+  loadChannelSecretContractApiForRecord: () => undefined,
 }));
 
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -465,8 +499,6 @@ let ExitError: new (code: number, message?: string) => Error;
 describe("config cli", () => {
   beforeAll(async () => {
     ({ parseConfigSetPath, registerConfigCli } = await import("./config-cli.js"));
-    const { resolveConfigSecretTargetByPath } = await import("../secrets/target-registry.js");
-    resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
     sharedProgram = new Command();
     sharedProgram.exitOverride();
     registerConfigCli(sharedProgram);

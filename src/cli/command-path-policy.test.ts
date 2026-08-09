@@ -350,7 +350,13 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
-    for (const commandPath of [["hooks"], ["skills", "info"]]) {
+    for (const commandPath of [
+      ["hooks"],
+      ["hooks", "list"],
+      ["hooks", "info"],
+      ["hooks", "check"],
+      ["skills", "info"],
+    ]) {
       expectResolvedPolicy(commandPath, {
         configGuard: "skip",
         loadPlugins: "never",

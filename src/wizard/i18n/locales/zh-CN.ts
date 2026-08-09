@@ -284,6 +284,7 @@ export const zh_CN = {
       browserHandoffTitle: "在浏览器中继续",
       codingAgentQuip:
         "我看到这台机器上有 {labels} — 品味不错。等 AI 就绪后，我还能把它们的记忆一并带过来。",
+      controlUiPreparing: "正在准备 Control UI…",
       custodianIntro: "你好 — 我是 OpenClaw，负责维护这套系统。我们开始设置吧。",
       failedOptionLine: "{label}：{reason}",
       failedOptionsIntro: "刚才这些没有成功：",

@@ -74,6 +74,10 @@ function throwPreservingValue(value) {
   throw /** @type {Error} */ (value);
 }
 
+function aggregateErrorWithCause(errors, message, cause) {
+  return new AggregateError(errors, message, { cause });
+}
+
 function git(checkout, args, options = {}) {
   return execFileSync("git", ["-C", checkout, ...args], {
     encoding: options.encoding ?? "utf8",
@@ -1087,9 +1091,10 @@ function prepareLaunchAgentEntrypointReplacement(deployment, entrypoint, options
           try {
             restore();
           } catch (restoreError) {
-            throw new AggregateError(
+            throw aggregateErrorWithCause(
               [ownershipError, restoreError],
               "System LaunchDaemon ownership changed during plist publication and the previous LaunchAgent could not be restored",
+              restoreError,
             );
           }
           throw ownershipError;
@@ -1424,9 +1429,10 @@ function stopManagedGatewayAndProve(
   if (!stopError) {
     throw proofError;
   }
-  throw new AggregateError(
+  throw aggregateErrorWithCause(
     [stopError, proofError],
     "Gateway stop command failed and native stopped proof did not converge",
+    proofError,
   );
 }
 
@@ -1751,9 +1757,10 @@ function bootstrapManagedGateway(runCommand, checkout, deployment, options = {})
     );
   } catch (cleanupError) {
     if (restartError) {
-      throw new AggregateError(
+      throw aggregateErrorWithCause(
         [restartError, cleanupError],
         "Gateway restart failed and the one-shot startup trace environment could not be cleared",
+        cleanupError,
       );
     }
     throw cleanupError;
@@ -2572,7 +2579,7 @@ export function maintainMain(options, dependencies = {}) {
             }
             gatewaySuspension = prepareSuspension(update.checkout, gatewayControlDeployment);
           } catch (controlError) {
-            throw new AggregateError(
+            throw aggregateErrorWithCause(
               [
                 new UpdateInvariantError(
                   "gateway_snapshot_control_unavailable",
@@ -2582,6 +2589,7 @@ export function maintainMain(options, dependencies = {}) {
                 controlError,
               ],
               "Gateway control is unavailable and the managed Gateway could not be proven stopped",
+              controlError,
             );
           }
         }
@@ -2595,9 +2603,10 @@ export function maintainMain(options, dependencies = {}) {
               proof: proveGatewayStopped(update.checkout),
             };
           } catch (proofError) {
-            throw new AggregateError(
+            throw aggregateErrorWithCause(
               [prepareError, proofError],
               "Gateway suspension failed and the managed Gateway could not be proven stopped",
+              proofError,
             );
           }
         }
@@ -2651,9 +2660,10 @@ export function maintainMain(options, dependencies = {}) {
               gatewayControlDeployment,
             );
           } catch (resumeError) {
-            throw new AggregateError(
+            throw aggregateErrorWithCause(
               [error, resumeError],
               "Gateway stop failed and the prepared maintenance suspension could not be resumed",
+              resumeError,
             );
           }
           throw error;
@@ -2757,9 +2767,10 @@ export function maintainMain(options, dependencies = {}) {
           });
           waitForManagedGatewayReadiness(gatewayDeploymentBefore, probeMilestones, sleep);
         } catch (recoveryError) {
-          throw new AggregateError(
+          throw aggregateErrorWithCause(
             [error, recoveryError],
             "Gateway replacement failed and the previous managed service could not be restored",
+            recoveryError,
           );
         }
         throw error;

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { resolveSessionFilePathOptions, resolveStorePath } from "../config/sessions/paths.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+  resolveStorePath,
+} from "../config/sessions/paths.js";
 import {
   loadSessionEntry,
   patchSessionEntry,
@@ -241,4 +245,13 @@ export async function resetSessionEntryLifecycleImpl(
   });
 
   return resultEntry;
+}
+
+/** Internal runtime entry point; plugin callers receive an owner-scoped wrapper. */
+export async function resetSessionEntryLifecycle(
+  params: ResetSessionEntryLifecycleParams,
+): Promise<SessionEntry | null> {
+  return await resetSessionEntryLifecycleImpl(params, (sessionId, options) =>
+    resolveSessionFilePath(sessionId, undefined, options),
+  );
 }

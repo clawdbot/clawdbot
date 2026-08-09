@@ -1,4 +1,5 @@
 // Signal plugin module implements sse reconnect behavior.
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import {
   computeBackoff,
   logVerbose,
@@ -20,6 +21,19 @@ const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   jitter: 0.2,
 };
 
+export type SignalStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
+
+export function publishSignalRecovering(
+  statusSink: SignalStatusSink | undefined,
+  lastError?: string,
+) {
+  statusSink?.({
+    connected: false,
+    lifecycle: "recovering",
+    ...(lastError ? { lastError } : {}),
+  });
+}
+
 type RunSignalSseLoopParams = {
   baseUrl: string;
   account?: string;
@@ -29,6 +43,7 @@ type RunSignalSseLoopParams = {
   timeoutMs?: number;
   transportKind?: SignalTransportKind;
   policy?: Partial<BackoffPolicy>;
+  statusSink?: SignalStatusSink;
 };
 
 export async function runSignalSseLoop({
@@ -40,6 +55,7 @@ export async function runSignalSseLoop({
   timeoutMs,
   transportKind,
   policy,
+  statusSink,
 }: RunSignalSseLoopParams) {
   const reconnectPolicy = {
     ...DEFAULT_RECONNECT_POLICY,
@@ -65,6 +81,15 @@ export async function runSignalSseLoop({
         abortSignal,
         timeoutMs,
         transportKind,
+        onStreamOpen: () => {
+          statusSink?.({
+            connected: true,
+            lifecycle: "ready",
+            lastConnectedAt: Date.now(),
+            lastError: null,
+            terminalDisconnect: undefined,
+          });
+        },
         onEvent: async (event: SignalSseEvent) => {
           reconnectAttempts = 0;
           await onEvent(event);
@@ -77,6 +102,7 @@ export async function runSignalSseLoop({
       if (abortSignal?.aborted) {
         return;
       }
+      publishSignalRecovering(statusSink);
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
       logReconnectVerbose(`Signal stream ended, reconnecting in ${delayMs / 1000}s...`);
@@ -86,6 +112,7 @@ export async function runSignalSseLoop({
         return;
       }
       runtime.error?.(`Signal stream error: ${String(err)}`);
+      publishSignalRecovering(statusSink, String(err));
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
       runtime.log?.(`Signal connection lost, reconnecting in ${delayMs / 1000}s...`);

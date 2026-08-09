@@ -169,6 +169,14 @@ vi.mock("../../agents/model-fallback-attempt.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
+vi.mock("../../agents/runtime-plan/build.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/runtime-plan/build.js")>()),
+  buildAgentRuntimeDeliveryPlan: () => ({
+    isSilentPayload: () => false,
+    resolveFollowupRoute: () => undefined,
+  }),
+}));
+
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({
     hasHooks: state.beforeAgentReplyHasHooksMock,
@@ -714,8 +722,9 @@ describe("runReplyAgent active steering", () => {
       gatewayHealth: "live",
     });
     const onAdopted = vi.fn();
+    const onBlockReply = vi.fn();
     const { run } = createMinimalRun({
-      opts: { turnAdoptionLifecycle: { onAdopted } },
+      opts: { onBlockReply, turnAdoptionLifecycle: { onAdopted } },
       isActive: true,
       isStreaming: true,
       shouldSteer: true,
@@ -735,6 +744,7 @@ describe("runReplyAgent active steering", () => {
 
     expect(state.beforeAgentReplyRunMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "model reply" }));
     expect(onAdopted).not.toHaveBeenCalled();
   });
 

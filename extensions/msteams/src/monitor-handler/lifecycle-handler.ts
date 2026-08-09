@@ -1,9 +1,5 @@
 // Msteams plugin module handles app lifecycle session boundaries.
-import {
-  listSessionEntries,
-  resetSessionEntryLifecycle,
-  resolveStorePath,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { listSessionEntries, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeStoredConversationId,
@@ -263,7 +259,8 @@ async function rotateMSTeamsSessions(params: {
       continue;
     }
 
-    const resetEntry = await resetSessionEntryLifecycle({
+    const resetEntry = await getMSTeamsRuntime().channel.session.resetSessionEntryLifecycle({
+      channelId: "msteams",
       storePath,
       sessionKey,
       expectedSessionId: entry.sessionId,

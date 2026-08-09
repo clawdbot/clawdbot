@@ -227,7 +227,9 @@ describe("plugins Docker assertions", () => {
 
     expect(script).toContain("run(controller.signal, timeoutPromise)");
     expect(
-      script.match(/readBoundedResponseText\([\s\S]*?limits\.bodyMaxBytes,\n\s+timeoutPromise,/gu),
+      script.match(
+        /readBoundedResponseText\([\s\S]*?limits\.bodyMaxBytes,\n\s+\{ createTooLargeError: createBoundedResponseTooLargeError, timeoutPromise \},/gu,
+      ),
     ).toHaveLength(2);
   });
 

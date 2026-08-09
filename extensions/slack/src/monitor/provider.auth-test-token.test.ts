@@ -618,6 +618,7 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
+      terminalDisconnect: undefined,
       ...expected,
     });
   });
@@ -632,6 +633,7 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
+      terminalDisconnect: undefined,
       lifecycle: "ready",
       lastError: null,
     });
@@ -663,6 +665,7 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
+      terminalDisconnect: undefined,
       lifecycle: "blocked",
       lastError: "request_timeout",
     });
@@ -688,6 +691,7 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
+      terminalDisconnect: undefined,
       lifecycle: "ready",
       lastError: null,
     });

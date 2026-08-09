@@ -33,6 +33,7 @@ import {
   resolveEveryAnchorMs,
 } from "./jobs-scheduling.js";
 import {
+  assertAnnounceDeliveryChannelSupport,
   assertCronExpressionSatisfiable,
   assertDeliverySupport,
   assertFailureDestinationSupport,
@@ -49,6 +50,7 @@ import { mergeCronPayload } from "./payload-merge.js";
 import type { CronServiceState } from "./state.js";
 
 const CRON_DECLARATIVE_LABEL_MAX_LENGTH = 200;
+type DeliveryValidationOptions = { configuredChannels?: readonly string[] };
 
 export { assertSupportedJobSpec };
 
@@ -119,7 +121,7 @@ function reconcileScheduledToolPolicy(params: {
 export function createJob(
   state: CronServiceState,
   input: CronJobCreate,
-  opts?: { scheduledToolPolicy?: CronScheduledToolPolicy },
+  opts?: DeliveryValidationOptions & { scheduledToolPolicy?: CronScheduledToolPolicy },
 ): CronJob {
   const now = state.deps.nowMs();
   const id = normalizeOptionalString(input.id) ?? crypto.randomUUID();
@@ -235,6 +237,7 @@ export function createJob(
   });
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
+  assertAnnounceDeliveryChannelSupport(job, opts?.configuredChannels);
   assertFailureDestinationSupport(job);
   assertCronExpressionSatisfiable(job, now, computeJobNextRunAtMs);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
@@ -250,7 +253,7 @@ export function applyJobPatch(
     scheduleValidationNowMs?: number;
     cronConfig?: CronConfig;
     scheduledToolPolicy?: CronScheduledToolPolicy;
-  },
+  } & DeliveryValidationOptions,
 ) {
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
   const explicitlyClearsToolsAllow = patch.payload?.toolsAllow === null;
@@ -434,6 +437,7 @@ export function applyJobPatch(
   });
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
+  assertAnnounceDeliveryChannelSupport(job, opts?.configuredChannels, patch);
   assertFailureDestinationSupport(job);
   if (
     opts?.scheduleValidationNowMs !== undefined &&
@@ -453,7 +457,7 @@ export function applyDeclarativeJobSpec(
     nowMs: number;
     cronConfig?: CronConfig;
     scheduledToolPolicy?: CronScheduledToolPolicy;
-  },
+  } & DeliveryValidationOptions,
 ) {
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
   const explicitlyDeclaresToolsAllow = input.payload.toolsAllow !== undefined;
@@ -558,6 +562,7 @@ export function applyDeclarativeJobSpec(
   assertPacingSupport(job);
   assertMainSessionAgentId(job, opts.defaultAgentId);
   assertDeliverySupport(job);
+  assertAnnounceDeliveryChannelSupport(job, opts.configuredChannels);
   assertFailureDestinationSupport(job);
   assertCronExpressionSatisfiable(job, opts.nowMs, computeJobNextRunAtMs);
 }

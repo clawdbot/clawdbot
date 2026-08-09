@@ -241,6 +241,7 @@ export async function runTelegramDispatchTurn(params: {
                 ? params.progress.commentaryProgressEnabled
                 : undefined,
             progressPreambleEnabled: params.progress.progressPreambleEnabled,
+            commentaryPayloadsEnabled: params.progress.progressPreambleEnabled,
             reasoningPayloadsEnabled: params.draft.durableReasoningPayloadsEnabled,
             onToolStart: params.progress.handleToolStart,
             onItemEvent: params.progress.handleItemEvent,
@@ -284,6 +285,8 @@ export async function runTelegramDispatchTurn(params: {
       return false;
     }
     params.state.queuedFinal = turnResult.dispatchResult.queuedFinal;
+    params.state.noVisibleReplyFallbackEligible =
+      turnResult.dispatchResult.noVisibleReplyFallbackEligible === true;
     if ((turnResult.dispatchResult.counts?.final ?? 0) > 0) {
       params.progress.markSawFinal();
     }

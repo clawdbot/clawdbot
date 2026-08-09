@@ -73,6 +73,7 @@ import {
   formatSlackUserResolved,
   gracefulStopSlackApp,
   publishSlackConnectedStatus,
+  publishSlackBlockedStatus,
   publishSlackDisconnectedStatus,
   resolveSlackBoltInterop,
   startSlackSocketAndWaitForDisconnect,
@@ -852,6 +853,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
           // Permanent account and credential failures need operator action.
           if (disconnect.error && isNonRecoverableSlackAuthError(disconnect.error)) {
+            publishSlackBlockedStatus(opts.setStatus, disconnect.error);
             runtime.error?.(
               `slack socket mode disconnected due to non-recoverable auth error — skipping channel (${formatUnknownError(disconnect.error)})`,
             );
@@ -880,11 +882,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           }
         } catch (err) {
           if (isNonRecoverableSlackAuthError(err)) {
+            publishSlackBlockedStatus(opts.setStatus, err);
             runtime.error?.(
               `slack socket mode failed to start due to non-recoverable auth error — skipping channel (${formatUnknownError(err)})`,
             );
             throw err;
           }
+          publishSlackDisconnectedStatus(opts.setStatus, err);
           reconnectAttempts += 1;
           const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
           runtime.error?.(

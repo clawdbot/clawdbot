@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { generateSecureToken } from "../infra/secure-random.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
@@ -153,13 +154,7 @@ function rememberReusableCatalog(key: string | undefined, catalog: ToolSearchCat
     reusableCatalogSnapshots.delete(key);
   }
   reusableCatalogSnapshots.set(key, { entries: catalog.entries, fingerprint });
-  while (reusableCatalogSnapshots.size > MAX_REUSABLE_CATALOG_SNAPSHOTS) {
-    const oldestKey = reusableCatalogSnapshots.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    reusableCatalogSnapshots.delete(oldestKey);
-  }
+  pruneMapToMaxSize(reusableCatalogSnapshots, MAX_REUSABLE_CATALOG_SNAPSHOTS);
 }
 
 function classifyTool(tool: CatalogTool): {
