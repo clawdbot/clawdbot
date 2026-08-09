@@ -212,13 +212,18 @@ function computeRetryDelayMs(
 }
 
 function shouldRetry(classification: ReturnType<typeof classifyMSTeamsSendError>): boolean {
-  // Only 429 throttling is replayed — a 429 means the connector rejected the
-  // request before processing it
+  // 429 throttling is always replayed — the connector rejected the request
+  // before processing it
   // (https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/rate-limit).
-  // Bot Framework activity creates are non-idempotent, so an ambiguous 408/5xx
-  // (the connector may already have accepted and delivered the activity) is
-  // never retried.
-  return classification.kind === "throttled";
+  // An ambiguous 408/5xx is replayed only when it escaped pre-send preparation
+  // (Graph/SharePoint): no activity was created, so a replay cannot duplicate
+  // anything. Send-stage ambiguous errors are never retried — Bot Framework
+  // activity creates are non-idempotent and the connector may already have
+  // accepted and delivered the activity.
+  return (
+    classification.kind === "throttled" ||
+    (classification.kind === "ambiguous" && classification.stage === "prepare")
+  );
 }
 
 export function renderReplyPayloadsToMessages(

@@ -535,7 +535,7 @@ describe("msteams messenger", () => {
       }
     });
 
-    it("tags pre-send upload 5xx failures as prepare-stage (never delivered, not retried)", async () => {
+    it("retries pre-send upload 5xx (never delivered) and tags persistent failure as prepare-stage", async () => {
       const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-prepare-"));
       const localFile = path.join(tmpDir, "upload.txt");
       await writeFile(localFile, "hello");
@@ -576,16 +576,75 @@ describe("msteams messenger", () => {
           retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
         }).catch((error: unknown) => error);
 
-        // A pre-send 5xx is ambiguous-kind but nothing was dispatched: the
-        // platform wrapper says "not dispatched", and the tagged cause keeps
-        // the stage visible so hints can say nothing was delivered.
+        // A pre-send 5xx is replayed (nothing was delivered, so a retry cannot
+        // duplicate) and a persistent failure still surfaces as the platform
+        // not-dispatched wrapper with the stage-tagged cause.
         expect(err).toBeInstanceOf(PlatformMessageNotDispatchedError);
         expect((err as PlatformMessageNotDispatchedError).cause).toMatchObject({
           statusCode: 503,
           msteamsSendStage: "prepare",
         });
-        expect(uploadAttempts).toBe(1);
+        expect(uploadAttempts).toBe(3);
         expect(attempts).toEqual([]);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("recovers when a pre-send upload 5xx succeeds on retry", async () => {
+      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-prepare-"));
+      const localFile = path.join(tmpDir, "upload.txt");
+      await writeFile(localFile, "hello");
+
+      try {
+        const attempts: string[] = [];
+        let uploadAttempts = 0;
+        graphUploadMockState.uploadAndShareSharePoint.mockImplementation(async () => {
+          uploadAttempts += 1;
+          if (uploadAttempts === 1) {
+            throw Object.assign(new Error("graph upload 503"), { statusCode: 503 });
+          }
+          return {
+            itemId: "item123",
+            webUrl: "https://sharepoint.example.com/item123",
+            shareUrl: "https://sharepoint.example.com/share/item123",
+            name: "upload.txt",
+          };
+        });
+        graphUploadMockState.getDriveItemProperties.mockResolvedValue({
+          eTag: '"{ITEM-123},1"',
+          webDavUrl: "https://sharepoint.example.com/item123",
+          name: "upload.txt",
+        });
+
+        const ctx = {
+          sendActivity: createRecordedSendActivity(attempts),
+        };
+        const ids = await sendMSTeamsMessages({
+          replyStyle: "thread",
+          app: createMockApp(),
+          appId: "app123",
+          conversationRef: {
+            ...baseRef,
+            conversation: {
+              ...baseRef.conversation,
+              conversationType: "channel",
+            },
+          },
+          context: ctx,
+          messages: [{ text: "one", mediaUrl: localFile }],
+          tokenProvider: {
+            getAccessToken: async () => "token",
+          },
+          sharePointSiteId: "site-123",
+          retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
+        });
+
+        // Preparation reliability is preserved: a transient Graph 5xx before
+        // the activity create is retried and the send completes.
+        expect(uploadAttempts).toBe(2);
+        expect(attempts).toEqual(["one"]);
+        expect(ids).toEqual(["id:one"]);
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
