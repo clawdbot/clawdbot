@@ -248,7 +248,8 @@ describe("users gateway methods", () => {
       avatarRevision: "avatar-sha256-png",
     });
     const payload = respond.mock.calls[0]?.[1] as UsersSetAvatarResult;
-    const readLegacyProfile = ({ profile }: Pick<UsersSetAvatarResult, "profile">) => profile;
+    const readLegacyProfile = ({ profile: resultProfile }: Pick<UsersSetAvatarResult, "profile">) =>
+      resultProfile;
     expect(readLegacyProfile(payload)).toEqual(updatedProfile);
     expect(refreshConnectedUserProfile.mock.invocationCallOrder[0]).toBeLessThan(
       respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
