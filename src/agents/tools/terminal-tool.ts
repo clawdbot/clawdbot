@@ -79,8 +79,8 @@ type TerminalToolOptions = {
 };
 
 async function resolveTaskOwnerId(agentSessionKey: string): Promise<string | undefined> {
-  const { listTasksForSessionKey } = await import("../../tasks/task-registry.js");
-  const tasks = listTasksForSessionKey(agentSessionKey).filter(
+  const { listTasksForSessionKeyForStatus } = await import("../../tasks/task-status-access.js");
+  const tasks = listTasksForSessionKeyForStatus(agentSessionKey).filter(
     (task) =>
       (task.status === "queued" || task.status === "running") &&
       task.childSessionKey?.trim() === agentSessionKey,
