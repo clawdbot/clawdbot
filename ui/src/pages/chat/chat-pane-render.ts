@@ -80,6 +80,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
+    void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
@@ -453,7 +454,9 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
         isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.dismiss") ===
           true,
-      onAcceptTaskSuggestion: (suggestion) => void this.acceptTaskSuggestion(suggestion),
+      taskSuggestionCloudProfiles: this.taskSuggestionCloudProfiles,
+      onAcceptTaskSuggestion: (suggestion, mode, cloudProfileId) =>
+        void this.acceptTaskSuggestion(suggestion, mode, cloudProfileId),
       onDismissTaskSuggestion: (suggestion) => void this.dismissTaskSuggestion(suggestion),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),

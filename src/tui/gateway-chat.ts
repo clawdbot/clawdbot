@@ -17,10 +17,12 @@ import {
   type CommandEntry,
   type CommandsListParams,
   type CommandsListResult,
+  type EnvironmentsListResult,
   type SessionsListParams,
   type SessionsPatchResult,
   type SessionsPatchParams,
   type TaskSuggestionsAcceptResult,
+  type TaskSuggestionsAcceptParams,
   type TaskSuggestionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -52,6 +54,7 @@ import type {
   TuiSessionCreateOptions,
   TuiSessionMutationResult,
   TuiChatSendResult,
+  TuiTaskSuggestionAcceptMode,
 } from "./tui-backend.js";
 
 type GatewayConnectionOptions = {
@@ -469,10 +472,29 @@ export class GatewayChatClient implements TuiBackend {
     return result.suggestions;
   }
 
-  async acceptTaskSuggestion(taskId: string) {
-    return await this.client.request<TaskSuggestionsAcceptResult>("taskSuggestions.accept", {
-      taskId,
-    });
+  async listCloudWorkerProfiles() {
+    if (this.hello?.features?.methods?.includes("environments.list") !== true) {
+      return [];
+    }
+    try {
+      const result = await this.client.request<EnvironmentsListResult>("environments.list", {});
+      return result.profiles?.map((profile) => profile.id) ?? [];
+    } catch {
+      // Cloud placement is optional; older or temporarily failing gateways stay quiet.
+      return [];
+    }
+  }
+
+  async acceptTaskSuggestion(
+    taskId: string,
+    mode?: TuiTaskSuggestionAcceptMode,
+    cloudProfileId?: string,
+  ) {
+    const params: TaskSuggestionsAcceptParams =
+      !mode || mode === "worktree"
+        ? { taskId }
+        : { taskId, mode, ...(cloudProfileId ? { cloudProfileId } : {}) };
+    return await this.client.request<TaskSuggestionsAcceptResult>("taskSuggestions.accept", params);
   }
 
   async dismissTaskSuggestion(taskId: string) {

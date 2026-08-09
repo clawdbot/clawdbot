@@ -53,6 +53,7 @@ function createHarness() {
   });
   const requestRender = vi.fn();
   const listTaskSuggestions = vi.fn().mockResolvedValue([]);
+  const listCloudWorkerProfiles = vi.fn().mockResolvedValue([]);
   const acceptTaskSuggestion = vi
     .fn()
     .mockResolvedValue({ taskId: "task_1", key: "agent:main:task" });
@@ -65,6 +66,7 @@ function createHarness() {
     client: {
       getTaskSuggestionActionCapabilities: () => actionCapabilities,
       listTaskSuggestions,
+      listCloudWorkerProfiles,
       acceptTaskSuggestion,
       dismissTaskSuggestion,
     },
@@ -96,6 +98,7 @@ function createHarness() {
     overlayHandles,
     requestRender,
     listTaskSuggestions,
+    listCloudWorkerProfiles,
     acceptTaskSuggestion,
     dismissTaskSuggestion,
     onAccepted,
@@ -139,8 +142,13 @@ describe("TUI task suggestions", () => {
     expect(renderedPrompt).toContain("Why: The adapter is unreachable");
     expect(renderedPrompt).toContain("Instructions:");
     expect(renderedPrompt).toContain("Delete the stale adapter and update its tests.");
-    expect(harness.selectors[0]?.items.map((item) => item.value)).toEqual(["accept", "dismiss"]);
-    expect(harness.selectors[0]?.setSelectedIndex).toHaveBeenCalledWith(1);
+    expect(harness.selectors[0]?.items.map((item) => item.value)).toEqual([
+      "accept-local",
+      "accept-session",
+      "accept",
+      "dismiss",
+    ]);
+    expect(harness.selectors[0]?.setSelectedIndex).toHaveBeenCalledWith(3);
 
     const accept = { value: "accept", label: "Start in worktree" };
     harness.selectors[0]?.onSelect?.(accept);
@@ -155,6 +163,57 @@ describe("TUI task suggestions", () => {
       expect(harness.onAccepted).toHaveBeenCalledWith("agent:main:task");
     });
     expect(harness.addSystem).toHaveBeenCalledWith("follow-up task started in agent:main:task");
+  });
+
+  it.each([
+    { value: "accept-local", mode: "local" as const },
+    { value: "accept-session", mode: "session" as const },
+  ])("forwards $mode acceptance after double Enter", async ({ value, mode }) => {
+    const harness = createHarness();
+    harness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion: suggestionPayload(),
+    });
+    const action = expectDefined(
+      harness.selectors[0]?.items.find((item) => item.value === value),
+      `${mode} action`,
+    );
+
+    harness.selectors[0]?.onSelect?.(action);
+    expect(harness.acceptTaskSuggestion).not.toHaveBeenCalled();
+    harness.selectors[0]?.onSelect?.(action);
+
+    await vi.waitFor(() => {
+      expect(harness.acceptTaskSuggestion).toHaveBeenCalledWith("task_1", mode);
+    });
+    if (mode === "session") {
+      expect(harness.onAccepted).not.toHaveBeenCalled();
+    }
+  });
+
+  it("offers one cloud action per profile and forwards the selected profile", async () => {
+    const harness = createHarness();
+    const suggestion = suggestionPayload();
+    harness.listTaskSuggestions.mockResolvedValueOnce([suggestion]);
+    harness.listCloudWorkerProfiles.mockResolvedValueOnce(["build", "review"]);
+
+    await harness.controller.refresh();
+
+    const cloudActions = harness.selectors[0]?.items.filter(
+      (item) => item.value === "accept-cloud",
+    );
+    expect(cloudActions?.map((item) => item.label)).toEqual([
+      "Send to cloud · build",
+      "Send to cloud · review",
+    ]);
+    const review = expectDefined(cloudActions?.[1], "review cloud action");
+    harness.selectors[0]?.onSelect?.(review);
+    expect(harness.acceptTaskSuggestion).not.toHaveBeenCalled();
+    harness.selectors[0]?.onSelect?.(review);
+
+    await vi.waitFor(() => {
+      expect(harness.acceptTaskSuggestion).toHaveBeenCalledWith("task_1", "cloud", "review");
+    });
   });
 
   it("keeps actions visible while paging through long instructions", () => {
@@ -288,6 +347,26 @@ describe("TUI task suggestions", () => {
     staleSelector?.onSelect?.({ value: "accept", label: "Start in worktree" });
     staleSelector?.onSelect?.({ value: "accept", label: "Start in worktree" });
     expect(harness.acceptTaskSuggestion).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds an active selector when cloud profile identity changes", async () => {
+    const harness = createHarness();
+    const suggestion = suggestionPayload();
+    harness.listTaskSuggestions.mockResolvedValue([suggestion]);
+    harness.listCloudWorkerProfiles.mockResolvedValueOnce(["build"]);
+
+    await harness.controller.refresh();
+    expect(harness.selectors[0]?.items.map((item) => item.label)).toContain(
+      "Send to cloud · build",
+    );
+
+    harness.listCloudWorkerProfiles.mockResolvedValueOnce(["review"]);
+    await harness.controller.refresh();
+
+    expect(harness.closeOverlay).toHaveBeenCalledWith(harness.overlayHandles[0]);
+    expect(harness.selectors[1]?.items.map((item) => item.label)).toContain(
+      "Send to cloud · review",
+    );
   });
 
   it("shows a still-pending suggestion again when its action fails", async () => {
