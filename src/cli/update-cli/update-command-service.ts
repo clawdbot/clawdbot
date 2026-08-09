@@ -55,10 +55,7 @@ import {
 import { runRestartScript } from "./restart-helper.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
-import {
-  disableUpdatedPackageCompileCacheEnv,
-  resolveUpdatedInstallCommandEnv,
-} from "./update-command-service-env.js";
+import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
