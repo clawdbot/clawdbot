@@ -58,13 +58,19 @@ export function prepareOwnedPluginLoadContext(
   input: PreparedModelRuntimeInput,
   env: NodeJS.ProcessEnv,
   registry: PluginRegistry | undefined,
+  additionalRegistry?: PluginRegistry,
 ): PluginMetadataSnapshot {
   const metadataSnapshot = resolvePluginMetadataSnapshot({
     config: input.config,
     env,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
   });
-  preparePluginLoadContext(input, env, registry, metadataSnapshot);
+  const context = preparePluginLoadContext(input, env, registry, metadataSnapshot);
+  if (additionalRegistry && additionalRegistry !== registry) {
+    // Generic inbound and model-selected registries keep distinct activation scopes while sharing
+    // the exact lifecycle-owned config, metadata, and install generation.
+    setPreparedPluginRuntimeLoadContext(additionalRegistry, context);
+  }
   return metadataSnapshot;
 }
 

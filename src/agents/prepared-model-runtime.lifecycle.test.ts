@@ -757,7 +757,7 @@ describe("prepared model runtime snapshots", () => {
       refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true, catalogMode: "static" }),
     ).resolves.toBeUndefined();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
     expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
   });
