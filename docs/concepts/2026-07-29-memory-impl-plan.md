@@ -1,3 +1,14 @@
+---
+doc-schema-version: 1
+summary: "Phased implementation plan for identity-aware multiplayer memory"
+title: "Multiplayer memory implementation plan"
+sidebarTitle: "Memory implementation plan"
+read_when:
+  - You are implementing identity-aware memory authorization in phases
+  - You need the definition of done for multiplayer memory milestones
+  - You are reviewing the rollout or security boundaries for multiplayer memory
+---
+
 # OpenClaw Multiplayer Memory Implementation Plan
 
 Date: 2026-07-29
