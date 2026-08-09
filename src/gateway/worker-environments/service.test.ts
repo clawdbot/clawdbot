@@ -1164,6 +1164,7 @@ describe("worker environment service", () => {
       workerService.create("development", "request-preparation-failure"),
     ).rejects.toMatchObject({
       code: "bootstrap_failure",
+      message: expect.stringContaining("npm install requires a released gateway package"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
 
     expect(provision).not.toHaveBeenCalled();
@@ -1589,6 +1590,7 @@ describe("worker environment service", () => {
 
     await expect(workerService.create("development", "request-malformed")).rejects.toMatchObject({
       code: "provider_failure",
+      message: expect.stringContaining(error),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     expect(store.list()[0]).toMatchObject({
       state: "provisioning",
@@ -1621,6 +1623,7 @@ describe("worker environment service", () => {
 
     await expect(workerService.create("development", "request-invalid")).rejects.toMatchObject({
       code: "invalid_profile",
+      message: expect.stringContaining("region is required"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     const record = expectDefined(store.list()[0], "store.list()[0] test invariant");
     expect(record).toMatchObject({ state: "failed", lastError: "region is required" });
@@ -2256,6 +2259,45 @@ describe("worker environment service", () => {
 
     await rejectedStart;
     expect(order).toEqual(["tunnel-stop", "provider-destroy"]);
+  });
+
+  it("stops a poisoned tunnel start and returns a typed deadline error", async () => {
+    vi.useFakeTimers();
+    seedReady("worker-tunnel-timeout");
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    let rejectStart!: (error: Error) => void;
+    const pendingStart = new Promise<never>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const tunnelManager = {
+      status: () => "connecting" as const,
+      start: vi.fn(() => {
+        signalStarted();
+        return pendingStart;
+      }),
+      stop: vi.fn(async () => {
+        rejectStart(new Error("tunnel stopped"));
+      }),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = createService(createProvider(), { tunnelManager });
+
+    const starting = workerService.startTunnel({
+      environmentId: "worker-tunnel-timeout",
+      ownerEpoch: 1,
+    });
+    const rejected = expect(starting).rejects.toMatchObject({
+      code: "provider_failure",
+      message: expect.stringContaining("did not connect within 3 minutes"),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    await started;
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+
+    await rejected;
+    expect(tunnelManager.stop).toHaveBeenCalledWith("worker-tunnel-timeout", 1);
   });
 
   it("adopts an unpersisted provision result before destroying", async () => {

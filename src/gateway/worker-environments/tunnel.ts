@@ -1,8 +1,11 @@
 import { RetrySupervisor } from "../../../packages/retry/src/index.js";
 import { sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
+import { withTimeout } from "../../infra/fs-safe.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { createDeferred, type Deferred } from "../../shared/deferred.js";
+import { boundedWorkerError } from "./service-validation.js";
 import {
   advanceWorkerSshAfterTransportExit,
   prepareWorkerSsh,
@@ -30,6 +33,9 @@ import { createWorkerWorkspaceActions, stableWorkerPathComponent } from "./works
 export type { WorkerTunnelHandle } from "./tunnel-contract.js";
 const REMOTE_SOCKET_NAME = "gateway.sock";
 const REMOTE_SETUP_TIMEOUT_MS = 20_000;
+// A live SSH process without the remote marker is not a usable tunnel. Bound each attempt so the
+// retry supervisor can move on instead of pinning the environment forever.
+const TUNNEL_READY_TIMEOUT_MS = 60_000;
 const DEFAULT_STABLE_CONNECTION_MS = 30_000;
 const DEFAULT_BACKOFF: BackoffPolicy = {
   initialMs: 250,
@@ -37,6 +43,7 @@ const DEFAULT_BACKOFF: BackoffPolicy = {
   factor: 2,
   jitter: 0,
 };
+const tunnelLog = createSubsystemLogger("gateway/worker-tunnel");
 
 const REMOTE_SOCKET_SETUP_SCRIPT = String.raw`set -eu
 directory=$1
@@ -50,7 +57,7 @@ if [ -e "$directory" ] || [ -L "$directory" ]; then
 else
   mkdir -- "$directory"
 fi
-chmod 700 -- "$directory"
+chmod 700 "$directory"  # no "--": BSD/macOS chmod treats it as a filename; path is script-owned and absolute
 rm -f -- "$socket"
 `;
 
@@ -281,7 +288,9 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         child = connection.process;
         childPort = connection.port;
         entry.process = child;
-        await child.ready;
+        await withTimeout(child.ready, TUNNEL_READY_TIMEOUT_MS, {
+          message: "Worker tunnel did not become ready within 60 seconds",
+        });
         if (!isCurrent(entry)) {
           await child.stop();
           return;
@@ -306,14 +315,41 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         if (now() - connectedAtMs >= stableConnectionMs) {
           reconnectSupervisor.reset();
         }
-      } catch {
+      } catch (error) {
         if (child && childPort !== undefined) {
-          const exit = await child.exited.catch(() => undefined);
+          let stopError: unknown;
+          let stopFailed = false;
+          const stopping = child.stop().catch((failure: unknown) => {
+            stopFailed = true;
+            stopError = failure;
+          });
+          let exit = await Promise.race([
+            child.exited.catch(() => undefined),
+            stopping.then(() => undefined),
+          ]);
+          await stopping;
+          if (stopFailed) {
+            // A failed stop means the SSH child may still be running. Never drop it from
+            // tracking and never retry over it — wait for its real exit first, and keep
+            // that late exit so transport-exit port rotation still advances.
+            tunnelLog.warn("worker tunnel stop failed; waiting for SSH child exit", {
+              environmentId: entry.environmentId,
+              error: boundedWorkerError(stopError),
+              connectError: boundedWorkerError(error),
+            });
+            exit = (await child.exited.catch(() => undefined)) ?? exit;
+          }
           if (exit && entry.prepared) {
             advanceWorkerSshAfterTransportExit(entry.prepared, childPort, exit);
           }
         }
-        await child?.stop().catch(() => undefined);
+        if (isCurrent(entry)) {
+          tunnelLog.warn("worker tunnel connect attempt failed", {
+            environmentId: entry.environmentId,
+            attempt: reconnectSupervisor.attempts + 1,
+            error: boundedWorkerError(error),
+          });
+        }
       } finally {
         if (entry.process === child) {
           entry.process = undefined;

@@ -93,6 +93,27 @@ describe("worker tunnel manager", () => {
     await handle.stop();
   });
 
+  it("times out a marker-less SSH child and retries", async () => {
+    vi.useFakeTimers();
+    const fake = fakeRunner();
+    const manager = createWorkerTunnelManager({ runner: fake.runner, sleep: async () => {} });
+    const starting = startTestTunnel(manager, "worker:ready-timeout", 1);
+    const rejected = expect(starting).rejects.toThrow("stopped before connecting");
+
+    try {
+      await waitForStarts(fake.starts, 1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await waitForStarts(fake.starts, 2);
+
+      expect(fake.starts[0]?.process.stopCount).toBe(1);
+      expect(manager.status("worker:ready-timeout")).toBe("reconnecting");
+    } finally {
+      await manager.stop("worker:ready-timeout");
+      await rejected;
+      vi.useRealTimers();
+    }
+  });
+
   it("reconnects on the next advertised port after SSH transport exit 255", async () => {
     const fake = fakeRunner();
     const manager = createWorkerTunnelManager({

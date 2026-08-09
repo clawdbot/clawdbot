@@ -92,6 +92,8 @@ class WorkerEnvironmentServiceError extends Error {
 const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) =>
   new WorkerEnvironmentServiceError(code, message);
 const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
+// One poisoned SSH attempt must not hold every later dispatch on the same owner epoch forever.
+const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
 
 function workerEnvironmentIdempotencyDigest(idempotencyKey: string): string {
   return createHash("sha256").update(idempotencyKey).digest("hex");
@@ -614,15 +616,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         ),
       );
     } catch (error) {
+      const detail = boundedError(error);
       if (
         error instanceof WorkerProviderError ||
         (error instanceof WorkerEnvironmentServiceError && error.code === "invalid_profile")
       ) {
-        move(record, "failed", { lastError: boundedError(error) });
-        throw serviceError("invalid_profile", "Worker provider rejected profile");
+        move(record, "failed", { lastError: detail });
+        throw serviceError("invalid_profile", `Worker provider rejected profile: ${detail}`);
       }
       saveError(record, error);
-      throw serviceError("provider_failure", "Worker provider operation failed");
+      throw serviceError("provider_failure", `Worker provider operation failed: ${detail}`);
     }
     // A timeout can happen after allocation; retain the same operation id for safe replay.
     const patch = { leaseId: lease.leaseId, sshEndpoint: lease.ssh };
@@ -654,8 +657,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         // must happen first because the previous response may have been lost after allocation.
         installation = await prepareInstallation(record);
       } catch (error) {
-        move(record, "failed", { lastError: boundedError(error) });
-        throw serviceError("bootstrap_failure", "Worker installation preparation failed");
+        const detail = boundedError(error);
+        move(record, "failed", { lastError: detail });
+        throw serviceError(
+          "bootstrap_failure",
+          `Worker installation preparation failed: ${detail}`,
+        );
       }
     }
     const provisioning = record.state === "requested" ? move(record, "provisioning") : record;
@@ -1101,7 +1108,24 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (!startup) {
       throw serviceError("invalid_state", "Worker tunnel failed to start");
     }
-    return await startup;
+    const timeoutError = serviceError(
+      "provider_failure",
+      "Worker tunnel did not connect within 3 minutes; check worker SSH reachability and retry",
+    );
+    try {
+      return await withTimeout(startup, TUNNEL_START_TIMEOUT_MS, {
+        createError: () => timeoutError,
+      });
+    } catch (error) {
+      if (error !== timeoutError) {
+        throw error;
+      }
+      // Stop can itself block on an unkillable SSH child; detach it (rejection observed,
+      // entry stays manager-tracked) so the deadline error is returned on time. Epoch-fenced
+      // so a stale timed-out attempt can never tear down a newer owner's tunnel.
+      void tunnels.stop(request.environmentId, request.ownerEpoch).catch(() => undefined);
+      throw timeoutError;
+    }
   };
 
   const stopTunnel = async (environmentId: string, ownerEpoch?: number): Promise<void> => {
