@@ -48,7 +48,7 @@ import {
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { launchTuiCli } from "../tui/tui-launch.js";
+import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import { t } from "./i18n/index.js";
@@ -972,17 +972,27 @@ export async function finalizeSetupWizard(
     if (shouldLaunchTui) {
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
       try {
-        await launchTuiCli(
-          {
-            ...(gatewayProbe.ok ? {} : { local: true }),
-            deliver: false,
-            message: shouldSeedBootstrapHatch
-              ? t("wizard.finalize.bootstrapHatchMessage")
-              : undefined,
-            timeoutMs: HATCH_TUI_TIMEOUT_MS,
-          },
-          gatewayProbe.ok ? { gatewayUrl: displayLinks.wsUrl, authSource: "config" } : {},
-        );
+        await runTui({
+          ...(gatewayProbe.ok
+            ? {
+                config: nextConfig,
+                boundGateway: {
+                  url: displayLinks.wsUrl,
+                  ...(settings.authMode === "token" && settings.gatewayToken
+                    ? { token: settings.gatewayToken }
+                    : {}),
+                  ...(settings.authMode === "password" && resolvedGatewayPassword
+                    ? { password: resolvedGatewayPassword }
+                    : {}),
+                },
+              }
+            : { local: true }),
+          deliver: false,
+          message: shouldSeedBootstrapHatch
+            ? t("wizard.finalize.bootstrapHatchMessage")
+            : undefined,
+          timeoutMs: HATCH_TUI_TIMEOUT_MS,
+        });
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
         if (sessionGateway) {

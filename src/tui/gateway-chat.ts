@@ -26,14 +26,14 @@ import {
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
-import { resolveGatewayInteractiveSurfaceAuth } from "../gateway/auth-surface-resolution.js";
+import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import {
-  buildGatewayConnectionDetails,
-  ensureExplicitGatewayAuth,
-  resolveExplicitGatewayAuth,
-} from "../gateway/call.js";
+  resolveGatewayClientBootstrap,
+  resolveGatewayUrlOverride,
+} from "../gateway/client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
+import { resolveExplicitGatewayAuth } from "../gateway/credentials.js";
 import { loadOriginDeviceToken } from "../infra/device-auth-store.js";
 import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -41,7 +41,6 @@ import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { sleep } from "../utils/sleep.js";
 import { VERSION } from "../version.js";
-import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -129,27 +128,6 @@ function hasStoredOriginDeviceAuth(deviceAuthScope: string): boolean {
   } catch {
     return false;
   }
-}
-
-function ensureTuiOriginAuth(params: {
-  deviceAuthScope: string;
-  explicitAuth: { token?: string; password?: string };
-  urlOverrideSource: "cli" | "env";
-}): void {
-  if (
-    params.explicitAuth.token ||
-    params.explicitAuth.password ||
-    hasStoredOriginDeviceAuth(params.deviceAuthScope)
-  ) {
-    return;
-  }
-  ensureExplicitGatewayAuth({
-    urlOverride: params.deviceAuthScope,
-    urlOverrideSource: params.urlOverrideSource,
-    explicitAuth: params.explicitAuth,
-    errorHint:
-      "Fix: pass --token or --password once to request pairing, approve it in that gateway's Control UI (Settings -> Devices), then retry with the same credential so OpenClaw can store the device token.",
-  });
 }
 
 function isLegacyPreserveSideRunsError(err: unknown): boolean {
@@ -535,114 +513,59 @@ async function resolveGatewayConnection(
   const env = process.env;
   const gatewayAuthMode = config.gateway?.auth?.mode;
   const isRemoteMode = config.gateway?.mode === "remote";
-  const preferConfiguredAuth = env[TUI_SETUP_AUTH_SOURCE_ENV] === TUI_SETUP_AUTH_SOURCE_CONFIG;
 
-  const urlOverride =
-    typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
-  const envUrlOverride = urlOverride ? undefined : nonEmptyString(env.OPENCLAW_GATEWAY_URL);
+  const urlOverride = resolveGatewayUrlOverride({ gatewayUrl: opts.url, env });
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
   const hasExplicitGatewayTarget = Boolean(
-    urlOverride || envUrlOverride || env.OPENCLAW_GATEWAY_PORT?.trim() || isRemoteMode,
+    urlOverride.url || env.OPENCLAW_GATEWAY_PORT?.trim() || isRemoteMode,
   );
   const activeLocalGatewayPort = hasExplicitGatewayTarget
     ? undefined
     : await readActiveGatewayLockPort();
-  const url = buildGatewayConnectionDetails({
-    config,
-    ...(urlOverride ? { url: urlOverride } : {}),
-    ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
-  }).url;
-
-  if (urlOverride) {
-    const deviceAuthScope = gatewayOriginScope(url);
-    ensureTuiOriginAuth({ deviceAuthScope, explicitAuth, urlOverrideSource: "cli" });
-    return {
-      url,
-      deviceAuthScope,
-      token: explicitAuth.token,
-      password: explicitAuth.password,
-      ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    };
-  }
-
-  if (envUrlOverride) {
-    const deviceAuthScope = gatewayOriginScope(url);
-    const envAuth = {
-      token: explicitAuth.token ?? nonEmptyString(env.OPENCLAW_GATEWAY_TOKEN),
-      password: explicitAuth.password ?? nonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD),
-    };
-    ensureTuiOriginAuth({ deviceAuthScope, explicitAuth: envAuth, urlOverrideSource: "env" });
-    return {
-      url,
-      deviceAuthScope,
-      token: envAuth.token,
-      password: envAuth.password,
-      ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    };
-  }
-
-  if (isRemoteMode) {
-    const deviceAuthScope = gatewayOriginScope(url);
-    const resolved = await resolveGatewayInteractiveSurfaceAuth({
-      config,
-      env,
-      explicitAuth,
-      suppressEnvAuthFallback: preferConfiguredAuth,
-      surface: "remote",
-    });
-    if (
-      resolved.failureReason &&
-      (resolved.failureReason !== "Missing gateway auth credentials." ||
-        !hasStoredOriginDeviceAuth(deviceAuthScope))
-    ) {
-      throwGatewayAuthResolutionError(resolved.failureReason);
+  if (
+    !urlOverride.source &&
+    gatewayAuthMode !== "none" &&
+    gatewayAuthMode !== "trusted-proxy" &&
+    !isRemoteMode
+  ) {
+    try {
+      assertExplicitGatewayAuthModeWhenBothConfigured(config);
+    } catch (err) {
+      throwGatewayAuthResolutionError(formatErrorMessage(err));
     }
-    return {
-      url,
-      deviceAuthScope,
-      token: resolved.token,
-      password: resolved.password,
-      ...((opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint)
-        ? { tlsFingerprint: opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint }
-        : {}),
-    };
   }
-
-  if (gatewayAuthMode === "none" || gatewayAuthMode === "trusted-proxy") {
-    const resolved = await resolveGatewayInteractiveSurfaceAuth({
-      config,
-      env,
-      explicitAuth,
-      surface: "local",
-    });
-    return {
-      url,
-      token: resolved.token,
-      password: resolved.password,
-      ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    };
-  }
-
-  try {
-    assertExplicitGatewayAuthModeWhenBothConfigured(config);
-  } catch (err) {
-    throwGatewayAuthResolutionError(formatErrorMessage(err));
-  }
-
-  const resolved = await resolveGatewayInteractiveSurfaceAuth({
+  const bootstrap = await resolveGatewayClientBootstrap({
     config,
-    env,
+    gatewayUrl: urlOverride.source === "cli" ? urlOverride.url : undefined,
     explicitAuth,
-    suppressEnvAuthFallback: preferConfiguredAuth,
-    surface: "local",
+    env,
+    authPolicy: "interactive",
+    ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
+    explicitTlsFingerprint: opts.tlsFingerprint,
+    allowStoredOriginAuth: hasStoredOriginDeviceAuth,
+    overrideAuthErrorHint:
+      "Fix: pass --token or --password once to request pairing, approve it in that gateway's Control UI (Settings -> Devices), then retry with the same credential so OpenClaw can store the device token.",
+    buildConnectionDetails: buildGatewayConnectionDetails,
+    resolveTlsFingerprint: async ({ urlSource, explicitTlsFingerprint }) =>
+      explicitTlsFingerprint ??
+      (urlSource === "config gateway.remote.url"
+        ? nonEmptyString(config.gateway?.remote?.tlsFingerprint)
+        : undefined),
   });
-  if (resolved.failureReason) {
-    throwGatewayAuthResolutionError(resolved.failureReason);
+  const hasStoredOriginAuth = Boolean(
+    bootstrap.deviceAuthScope && hasStoredOriginDeviceAuth(bootstrap.deviceAuthScope),
+  );
+  if (
+    bootstrap.authFailureReason &&
+    (bootstrap.authFailureReason !== "Missing gateway auth credentials." || !hasStoredOriginAuth)
+  ) {
+    throwGatewayAuthResolutionError(bootstrap.authFailureReason);
   }
   return {
-    url,
-    token: resolved.token,
-    password: resolved.password,
-    ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
+    url: bootstrap.url,
+    deviceAuthScope: bootstrap.deviceAuthScope,
+    token: bootstrap.auth.token,
+    password: bootstrap.auth.password,
+    ...(bootstrap.tlsFingerprint ? { tlsFingerprint: bootstrap.tlsFingerprint } : {}),
   };
 }
