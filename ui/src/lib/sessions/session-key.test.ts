@@ -1,12 +1,41 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
+  canArchiveSessionRow,
+  canDeleteSessionRows,
   canonicalUiSessionKeyForPersistence,
   isUiSelectedGlobalSessionKey,
   parseSessionKeyParts,
   resolveUiSessionNavigationParentKey,
   uiSessionEventMatches,
 } from "./session-key.ts";
+
+describe("session archive eligibility", () => {
+  it.each([
+    ["active non-main", { key: "agent:main:work", hasActiveRun: true }, true, false],
+    ["idle non-main", { key: "agent:main:work" }, true, true],
+    ["configured main", { key: "agent:main:home" }, false, false],
+    ["literal main", { key: "main" }, false, false],
+    ["global", { key: "global", kind: "global" }, false, false],
+    ["unknown", { key: "unknown", kind: "unknown" }, false, false],
+    ["archived global", { key: "global", kind: "global", archived: true }, false, true],
+  ] as const)("classifies %s", (_name, row, archiveAllowed, deleteAllowed) => {
+    expect(canArchiveSessionRow(row, "home")).toBe(archiveAllowed);
+    expect(canDeleteSessionRows([row], "home")).toBe(deleteAllowed);
+  });
+
+  it("keeps mixed archived and idle batch deletion disabled", () => {
+    expect(
+      canDeleteSessionRows(
+        [
+          { key: "global", kind: "global", archived: true },
+          { key: "agent:main:work", archived: false },
+        ],
+        "home",
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("parseSessionKeyParts", () => {
   it("preserves opaque channel account tails", () => {

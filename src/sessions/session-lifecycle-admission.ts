@@ -22,8 +22,6 @@ export {
 } from "./session-work-admission-handoff.js";
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
-/** Stable gateway error for an archive rejected by an admitted or projected run. */
-export const SESSION_ARCHIVE_ACTIVE_RUN_ERROR = "Cannot archive a session with an active run.";
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   interrupt?: () => void;
   released: Promise<void>;

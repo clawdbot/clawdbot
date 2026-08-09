@@ -79,6 +79,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "telegram" },
   { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
+  { pluginId: "tokenjuice", pluginLocalRuntimeDeps: ["tokenjuice"] },
   { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
   {
