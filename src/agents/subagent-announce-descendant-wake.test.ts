@@ -19,7 +19,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 
-const { wakeSubagentRunAfterDescendants } = await import("./subagent-announce-wake.js");
+const { wakeSubagentRunAfterDescendants } = await import("./subagent-announce-descendant-wake.js");
 
 function createWakeHarness(params: {
   callGateway: ReturnType<typeof vi.fn>;

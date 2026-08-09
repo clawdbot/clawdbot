@@ -18,13 +18,13 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.js";
+import { hasUsableSessionEntry } from "./subagent-announce-descendant-wake.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
   buildChildCompletionFindings,
   dedupeLatestChildCompletionRows,
   filterCurrentDirectChildCompletionRows,
 } from "./subagent-announce-output.js";
-import { hasUsableSessionEntry } from "./subagent-announce-wake.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";

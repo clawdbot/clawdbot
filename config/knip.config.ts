@@ -391,14 +391,6 @@ const config = {
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
-    // karmaterminal/openclaw#1232: our hardened wake implementation lives in
-    // subagent-announce-wake.ts, so upstream's same-purpose module is
-    // unreferenced here. It is NOT safe to adopt upstream's helper verbatim -
-    // it returns a plain boolean and drops the "termination-unconfirmed"
-    // tri-state, which would let cleanup delete a session still owned by a
-    // live wake run. The fix is to consolidate onto upstream's filename while
-    // keeping our semantics; tracked, not suppressed indefinitely.
-    "src/agents/subagent-announce-descendant-wake.ts": ["files"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
     "src/boards/board-notices.ts": ["exports"],

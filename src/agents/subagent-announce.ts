@@ -25,6 +25,12 @@ import {
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
 } from "./subagent-announce-delivery.js";
+import {
+  hasUsableSessionEntry,
+  isWakeContinuationRun,
+  stripWakeRunSuffixes,
+  wakeSubagentRunAfterDescendants,
+} from "./subagent-announce-descendant-wake.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import {
   buildSubagentAnnounceMessages,
@@ -49,12 +55,6 @@ import {
   normalizeSubagentAnnounceReply,
   warnIfCronAnnounceSkipped,
 } from "./subagent-announce-reply.js";
-import {
-  hasUsableSessionEntry,
-  isWakeContinuationRun,
-  stripWakeRunSuffixes,
-  wakeSubagentRunAfterDescendants,
-} from "./subagent-announce-wake.js";
 import {
   callGateway,
   dispatchGatewayMethodInProcess,
@@ -100,7 +100,7 @@ function loadSubagentRegistryRuntime() {
 
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
-export { hasUsableSessionEntry } from "./subagent-announce-wake.js";
+export { hasUsableSessionEntry } from "./subagent-announce-descendant-wake.js";
 export type { SubagentAnnounceType } from "./subagent-announce-message.js";
 
 export async function runSubagentAnnounceFlow(params: {
