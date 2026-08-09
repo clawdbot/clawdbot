@@ -12,7 +12,7 @@ export const structuredReplaySafeToolCallIds = new Set<string>();
 const startedToolCallIds = new Set<string>();
 const trackedToolCallIds = new Set<string>();
 const batchAdmittedToolCallIds = new Set<string>();
-const loopWarningsByToolCallId = new Map<string, string>();
+const loopWarningsByToolCallId = new Map<string, { warning: string; carried: boolean }>();
 const MAX_PENDING_LOOP_WARNINGS = 1024;
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
@@ -113,7 +113,10 @@ export function recordLoopWarningForToolCall(
   warning: string,
   runId?: string,
 ): void {
-  loopWarningsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), warning);
+  loopWarningsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), {
+    warning,
+    carried: false,
+  });
   pruneMapToMaxSize(loopWarningsByToolCallId, MAX_PENDING_LOOP_WARNINGS);
 }
 
@@ -123,9 +126,45 @@ export function consumeLoopWarningForToolCall(
   runId?: string,
 ): string | undefined {
   const key = buildAdjustedParamsKey({ runId, toolCallId });
-  const warning = loopWarningsByToolCallId.get(key);
+  const warning = loopWarningsByToolCallId.get(key)?.warning;
   loopWarningsByToolCallId.delete(key);
   return warning;
+}
+
+function claimLoopWarningForTransport(toolCallId: string, runId?: string): string | undefined {
+  const pending = loopWarningsByToolCallId.get(buildAdjustedParamsKey({ runId, toolCallId }));
+  if (!pending || pending.carried) {
+    return undefined;
+  }
+  pending.carried = true;
+  return pending.warning;
+}
+
+function appendWarningTextToToolResult(
+  result: AgentToolResult<unknown>,
+  warning: string,
+): AgentToolResult<unknown> {
+  const text = `Tool loop warning: ${warning}`;
+  const alreadyPresent = result.content?.some(
+    (block) => block.type === "text" && block.text.includes(text),
+  );
+  if (alreadyPresent) {
+    return result;
+  }
+  return {
+    ...result,
+    content: [...(result.content ?? []), { type: "text", text }],
+  };
+}
+
+/** Carry guidance through tool execution while retaining it for final outcome hooks. */
+export function carryLoopWarningToToolResult(
+  result: AgentToolResult<unknown>,
+  toolCallId: string,
+  runId?: string,
+): AgentToolResult<unknown> {
+  const warning = claimLoopWarningForTransport(toolCallId, runId);
+  return warning ? appendWarningTextToToolResult(result, warning) : result;
 }
 
 export function appendLoopWarningToToolResult(
@@ -137,22 +176,10 @@ export function appendLoopWarningToToolResult(
   if (!warning) {
     return result;
   }
-  return {
-    ...result,
-    content: [...(result.content ?? []), { type: "text", text: `Tool loop warning: ${warning}` }],
-  };
+  return appendWarningTextToToolResult(result, warning);
 }
 
-/** Carry warning guidance through a failed call without masking immutable errors. */
-export function appendLoopWarningToError(
-  error: unknown,
-  toolCallId: string,
-  runId?: string,
-): unknown {
-  const warning = consumeLoopWarningForToolCall(toolCallId, runId);
-  if (!warning) {
-    return error;
-  }
+function appendWarningTextToError(error: unknown, warning: string): unknown {
   const originalMessage = error instanceof Error ? error.message : String(error);
   const message = `${originalMessage}\n\nTool loop warning: ${warning}`;
   if (error instanceof Error) {
@@ -166,6 +193,16 @@ export function appendLoopWarningToError(
     }
   }
   return new Error(message);
+}
+
+/** Carry guidance through a failed call while retaining it for final outcome hooks. */
+export function carryLoopWarningToError(
+  error: unknown,
+  toolCallId: string,
+  runId?: string,
+): unknown {
+  const warning = claimLoopWarningForTransport(toolCallId, runId);
+  return warning ? appendWarningTextToError(error, warning) : error;
 }
 
 /** Release admission and warning state for prepared calls suppressed by steering. */

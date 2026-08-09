@@ -1,7 +1,10 @@
-import { clearBatchAdmittedToolCallsForRun } from "../../agent-tools.before-tool-call.state.js";
+import {
+  appendLoopWarningToToolResult,
+  clearBatchAdmittedToolCallsForRun,
+} from "../../agent-tools.before-tool-call.state.js";
 import type { HookContext } from "../../agent-tools.before-tool-call.types.js";
 import { normalizeCodeModeExecBeforeHookParams } from "../../code-mode-control-tools.js";
-import type { Agent } from "../../runtime/index.js";
+import type { AfterToolCallResult, Agent } from "../../runtime/index.js";
 import {
   attachInternalToolBatchLifecycle,
   type InternalBeforeToolBatchHook,
@@ -60,4 +63,40 @@ export function installToolLoopRecoveryCleanup(params: { agent: Agent; runId: st
       clearBatchAdmittedToolCallsForRun(params.runId);
     }
   });
+}
+
+/** Attach pending guidance after every result-replacing outcome hook has settled. */
+export function installToolLoopWarningFinalizer(params: { agent: Agent; runId: string }): void {
+  const previousAfterToolOutcome = params.agent.afterToolOutcome?.bind(params.agent);
+  params.agent.afterToolOutcome = async (context, signal) => {
+    let prior: AfterToolCallResult | undefined;
+    try {
+      prior = await previousAfterToolOutcome?.(context, signal);
+    } catch (error) {
+      const result = appendLoopWarningToToolResult(
+        {
+          content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+          details: {},
+        },
+        context.toolCall.id,
+        params.runId,
+      );
+      return { content: result.content, details: result.details, isError: true };
+    }
+
+    const effectiveResult = prior
+      ? {
+          ...context.result,
+          content: prior.content ?? context.result.content,
+          details: prior.details ?? context.result.details,
+          terminate: prior.terminate ?? context.result.terminate,
+        }
+      : context.result;
+    const result = appendLoopWarningToToolResult(
+      effectiveResult,
+      context.toolCall.id,
+      params.runId,
+    );
+    return result === effectiveResult ? prior : { ...prior, content: result.content };
+  };
 }

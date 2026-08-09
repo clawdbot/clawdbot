@@ -57,6 +57,7 @@ import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 import {
   createToolLoopBatchAdmission,
   installToolLoopRecoveryCleanup,
+  installToolLoopWarningFinalizer,
 } from "./tool-loop-recovery.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -233,6 +234,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
     installCodeModeRepairHook({ agent: activeSession.agent });
   }
+  installToolLoopWarningFinalizer({ agent: activeSession.agent, runId: attempt.runId });
   input.markStage("agent-session");
 
   return {

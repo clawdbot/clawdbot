@@ -6,7 +6,7 @@
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
+import type { Agent, AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { runAgentLoop, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
@@ -22,6 +22,7 @@ import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.j
 import { recordLoopWarningForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import { installToolLoopWarningFinalizer } from "./embedded-agent-runner/run/tool-loop-recovery.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
@@ -50,6 +51,8 @@ const FAUX_MODEL = {
 async function runToolCallTranscript(params: {
   tools: AgentTool[];
   toolCall: { id: string; name: string; arguments: Record<string, unknown> };
+  afterToolCall?: Agent["afterToolCall"];
+  afterToolOutcome?: Agent["afterToolOutcome"];
 }) {
   let streamCalls = 0;
   const streamFn: StreamFn = () => {
@@ -87,6 +90,8 @@ async function runToolCallTranscript(params: {
     {
       model: FAUX_MODEL,
       convertToLlm: (agentMessages) => agentMessages as never,
+      ...(params.afterToolCall ? { afterToolCall: params.afterToolCall } : {}),
+      ...(params.afterToolOutcome ? { afterToolOutcome: params.afterToolOutcome } : {}),
     },
     () => {},
     undefined,
@@ -607,6 +612,91 @@ describe("toClientToolDefinitions – param coercion", () => {
             text: "tool failed\n\nTool loop warning: Reassess before retrying.",
           },
         ]),
+      }),
+    );
+  });
+
+  it("preserves a loop warning after afterToolCall replaces transcript content", async () => {
+    const runId = "run-after-call-replacement";
+    const toolCallId = "call-after-call-replacement";
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "read",
+        label: "Read",
+        description: "reads",
+        parameters: Type.Object({}),
+        execute: async () => ({
+          content: [{ type: "text", text: "tool output" }],
+          details: {},
+        }),
+      } satisfies AgentTool,
+      { runId },
+    );
+    const agent = {
+      afterToolCall: async () => ({
+        content: [{ type: "text" as const, text: "afterToolCall replacement" }],
+      }),
+    } as unknown as Agent;
+    installToolLoopWarningFinalizer({ agent, runId });
+    recordLoopWarningForToolCall(toolCallId, "Reassess before retrying.", runId);
+
+    const messages = await runToolCallTranscript({
+      tools: [tool],
+      toolCall: { id: toolCallId, name: "read", arguments: {} },
+      afterToolCall: agent.afterToolCall,
+      afterToolOutcome: agent.afterToolOutcome,
+    });
+
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId,
+        content: [
+          { type: "text", text: "afterToolCall replacement" },
+          { type: "text", text: "Tool loop warning: Reassess before retrying." },
+        ],
+      }),
+    );
+  });
+
+  it("preserves a loop warning after afterToolOutcome replaces transcript content", async () => {
+    const runId = "run-after-outcome-replacement";
+    const toolCallId = "call-after-outcome-replacement";
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "read",
+        label: "Read",
+        description: "reads",
+        parameters: Type.Object({}),
+        execute: async () => ({
+          content: [{ type: "text", text: "tool output" }],
+          details: {},
+        }),
+      } satisfies AgentTool,
+      { runId },
+    );
+    const agent = {
+      afterToolOutcome: async () => ({
+        content: [{ type: "text" as const, text: "afterToolOutcome replacement" }],
+      }),
+    } as unknown as Agent;
+    installToolLoopWarningFinalizer({ agent, runId });
+    recordLoopWarningForToolCall(toolCallId, "Reassess before retrying.", runId);
+
+    const messages = await runToolCallTranscript({
+      tools: [tool],
+      toolCall: { id: toolCallId, name: "read", arguments: {} },
+      afterToolOutcome: agent.afterToolOutcome,
+    });
+
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId,
+        content: [
+          { type: "text", text: "afterToolOutcome replacement" },
+          { type: "text", text: "Tool loop warning: Reassess before retrying." },
+        ],
       }),
     );
   });

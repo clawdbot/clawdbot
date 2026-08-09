@@ -38,10 +38,10 @@ import {
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.policy.js";
 import {
-  appendLoopWarningToError,
-  appendLoopWarningToToolResult,
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  carryLoopWarningToError,
+  carryLoopWarningToToolResult,
   clearTrackedToolExecution,
   consumeLoopWarningForToolCall,
   preExecutionBlockedToolCallIds,
@@ -325,7 +325,7 @@ export function wrapToolWithBeforeToolCallHook(
           consumeLoopWarningForToolCall(toolCallId, ctx?.runId);
           throw error;
         }
-        throw appendLoopWarningToError(error, toolCallId, ctx?.runId);
+        throw carryLoopWarningToError(error, toolCallId, ctx?.runId);
       };
       const trace =
         hookOptions.emitDiagnostics && ctx?.trace
@@ -424,7 +424,7 @@ export function wrapToolWithBeforeToolCallHook(
           result: blockedResult,
           toolCallOrdinal,
         });
-        return appendLoopWarningToToolResult(blockedResult, toolCallId, ctx?.runId);
+        return carryLoopWarningToToolResult(blockedResult, toolCallId, ctx?.runId);
       };
       let preparedParams: unknown;
       try {
@@ -621,7 +621,7 @@ export function wrapToolWithBeforeToolCallHook(
             }),
           );
         }
-        return appendLoopWarningToToolResult(result, toolCallId, ctx?.runId);
+        return carryLoopWarningToToolResult(result, toolCallId, ctx?.runId);
       } catch (err) {
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(

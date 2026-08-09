@@ -18,8 +18,8 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { consumeFinalClientVoiceToolConfirmation } from "./agent-tools.before-tool-call.policy.js";
 import {
-  appendLoopWarningToError,
-  appendLoopWarningToToolResult,
+  carryLoopWarningToError,
+  carryLoopWarningToToolResult,
   consumeLoopWarningForToolCall,
 } from "./agent-tools.before-tool-call.state.js";
 import {
@@ -279,7 +279,7 @@ async function executeAdaptedToolOperation(params: {
   hookContext: HookContext | undefined;
 }): Promise<AgentToolResult<unknown>> {
   const withLoopWarning = (result: AgentToolResult<unknown>) =>
-    appendLoopWarningToToolResult(result, params.toolCallId, params.hookContext?.runId);
+    carryLoopWarningToToolResult(result, params.toolCallId, params.hookContext?.runId);
   try {
     return withLoopWarning(
       normalizeToolExecutionResult({
@@ -640,7 +640,7 @@ export function toClientToolDefinitions(
         const { toolCallId, params, signal } = splitToolExecuteArgs(args);
         const control = readInternalExecutionControl(args[4]);
         const withLoopWarning = (result: AgentToolResult<unknown>) =>
-          appendLoopWarningToToolResult(result, toolCallId, hookContext?.runId);
+          carryLoopWarningToToolResult(result, toolCallId, hookContext?.runId);
         if (onClientToolCall && typeof onClientToolCall !== "function") {
           onClientToolCall.reserve?.(toolCallId, func.name);
         }
@@ -724,7 +724,7 @@ export function toClientToolDefinitions(
             consumeLoopWarningForToolCall(toolCallId, hookContext?.runId);
             throw err;
           }
-          throw appendLoopWarningToError(err, toolCallId, hookContext?.runId);
+          throw carryLoopWarningToError(err, toolCallId, hookContext?.runId);
         }
         // Return a terminal pending result; the client will execute the tool.
         return withLoopWarning({
