@@ -45,6 +45,7 @@ type CanonicalSessionCandidate = {
   sessionKey: string;
   sqlitePath: string;
   storePath: string;
+  windowOwnerEvidenceOnly: boolean;
 };
 
 function createCanonicalRepairRemoval(
@@ -116,21 +117,30 @@ function collectCanonicalSessionCandidates(
       agentId: target.agentId,
       clone: false,
       storePath: target.storePath,
-    }).map(({ entry, rawEntryJson, sessionKey }) => {
+    }).map(({ currentWindowOwnerSessionKey, entry, rawEntryJson, sessionKey }) => {
       const storedKey = resolveStoredSessionKeyForAgentStore({
         cfg: params.cfg,
         agentId: target.agentId,
         sessionKey,
       });
       return {
-        canonicalKey: storedKey
-          ? resolveDeliveryProvenCanonicalSessionKey(storedKey, entry)
-          : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: target.agentId }),
+        // A malformed/placeholder node can share its current session id with a window already
+        // owned by the canonical node. That unique window is stronger identity evidence than
+        // the stale key itself, whose `{}` payload carries no delivery provenance.
+        canonicalKey:
+          rawEntryJson !== undefined && currentWindowOwnerSessionKey
+            ? currentWindowOwnerSessionKey
+            : storedKey
+              ? resolveDeliveryProvenCanonicalSessionKey(storedKey, entry)
+              : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: target.agentId }),
         entry,
         rawEntryJson,
         sessionKey,
         storedKey,
         target,
+        windowOwnerEvidenceOnly: Boolean(
+          rawEntryJson !== undefined && currentWindowOwnerSessionKey,
+        ),
       };
     }),
   );
@@ -149,7 +159,8 @@ function collectCanonicalSessionCandidates(
       addCanonicalMapping(`*\0${ownerAgentId}\0${key}`, item.canonicalKey);
     }
   }
-  return inventory.map(({ canonicalKey, entry, rawEntryJson, sessionKey, target }) => {
+  return inventory.map((item) => {
+    const { canonicalKey, entry, rawEntryJson, sessionKey, target, windowOwnerEvidenceOnly } = item;
     const canonicalAgentId =
       canonicalKey === "global" || canonicalKey === "unknown"
         ? target.agentId
@@ -218,6 +229,7 @@ function collectCanonicalSessionCandidates(
       sessionKey,
       sqlitePath: target.sqlitePath,
       storePath: target.storePath,
+      windowOwnerEvidenceOnly,
     };
     if (rawEntryJson !== undefined) {
       candidate.rawEntryJson = rawEntryJson;
@@ -295,8 +307,9 @@ function selectCanonicalSessionCandidate(
     env: params.env,
     sourceAgentId: first.agentId,
   });
+  const metadataCandidates = candidates.filter((candidate) => !candidate.windowOwnerEvidenceOnly);
   const selected = mergeCanonicalSessionEntryCandidates(
-    candidates
+    (metadataCandidates.length > 0 ? metadataCandidates : candidates)
       .toSorted((left, right) =>
         Buffer.compare(
           Buffer.from(`${left.sqlitePath}\0${left.sessionKey}`, "utf8"),

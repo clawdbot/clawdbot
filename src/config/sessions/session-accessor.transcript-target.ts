@@ -2,6 +2,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getRuntimeConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
 import { resolveSessionEntrySelection } from "./session-accessor.entry.js";
+import { resolveSqliteSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
 import type {
   SessionTranscriptReadScope,
   SessionTranscriptReadTarget,
@@ -17,7 +18,10 @@ type SessionTranscriptRuntimeContext = {
 };
 
 function resolveRuntimeContext(
-  scope: Pick<SessionTranscriptRuntimeScope, "agentId" | "env" | "sessionKey" | "storePath">,
+  scope: Pick<
+    SessionTranscriptRuntimeScope,
+    "agentId" | "env" | "sessionId" | "sessionKey" | "storePath"
+  >,
 ): SessionTranscriptRuntimeContext {
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
   if (!agentId) {
@@ -38,9 +42,15 @@ function resolveRuntimeContext(
     sessionKey: scope.sessionKey,
     storePath,
   });
+  const persistedOwner = resolveSqliteSessionKeyBySessionId({
+    agentId,
+    ...(scope.env ? { env: scope.env } : {}),
+    sessionId: scope.sessionId,
+    storePath,
+  });
   return {
     agentId,
-    sessionKey: resolved?.normalizedKey ?? scope.sessionKey,
+    sessionKey: persistedOwner ?? resolved?.normalizedKey ?? scope.sessionKey,
     storePath,
   };
 }

@@ -10,7 +10,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   castAgentMessage,
@@ -524,6 +524,38 @@ describe("importCodexThreadHistoryToTranscript", () => {
         stopReason: "stop",
         timestamp: expect.any(Number),
       },
+    ]);
+  });
+});
+
+describe("Codex transcript mirror session identity", () => {
+  it("uses the persisted session window owner instead of materializing a stale alias", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-canonical-owner-");
+    const staleAlias = "agent:main:telegram:default:direct:fixture-peer";
+
+    await mirrorCodexAppServerTranscript({
+      ...target,
+      sessionKey: staleAlias,
+      messages: [makeAgentUserMessage({ content: "canonical owner", timestamp: Date.now() })],
+      idempotencyScope: "codex-app-server:canonical-owner",
+    });
+
+    expect(
+      getSessionEntry({
+        agentId: target.agentId,
+        sessionKey: staleAlias,
+        storePath: target.storePath,
+      }),
+    ).toBeUndefined();
+    expect(
+      getSessionEntry({
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      }),
+    ).toMatchObject({ sessionId: target.sessionId });
+    expect(await readMirrorMessages(target)).toEqual([
+      expect.objectContaining({ role: "user", text: "canonical owner" }),
     ]);
   });
 });

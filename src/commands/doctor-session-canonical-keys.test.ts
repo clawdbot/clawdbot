@@ -224,6 +224,83 @@ describe("doctor canonical session-key repair", () => {
     });
   });
 
+  it("removes a stale placeholder alias owned by an existing canonical session window", async () => {
+    await withStateDirEnv("openclaw-doctor-canonical-placeholder-alias-", async ({ stateDir }) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
+      const storePath = resolveStorePath(storeTemplate, { agentId: "main", env });
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }] },
+        session: { store: storeTemplate },
+      } as OpenClawConfig;
+      const canonicalKey = "agent:main:main";
+      const staleAlias = "agent:main:telegram:default:direct:fixture-peer";
+      const sessionId = "shared-canonical-session";
+      insertLegacySession({
+        agentId: "main",
+        entry: {
+          sessionId,
+          updatedAt: 20,
+          label: "preserved canonical label",
+          model: "preserved-model",
+          modelProvider: "preserved-provider",
+        },
+        env,
+        eventText: "preserved canonical transcript",
+        sessionKey: canonicalKey,
+        storePath,
+      });
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        env,
+        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
+      });
+      database.db
+        .prepare(
+          `INSERT INTO session_nodes
+             (session_key, current_session_id, entry_json, entry_valid, updated_at)
+           VALUES (?, ?, '{}', -1, ?)`,
+        )
+        .run(staleAlias, sessionId, 30);
+
+      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+        foundGroups: 1,
+        removedRows: 1,
+        repairedGroups: 1,
+      });
+      expect(
+        loadExactSessionEntryReadOnly({ agentId: "main", env, sessionKey: staleAlias, storePath }),
+      ).toBeUndefined();
+      expect(
+        loadExactSessionEntryReadOnly({ agentId: "main", env, sessionKey: canonicalKey, storePath })
+          ?.entry,
+      ).toMatchObject({
+        label: "preserved canonical label",
+        model: "preserved-model",
+        modelProvider: "preserved-provider",
+        sessionId,
+        updatedAt: 20,
+      });
+      await expect(
+        loadTranscriptEvents({
+          agentId: "main",
+          env,
+          sessionId,
+          sessionKey: canonicalKey,
+          storePath,
+        }),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "preserved canonical transcript" }),
+        }),
+      ]);
+      expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
+        foundGroups: 0,
+        repairedGroups: 0,
+      });
+    });
+  });
+
   it("moves a legacy global heartbeat sibling to its agent-qualified key", async () => {
     await withStateDirEnv("openclaw-doctor-canonical-global-heartbeat-", async ({ stateDir }) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

@@ -209,6 +209,7 @@ type CanonicalRepairRow = Selectable<OpenClawAgentKyselyDatabase["session_nodes"
   current_previous_session_id: string | null;
   current_started_at: number | null;
   current_window_id: string | null;
+  current_window_owner_session_key: string | null;
   delivery_account_id: string | null;
   delivery_channel: string | null;
   delivery_target: string | null;
@@ -290,7 +291,7 @@ function hydrateCanonicalRepairEntry(row: CanonicalRepairRow): SessionEntry {
 
 export function listSqliteSessionEntriesForCanonicalRepair(
   scope: SessionEntryListScope = {},
-): Array<SessionEntrySummary & { rawEntryJson?: string }> {
+): Array<SessionEntrySummary & { currentWindowOwnerSessionKey?: string; rawEntryJson?: string }> {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const databaseOptions = toDatabaseOptions(resolved);
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
@@ -305,6 +306,11 @@ export function listSqliteSessionEntriesForCanonicalRepair(
             .onRef("current_window.session_key", "=", "session_nodes.session_key"),
         )
         .leftJoin(
+          "session_windows as current_window_owner",
+          "current_window_owner.session_id",
+          "session_nodes.current_session_id",
+        )
+        .leftJoin(
           "conversations as current_conversation",
           "current_conversation.conversation_id",
           "current_window.primary_conversation_id",
@@ -312,6 +318,7 @@ export function listSqliteSessionEntriesForCanonicalRepair(
         .selectAll("session_nodes")
         .select([
           "current_window.session_id as current_window_id",
+          "current_window_owner.session_key as current_window_owner_session_key",
           "current_window.started_at as current_started_at",
           "current_window.ended_at as current_ended_at",
           "current_window.chat_type as current_chat_type",
@@ -345,6 +352,11 @@ export function listSqliteSessionEntriesForCanonicalRepair(
         {
           sessionKey: row.session_key,
           entry,
+          ...(row.entry_json === "{}" &&
+          row.current_window_id === null &&
+          row.current_window_owner_session_key
+            ? { currentWindowOwnerSessionKey: row.current_window_owner_session_key }
+            : {}),
           ...(rawCompareRequired ? { rawEntryJson: row.entry_json } : {}),
         },
       ];
