@@ -83,12 +83,14 @@ export class ModelSetupWizardRunner {
     }
   }
 
-  async cancel(): Promise<void> {
+  async cancel(options: { settleActiveRequest?: boolean } = {}): Promise<void> {
     const client = this.options.getClient();
     const sessionId = this.sessionId;
     this.generation += 1;
     this.sessionId = null;
-    this.abortController?.abort();
+    if (!options.settleActiveRequest) {
+      this.abortController?.abort();
+    }
     this.abortController = null;
     this.setState({ phase: "idle" });
     if (!client || !sessionId) {
@@ -130,18 +132,27 @@ export class ModelSetupWizardRunner {
     if (!client || !sessionId || !signal) {
       return;
     }
-    const result = await client.request<WizardNextResult>(
-      "wizard.next",
-      { sessionId, ...(answer ? { answer } : {}) },
-      { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
-    );
-    if (generation !== this.generation) {
-      return;
+    let nextAnswer = answer;
+    while (true) {
+      const result = await client.request<WizardNextResult>(
+        "wizard.next",
+        { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
+        { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
+      );
+      if (generation !== this.generation) {
+        return;
+      }
+      const next = this.applyResult(authChoice, result);
+      if (next.phase !== "step" || next.step.executor !== "gateway") {
+        return;
+      }
+      // Gateway-owned progress has no user control to trigger the next poll.
+      // Keep it in this request chain so its mutation owner settles with it.
+      nextAnswer = undefined;
     }
-    this.applyResult(authChoice, result);
   }
 
-  private applyResult(authChoice: string, result: WizardNextResult): void {
+  private applyResult(authChoice: string, result: WizardNextResult): ModelSetupWizardState {
     const next = wizardStateFromResult(
       authChoice,
       result,
@@ -154,18 +165,8 @@ export class ModelSetupWizardRunner {
       this.sessionId = null;
       this.abortController = null;
       this.options.onDone(this.startMethod, next.preparedModelRef);
-      return;
     }
-    // Gateway-executed steps (download/pull progress) carry no input controls,
-    // so nothing would ever ask for the next one. Keep polling: the session
-    // long-polls until the next update or the terminal result, so this renders
-    // live progress instead of freezing on the first frame.
-    if (next.phase === "step" && next.step.executor === "gateway") {
-      const generation = this.generation;
-      void this.requestNext(authChoice, undefined, generation).catch((error: unknown) => {
-        this.handleError(error, generation);
-      });
-    }
+    return next;
   }
 
   private handleError(error: unknown, generation: number): void {

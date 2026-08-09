@@ -228,5 +228,12 @@ describe("ModelSetupWizardRunner", () => {
     });
 
     expect(seen).toEqual(messages);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "openclaw.setup.prepare.start",
+      "wizard.next",
+      "wizard.next",
+      "wizard.next",
+      "wizard.next",
+    ]);
   });
 });
