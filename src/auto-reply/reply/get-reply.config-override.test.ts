@@ -10,6 +10,7 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import "./get-reply.test-runtime-mocks.js";
+import { runWithPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
@@ -17,11 +18,11 @@ const mocks = vi.hoisted(() => ({
 }));
 registerGetReplyRuntimeOverrides(mocks);
 
-let getReplyFromConfig: typeof import("./get-reply-from-config.runtime.js").getReplyFromConfig;
+let getReplyFromConfig: typeof import("../../plugin-sdk/reply-runtime.js").getReplyFromConfig;
 let loadConfigMock: typeof import("../../config/config.js").getRuntimeConfig;
 
 async function loadGetReplyRuntimeForTest() {
-  ({ getReplyFromConfig } = await import("./get-reply-from-config.runtime.js"));
+  ({ getReplyFromConfig } = await import("../../plugin-sdk/reply-runtime.js"));
   ({ getRuntimeConfig: loadConfigMock } = await import("../../config/config.js"));
 }
 
@@ -94,22 +95,23 @@ describe("getReplyFromConfig configOverride", () => {
     });
 
     const conflictingRuntime = createPreparedDispatchRuntime();
-    await getReplyFromConfig(
-      buildGetReplyCtx(),
-      undefined,
-      withFullRuntimeReplyConfig({
-        channels: {
-          telegram: {
-            botToken: "resolved-telegram-token",
+    await runWithPreparedReplyDispatchRuntime(conflictingRuntime, () =>
+      getReplyFromConfig(
+        buildGetReplyCtx(),
+        undefined,
+        withFullRuntimeReplyConfig({
+          channels: {
+            telegram: {
+              botToken: "resolved-telegram-token",
+            },
           },
-        },
-        agents: {
-          defaults: {
-            userTimezone: "America/New_York",
+          agents: {
+            defaults: {
+              userTimezone: "America/New_York",
+            },
           },
-        },
-      } satisfies OpenClawConfig),
-      conflictingRuntime,
+        } satisfies OpenClawConfig),
+      ),
     );
 
     expect(loadConfigMock).not.toHaveBeenCalled();
@@ -122,13 +124,15 @@ describe("getReplyFromConfig configOverride", () => {
     );
   });
 
-  it("uses one supplied prepared dispatch runtime without a second owner lookup", async () => {
+  it("uses one request-scoped prepared runtime through the raw Plugin SDK resolver", async () => {
     const preparedRuntime = createPreparedDispatchRuntime();
     vi.mocked(loadConfigMock).mockImplementation(() => {
       throw new Error("getRuntimeConfig should not be called for a prepared Gateway dispatch");
     });
 
-    await getReplyFromConfig(buildGetReplyCtx(), undefined, undefined, preparedRuntime);
+    await runWithPreparedReplyDispatchRuntime(preparedRuntime, () =>
+      getReplyFromConfig(buildGetReplyCtx()),
+    );
 
     expect(loadConfigMock).not.toHaveBeenCalled();
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
@@ -149,7 +153,9 @@ describe("getReplyFromConfig configOverride", () => {
     });
 
     await expect(
-      getReplyFromConfig(buildGetReplyCtx(), undefined, undefined, preparedRuntime),
+      runWithPreparedReplyDispatchRuntime(preparedRuntime, () =>
+        getReplyFromConfig(buildGetReplyCtx()),
+      ),
     ).rejects.toThrow("reply model catalog owner changed from main to worker");
   });
 

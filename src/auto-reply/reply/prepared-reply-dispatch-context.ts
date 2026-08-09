@@ -13,6 +13,13 @@ export function runWithPreparedReplyDispatchRuntime<T>(
   return preparedReplyDispatchRuntime.run(runtime, run);
 }
 
+export function bindPreparedReplyDispatchRuntime<Args extends unknown[], Result>(
+  runtime: PreparedReplyDispatchRuntime | undefined,
+  run: (...args: Args) => Result,
+): (...args: Args) => Result {
+  return (...args) => runWithPreparedReplyDispatchRuntime(runtime, () => run(...args));
+}
+
 export function getPreparedReplyDispatchRuntime(): PreparedReplyDispatchRuntime | undefined {
   return preparedReplyDispatchRuntime.getStore();
 }

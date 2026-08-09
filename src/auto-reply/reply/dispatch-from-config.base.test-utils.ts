@@ -52,6 +52,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -141,17 +142,11 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver.mock.calls[0]?.[3]).toBeUndefined();
   });
 
-  it("uses zero fallback registry loads for a published Gateway dispatch", async () => {
+  it("keeps a raw three-argument resolver on one prepared generation across replacement", async () => {
     setNoAbort();
     const cfg = emptyConfig;
-    const replyResolver = vi.fn(
-      async (
-        _ctx: MsgContext,
-        _opts?: GetReplyOptions,
-        _cfg?: OpenClawConfig,
-        _preparedRuntime?: unknown,
-      ) => ({ text: "hi" }) satisfies ReplyPayload,
-    );
+    let receivedPreparedRuntime: unknown;
+    let replacementPreparedRuntime: unknown;
     const preparedRegistry = createTestRegistry([]);
     const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
     const preparedRuntime = Object.freeze({
@@ -164,7 +159,22 @@ describe("dispatchReplyFromConfig", () => {
     });
     const preparedLookup = vi
       .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
-      .mockResolvedValue(preparedRuntime);
+      .mockResolvedValueOnce(preparedRuntime)
+      .mockResolvedValue(
+        Object.freeze({
+          ...preparedRuntime,
+          workspaceDir: "/tmp/replacement-workspace",
+        }),
+      );
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, _opts?: GetReplyOptions, configOverride?: OpenClawConfig) => {
+        expect(configOverride).toBeUndefined();
+        receivedPreparedRuntime = getPreparedReplyDispatchRuntime();
+        replacementPreparedRuntime = await preparedLookup({ agentId: "main" });
+        expect(getPreparedReplyDispatchRuntime()).toBe(receivedPreparedRuntime);
+        return { text: "hi" } satisfies ReplyPayload;
+      },
+    );
     try {
       await dispatchReplyFromConfig({
         ctx: buildTestCtx({
@@ -177,10 +187,12 @@ describe("dispatchReplyFromConfig", () => {
         replyResolver,
         usePublishedModelRuntime: true,
       });
-      expect(preparedLookup).toHaveBeenCalledOnce();
-      expect(preparedLookup).toHaveBeenCalledWith({ agentId: "main" });
+      expect(preparedLookup).toHaveBeenCalledTimes(2);
+      expect(preparedLookup).toHaveBeenNthCalledWith(1, { agentId: "main" });
+      expect(preparedLookup).toHaveBeenNthCalledWith(2, { agentId: "main" });
       expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
-      expect(replyResolver.mock.calls[0]?.[3]).toBe(preparedRuntime);
+      expect(receivedPreparedRuntime).toBe(preparedRuntime);
+      expect(replacementPreparedRuntime).not.toBe(preparedRuntime);
     } finally {
       preparedLookup.mockRestore();
     }

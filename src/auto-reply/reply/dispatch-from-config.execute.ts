@@ -2,7 +2,6 @@ import {
   hasOutboundReplyContent,
   isFastModeAutoProgressPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.types.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
@@ -30,16 +29,9 @@ import {
 } from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
-import type { InternalGetReplyFromConfig } from "./get-reply.types.js";
+import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
-
-type PreparedDispatchReplyResolver = (
-  ctx: Parameters<InternalGetReplyFromConfig>[0],
-  opts?: Parameters<InternalGetReplyFromConfig>[1],
-  configOverride?: Parameters<InternalGetReplyFromConfig>[2],
-  preparedReplyDispatchRuntime?: PreparedReplyDispatchRuntime,
-) => ReturnType<InternalGetReplyFromConfig>;
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
   const {
@@ -84,9 +76,14 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     waitForPendingDirectBlockReplyDelivery,
     wrapProgressCallback,
   } = state;
-  // The prepared generation is dispatch-internal; keep the public Plugin SDK resolver contract
-  // at three arguments while the default runtime consumes this fourth request-scoped fact.
-  const replyResolver = state.replyResolver as PreparedDispatchReplyResolver;
+  // Bind at the invocation boundary so every public three-argument resolver consumes the same
+  // request-scoped generation without widening its Plugin SDK contract.
+  const replyResolver = bindPreparedReplyDispatchRuntime(
+    params.configOverride ? undefined : state.preparedReplyDispatchRuntime,
+    state.replyResolver,
+  );
+  const resolverConfigOverride =
+    state.preparedReplyDispatchRuntime && !params.configOverride ? undefined : replyConfig;
   let deliberateSilentTerminalReply = false;
   let pendingContinuation = false;
   let didDeliverVisiblePartialReply = false;
@@ -597,8 +594,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   return run();
                 },
               },
-              replyConfig,
-              params.configOverride ? undefined : state.preparedReplyDispatchRuntime,
+              resolverConfigOverride,
             ),
           ),
         trackDispatchLifecycleWork,
