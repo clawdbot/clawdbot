@@ -6,12 +6,12 @@ const SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY = "openclawSyntheticMissingToolRe
 const DEFAULT_MISSING_TOOL_RESULT_TEXT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 
-export type ToolCallLike = {
+type ToolCallLike = {
   id: string;
   name?: string;
 };
 
-export type ToolCallOccurrence = {
+type ToolCallOccurrence = {
   id: string;
   name?: string;
   result?: ToolResultMessage;
@@ -26,7 +26,7 @@ type ToolResultRecord = {
   id?: string;
 };
 
-export type ToolUsePairingFrame = {
+type ToolUsePairingFrame = {
   startIndex: number;
   endIndex: number;
   assistant: Extract<AgentMessage, { role: "assistant" }>;
@@ -35,13 +35,13 @@ export type ToolUsePairingFrame = {
   failed: boolean;
 };
 
-export type ToolUsePairingClassification = {
+type ToolUsePairingClassification = {
   frames: ToolUsePairingFrame[];
   droppedDuplicateCount: number;
   droppedOrphanCount: number;
 };
 
-export type ToolCallOccurrenceQueue<T> = {
+type ToolCallOccurrenceQueue<T> = {
   add: (id: string, occurrence: T) => void;
   claim: (id: string) => T | undefined;
   clear: () => void;
@@ -327,7 +327,10 @@ export function classifyToolUseResultPairing(
         droppedOrphanCount += preserveUnframed ? 0 : 1;
         continue;
       }
-      const candidate = candidates[0]!;
+      const candidate = candidates[0];
+      if (!candidate) {
+        continue;
+      }
       droppedDuplicateCount += candidate.result ? 1 : 0;
       candidate.result = normalizeToolResultName(record.result, candidate.name);
       candidate.sourceResult = record.sourceResult;
