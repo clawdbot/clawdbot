@@ -181,6 +181,15 @@ function rewriteAgent(
 function rewriteNonAgentRefs(root: Record<string, unknown>, changes: string[]): void {
   rewriteExecReviewer(root, "tools.exec.reviewer.model", changes);
   rewriteStructuredMediaModels(root, changes);
+  const media = asObjectRecord(asObjectRecord(root.tools)?.media);
+  for (const capability of ["image", "audio", "video"] as const) {
+    rewriteString(
+      asObjectRecord(media?.[capability]),
+      "preferredModel",
+      `tools.media.${capability}.preferredModel`,
+      changes,
+    );
+  }
   const channels = asObjectRecord(root.channels);
   const modelByChannel = asObjectRecord(channels?.modelByChannel);
   if (modelByChannel) {

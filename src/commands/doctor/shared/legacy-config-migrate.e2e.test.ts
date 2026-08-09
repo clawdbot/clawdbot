@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
+import { resolveModelEntries } from "../../../media-understanding/resolve.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
@@ -223,6 +224,37 @@ describe("legacy config migration end to end", () => {
     const validation = validateConfigObjectRaw(result.config);
     expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
     expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
+    expect(migrateLegacyConfig(result.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("keeps a repaired OpenCode media preference selected", () => {
+    const result = migrateLegacyConfig({
+      tools: {
+        media: {
+          image: { preferredModel: "opencode/hy3-free" },
+          models: [
+            { provider: "other", model: "alternative", capabilities: ["image"] },
+            { provider: "opencode", model: "hy3-free", capabilities: ["image"] },
+          ],
+        },
+      },
+    });
+
+    expect(result.config?.tools?.media?.image?.preferredModel).toBe("opencode/laguna-s-2.1-free");
+    const entries = resolveModelEntries({
+      cfg: result.config ?? {},
+      capability: "image",
+      config: result.config?.tools?.media?.image,
+      providerRegistry: new Map([
+        ["opencode", { capabilities: ["image"] }],
+        ["other", { capabilities: ["image"] }],
+      ]),
+    });
+    expect(entries[0]?.entry).toMatchObject({
+      provider: "opencode",
+      model: "laguna-s-2.1-free",
+    });
+    expect(validateConfigObjectRaw(result.config).ok).toBe(true);
     expect(migrateLegacyConfig(result.config)).toEqual({ config: null, changes: [] });
   });
 });

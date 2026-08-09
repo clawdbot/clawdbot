@@ -814,7 +814,7 @@ describe("doctor-contract-registry module loader", () => {
     });
   });
 
-  it("loads a provider doctor contract when a configured model ref is its only activation", () => {
+  it("loads a provider doctor contract when a media preference is its only activation", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "doctor-contract-api.ts"), "export {};\n", "utf-8");
     mocks.createJiti.mockImplementation(() => () => ({
@@ -835,7 +835,9 @@ describe("doctor-contract-registry module loader", () => {
       ],
       diagnostics: [],
     });
-    const config = { agents: { defaults: { model: "opencode/hy3-free" } } };
+    const config = {
+      tools: { media: { image: { preferredModel: "opencode/hy3-free" } } },
+    };
     const pluginIds = collectRelevantDoctorPluginIds(config);
 
     expect(pluginIds).toEqual(["opencode"]);

@@ -116,6 +116,13 @@ export function collectConfiguredModelRefs(
     "tools.exec.reviewer.model",
     isRecord(exec.reviewer) ? exec.reviewer.model : undefined,
   );
+  const media = isRecord(tools.media) ? tools.media : {};
+  for (const capability of ["image", "audio", "video"] as const) {
+    pushModelRef(
+      `tools.media.${capability}.preferredModel`,
+      isRecord(media[capability]) ? media[capability].preferredModel : undefined,
+    );
+  }
   const agents = isRecord(root.agents) ? root.agents : {};
   collectFromAgent("agents.defaults", agents.defaults);
   if (Object.hasOwn(agents, "entries")) {

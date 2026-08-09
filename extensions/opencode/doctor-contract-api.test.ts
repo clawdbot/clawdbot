@@ -227,7 +227,9 @@ describe("OpenCode doctor compatibility normalization", () => {
     const input = {
       tools: {
         media: {
-          image: { preferredModel: "hy3-free" },
+          image: { preferredModel: "opencode/hy3-free" },
+          audio: { preferredModel: "hy3-free" },
+          video: { preferredModel: "OPENCODE/HY3-FREE@work" },
           models: [
             {
               provider: " OpenCode ",
@@ -260,9 +262,13 @@ describe("OpenCode doctor compatibility normalization", () => {
       capabilities: ["image"],
     });
     expect(migrated.tools.media.models.slice(1)).toEqual(input.tools.media.models.slice(1));
-    expect(migrated.tools.media.image.preferredModel).toBe("hy3-free");
+    expect(migrated.tools.media.image.preferredModel).toBe(REPLACEMENT);
+    expect(migrated.tools.media.audio.preferredModel).toBe("hy3-free");
+    expect(migrated.tools.media.video.preferredModel).toBe(`${REPLACEMENT}@work`);
     expect(result.changes).toEqual([
       "Updated tools.media.models.0 to the current OpenCode Zen model.",
+      `Updated tools.media.image.preferredModel from the retired OpenCode Zen model to ${REPLACEMENT}.`,
+      `Updated tools.media.video.preferredModel from the retired OpenCode Zen model to ${REPLACEMENT}.`,
     ]);
   });
 

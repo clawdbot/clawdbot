@@ -130,6 +130,32 @@ describe("configured model refs", () => {
       ],
     },
     {
+      name: "media preferences",
+      config: {
+        tools: {
+          media: {
+            image: { preferredModel: "image-provider/model" },
+            audio: { preferredModel: "audio-provider/model" },
+            video: { preferredModel: "video-provider/model" },
+          },
+        },
+      },
+      expected: [
+        {
+          path: "tools.media.image.preferredModel",
+          value: "image-provider/model",
+        },
+        {
+          path: "tools.media.audio.preferredModel",
+          value: "audio-provider/model",
+        },
+        {
+          path: "tools.media.video.preferredModel",
+          value: "video-provider/model",
+        },
+      ],
+    },
+    {
       name: "keyed agent exec reviewer",
       config: {
         agents: {
