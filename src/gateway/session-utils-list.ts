@@ -5,7 +5,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   countActiveDescendantRuns,
@@ -22,7 +21,10 @@ import {
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
-import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveStoredSessionKeyForAgentStore,
+} from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscriptBatch as readScopedSessionTitleFieldsFromTranscriptBatch } from "./session-transcript-title-reader.js";
 import type {
   SessionActorProfileIdentity,
@@ -141,7 +143,7 @@ function populateSessionListAcpMetadata(params: {
     const agentId = normalizeAgentId(
       key === "global" && typeof params.opts.agentId === "string"
         ? params.opts.agentId
-        : (parsed?.agentId ?? resolveDefaultAgentId(params.cfg)),
+        : (parsed?.agentId ?? resolveSessionStoreAgentId(params.cfg, key)),
     );
     return {
       sessionKey: resolveStoredSessionKeyForAgentStore({
@@ -534,7 +536,7 @@ export async function listSessionsFromStoreAsync(
             ? normalizeAgentId(opts.agentId)
             : parsed?.agentId
               ? normalizeAgentId(parsed.agentId)
-              : resolveDefaultAgentId(cfg);
+              : resolveSessionStoreAgentId(cfg, key);
         return [
           {
             agentId,

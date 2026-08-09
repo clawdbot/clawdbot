@@ -1,7 +1,7 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveSoleAgentId } from "../../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
 import {
@@ -10,11 +10,9 @@ import {
 } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swarm-output-schema.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
@@ -68,6 +66,11 @@ export function prepareAgentRequestPreflight(params: {
   const cfg = params.context.getRuntimeConfig();
   const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(params.client);
   const requestSessionKey = request.sessionKey?.trim();
+  const selectedAgentId = requestSessionKey
+    ? (parseAgentSessionKey(requestSessionKey)?.agentId ??
+      normalizeOptionalString(request.agentId) ??
+      tryResolveSoleAgentId(cfg))
+    : (normalizeOptionalString(request.agentId) ?? tryResolveSoleAgentId(cfg));
   const collectorSession = findSwarmCollectorSession(requestSessionKey);
   // Collector children always use subagent session keys, so ordinary traffic
   // must never pay the persisted-store read. The store fallback only covers a
@@ -75,8 +78,9 @@ export function prepareAgentRequestPreflight(params: {
   const persistedCollectorSession =
     !collectorSession && requestSessionKey && isSubagentSessionKey(requestSessionKey)
       ? loadSessionEntry({
+          ...(selectedAgentId ? { agentId: selectedAgentId } : {}),
           storePath: resolveSessionStorePathCore(cfg.session?.store, {
-            agentId: resolveAgentIdFromSessionKey(requestSessionKey, resolveDefaultAgentId(cfg)),
+            agentId: selectedAgentId,
           }),
           sessionKey: requestSessionKey,
         })?.swarmCollector === true
@@ -116,8 +120,8 @@ export function prepareAgentRequestPreflight(params: {
       cfg,
       registeredCollector?.requesterAgentId ??
         (swarmRequesterSessionKey
-          ? resolveAgentIdFromSessionKey(swarmRequesterSessionKey, resolveDefaultAgentId(cfg))
-          : undefined),
+          ? (parseAgentSessionKey(swarmRequesterSessionKey)?.agentId ?? selectedAgentId)
+          : selectedAgentId),
     ).enabled;
     const pendingCollectorLaunch =
       registeredCollector?.swarmLaunchPending === true &&

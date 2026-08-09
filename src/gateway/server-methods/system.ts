@@ -16,7 +16,7 @@ import {
   SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
   validateSystemEventParams,
 } from "../../../packages/gateway-protocol/src/schema.js";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds, tryResolveSoleAgentId } from "../../agents/agent-scope.js";
 import {
   readUtilityModelSetting,
   resolveUtilityModelRefForAgent,
@@ -62,17 +62,20 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
   const config = context.getRuntimeConfig();
   const port = resolveGatewayPort(config);
   const lanAddress = (await resolveCachedAdvertisedLanHost()) ?? undefined;
-  const defaultAgentId = resolveDefaultAgentId(config);
-  const utilitySetting = readUtilityModelSetting(config, defaultAgentId);
-  const utilityModel = resolveUtilityModelRefForAgent({ cfg: config, agentId: defaultAgentId });
-  const defaultAgentUtilityModel =
-    utilitySetting.kind === "disabled"
-      ? ({ status: "disabled" } as const)
-      : utilitySetting.kind === "explicit"
-        ? ({ status: "configured", model: utilitySetting.modelRef } as const)
-        : utilityModel
-          ? ({ status: "auto", model: utilityModel } as const)
-          : ({ status: "unavailable" } as const);
+  const soleAgentId = tryResolveSoleAgentId(config);
+  const defaultAgentUtilityModel = soleAgentId
+    ? (() => {
+        const utilitySetting = readUtilityModelSetting(config, soleAgentId);
+        const utilityModel = resolveUtilityModelRefForAgent({ cfg: config, agentId: soleAgentId });
+        return utilitySetting.kind === "disabled"
+          ? ({ status: "disabled" } as const)
+          : utilitySetting.kind === "explicit"
+            ? ({ status: "configured", model: utilitySetting.modelRef } as const)
+            : utilityModel
+              ? ({ status: "auto", model: utilityModel } as const)
+              : ({ status: "unavailable" } as const);
+      })()
+    : ({ status: "unavailable" } as const);
 
   return {
     machineName: await getMachineDisplayName(),

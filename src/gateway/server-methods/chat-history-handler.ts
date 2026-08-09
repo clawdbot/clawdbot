@@ -5,6 +5,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
+  type AgentsListResult,
   errorShape,
   validateChatHistoryParams,
   validateChatMetadataParams,
@@ -386,12 +387,11 @@ async function handleChatHistoryRequest({
   });
   const modelCatalogSnapshot = await modelCatalogPromise;
   const catalogOwnedBySessionAgent = modelCatalogSnapshot?.agentId === sessionAgentId;
-  const catalogConfig = catalogOwnedBySessionAgent ? modelCatalogSnapshot.config : cfg;
   const modelCatalog = catalogOwnedBySessionAgent ? modelCatalogSnapshot.entries : undefined;
-  const defaultAgentId = resolveDefaultAgentId(catalogConfig);
+  const defaultAgentId = sessionAgentId;
   let startupProjection: ChatStartupProjectionResult | undefined;
   let startupMetadata: ChatMetadataResult | undefined;
-  let startupAgentsList: ReturnType<typeof listAgentsForGateway> | undefined;
+  let startupAgentsList: AgentsListResult | undefined;
   if (method === "chat.startup") {
     const includeSystem = hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND);
     const startupProjections = await measureDiagnosticsTimelineSpan(

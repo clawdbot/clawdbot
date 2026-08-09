@@ -1,5 +1,6 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
@@ -59,17 +60,33 @@ function broadcastSessionsChanged(
           : undefined,
       )
     : null;
-  const defaultAgentId = resolveDefaultAgentId(context.getRuntimeConfig());
-  const activeRunState = sessionRow
-    ? resolveVisibleActiveSessionRunState({
-        context,
-        requestedKey: payload.sessionKey ?? sessionRow.key,
-        canonicalKey: sessionRow.key,
-        sessionId: sessionRow.sessionId,
-        agentId: sessionRow.key === "global" ? payload.agentId : undefined,
-        defaultAgentId,
-      })
-    : null;
+  const cfg = context.getRuntimeConfig();
+  const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  let defaultAgentId: string | undefined;
+  if (sessionRow) {
+    try {
+      defaultAgentId = resolveAgentIdFromSessionKey(
+        sessionRow.key,
+        sessionRow.key === "global"
+          ? compatibilityAgentId
+          : (payload.agentId ?? compatibilityAgentId),
+      );
+    } catch {
+      defaultAgentId = undefined;
+    }
+  }
+  const activeRunState =
+    sessionRow &&
+    (sessionRow.key !== "global" || defaultAgentId !== undefined || payload.agentId !== undefined)
+      ? resolveVisibleActiveSessionRunState({
+          context,
+          requestedKey: payload.sessionKey ?? sessionRow.key,
+          canonicalKey: sessionRow.key,
+          sessionId: sessionRow.sessionId,
+          agentId: sessionRow.key === "global" ? payload.agentId : undefined,
+          defaultAgentId,
+        })
+      : null;
   context.broadcastToConnIds(
     "sessions.changed",
     {

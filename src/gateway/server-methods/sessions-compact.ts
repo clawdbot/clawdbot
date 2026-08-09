@@ -5,9 +5,9 @@ import {
   errorShape,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   resolveSessionWorkStartError,
   SESSION_TOTAL_TOKENS_VERSION,
@@ -69,6 +69,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
+    const compatibilityDefaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
     const target = resolveGatewaySessionStoreTargetWithStore({
       cfg,
       key,
@@ -221,7 +222,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               canonicalKey: target.canonicalKey,
               sessionId,
               agentId: requestedAgentId,
-              defaultAgentId: resolveDefaultAgentId(cfg),
+              defaultAgentId: compatibilityDefaultAgentId,
             });
           // Accepted work can live only in its command lane; waiting behind it
           // while holding the lifecycle fence would deadlock or drop that turn.

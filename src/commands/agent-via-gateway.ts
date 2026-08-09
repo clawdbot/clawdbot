@@ -10,7 +10,12 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import type { AgentsListResult } from "../../packages/gateway-protocol/src/index.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentIds,
+  tryResolveSoleAgentId,
+} from "../agents/agent-scope-config.js";
 import { measureAgentStartup } from "../agents/startup-timing.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -20,6 +25,8 @@ import {
   readGatewayDispatchConfig,
   readGatewayDispatchConfigWithShellEnvFallback,
 } from "../config/gateway-dispatch-config.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   callGateway,
@@ -30,7 +37,7 @@ import {
   type GatewayRequestFunction,
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
-import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE } from "../gateway/operator-scopes.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import {
@@ -99,8 +106,18 @@ type AgentCliOpts = {
   extraSystemPrompt?: string;
   local?: boolean;
 };
+type RemoteGatewayRoster = {
+  agentIds: string[];
+  defaultId: string;
+  ownership?: AgentsListResult["ownership"];
+  selectionRequired: boolean;
+  mainKey: string;
+  scope: AgentsListResult["scope"];
+};
 type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
   message: string;
+  gatewayDispatchConfig?: OpenClawConfig;
+  remoteGatewayRoster?: RemoteGatewayRoster;
 };
 
 type AgentCliSignal = EmbeddedStateSignal;
@@ -117,6 +134,32 @@ type AgentGatewayCallIdentity = Pick<
 >;
 type AgentSessionModule = typeof import("./agent/session.runtime.js");
 type AgentSessionModuleLoader = () => Promise<AgentSessionModule>;
+
+function usesImplicitRemoteCompatibilityDefault(roster: RemoteGatewayRoster): boolean {
+  return (
+    !roster.selectionRequired &&
+    (roster.ownership === "legacy" || (!roster.ownership && roster.agentIds.length > 1))
+  );
+}
+
+function resolveImplicitCliAgentId(cfg: OpenClawConfig, remote?: RemoteGatewayRoster): string {
+  const selectionCfg = remote
+    ? cfg
+    : (migratePersistedImplicitMainRoster(cfg).config as OpenClawConfig);
+  const selected = remote
+    ? remote.selectionRequired
+      ? undefined
+      : remote.defaultId
+    : tryResolveLegacyCompatibilityAgentId(selectionCfg);
+  if (selected) {
+    return selected;
+  }
+  const agentIds = remote?.agentIds ?? listAgentIds(selectionCfg);
+  throw new AgentSelectionRequiredError(agentIds, {
+    surface: "agent turn",
+    hint: `Pass --agent <id> to select one of: ${agentIds.join(", ")}.`,
+  });
+}
 
 const GATEWAY_ABORT_RETRY_DELAYS_MS = [50, 150, 300, 600] as const;
 const GATEWAY_ABORT_REQUEST_TIMEOUT_MS = 2_000;
@@ -221,6 +264,51 @@ async function runEmbeddedAgentCommand(
 async function loadRuntimeConfig(): Promise<OpenClawConfig> {
   const { getRuntimeConfig } = await runtimeConfigModuleLoader.load();
   return getRuntimeConfig();
+}
+
+function usesRemoteGateway(cfg: OpenClawConfig): boolean {
+  return Boolean(
+    cfg.gateway?.mode === "remote" || normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL),
+  );
+}
+
+async function loadRemoteGatewayRoster(cfg: OpenClawConfig): Promise<RemoteGatewayRoster> {
+  const result = await callGateway<AgentsListResult>({
+    method: "agents.list",
+    params: {},
+    config: cfg,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+    scopes: [READ_SCOPE],
+  });
+  const agentIds = result.agents
+    .filter((entry) => entry.kind !== "system")
+    .map((entry) => normalizeAgentId(entry.id));
+  return {
+    agentIds,
+    defaultId: normalizeAgentId(result.defaultId),
+    ownership: result.ownership,
+    selectionRequired: result.selectionRequired ?? result.ownership === "explicit",
+    mainKey: result.mainKey,
+    scope: result.scope,
+  };
+}
+
+async function loadRemoteGatewayRosterWithShellEnvFallback(
+  cfg: OpenClawConfig,
+): Promise<{ config: OpenClawConfig; roster: RemoteGatewayRoster }> {
+  try {
+    return { config: cfg, roster: await loadRemoteGatewayRoster(cfg) };
+  } catch (error) {
+    if (!shouldRetryGatewayDispatchWithShellEnvFallback(error)) {
+      throw error;
+    }
+    const fallbackConfig = await readGatewayDispatchConfigWithShellEnvFallback();
+    return {
+      config: fallbackConfig,
+      roster: await loadRemoteGatewayRoster(fallbackConfig),
+    };
+  }
 }
 
 function formatActiveGatewayLocalRefusal(identity: GatewayLockIdentity): string {
@@ -457,36 +545,80 @@ function validateExplicitSessionKeyForDispatch(
 async function normalizeSessionKeyOptsForDispatch(
   opts: AgentDispatchOpts,
 ): Promise<AgentDispatchOpts> {
+  let normalizedOpts = opts;
   const rawSessionKey = opts.sessionKey?.trim();
   const rawTo = opts.to?.trim();
   if (!rawSessionKey && !opts.sessionId?.trim() && classifySessionKeyShape(rawTo) === "agent") {
-    return {
-      ...opts,
-      to: undefined,
-      sessionKey: rawTo,
-    };
+    return normalizeSessionKeyOptsForDispatch({ ...opts, to: undefined, sessionKey: rawTo });
   }
   const isLegacySessionKey =
     rawSessionKey && classifySessionKeyShape(rawSessionKey) === "legacy_or_alias";
-  const agentIdRaw = opts.agent?.trim();
+  const explicitAgentIdRaw = opts.agent?.trim();
+  let agentIdRaw = explicitAgentIdRaw;
+  const hasExplicitSessionTarget =
+    Boolean(opts.sessionId?.trim()) ||
+    [rawSessionKey, rawTo].some((value) => classifySessionKeyShape(value) === "agent");
+  let selectionCfg: OpenClawConfig | undefined;
+  let remoteGatewayRoster: RemoteGatewayRoster | undefined;
+  if (opts.local !== true) {
+    let cfg = readGatewayDispatchConfig();
+    normalizedOpts = { ...normalizedOpts, gatewayDispatchConfig: cfg };
+    if (usesRemoteGateway(cfg)) {
+      const loaded = await loadRemoteGatewayRosterWithShellEnvFallback(cfg);
+      cfg = loaded.config;
+      remoteGatewayRoster = loaded.roster;
+      normalizedOpts = { ...normalizedOpts, gatewayDispatchConfig: cfg, remoteGatewayRoster };
+    }
+    selectionCfg = cfg;
+  }
+  if (!agentIdRaw && !hasExplicitSessionTarget && !(opts.local === true && rawTo)) {
+    const cfg =
+      opts.local === true
+        ? await loadRuntimeConfig()
+        : (selectionCfg ?? readGatewayDispatchConfig());
+    selectionCfg = cfg;
+    const selectedAgentId = resolveImplicitCliAgentId(cfg, remoteGatewayRoster);
+    const implicitSoleAgent = remoteGatewayRoster
+      ? remoteGatewayRoster.ownership === "sole" ||
+        (!remoteGatewayRoster.ownership && remoteGatewayRoster.agentIds.length === 1)
+      : tryResolveSoleAgentId(cfg) === selectedAgentId;
+    const implicitCompatibilityDefault = remoteGatewayRoster
+      ? usesImplicitRemoteCompatibilityDefault(remoteGatewayRoster)
+      : !implicitSoleAgent;
+    const implicitGlobalSession =
+      !explicitAgentIdRaw &&
+      rawSessionKey === undefined &&
+      (remoteGatewayRoster
+        ? remoteGatewayRoster.scope === "global"
+        : !usesRemoteGateway(cfg) && cfg.session?.scope === "global");
+    const unscopedSession = isUnscopedSessionKeySentinel(rawSessionKey) || implicitGlobalSession;
+    const implicitAgentSelection = implicitSoleAgent || implicitCompatibilityDefault;
+    agentIdRaw = implicitAgentSelection && unscopedSession ? undefined : selectedAgentId;
+    if (agentIdRaw && !implicitCompatibilityDefault) {
+      normalizedOpts = {
+        ...normalizedOpts,
+        agent: selectedAgentId,
+      };
+    }
+  }
   const shouldScopeDefaultAgentKey =
     isLegacySessionKey && !agentIdRaw && !isUnscopedSessionKeySentinel(rawSessionKey);
   const cfg =
     isLegacySessionKey && (agentIdRaw || shouldScopeDefaultAgentKey)
-      ? opts.local === true
+      ? normalizedOpts.local === true
         ? await loadRuntimeConfig()
-        : readGatewayDispatchConfig()
+        : (selectionCfg ?? readGatewayDispatchConfig())
       : undefined;
   const sessionKey = scopeLegacySessionKeyToAgent({
-    agentId: agentIdRaw ?? (shouldScopeDefaultAgentKey ? resolveDefaultAgentId(cfg!) : undefined),
-    sessionKey: opts.sessionKey,
-    mainKey: cfg?.session?.mainKey,
+    agentId: agentIdRaw,
+    sessionKey: normalizedOpts.sessionKey,
+    mainKey: remoteGatewayRoster?.mainKey ?? cfg?.session?.mainKey,
   });
-  if (sessionKey === opts.sessionKey) {
-    return opts;
+  if (sessionKey === normalizedOpts.sessionKey) {
+    return normalizedOpts;
   }
   return {
-    ...opts,
+    ...normalizedOpts,
     sessionKey,
   };
 }
@@ -741,7 +873,27 @@ async function agentViaGatewayCommand(
 ) {
   const body = opts.message;
   const explicitSessionKey = opts.sessionKey?.trim();
-  if (!opts.to && !opts.sessionId && !opts.agent && !explicitSessionKey) {
+  let cfg: OpenClawConfig = opts.gatewayDispatchConfig ?? readGatewayDispatchConfig();
+  const remoteGateway = usesRemoteGateway(cfg);
+  const remoteRosterIsSole =
+    opts.remoteGatewayRoster?.ownership === "sole" ||
+    (!opts.remoteGatewayRoster?.ownership && opts.remoteGatewayRoster?.agentIds.length === 1);
+  const remoteRosterUsesCompatibilityDefault = Boolean(
+    opts.remoteGatewayRoster && usesImplicitRemoteCompatibilityDefault(opts.remoteGatewayRoster),
+  );
+  const hasImplicitGlobalTarget =
+    (opts.remoteGatewayRoster?.scope ?? cfg.session?.scope) === "global" &&
+    (opts.remoteGatewayRoster
+      ? !opts.remoteGatewayRoster.selectionRequired &&
+        (remoteRosterIsSole || remoteRosterUsesCompatibilityDefault)
+      : !remoteGateway && tryResolveSoleAgentId(cfg) !== undefined);
+  if (
+    !opts.to &&
+    !opts.sessionId &&
+    !opts.agent &&
+    !explicitSessionKey &&
+    !hasImplicitGlobalTarget
+  ) {
     throw new Error(
       `No target session selected. Use --agent <id>, --session-key <key>, --session-id <id>, or --to <E.164>. Run ${formatCliCommand("openclaw agents list")} to see agents.`,
     );
@@ -749,12 +901,12 @@ async function agentViaGatewayCommand(
 
   // Scoped gateway turns need core agent/session/gateway fields only. The
   // running gateway owns plugin validation and plugin metadata freshness.
-  let cfg: OpenClawConfig = readGatewayDispatchConfig();
   const agentIdRaw = opts.agent?.trim();
   const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
   if (agentId) {
-    const knownAgents = listAgentIds(cfg);
-    if (!knownAgents.includes(agentId)) {
+    const knownAgents =
+      opts.remoteGatewayRoster?.agentIds ?? (remoteGateway ? undefined : listAgentIds(cfg));
+    if (knownAgents && !knownAgents.includes(agentId)) {
       throw new Error(
         `Unknown agent id "${agentIdRaw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
       );
@@ -772,30 +924,40 @@ async function agentViaGatewayCommand(
     opts.to?.trim() &&
     classifySessionKeyShape(opts.to) !== "agent",
   );
+  const deferRemoteSessionId = Boolean(
+    remoteGateway && opts.sessionId?.trim() && !explicitSessionKey,
+  );
+  const deferAgentDefaultSession = Boolean(
+    agentId && !explicitSessionKey && !opts.sessionId?.trim() && !opts.to?.trim(),
+  );
+  const preserveImplicitCompatibilitySession =
+    (remoteRosterIsSole || remoteRosterUsesCompatibilityDefault) &&
+    !agentId &&
+    (isUnscopedSessionKeySentinel(explicitSessionKey) || hasImplicitGlobalTarget);
 
-  const sessionKey = deferExplicitRecipientSession
-    ? undefined
-    : classifySessionKeyShape(explicitSessionKey) === "agent"
-      ? explicitSessionKey
-      : explicitSessionKey || opts.to || opts.sessionId
-        ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({
+  const sessionKey = preserveImplicitCompatibilitySession
+    ? explicitSessionKey
+    : deferAgentDefaultSession || deferExplicitRecipientSession || deferRemoteSessionId
+      ? undefined
+      : classifySessionKeyShape(explicitSessionKey) === "agent"
+        ? explicitSessionKey
+        : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
             cfg,
             agentId,
             to: opts.to,
             sessionId: opts.sessionId,
             sessionKey: explicitSessionKey,
-          }).sessionKey
-        : undefined;
-  const abortSessionKey = deferExplicitRecipientSession
-    ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({ cfg, agentId }).sessionKey
-    : sessionKey;
+          }).sessionKey;
+  const abortSessionKey = deferRemoteSessionId
+    ? undefined
+    : deferExplicitRecipientSession
+      ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({ cfg, agentId }).sessionKey
+      : sessionKey;
 
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);
   const hasModelOverride = Boolean(modelOverride);
   const needsAdminGatewayIdentity = hasModelOverride || isSessionResetCommand(body);
-  const hasGatewayUrlOverride = Boolean(normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL));
-  const usesRemoteGateway = cfg.gateway?.mode === "remote" || hasGatewayUrlOverride;
   const gatewayIdentity: AgentGatewayCallIdentity = needsAdminGatewayIdentity
     ? {
         clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
@@ -807,7 +969,7 @@ async function agentViaGatewayCommand(
         mode: GATEWAY_CLIENT_MODES.CLI,
         // The local CLI is the Gateway owner. Keep owner-only run tools available;
         // remote clients retain the agent method's least-privilege scope.
-        ...(usesRemoteGateway ? {} : { scopes: [ADMIN_SCOPE] }),
+        ...(remoteGateway ? {} : { scopes: [ADMIN_SCOPE] }),
       };
 
   let acceptedRunId: string | undefined = idempotencyKey;

@@ -152,6 +152,24 @@ describe("AgentsListResultSchema", () => {
     expectAccepted(AgentsListResultSchema, result);
   });
 
+  it("keeps the legacy default required while accepting additive ownership metadata", () => {
+    const legacy = {
+      defaultId: "ops",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "ops" }, { id: "research" }],
+    };
+    const current = {
+      ...legacy,
+      ownership: "explicit",
+      selectionRequired: true,
+    };
+
+    expect(Value.Check(AgentsListResultSchema, legacy)).toBe(true);
+    expect(Value.Check(AgentsListResultSchema, current)).toBe(true);
+    expect(Value.Check(AgentsListResultSchema, { ...current, defaultId: undefined })).toBe(false);
+  });
+
   it("accepts system and legacy omitted kinds but rejects unknown kinds", () => {
     const result = {
       defaultId: "main",

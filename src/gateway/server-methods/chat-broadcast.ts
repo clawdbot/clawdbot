@@ -1,6 +1,7 @@
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
+import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import {
   resolveSessionSubscriptionKey,
   resolveSessionSubscriptionKeys,
@@ -39,12 +40,16 @@ function resolveChatSessionKeys(params: {
   if (canonicalKey === params.sessionKey) {
     return [canonicalKey];
   }
-  const defaultAgentId = resolveDefaultAgentId(params.context.getRuntimeConfig?.() ?? {});
-  return resolveSessionSubscriptionKeys(
+  const cfg = params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig);
+  const compatibilityAgentId = tryResolveSessionCompatibilityOwnerAgentId(
+    cfg,
     params.sessionKey,
-    params.agentId ?? defaultAgentId,
-    defaultAgentId,
   );
+  const scopedAgentId = params.agentId ?? compatibilityAgentId;
+  if (!scopedAgentId) {
+    return [params.sessionKey];
+  }
+  return resolveSessionSubscriptionKeys(params.sessionKey, scopedAgentId, compatibilityAgentId);
 }
 
 export function sendGlobalAwareNodeChatPayload(params: {

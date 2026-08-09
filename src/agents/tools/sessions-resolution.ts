@@ -152,6 +152,7 @@ export function shouldResolveSessionIdInput(value: string): boolean {
 type SessionReferenceResolution =
   | {
       ok: true;
+      agentId?: string;
       key: string;
       displayKey: string;
       resolvedViaSessionId: boolean;
@@ -161,6 +162,7 @@ type SessionReferenceResolution =
 type VisibleSessionReferenceResolution =
   | {
       ok: true;
+      agentId?: string;
       key: string;
       displayKey: string;
       missing?: true;
@@ -173,6 +175,7 @@ type VisibleSessionReferenceResolution =
     };
 
 function buildResolvedSessionReference(params: {
+  agentId?: string;
   key: string;
   alias: string;
   mainKey: string;
@@ -180,6 +183,7 @@ function buildResolvedSessionReference(params: {
 }): Extract<SessionReferenceResolution, { ok: true }> {
   return {
     ok: true,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     key: params.key,
     displayKey: resolveDisplaySessionKey({
       key: params.key,
@@ -210,15 +214,23 @@ function buildFailedSessionReference(
       };
 }
 
-async function requestResolvedSessionKey(
+async function requestResolvedSession(
   params: Record<string, unknown> & { allowMissing?: boolean },
   callGateway: GatewayCaller,
-): Promise<string | undefined> {
-  const result = await callGateway<{ key?: unknown }>({
+): Promise<{ agentId?: string; key: string } | undefined> {
+  const toResolvedSession = (result: { agentId?: unknown; key?: unknown } | undefined) => {
+    const key = normalizeOptionalString(result?.key);
+    if (!key) {
+      return undefined;
+    }
+    const agentId = normalizeOptionalString(result?.agentId);
+    return { key, ...(agentId ? { agentId } : {}) };
+  };
+  const result = await callGateway<{ agentId?: unknown; key?: unknown }>({
     method: "sessions.resolve",
     params,
   });
-  return normalizeOptionalString(result?.key);
+  return toResolvedSession(result);
 }
 
 function buildSessionResolveQuery(params: {
@@ -250,16 +262,19 @@ export async function resolveSessionReference(params: {
   callGateway?: GatewayCaller;
 }): Promise<SessionReferenceResolution> {
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
-  const buildReference = (key: string, resolvedViaSessionId: boolean) =>
+  const buildReference = (
+    resolved: { agentId?: string; key: string },
+    resolvedViaSessionId: boolean,
+  ) =>
     buildResolvedSessionReference({
-      key,
+      ...resolved,
       alias: params.alias,
       mainKey: params.mainKey,
       resolvedViaSessionId,
     });
   const tryResolve = async (input: string, kind: "key" | "sessionId", allowMissing = false) => {
     try {
-      const key = await requestResolvedSessionKey(
+      const resolved = await requestResolvedSession(
         buildSessionResolveQuery({
           input,
           kind,
@@ -269,7 +284,7 @@ export async function resolveSessionReference(params: {
         }),
         gatewayCall,
       );
-      return key ? buildReference(key, kind === "sessionId") : null;
+      return resolved ? buildReference(resolved, kind === "sessionId") : null;
     } catch {
       return null;
     }
@@ -295,7 +310,7 @@ export async function resolveSessionReference(params: {
       return resolvedByKey;
     }
     try {
-      const key = await requestResolvedSessionKey(
+      const resolved = await requestResolvedSession(
         buildSessionResolveQuery({
           input: raw,
           kind: "sessionId",
@@ -304,10 +319,10 @@ export async function resolveSessionReference(params: {
         }),
         gatewayCall,
       );
-      if (!key) {
+      if (!resolved) {
         throw new Error(`Session not found: ${raw} (use the full sessionKey from sessions_list)`);
       }
-      return buildReference(key, true);
+      return buildReference(resolved, true);
     } catch (error) {
       return buildFailedSessionReference(error, raw, params.restrictToSpawned);
     }
@@ -424,5 +439,11 @@ export async function resolveVisibleSessionReference(params: {
       displayKey,
     };
   }
-  return { ok: true, key: resolvedKey, displayKey, ...(missing ? { missing: true } : {}) };
+  return {
+    ok: true,
+    ...(params.resolvedSession.agentId ? { agentId: params.resolvedSession.agentId } : {}),
+    key: resolvedKey,
+    displayKey,
+    ...(missing ? { missing: true } : {}),
+  };
 }

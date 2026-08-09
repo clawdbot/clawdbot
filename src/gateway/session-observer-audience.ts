@@ -1,3 +1,5 @@
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
@@ -8,10 +10,11 @@ export function createSessionObserverAudience(params: {
   subscribers: SessionMessageSubscriberRegistry;
   sessionEventSubscribers?: SessionEventSubscriberRegistry;
   isVisible: (connId: string) => boolean;
-  getDefaultAgentId: () => string;
+  getConfig: () => OpenClawConfig;
 }) {
   const messageSubscriberKeys = (sessionKey: string, agentId: string): string[] => {
-    return resolveSessionSubscriptionKeys(sessionKey, agentId, params.getDefaultAgentId());
+    const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(params.getConfig());
+    return resolveSessionSubscriptionKeys(sessionKey, agentId, compatibilityAgentId);
   };
 
   const messageRecipients = (sessionKey: string, agentId: string): Set<string> => {

@@ -7,8 +7,8 @@ import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   resolveAgentConfig,
-  resolveDefaultAgentId,
   resolveSessionAgentId,
+  tryResolveSoleAgentId,
 } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -40,7 +40,7 @@ import {
 } from "../auto-reply/thinking.js";
 import { resolveAgentMainSessionKey, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import {
   createSessionRowModelCacheKey,
@@ -273,19 +273,28 @@ export function resolveGatewaySessionThinkingProjectionInternal(
 export function getSessionDefaults(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
-  options?: { allowPluginNormalization?: boolean },
+  options?: { agentId?: string; allowPluginNormalization?: boolean },
 ): GatewaySessionsDefaults {
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    allowPluginNormalization: options?.allowPluginNormalization,
-  });
+  const agentId = normalizeAgentId(
+    options?.agentId ?? tryResolveSoleAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
+  );
+  const resolved = options?.agentId
+    ? resolveDefaultModelForAgent({
+        cfg,
+        agentId,
+        allowPluginNormalization: options.allowPluginNormalization,
+      })
+    : resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+        allowPluginNormalization: options?.allowPluginNormalization,
+      });
   const contextTokens =
+    resolveAgentConfig(cfg, agentId)?.contextTokens ??
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
-  const agentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
   const agentRuntime = resolveModelAgentRuntimeMetadata({
     cfg,

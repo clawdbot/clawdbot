@@ -170,6 +170,7 @@ function resolveReadableAcpSessionRow(params: {
 
 export function readAcpSessionMeta(params: {
   sessionKey: string;
+  agentId?: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
@@ -180,6 +181,7 @@ export function readAcpSessionMeta(params: {
   }
   const storeEntry = readSessionEntryFromStore({
     sessionKey,
+    agentId: params.agentId,
     cfg: params.cfg,
     env: params.env,
     clone: false,

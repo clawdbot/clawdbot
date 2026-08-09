@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { listAgentEntries, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentEntries, tryResolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
@@ -76,7 +76,7 @@ const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
 export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const entries = listAgentEntries(cfg);
   const seen = new Set<string>();
   const ordered: Array<{ id: string; name?: string }> = [];
@@ -96,10 +96,10 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
     ordered.push({ id, name: typeof entry.name === "string" ? entry.name : undefined });
   }
 
-  if (!seen.has(defaultAgentId)) {
+  if (defaultAgentId && !seen.has(defaultAgentId)) {
     ordered.unshift({ id: defaultAgentId });
   }
-  if (ordered.length === 0) {
+  if (ordered.length === 0 && defaultAgentId) {
     ordered.push({ id: defaultAgentId });
   }
 
@@ -218,15 +218,15 @@ export async function collectGatewayHealthSnapshot(params: {
       sessions,
     });
   }
-  const defaultAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
-  const heartbeatSeconds = defaultAgent?.heartbeat.everyMs
-    ? Math.round(defaultAgent.heartbeat.everyMs / 1000)
+  const summaryAgent = agents.find((agent) => agent.isDefault) ?? agents[0];
+  const heartbeatSeconds = summaryAgent?.heartbeat.everyMs
+    ? Math.round(summaryAgent.heartbeat.everyMs / 1000)
     : 0;
   const sessions =
-    defaultAgent?.sessions ??
+    summaryAgent?.sessions ??
     (await buildHealthSessionSummary(
-      resolveSessionStorePathCore(cfg.session?.store, { agentId: defaultAgentId }),
-      defaultAgentId,
+      resolveSessionStorePathCore(cfg.session?.store, { agentId: summaryAgent?.agentId }),
+      summaryAgent?.agentId,
     ));
 
   const start = Date.now();
@@ -247,7 +247,9 @@ export async function collectGatewayHealthSnapshot(params: {
       cfg,
       accountIds,
     });
-    const boundAccounts = channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [];
+    const boundAccounts = defaultAgentId
+      ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+      : [];
     const preferredAccountId = resolvePreferredAccountId({
       accountIds,
       defaultAccountId,
@@ -411,7 +413,7 @@ export async function collectGatewayHealthSnapshot(params: {
     channelOrder,
     channelLabels,
     heartbeatSeconds,
-    defaultAgentId,
+    ...(defaultAgentId ? { defaultAgentId } : {}),
     agents,
     sessions: {
       path: sessions.path,

@@ -101,16 +101,37 @@ async function withTempStore(
   }
 }
 
-function mockGatewaySuccessReply(text = "hello") {
-  callGateway.mockResolvedValue({
+function gatewaySuccessReply(text: string) {
+  return {
     runId: "idem-1",
     status: "ok",
-    result: {
-      payloads: [{ text }],
-      meta: { stub: true },
-    },
+    result: { payloads: [{ text }], meta: { stub: true } },
+  };
+}
+
+function mockGatewaySuccessReply(text = "hello") {
+  callGateway.mockResolvedValue(gatewaySuccessReply(text));
+}
+
+function mockRemoteGatewayRoster(ownership: "sole" | "legacy" | "explicit", agents = ["ops"]) {
+  callGateway.mockImplementation(async (requestValue) => {
+    const request = requireRecord(requestValue, "gateway request");
+    return request.method === "agents.list"
+      ? {
+          defaultId: "ops",
+          ownership,
+          selectionRequired: ownership === "explicit",
+          mainKey: "remote-main",
+          scope: "per-sender",
+          agents: agents.map((id) => ({ id })),
+        }
+      : gatewaySuccessReply("remote");
   });
 }
+
+const remoteGatewayConfig = {
+  gateway: { mode: "remote" as const, remote: { url: "wss://gateway.example" } },
+};
 
 function mockLocalAgentReply(text = "local") {
   agentCommand.mockImplementationOnce(async (_opts, rt) => {
@@ -431,16 +452,51 @@ describe("agentCliCommand", () => {
       vi.stubEnv("OPENCLAW_GATEWAY_URL", gatewayUrl);
     }
     await withTempStore(async () => {
-      mockGatewaySuccessReply();
+      mockRemoteGatewayRoster("sole");
 
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      const request = requireRecord(callGateway.mock.calls[1]?.[0], "gateway request");
       expect(request.clientName).toBe("cli");
       expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
     }, overrides);
+  });
+
+  it("uses the explicit remote selection and session-id contract", async () => {
+    mockRemoteGatewayRoster("explicit", ["ops", "research"]);
+    await withTempStore(async () => {
+      await expect(agentCliCommand({ message: "hi" }, runtime)).rejects.toMatchObject({
+        code: "AGENT_SELECTION_REQUIRED",
+        agentIds: ["ops", "research"],
+      });
+      expect(callGateway).toHaveBeenCalledOnce();
+    }, remoteGatewayConfig);
+
+    mockRemoteGatewayRoster("explicit", ["ops", "research"]);
+    await withTempStore(async () => {
+      await agentCliCommand({ message: "hi", sessionId: "remote-session" }, runtime);
+      const request = requireRecord(callGateway.mock.calls.at(-1)?.[0], "agent request");
+      expect(request.params).toMatchObject({
+        agentId: undefined,
+        sessionId: "remote-session",
+        sessionKey: undefined,
+      });
+      expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+    }, remoteGatewayConfig);
+  });
+
+  it.each([
+    { ownership: "sole" as const, agents: ["ops"] },
+    { ownership: "legacy" as const, agents: ["ops", "research"] },
+  ])("keeps a remote $ownership owner implicit for a sentinel", async ({ ownership, agents }) => {
+    mockRemoteGatewayRoster(ownership, agents);
+    await withTempStore(async () => {
+      await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
+      const request = requireRecord(callGateway.mock.calls[1]?.[0], "agent request");
+      expect(request.params).toMatchObject({ agentId: undefined, sessionKey: "global" });
+    }, remoteGatewayConfig);
   });
 
   it("reads a UTF-8 message file for gateway dispatch", async () => {

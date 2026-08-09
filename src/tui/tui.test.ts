@@ -304,6 +304,7 @@ describe("resolveTuiSessionKey", () => {
 describe("resolveInitialTuiAgentId", () => {
   const cfg: OpenClawConfig = {
     agents: {
+      ownership: "explicit",
       list: [
         { id: "main", workspace: "/tmp/openclaw" },
         { id: "ops", workspace: "/tmp/openclaw/projects/ops" },
