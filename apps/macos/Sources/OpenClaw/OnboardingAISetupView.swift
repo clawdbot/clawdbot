@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import OpenClawChatUI
 import OpenClawProtocol
 import SwiftUI
 
@@ -157,8 +156,6 @@ struct GatewayAuthCard: Equatable {
 
 struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
-    var systemAgentChat: SystemAgentOnboardingChatModel
-    @Binding var showSystemAgentChat: Bool
     var returnToGatewayAuthentication: () -> Void
     var retryConfiguredGatewayProbe: () -> Void
     @State private var openedProviderAuthURL: URL?
@@ -181,9 +178,6 @@ struct OnboardingAISetupView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sheet(isPresented: self.$showSystemAgentChat) {
-            self.systemAgentSheet
-        }
         .sheet(isPresented: Binding(
             get: { self.model.activeAuthOption != nil },
             set: {
@@ -298,19 +292,6 @@ struct OnboardingAISetupView: View {
             self.providerPrepareSection
             self.providerAuthSection
             self.manualSection
-        }
-
-        if SystemAgentAvailability.shouldShow(configuredModel: self.model.connectedModelRef) {
-            HStack {
-                Spacer(minLength: 0)
-                Button {
-                    self.showSystemAgentChat = true
-                } label: {
-                    Label("Need help? Chat with OpenClaw", systemImage: "questionmark.bubble")
-                        .font(.caption)
-                }
-                .buttonStyle(.link)
-            }
         }
     }
 
@@ -927,23 +908,6 @@ struct OnboardingAISetupView: View {
             return "Paste the key or token here, and OpenClaw checks it with a real test question."
         }
         return "\(hint). Paste it here, and OpenClaw checks it with a real test question."
-    }
-
-    private var systemAgentSheet: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Label("OpenClaw — setup helper", systemImage: "lifepreserver")
-                    .font(.headline)
-                Spacer(minLength: 0)
-                Button("Done") {
-                    self.showSystemAgentChat = false
-                }
-            }
-            .padding([.top, .horizontal], 14)
-            SystemAgentOnboardingChatView(model: self.systemAgentChat)
-                .task { await self.systemAgentChat.startIfNeeded() }
-        }
-        .frame(width: 520, height: 480)
     }
 }
 
