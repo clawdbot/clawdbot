@@ -356,10 +356,10 @@ jobs:
           timeout_outcome="none"
           if [[ "$qa_exit_code" -eq 137 ]] && grep -Eq "^timeout: sending signal KILL to command '[A-Za-z0-9_./+-]+'$" "$timeout_supervisor_log"; then
             timeout_outcome="kill"
-            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and required SIGKILL after the 30-second grace period; partial evidence will still be uploaded."
+            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and required SIGKILL after the 30-second grace period; canonical qa-evidence.json was not published, but diagnostic artifacts will still be uploaded."
           elif [[ "$qa_exit_code" -eq 124 ]] && grep -Eq "^timeout: sending signal TERM to command '[A-Za-z0-9_./+-]+'$" "$timeout_supervisor_log"; then
             timeout_outcome="term"
-            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and was terminated; partial evidence will still be uploaded."
+            echo "::warning::QA profile '${QA_PROFILE}' timed out after 110 minutes and was terminated; canonical qa-evidence.json was not published, but diagnostic artifacts will still be uploaded."
           fi
 
           QA_EXIT_CODE="$qa_exit_code" TIMEOUT_OUTCOME="$timeout_outcome" OUTPUT_DIR="$output_dir" \

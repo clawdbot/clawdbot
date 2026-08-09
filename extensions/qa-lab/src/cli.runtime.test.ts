@@ -43,6 +43,21 @@ vi.mock("./suite-launch.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./suite-launch.runtime.js")>()),
   runQaFlowSuiteFromRuntime,
   runQaSuite,
+  runQaSuiteCore: async (params: QaSuiteRunParams) => {
+    const result = await runQaSuite(params);
+    const evidencePath = result?.result.evidencePath;
+    let evidence = makeQaEvidence();
+    if (evidencePath) {
+      try {
+        evidence = JSON.parse(await fs.readFile(evidencePath, "utf8"));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+    }
+    return Object.freeze({ result, evidence, complete: vi.fn() });
+  },
 }));
 
 vi.mock("./character-eval.js", () => ({
@@ -248,6 +263,8 @@ function executionCellsForSuiteParams(params?: QaSuiteRunParams) {
 describe("qa cli runtime", () => {
   let stdoutWrite: ReturnType<typeof vi.spyOn>;
   let stderrWrite: ReturnType<typeof vi.spyOn>;
+  let profileArtifactsDir: string;
+  let profileEvidencePath: string;
   let suiteArtifactsDir: string;
   let suiteEvidencePath: string;
   let suiteReportPath: string;
@@ -260,6 +277,10 @@ describe("qa cli runtime", () => {
     suiteEvidencePath = path.join(suiteArtifactsDir, "qa-evidence.json");
     suiteReportPath = path.join(suiteArtifactsDir, "qa-suite-report.md");
     suiteSummaryPath = path.join(suiteArtifactsDir, "qa-suite-summary.json");
+    profileArtifactsDir = path.join(suiteArtifactsDir, "profile");
+    profileEvidencePath = path.join(profileArtifactsDir, QA_EVIDENCE_FILENAME);
+    await fs.mkdir(profileArtifactsDir, { recursive: true });
+    await fs.writeFile(profileEvidencePath, "stale profile evidence\n", "utf8");
     telegramArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-telegram-runtime-"));
     telegramSummaryPath = path.join(telegramArtifactsDir, QA_EVIDENCE_FILENAME);
     await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
@@ -731,8 +752,8 @@ describe("qa cli runtime", () => {
       });
 
       await runQaProfileCommand({
-        repoRoot: "/tmp/openclaw-repo",
-        outputDir: ".artifacts/qa-e2e/smoke-ci",
+        repoRoot: suiteArtifactsDir,
+        outputDir: "profile",
         profile: "smoke-ci",
         surface: "telegram",
         category: "telegram.native-controls-and-approvals",
@@ -745,8 +766,8 @@ describe("qa cli runtime", () => {
 
       const suiteArgs = mockFirstObjectArg(runQaSuite);
       expectFields(suiteArgs, {
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa-e2e/smoke-ci"),
+        repoRoot: suiteArtifactsDir,
+        outputDir: profileArtifactsDir,
         transportId: "qa-channel",
         channelDriver: "crabline",
         providerMode: "mock-openai",
@@ -759,7 +780,7 @@ describe("qa cli runtime", () => {
       });
       expect(suiteArgs.scenarioIds).toEqual(["telegram-commands-command"]);
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
-      const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
+      const evidence = JSON.parse(await fs.readFile(profileEvidencePath, "utf8")) as {
         evidenceMode?: unknown;
         entries?: unknown[];
         profile?: unknown;
@@ -803,7 +824,7 @@ describe("qa cli runtime", () => {
       expect(evidence.entries?.[0]).not.toHaveProperty("execution");
       expect(JSON.stringify(evidence.scorecard)).not.toContain("telegram-commands-command");
       expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
-      expectWriteContains(stdoutWrite, `QA profile scorecard: ${suiteEvidencePath}`);
+      expectWriteContains(stdoutWrite, `QA profile scorecard: ${profileEvidencePath}`);
     } finally {
       if (previousProfile === undefined) {
         delete process.env.OPENCLAW_QA_PROFILE;
@@ -815,7 +836,8 @@ describe("qa cli runtime", () => {
 
   it("passes non-Crabline profile channel drivers as declarative suite metadata", async () => {
     await runQaProfileCommand({
-      repoRoot: "/tmp/openclaw-repo",
+      repoRoot: suiteArtifactsDir,
+      outputDir: "profile",
       profile: "release",
       surface: "agent-runtime",
       category: "agent-runtime.agent-turn-execution",
@@ -829,7 +851,8 @@ describe("qa cli runtime", () => {
 
   it("keeps portable channel scenarios in driver-selected profile runs", async () => {
     await runQaProfileCommand({
-      repoRoot: "/tmp/openclaw-repo",
+      repoRoot: suiteArtifactsDir,
+      outputDir: "profile",
       profile: "release",
       surface: "channels",
       providerMode: "mock-openai",
@@ -847,7 +870,8 @@ describe("qa cli runtime", () => {
 
   it("runs the all profile through the live taxonomy profile path", async () => {
     await runQaProfileCommand({
-      repoRoot: "/tmp/openclaw-repo",
+      repoRoot: suiteArtifactsDir,
+      outputDir: "profile",
       profile: "all",
       surface: "agent-runtime",
       category: "agent-runtime.agent-turn-execution",
@@ -906,7 +930,8 @@ describe("qa cli runtime", () => {
 
       try {
         await runQaProfileCommand({
-          repoRoot: "/tmp/openclaw-repo",
+          repoRoot: suiteArtifactsDir,
+          outputDir: "profile",
           profile: "all",
           surface: "media",
           category: "media.media-generation",
@@ -935,7 +960,8 @@ describe("qa cli runtime", () => {
     });
 
     await runQaProfileCommand({
-      repoRoot: "/tmp/openclaw-repo",
+      repoRoot: suiteArtifactsDir,
+      outputDir: "profile",
       profile: "smoke-ci",
     });
 
@@ -960,7 +986,8 @@ describe("qa cli runtime", () => {
   it("rejects explicit profile selections incompatible with the profile channel", async () => {
     await expect(
       runQaProfileCommand({
-        repoRoot: "/tmp/openclaw-repo",
+        repoRoot: suiteArtifactsDir,
+        outputDir: "profile",
         profile: "smoke-ci",
         scenarioIds: ["control-ui-qa-channel-image-roundtrip"],
       }),
@@ -973,7 +1000,8 @@ describe("qa cli runtime", () => {
 
   it("dispatches the Matrix restart scenario through the Crabline smoke profile", async () => {
     await runQaProfileCommand({
-      repoRoot: "/tmp/openclaw-repo",
+      repoRoot: suiteArtifactsDir,
+      outputDir: "profile",
       profile: "smoke-ci",
       scenarioIds: ["matrix-restart-resume"],
     });
@@ -989,7 +1017,8 @@ describe("qa cli runtime", () => {
   it("rejects qa profile runs that do not match taxonomy categories", async () => {
     await expect(
       runQaProfileCommand({
-        repoRoot: "/tmp/openclaw-repo",
+        repoRoot: suiteArtifactsDir,
+        outputDir: "profile",
         profile: "smoke-ci",
         surface: "unknown-surface",
       }),
@@ -1002,7 +1031,8 @@ describe("qa cli runtime", () => {
   it("rejects qa profile scenario filters outside the selected taxonomy categories", async () => {
     await expect(
       runQaProfileCommand({
-        repoRoot: "/tmp/openclaw-repo",
+        repoRoot: suiteArtifactsDir,
+        outputDir: "profile",
         profile: "smoke-ci",
         category: "channels.outbound-delivery-and-reply-pipeline",
         scenarioIds: ["not-a-real-scenario"],
@@ -1016,13 +1046,59 @@ describe("qa cli runtime", () => {
   it("rejects qa profile runs whose profile is not declared in taxonomy.yaml", async () => {
     await expect(
       runQaProfileCommand({
-        repoRoot: "/tmp/openclaw-repo",
+        repoRoot: suiteArtifactsDir,
+        outputDir: "profile",
         profile: "nightly",
       }),
     ).rejects.toThrow(
       '--qa-profile must be one of smoke-ci, personal-agent, observability, release, all, got "nightly".',
     );
     expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
+  it("invalidates stale profile evidence before planning fails", async () => {
+    const planningError = new Error("profile planning failed");
+    readQaScenarioPack.mockImplementationOnce(() => {
+      throw planningError;
+    });
+
+    await expect(
+      runQaProfileCommand({
+        repoRoot: suiteArtifactsDir,
+        outputDir: "profile",
+        profile: "smoke-ci",
+      }),
+    ).rejects.toBe(planningError);
+    await expect(fs.access(profileEvidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
+  it("does not restore stale profile evidence when scorecard attachment fails", async () => {
+    runQaSuite.mockImplementationOnce(async (params) => {
+      await fs.writeFile(suiteEvidencePath, "not-json\n", "utf8");
+      return flowSuiteRuntimeResult({
+        observedCells: executionCellsForSuiteParams(params),
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      });
+    });
+
+    await expect(
+      runQaProfileCommand({
+        repoRoot: suiteArtifactsDir,
+        outputDir: "profile",
+        profile: "release",
+        surface: "agent-runtime",
+        category: "agent-runtime.agent-turn-execution",
+        providerMode: "mock-openai",
+      }),
+    ).rejects.toBeInstanceOf(SyntaxError);
+    await expect(fs.access(profileEvidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(
+      (await fs.readdir(profileArtifactsDir)).filter((entry) => entry.endsWith(".staged")),
+    ).toEqual([]);
+    expect(stdoutWrite.mock.calls.flat().join("")).not.toContain("QA profile scorecard:");
+    expect(stdoutWrite.mock.calls.flat().join("")).not.toContain("QA suite evidence:");
   });
 
   it("resolves suite repo-root-relative paths before dispatching", async () => {

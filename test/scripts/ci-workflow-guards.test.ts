@@ -5565,11 +5565,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         }
         if (scenario.timeoutOutcome === "term") {
           expect(result.stdout).toContain(
-            "::warning::QA profile 'all' timed out after 1 second and was terminated",
+            "::warning::QA profile 'all' timed out after 1 second and was terminated; canonical qa-evidence.json was not published, but diagnostic artifacts will still be uploaded.",
           );
         } else if (scenario.timeoutOutcome === "kill") {
           expect(result.stdout).toContain(
-            "::warning::QA profile 'all' timed out after 1 second and required SIGKILL after the 0.5-second grace period",
+            "::warning::QA profile 'all' timed out after 1 second and required SIGKILL after the 0.5-second grace period; canonical qa-evidence.json was not published, but diagnostic artifacts will still be uploaded.",
           );
         } else {
           expect(result.stdout).not.toContain("::warning::QA profile");

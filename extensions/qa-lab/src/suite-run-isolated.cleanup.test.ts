@@ -1,15 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import { runQaFlowSuiteIsolated } from "./suite-run-isolated.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
-import type {
-  QaSuiteResolvedRunContext,
-  QaSuiteRunner,
-  QaSuiteScenarioRunner,
-} from "./suite-types.js";
+import type { QaSuiteResolvedRunContext, QaSuiteScenarioRunner } from "./suite-types.js";
 
 const mocks = vi.hoisted(() => ({
   disposeRegisteredAgentHarnesses: vi.fn(async () => {}),
@@ -26,13 +25,14 @@ const mocks = vi.hoisted(() => ({
     stop: vi.fn(async () => {}),
   })),
   writeQaSuiteArtifacts: vi.fn(async () => ({
-    evidence: undefined,
+    evidence: { kind: "test" },
     evidencePath: "/qa-output/qa-evidence.json",
     report: "",
     reportPath: "/qa-output/qa-suite-report.md",
     summaryPath: "/qa-output/qa-suite-summary.json",
   })),
 }));
+const tempRoots: string[] = [];
 
 vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
   disposeRegisteredAgentHarnesses: mocks.disposeRegisteredAgentHarnesses,
@@ -91,6 +91,12 @@ function createCleanupTestContext(): QaSuiteResolvedRunContext {
   };
 }
 
+afterEach(async () => {
+  await Promise.all(
+    tempRoots.splice(0).map((repoRoot) => fs.rm(repoRoot, { recursive: true, force: true })),
+  );
+});
+
 describe("isolated QA suite transport cleanup", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -128,16 +134,23 @@ describe("isolated QA suite transport cleanup", () => {
     const cleanupError = new Error("agent harness disposal failed");
     mocks.disposeRegisteredAgentHarnesses.mockRejectedValueOnce(cleanupError);
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const runChild = vi.fn<QaSuiteRunner>().mockResolvedValue({
-      outputDir: "/qa-child",
-      evidencePath: "/qa-child/qa-evidence.json",
-      reportPath: "/qa-child/qa-suite-report.md",
-      summaryPath: "/qa-child/qa-suite-summary.json",
-      report: "",
-      scenarios: [{ name: "leased-channel-scenario", status: "pass", steps: [] }],
-      startedScenarioIds: ["leased-channel-scenario"],
-      watchUrl: lab.baseUrl,
-    });
+    const runChild = vi.fn().mockResolvedValue(
+      Object.freeze({
+        evidence: { kind: "test" },
+        complete: vi.fn(),
+        result: {
+          outputDir: "/qa-child",
+          evidence: { kind: "test" },
+          evidencePath: "/qa-child/qa-evidence.json",
+          reportPath: "/qa-child/qa-suite-report.md",
+          summaryPath: "/qa-child/qa-suite-summary.json",
+          report: "",
+          scenarios: [{ name: "leased-channel-scenario", status: "pass", steps: [] }],
+          startedScenarioIds: ["leased-channel-scenario"],
+          watchUrl: lab.baseUrl,
+        },
+      }),
+    );
     const context = createCleanupTestContext();
     context.progressEnabled = true;
 
@@ -158,6 +171,9 @@ describe("isolated QA suite transport cleanup", () => {
     expect(lab.setLatestReport).toHaveBeenCalledWith(
       expect.objectContaining({ outputPath: "/qa-output/qa-suite-report.md" }),
     );
+    expect(lab.setScenarioRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed" }),
+    );
     expect((thrown as Error).message.split("\n")[0]).toBe(
       "QA scenarios passed, but cleanup failed",
     );
@@ -167,6 +183,7 @@ describe("isolated QA suite transport cleanup", () => {
     expect((thrown as Error).message).toContain(
       "retained artifacts: output=/qa-output report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
     );
+    expect((thrown as Error).message).not.toContain(" evidence=");
     expect((thrown as Error).cause).toBe(cleanupError);
     expect(stderrWrite.mock.calls.flat().join("")).not.toContain("run complete");
     stderrWrite.mockRestore();
@@ -185,7 +202,7 @@ describe("isolated QA suite transport cleanup", () => {
     const runScenario = vi
       .fn<QaSuiteScenarioRunner>()
       .mockResolvedValue({ name: "leased-channel-scenario", status: "pass", steps: [] });
-    const runChild: QaSuiteRunner = async (childParams) => {
+    const runChild = async (childParams: Parameters<typeof runQaFlowSuiteStandard>[0]) => {
       if (!childParams) {
         throw new Error("expected nested standard run params");
       }
@@ -203,7 +220,8 @@ describe("isolated QA suite transport cleanup", () => {
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     try {
-      await runQaFlowSuiteIsolated({ startLab }, context, runChild);
+      const completion = await runQaFlowSuiteIsolated({ startLab }, context, runChild);
+      await completion.complete();
 
       const completionLines = stderrWrite.mock.calls
         .flat()
@@ -217,6 +235,52 @@ describe("isolated QA suite transport cleanup", () => {
     } finally {
       stderrWrite.mockRestore();
     }
+  });
+
+  it("leaves isolated publication state untouched when evidence writing is disabled", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-isolated-no-evidence-"));
+    tempRoots.push(repoRoot);
+    const outputDir = path.join(repoRoot, "output");
+    const canonicalPath = path.join(outputDir, "qa-evidence.json");
+    const lockPath = `${canonicalPath}.lock`;
+    const stagedPath = path.join(outputDir, ".qa-evidence.json.preseed.staged");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(canonicalPath, "canonical\n", "utf8");
+    await fs.writeFile(lockPath, "lock\n", "utf8");
+    await fs.writeFile(stagedPath, "staged\n", "utf8");
+    const lab = createCleanupTestLab();
+    const context = createCleanupTestContext();
+    context.repoRoot = repoRoot;
+    context.outputDir = outputDir;
+    context.channelDriver = undefined;
+    const runChild = vi.fn().mockResolvedValue(
+      Object.freeze({
+        evidence: { kind: "test" },
+        complete: vi.fn(),
+        result: {
+          outputDir: path.join(outputDir, "child"),
+          evidence: { kind: "test" },
+          evidencePath: path.join(outputDir, "child", "qa-evidence.json"),
+          reportPath: path.join(outputDir, "child", "qa-suite-report.md"),
+          summaryPath: path.join(outputDir, "child", "qa-suite-summary.json"),
+          report: "",
+          scenarios: [{ name: "leased-channel-scenario", status: "pass", steps: [] }],
+          startedScenarioIds: ["leased-channel-scenario"],
+          watchUrl: lab.baseUrl,
+        },
+      }),
+    );
+
+    const completion = await runQaFlowSuiteIsolated(
+      { startLab: async () => lab, writeEvidenceFile: false },
+      context,
+      runChild,
+    );
+    await completion.complete();
+
+    await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe("canonical\n");
+    await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("lock\n");
+    await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("staged\n");
   });
 
   it.each(["cleanup", "cleanupAfterGatewayStop"] as const)(
@@ -253,7 +317,7 @@ describe("isolated QA suite transport cleanup", () => {
           };
         },
       };
-      const runChild = vi.fn<QaSuiteRunner>();
+      const runChild = vi.fn();
 
       await expect(
         runQaFlowSuiteIsolated(

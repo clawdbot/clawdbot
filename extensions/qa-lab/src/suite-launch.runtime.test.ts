@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { acquireFileLock } from "openclaw/plugin-sdk/file-lock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QaSuiteInfraError } from "./errors.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
@@ -11,20 +12,24 @@ import type {
   QaTestFileScenarioRunResult,
 } from "./test-file-scenario-runner.js";
 
-const { crablineRuntimeLoads, runQaFlowSuite, runQaTestFileScenarios } = vi.hoisted(() => ({
-  crablineRuntimeLoads: vi.fn(),
-  runQaFlowSuite: vi.fn(),
-  runQaTestFileScenarios: vi.fn(),
-}));
+const { crablineRuntimeLoads, generatedOutputDirs, runQaFlowSuite, runQaTestFileScenarios } =
+  vi.hoisted(() => ({
+    crablineRuntimeLoads: vi.fn(),
+    generatedOutputDirs: new Set<string>(),
+    runQaFlowSuite: vi.fn(),
+    runQaTestFileScenarios: vi.fn(),
+  }));
 
 vi.mock("@openclaw/crabline", async (importOriginal) => {
   crablineRuntimeLoads();
   return await importOriginal<typeof import("@openclaw/crabline")>();
 });
 
-vi.mock("./suite.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./suite.js")>()),
-  runQaFlowSuite,
+vi.mock("./suite-run.runtime.js", () => ({
+  runQaFlowSuiteFromRuntimeCore: async (params: object | undefined) => {
+    const result = await runQaFlowSuite(params);
+    return Object.freeze({ result, evidence: result.evidence, complete: vi.fn() });
+  },
 }));
 
 vi.mock("./test-file-scenario-runner.js", async (importOriginal) => ({
@@ -163,8 +168,11 @@ describe("qa suite runtime launcher", () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
     await Promise.all(
-      tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
+      [...tempRoots.splice(0), ...generatedOutputDirs].map((root) =>
+        fs.rm(root, { recursive: true, force: true }),
+      ),
     );
+    generatedOutputDirs.clear();
   });
 
   it("keeps Crabline out of unrelated live transport startup", async () => {
@@ -182,22 +190,26 @@ describe("qa suite runtime launcher", () => {
   });
 
   it("routes selected flow scenarios to the flow suite engine", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-flow-route-");
     const result = await runQaSuite({
-      repoRoot: process.cwd(),
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/flow-route",
       providerMode: "mock-openai",
       scenarioIds: ["channel-chat-baseline"],
     });
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "flow-route");
 
     expect(result).toMatchObject({
       executionKind: "flow",
       result: {
-        summaryPath: "/tmp/qa-flow/qa-suite-summary.json",
+        summaryPath: path.join(outputDir, "qa-suite-summary.json"),
       },
     });
     expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
     expect(runQaFlowSuite).toHaveBeenCalledWith(
       expect.objectContaining({
-        repoRoot: process.cwd(),
+        repoRoot,
+        outputDir,
         providerMode: "mock-openai",
         scenarioIds: ["channel-chat-baseline"],
       }),
@@ -226,29 +238,41 @@ describe("qa suite runtime launcher", () => {
   });
 
   it("retries a flow-only suite once for retryable infrastructure failures", async () => {
-    const attempts = mockFlowPartitionFailures(
-      new Map([
-        [
-          "channel-chat-baseline",
-          [new QaSuiteInfraError("agent_wait_failed", "agent.wait failed")],
-        ],
-      ]),
-    );
+    const repoRoot = await makeTempRepo("qa-suite-retry-lock-");
+    const outputDir = path.join(repoRoot, "output");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation()!;
+    let attempts = 0;
+    runQaFlowSuite.mockImplementation(async (params) => {
+      attempts += 1;
+      await expect(
+        acquireFileLock(outputDir, {
+          retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+        }),
+      ).rejects.toMatchObject({ code: "file_lock_timeout" });
+      if (attempts === 1) {
+        throw new QaSuiteInfraError("agent_wait_failed", "agent.wait failed");
+      }
+      return await defaultFlowImplementation(params);
+    });
+    const rename = vi.spyOn(fs, "rename");
     const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
 
     try {
       const result = await runQaSuite({
-        repoRoot: process.cwd(),
+        repoRoot,
+        outputDir,
         providerMode: "mock-openai",
         scenarioIds: ["channel-chat-baseline"],
       });
 
       expect(result.executionKind).toBe("flow");
-      expect(attempts.get("channel-chat-baseline")).toBe(2);
+      expect(attempts).toBe(2);
+      expect(rename).toHaveBeenCalledOnce();
       expect(stderrWrite.mock.calls.flat().join("")).toContain(
         "[qa-suite] infra retry 1/1: agent.wait failed",
       );
     } finally {
+      rename.mockRestore();
       stderrWrite.mockRestore();
     }
   });
@@ -279,6 +303,37 @@ describe("qa suite runtime launcher", () => {
     } finally {
       stderrWrite.mockRestore();
     }
+  });
+
+  it("does not publish stale or staged evidence when flow cleanup fails", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-cleanup-publication-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "cleanup-publication");
+    const evidencePath = path.join(outputDir, "qa-evidence.json");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(evidencePath, "stale\n", "utf8");
+    const cleanupError = new Error("agent harness cleanup failed");
+    let cleanupFailure: unknown;
+    try {
+      throwQaSuiteCleanupErrors({
+        cleanupFailures: [{ phase: "agent harnesses", error: cleanupError }],
+        runFailed: false,
+        runError: undefined,
+      });
+    } catch (error) {
+      cleanupFailure = error;
+    }
+    runQaFlowSuite.mockRejectedValueOnce(cleanupFailure);
+
+    await expect(
+      runQaSuite({
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai",
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    ).rejects.toBe(cleanupFailure);
+    await expect(fs.access(evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await fs.readdir(outputDir)).filter((entry) => entry.endsWith(".staged"))).toEqual([]);
   });
 
   it("partitions flow-only suites that request isolated workers", async () => {
@@ -1145,13 +1200,29 @@ describe("qa suite runtime launcher", () => {
 
   it("runs mixed flow and Vitest/Playwright scenarios as one suite", async () => {
     const repoRoot = await makeTempRepo("qa-suite-mixed-");
-    const result = await runQaSuite({
-      repoRoot,
-      outputDir: ".artifacts/qa-e2e/mixed",
-      scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
-    });
-
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mixed");
+    const evidencePath = path.join(outputDir, "qa-evidence.json");
+    const rename = fs.rename.bind(fs);
+    const publications: Array<{ source: string; destination: string }> = [];
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (String(destination) === evidencePath) {
+        publications.push({ source: String(source), destination: String(destination) });
+        expect(path.basename(String(source))).toMatch(/^\.qa-evidence\.json\..+\.staged$/);
+        await expect(fs.access(evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      return await rename(source, destination);
+    });
+    let result: Awaited<ReturnType<typeof runQaSuite>>;
+    try {
+      result = await runQaSuite({
+        repoRoot,
+        outputDir: ".artifacts/qa-e2e/mixed",
+        scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
+      });
+    } finally {
+      renameSpy.mockRestore();
+    }
+
     expect(result).toMatchObject({
       executionKind: "suite",
       result: {
@@ -1173,7 +1244,10 @@ describe("qa suite runtime launcher", () => {
       }),
     );
     await expect(fs.access(path.join(outputDir, "qa-suite-summary.json"))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(outputDir, "qa-evidence.json"))).resolves.toBeUndefined();
+    expect(publications).toEqual([
+      { source: expect.any(String), destination: path.join(outputDir, "qa-evidence.json") },
+    ]);
+    await expect(fs.access(evidencePath)).resolves.toBeUndefined();
     await expect(fs.access(path.join(outputDir, "flow", "qa-evidence.json"))).rejects.toMatchObject(
       {
         code: "ENOENT",
@@ -1202,6 +1276,29 @@ describe("qa suite runtime launcher", () => {
     expect(summary.scenarios?.[1]?.details).toContain(
       "log=.artifacts/qa-e2e/mixed/playwright/control-ui-chat-flow-playwright.log",
     );
+  });
+
+  it("leaves unified publication state untouched when evidence writing is disabled", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-unified-no-evidence-");
+    const outputDir = path.join(repoRoot, "output");
+    const canonicalPath = path.join(outputDir, "qa-evidence.json");
+    const lockPath = `${canonicalPath}.lock`;
+    const stagedPath = path.join(outputDir, ".qa-evidence.json.preseed.staged");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(canonicalPath, "canonical\n", "utf8");
+    await fs.writeFile(lockPath, "lock\n", "utf8");
+    await fs.writeFile(stagedPath, "staged\n", "utf8");
+
+    await runQaSuite({
+      repoRoot,
+      outputDir,
+      writeEvidenceFile: false,
+      scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
+    });
+
+    await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe("canonical\n");
+    await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("lock\n");
+    await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("staged\n");
   });
 
   it("aggregates mixed-kind progress through the parent lab", async () => {

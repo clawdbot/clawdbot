@@ -15,6 +15,7 @@ import {
   type QaSuiteGatewayRssSample,
   writeQaSuiteArtifacts,
 } from "./suite-artifacts.js";
+import type { QaSuiteDeferredCompletion } from "./suite-evidence-lifecycle.js";
 import {
   applyQaMergePatch,
   collectQaSuiteTransportPolicy,
@@ -53,7 +54,7 @@ export async function runQaFlowSuiteStandard(
   params: QaSuiteRunParams | undefined,
   context: QaSuiteResolvedRunContext,
   runScenarioDefinition: QaSuiteScenarioRunner,
-): Promise<QaSuiteResult> {
+): Promise<QaSuiteDeferredCompletion<QaSuiteResult>> {
   const {
     startedAt,
     repoRoot,
@@ -109,8 +110,7 @@ export async function runQaFlowSuiteStandard(
   let runFailed = false;
   let runError: unknown;
   let result: QaSuiteResult | undefined;
-  let completionProgress: string | undefined;
-  let evidenceWritten = false;
+  let complete: (() => void) | undefined;
   const startedScenarioIds: string[] = [];
   try {
     writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
@@ -372,13 +372,6 @@ export async function runQaFlowSuiteStandard(
     ) {
       preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     }
-    lab.setScenarioRun({
-      kind: "suite",
-      status: "completed",
-      startedAt: startedAt.toISOString(),
-      finishedAt: finishedAt.toISOString(),
-      scenarios: [...liveScenarioOutcomes],
-    });
     const { evidence, evidencePath, report, reportPath, summaryPath } = await writeQaSuiteArtifacts(
       {
         repoRoot,
@@ -399,7 +392,7 @@ export async function runQaFlowSuiteStandard(
         channelDriver: transportFactoryResult.driver,
         channelDriverSelection: params?.channelDriverSelection,
         isolatedWorkers: false,
-        writeEvidenceFile: params?.writeEvidenceFile,
+        writeEvidenceFile: false,
         // Same "filtered → executed list, unfiltered → null" convention as
         // the concurrent-path writeQaSuiteArtifacts call above.
         scenarioIds:
@@ -408,14 +401,26 @@ export async function runQaFlowSuiteStandard(
             : undefined,
       },
     );
-    const latestReport = {
-      outputPath: reportPath,
-      markdown: report,
-      generatedAt: finishedAt.toISOString(),
-    } satisfies QaLabLatestReport;
-    lab.setLatestReport(latestReport);
-    completionProgress = `run complete: passed=${scenarios.length - failedCount - skippedCount} failed=${failedCount} skipped=${skippedCount} total=${scenarios.length}`;
-    evidenceWritten = evidence !== undefined && (params?.writeEvidenceFile ?? true);
+    complete = () => {
+      lab.setScenarioRun({
+        kind: "suite",
+        status: "completed",
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        scenarios: [...liveScenarioOutcomes],
+      });
+      lab.setLatestReport({
+        outputPath: reportPath,
+        markdown: report,
+        generatedAt: finishedAt.toISOString(),
+      } satisfies QaLabLatestReport);
+      if (!params?.captureRuntimeParityCell && !isQaSuiteNestedRun(params)) {
+        writeQaSuiteProgress(
+          progressEnabled,
+          `run complete: passed=${scenarios.length - failedCount - skippedCount} failed=${failedCount} skipped=${skippedCount} total=${scenarios.length}`,
+        );
+      }
+    };
     result = {
       outputDir,
       evidence,
@@ -462,13 +467,14 @@ export async function runQaFlowSuiteStandard(
             }
           },
     });
-    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result, evidenceWritten });
+    throwQaSuiteCleanupErrors({ cleanupFailures, runFailed, runError, result });
   }
-  if (!result || !completionProgress) {
+  if (!result?.evidence || !complete) {
     throw new Error("QA suite completed without terminal result metadata");
   }
-  if (!params?.captureRuntimeParityCell && !isQaSuiteNestedRun(params)) {
-    writeQaSuiteProgress(progressEnabled, completionProgress);
-  }
-  return result;
+  return Object.freeze({
+    evidence: result.evidence,
+    result,
+    complete,
+  });
 }

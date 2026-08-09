@@ -5,14 +5,28 @@ import {
   createQaTransportAdapter,
   type QaTransportAdapterFactory,
 } from "./qa-transport-registry.js";
+import type { QaSuiteDeferredCompletion } from "./suite-evidence-lifecycle.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
 import { runQaRuntimeParitySuite } from "./suite-runtime-parity-runner.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type {
   QaSuiteResolvedRunContext,
-  QaSuiteRunner,
+  QaSuiteResult,
+  QaSuiteRunParams,
   QaSuiteScenarioRunner,
 } from "./suite-types.js";
+
+type DeferredQaSuiteRunner = (
+  params?: QaSuiteRunParams,
+) => Promise<QaSuiteDeferredCompletion<QaSuiteResult>>;
+
+function deferResult(result: QaSuiteResult): QaSuiteDeferredCompletion<QaSuiteResult> {
+  return Object.freeze({
+    evidence: result.evidence!,
+    result,
+    complete: vi.fn(),
+  });
+}
 
 const mocks = vi.hoisted(() => ({
   captureRuntimeParityCell: vi.fn(
@@ -138,7 +152,7 @@ function runCleanupTestSuite(params: {
   factory: QaTransportAdapterFactory;
   lab: QaLabServerHandle;
   progressEnabled?: boolean;
-  runChild: QaSuiteRunner;
+  runChild: DeferredQaSuiteRunner;
 }) {
   return runQaRuntimeParitySuite({
     runQaFlowSuite: params.runChild,
@@ -176,25 +190,28 @@ describe("runtime parity suite transport cleanup", () => {
     const cleanup = vi.fn(async () => {});
     const factory = createCleanupTestFactory(lab, () => ({ cleanup }));
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => ({
-      outputDir: "/qa-child",
-      evidencePath: "/qa-child/qa-evidence.json",
-      reportPath: "/qa-child/qa-suite-report.md",
-      summaryPath: "/qa-child/qa-suite-summary.json",
-      report: "",
-      scenarios: [{ name: "runtime-cleanup", status: "pass", steps: [] }],
-      startedScenarioIds: ["runtime-cleanup"],
-      watchUrl: lab.baseUrl,
-      runtimeParityCell: {
-        runtime: params?.forcedRuntime ?? "openclaw",
-        transcriptBytes: "",
-        toolCalls: [],
-        finalText: "ok",
-        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-        wallClockMs: 1,
-        bootStateLines: [],
-      },
-    }));
+    const runChild = vi.fn<DeferredQaSuiteRunner>().mockImplementation(async (params) =>
+      deferResult({
+        outputDir: "/qa-child",
+        evidence: { kind: "test" } as QaSuiteResult["evidence"],
+        evidencePath: "/qa-child/qa-evidence.json",
+        reportPath: "/qa-child/qa-suite-report.md",
+        summaryPath: "/qa-child/qa-suite-summary.json",
+        report: "",
+        scenarios: [{ name: "runtime-cleanup", status: "pass", steps: [] }],
+        startedScenarioIds: ["runtime-cleanup"],
+        watchUrl: lab.baseUrl,
+        runtimeParityCell: {
+          runtime: params?.forcedRuntime ?? "openclaw",
+          transcriptBytes: "",
+          toolCalls: [],
+          finalText: "ok",
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+      }),
+    );
 
     try {
       const thrown = await runCleanupTestSuite({
@@ -205,12 +222,7 @@ describe("runtime parity suite transport cleanup", () => {
       }).catch((error: unknown) => error);
 
       expect(cleanup).toHaveBeenCalledOnce();
-      expect(setLatestReport).toHaveBeenCalledWith(
-        expect.objectContaining({ outputPath: "/qa-output/qa-suite-report.md" }),
-      );
-      expect(setLatestReport.mock.invocationCallOrder[0]).toBeLessThan(
-        stopLab.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
+      expect(setLatestReport).not.toHaveBeenCalled();
       expect((thrown as Error).message.split("\n")[0]).toBe(
         "QA scenarios passed, but cleanup failed",
       );
@@ -218,8 +230,9 @@ describe("runtime parity suite transport cleanup", () => {
         "failed cleanup phases: lab stop: owned lab shutdown reset",
       );
       expect((thrown as Error).message).toContain(
-        "retained artifacts: output=/qa-output report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json evidence=/qa-output/qa-evidence.json",
+        "retained artifacts: output=/qa-output report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
       );
+      expect((thrown as Error).message).not.toContain(" evidence=");
       expect((thrown as Error).cause).toBe(cleanupError);
       expect(stderrWrite.mock.calls.flat().join("")).not.toContain("run complete");
     } finally {
@@ -231,27 +244,32 @@ describe("runtime parity suite transport cleanup", () => {
     const lab = createCleanupTestLab();
     const cleanup = vi.fn(async () => {});
     const factory = createCleanupTestFactory(lab, () => ({ cleanup }));
-    const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async (params) => ({
-      outputDir: "/qa-child",
-      evidencePath: "/qa-child/qa-evidence.json",
-      reportPath: "/qa-child/qa-suite-report.md",
-      summaryPath: "/qa-child/qa-suite-summary.json",
-      report: "",
-      scenarios: [{ name: "runtime-cleanup", status: "pass", steps: [] }],
-      startedScenarioIds: [],
-      watchUrl: lab.baseUrl,
-      runtimeParityCell: {
-        runtime: params?.forcedRuntime ?? "openclaw",
-        transcriptBytes: "",
-        toolCalls: [],
-        finalText: "ok",
-        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-        wallClockMs: 1,
-        bootStateLines: [],
-      },
-    }));
+    const runChild = vi.fn<DeferredQaSuiteRunner>().mockImplementation(async (params) =>
+      deferResult({
+        outputDir: "/qa-child",
+        evidence: { kind: "test" } as QaSuiteResult["evidence"],
+        evidencePath: "/qa-child/qa-evidence.json",
+        reportPath: "/qa-child/qa-suite-report.md",
+        summaryPath: "/qa-child/qa-suite-summary.json",
+        report: "",
+        scenarios: [{ name: "runtime-cleanup", status: "pass", steps: [] }],
+        startedScenarioIds: [],
+        watchUrl: lab.baseUrl,
+        runtimeParityCell: {
+          runtime: params?.forcedRuntime ?? "openclaw",
+          transcriptBytes: "",
+          toolCalls: [],
+          finalText: "ok",
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+      }),
+    );
 
-    const result = await runCleanupTestSuite({ factory, lab, runChild });
+    const completion = await runCleanupTestSuite({ factory, lab, runChild });
+    await completion.complete();
+    const result = completion.result;
 
     expect(result.startedScenarioIds).toEqual([]);
     expect(runChild).toHaveBeenCalledTimes(2);
@@ -270,7 +288,7 @@ describe("runtime parity suite transport cleanup", () => {
     const runScenario = vi
       .fn<QaSuiteScenarioRunner>()
       .mockResolvedValue({ name: scenario.title, status: "pass", steps: [] });
-    const runChild: QaSuiteRunner = async (childParams) => {
+    const runChild: DeferredQaSuiteRunner = async (childParams) => {
       if (!childParams) {
         throw new Error("expected nested standard run params");
       }
@@ -297,7 +315,7 @@ describe("runtime parity suite transport cleanup", () => {
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     try {
-      await runQaRuntimeParitySuite({
+      const completion = await runQaRuntimeParitySuite({
         runQaFlowSuite: runChild,
         repoRoot: "/qa-repo",
         outputDir: "/qa-output",
@@ -313,6 +331,7 @@ describe("runtime parity suite transport cleanup", () => {
         progressEnabled: true,
         runtimePair: ["openclaw", "codex"],
       });
+      await completion.complete();
 
       const completionLines = stderrWrite.mock.calls
         .flat()
@@ -338,7 +357,7 @@ describe("runtime parity suite transport cleanup", () => {
     });
     const cleanup = vi.fn(async () => {});
     const factory = createCleanupTestFactory(lab, () => ({ cleanup }));
-    const runChild = vi.fn<QaSuiteRunner>().mockRejectedValueOnce(scenarioError);
+    const runChild = vi.fn<DeferredQaSuiteRunner>().mockRejectedValueOnce(scenarioError);
 
     await expect(runCleanupTestSuite({ factory, lab, runChild })).rejects.toMatchObject({
       message: expect.stringContaining(
@@ -379,7 +398,7 @@ describe("runtime parity suite transport cleanup", () => {
         },
       };
     });
-    const runChild = vi.fn<QaSuiteRunner>().mockImplementation(async () => {
+    const runChild = vi.fn<DeferredQaSuiteRunner>().mockImplementation(async () => {
       const childTransport = await createQaTransportAdapter(
         {
           channelId: "leased",
@@ -418,7 +437,7 @@ describe("runtime parity suite transport cleanup", () => {
         .mockRejectedValueOnce(cleanupError)
         .mockResolvedValueOnce(undefined);
       const factory = createCleanupTestFactory(lab, () => ({ [cleanupPhase]: cleanup }));
-      const runChild = vi.fn<QaSuiteRunner>();
+      const runChild = vi.fn<DeferredQaSuiteRunner>();
 
       await expect(runCleanupTestSuite({ factory, lab, runChild })).rejects.toBe(cleanupError);
 
