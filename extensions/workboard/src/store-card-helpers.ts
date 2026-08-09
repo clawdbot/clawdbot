@@ -252,7 +252,9 @@ export function updateEvent(
     (existing.metadata?.links?.length ?? 0) !== (next.metadata?.links?.length ?? 0) ||
     latestMetadataIdChanged(existing.metadata?.links, next.metadata?.links)
   ) {
-    return { kind: "link_added" };
+    return (next.metadata?.links?.length ?? 0) < (existing.metadata?.links?.length ?? 0)
+      ? { kind: "link_removed" }
+      : { kind: "link_added" };
   }
   if (
     (existing.metadata?.proof?.length ?? 0) !== (next.metadata?.proof?.length ?? 0) ||

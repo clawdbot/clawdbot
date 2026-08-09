@@ -593,6 +593,16 @@ export class WorkboardWorkflowStore extends WorkboardRepairStore {
             },
             scope === null ? undefined : scope,
           );
+          const existingDecompositionMode = created.metadata?.automation?.decompositionMode;
+          if (
+            existingCardIds.has(created.id) &&
+            existingDecompositionMode !== undefined &&
+            existingDecompositionMode !== decompositionMode
+          ) {
+            throw new Error(
+              `idempotent child ${created.id} already uses decompositionMode "${existingDecompositionMode}" and cannot be reused with "${decompositionMode}".`,
+            );
+          }
           const hasHardDependency = cardParentIds(created).includes(parent.id);
           if (existingCardIds.has(created.id) && !hasHardDependency) {
             reusedChildSnapshots.set(created.id, created);

@@ -182,6 +182,23 @@ the parent/child relationship. Both repair tools are idempotent and record
 `link_removed` events without changing card status, comments, proof, artifacts,
 or unrelated history.
 
+Dependency diagnostics are fail-closed and remain active until the graph is
+repaired:
+
+- `broken_dependency` means a hard parent/child link targets a missing card or
+  lacks its reciprocal link. Inspect both cards, then use
+  `workboard_unlink_dependency` only after confirming that the surviving link is
+  obsolete.
+- `dependency_cycle` means hard dependency links form a cycle. Review the whole
+  cycle and remove only the relationship whose intended ordering is known.
+- `aggregate_deadlock` means an explicitly orchestrated decomposition child is
+  still hard-blocked by its incomplete aggregate parent. Dry-run
+  `workboard_repair_decomposition` first, then apply the proven repair.
+
+Changing `decompositionMode` on an idempotent retry is rejected when the reused
+child already has an explicit, incompatible mode. Repeat the original mode or
+use a new idempotency key after intentionally creating a distinct child.
+
 Proof statuses are worker-reported outcomes, not independent verification. A `passed`
 entry means the worker reports that its command or check succeeded; consumers that need
 an independent quality gate should inspect the attached command, URL, or artifact and

@@ -3917,17 +3917,49 @@ describe("WorkboardStore", () => {
     expect(dispatch.promoted.map((card) => card.id)).not.toContain(result.children[0]!.id);
   });
 
+  it("rejects incompatible idempotent decomposition retries without changing prior semantics", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", idempotencyKey: "parent-key" });
+    const first = await store.decompose(parent.id, {
+      completeParent: false,
+      decompositionMode: "hard",
+      children: [{ title: "Child", idempotencyKey: "child-key" }],
+    });
+    const child = first.children[0]!;
+    const parentBeforeRetry = await store.get(parent.id);
+    const childBeforeRetry = await store.get(child.id);
+
+    await expect(
+      store.decompose(parent.id, {
+        completeParent: false,
+        decompositionMode: "orchestration",
+        children: [{ title: "Ignored retry", idempotencyKey: "child-key" }],
+      }),
+    ).rejects.toThrow(/already uses decompositionMode "hard"/);
+
+    await expect(store.get(parent.id)).resolves.toEqual(parentBeforeRetry);
+    await expect(store.get(child.id)).resolves.toEqual(childBeforeRetry);
+  });
+
   it("unlinks reciprocal dependencies idempotently and records removal events", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const parent = await store.create({ title: "Parent" });
     const child = await store.create({ title: "Child" });
     await store.linkCards(parent.id, child.id);
+    const parentEventCount = (await store.get(parent.id))?.events?.length ?? 0;
+    const childEventCount = (await store.get(child.id))?.events?.length ?? 0;
 
     const first = await store.unlinkDependency(parent.id, child.id);
     expect(first.metadata?.links).toBeUndefined();
     expect(first.events?.at(-1)).toMatchObject({ kind: "link_removed" });
     expect((await store.get(parent.id))?.metadata?.links).toBeUndefined();
     expect((await store.get(parent.id))?.events?.at(-1)).toMatchObject({ kind: "link_removed" });
+    expect(first.events?.slice(childEventCount)).toEqual([
+      expect.objectContaining({ kind: "link_removed" }),
+    ]);
+    expect((await store.get(parent.id))?.events?.slice(parentEventCount)).toEqual([
+      expect.objectContaining({ kind: "link_removed" }),
+    ]);
 
     const parentAfterFirst = await store.get(parent.id);
     const second = await store.unlinkDependency(parent.id, child.id);

@@ -52,7 +52,7 @@ export class WorkboardRepairStore extends WorkboardPromoteStore {
         }
         candidateChildIds.push(childId);
         if (!dryRun) {
-          await this.unlinkDependencyDirect(parent.id, childId, Date.now(), scope);
+          await this.unlinkDependencyDirect(parent.id, childId, scope);
           repairedChildIds.push(childId);
         }
       }

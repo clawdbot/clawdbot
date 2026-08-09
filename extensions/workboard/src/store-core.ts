@@ -744,14 +744,13 @@ export class WorkboardCoreStore {
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(
-      async () => await this.unlinkDependencyDirect(parentId, childId, Date.now(), scope),
+      async () => await this.unlinkDependencyDirect(parentId, childId, scope),
     );
   }
 
   protected async unlinkDependencyDirect(
     parentId: string,
     childId: string,
-    now = Date.now(),
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
     const parent = await this.get(parentId);
@@ -779,18 +778,13 @@ export class WorkboardCoreStore {
     const childLinks = (child.metadata?.links ?? []).filter(
       (link) => !(link.type === "parent" && link.targetCardId === parent.id),
     );
-    const updatedParent = await this.updateCard(
+    await this.updateCard(
       parent.id,
       {
         metadata: { ...parent.metadata, links: parentLinks },
       },
       { allowMetadataDependencyLinks: true, enforceStatusHolds: false },
     );
-    const nextParent = {
-      ...updatedParent,
-      events: appendEvent(updatedParent, { kind: "link_removed" }, now),
-    };
-    await this.store.register(nextParent.id, { version: 1, card: nextParent });
     const updatedChild = await this.updateCard(
       child.id,
       {
@@ -798,12 +792,7 @@ export class WorkboardCoreStore {
       },
       { allowMetadataDependencyLinks: true, enforceStatusHolds: false },
     );
-    const nextChild = {
-      ...updatedChild,
-      events: appendEvent(updatedChild, { kind: "link_removed" }, now),
-    };
-    await this.store.register(nextChild.id, { version: 1, card: nextChild });
-    return await this.promoteDependencyReady(nextChild.id);
+    return await this.promoteDependencyReady(updatedChild.id);
   }
 
   protected async linkCardsDirect(
