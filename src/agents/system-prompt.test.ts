@@ -1118,9 +1118,6 @@ describe("buildAgentSystemPrompt", () => {
       "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write proposal/skill files directly.",
       "Generated = pending proposal. Apply/reject/quarantine only explicit user ask.",
       "proposal_content = complete final skill body, never plan/diff; update/revise preserves unchanged content.",
-      "When the current-turn context contains `✨ SKILL OPPORTUNITY`, place that block near the top of the reply before ordinary narrative.",
-      "For a genuine opportunity, preserve the opportunity block and report only durable capture that an enabled extension confirms; card or proposal creation does not create or apply a skill.",
-      "Never conflate a recommendation, a pending proposal, and a live skill; keep the explicit approval boundary visible.",
       "",
     ]);
 
@@ -1139,13 +1136,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(withTool).toContain("## Skill Workshop");
     expect(withTool).toContain("Durable reusable skill/playbook/workflow work");
     expect(withTool).toContain("Generated = pending proposal");
-
-    const withWorkboard = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["read", "skill_workshop", "workboard_create"],
-    });
-    expect(withWorkboard).not.toContain("call `workboard_create` once before replying");
-    expect(withWorkboard).not.toContain("Workboard opportunity capture");
   });
 
   it("appends available skills when provided", () => {

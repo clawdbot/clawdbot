@@ -10,7 +10,6 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildSkillOpportunityContext } from "../../skills/workshop/opportunity.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";

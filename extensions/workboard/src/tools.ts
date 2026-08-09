@@ -19,11 +19,6 @@ function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
   );
 }
 
-function contextSessionKey(ctx: OpenClawPluginToolContext | undefined): string | undefined {
-  const value = (ctx as Record<string, unknown> | undefined)?.sessionKey;
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function canMutateCard(card: WorkboardCard, ownerId: string, token?: string): boolean {
   const claim = card.metadata?.claim;
   return !claim || claim.ownerId === ownerId || safeEqualSecret(token, claim.token);
@@ -183,7 +178,6 @@ export function createWorkboardTools(params: {
 }): AnyAgentTool[] {
   const store = params.store ?? WorkboardStore.openSqlite();
   const ownerId = contextOwner(params.context);
-  const sessionKey = contextSessionKey(params.context);
   const readScopedCardToolParams = async (rawParams: unknown): Promise<WorkboardToolCardParams> => {
     const input = readCardToolParams(rawParams, ownerId);
     await requireScopedCard(store, input.id, ownerId, input.token);
@@ -367,7 +361,6 @@ export function createWorkboardTools(params: {
         const claimed = await store.claim(id, {
           ownerId,
           ttlSeconds: record.ttlSeconds,
-          ...(sessionKey ? { sessionKey } : {}),
         });
         return jsonResult({ ...claimed, card: redactClaimToken(claimed.card) });
       },
