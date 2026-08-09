@@ -76,6 +76,9 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
             pollIntervalMs: batch.pollIntervalMs,
             timeoutMs: batch.timeoutMs,
             ...(batch.signal ? { signal: batch.signal } : {}),
+            ...(batch.submissionLifecycle
+              ? { submissionLifecycle: batch.submissionLifecycle }
+              : {}),
             debug: batch.debug,
           });
           return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);

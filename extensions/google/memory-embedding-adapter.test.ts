@@ -96,9 +96,14 @@ describe("Gemini memory embedding adapter", () => {
     expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
   });
 
-  it("declares native batch failures fail-closed and forwards cancellation", async () => {
+  it("declares native batch failures fail-closed and forwards cancellation and ownership", async () => {
     const result = await createAdapterWithHeaders({});
     const controller = new AbortController();
+    const submissionLifecycle = {
+      started: vi.fn(async () => {}),
+      accepted: vi.fn(async () => {}),
+      rejected: vi.fn(async () => {}),
+    };
 
     expect(result.runtime?.batchFailureMode).toBe("error");
     await result.runtime?.batchEmbed?.({
@@ -109,11 +114,12 @@ describe("Gemini memory embedding adapter", () => {
       pollIntervalMs: 1_000,
       timeoutMs: 60_000,
       signal: controller.signal,
+      submissionLifecycle,
       debug: () => {},
     });
 
     expect(mocks.runGeminiEmbeddingBatches).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: controller.signal }),
+      expect.objectContaining({ signal: controller.signal, submissionLifecycle }),
     );
   });
 });

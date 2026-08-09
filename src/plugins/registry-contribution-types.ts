@@ -56,6 +56,15 @@ export type MemoryEmbeddingBatchChunk = {
   embeddingInput?: EmbeddingInput;
 };
 
+export type MemoryEmbeddingBatchSubmissionLifecycle = {
+  /** Persist a provider-safe correlation id before sending a non-idempotent create request. */
+  started: (params: { submissionId: string }) => Promise<void>;
+  /** Attach the provider resource name after a successful create response. */
+  accepted: (params: { submissionId: string; batchName: string }) => Promise<void>;
+  /** Remove a pre-submit record after a definitive create rejection. */
+  rejected: (params: { submissionId: string }) => Promise<void>;
+};
+
 export type MemoryEmbeddingBatchOptions = {
   agentId: string;
   chunks: MemoryEmbeddingBatchChunk[];
@@ -65,6 +74,8 @@ export type MemoryEmbeddingBatchOptions = {
   timeoutMs: number;
   /** Cancels local batch work; a submitted remote job may continue running. */
   signal?: AbortSignal;
+  /** Durable ownership callbacks for non-idempotent provider submissions. */
+  submissionLifecycle?: MemoryEmbeddingBatchSubmissionLifecycle;
   debug: (message: string, data?: Record<string, unknown>) => void;
 };
 

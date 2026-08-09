@@ -56,6 +56,7 @@ let providerRuntimeBatchFailureMode: "fallback" | "error" | undefined;
 let providerRuntimeBatchInvocations = 0;
 let providerRuntimeBatchSignals: Array<AbortSignal | undefined> = [];
 let providerRuntimeBatchWaitForAbort = false;
+let providerRuntimeSubmissionMode: "none" | "ambiguous" | "accepted" | "rejected" = "none";
 let providerRuntimeActiveBatchCalls = 0;
 let providerRuntimeMaxActiveBatchCalls = 0;
 let providerCloseCalls = 0;
@@ -267,8 +268,32 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                   batchEmbed: async (batch: {
                     chunks: Array<{ text: string }>;
                     signal?: AbortSignal;
+                    submissionLifecycle?: {
+                      started: (params: { submissionId: string }) => Promise<void>;
+                      accepted: (params: {
+                        submissionId: string;
+                        batchName: string;
+                      }) => Promise<void>;
+                      rejected: (params: { submissionId: string }) => Promise<void>;
+                    };
                   }) => {
                     providerRuntimeBatchInvocations += 1;
+                    const submissionId = `openclaw-memory-test-${providerRuntimeBatchInvocations}`;
+                    if (providerRuntimeSubmissionMode !== "none") {
+                      const lifecycle = batch.submissionLifecycle;
+                      if (!lifecycle) {
+                        throw new Error("expected batch submission lifecycle");
+                      }
+                      await lifecycle.started({ submissionId });
+                      if (providerRuntimeSubmissionMode === "accepted") {
+                        await lifecycle.accepted({
+                          submissionId,
+                          batchName: `batches/test-${providerRuntimeBatchInvocations}`,
+                        });
+                      } else if (providerRuntimeSubmissionMode === "rejected") {
+                        await lifecycle.rejected({ submissionId });
+                      }
+                    }
                     providerRuntimeBatchSignals.push(batch.signal);
                     providerRuntimeActiveBatchCalls += 1;
                     providerRuntimeMaxActiveBatchCalls = Math.max(
@@ -282,13 +307,17 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                           throw new Error("expected batch abort signal");
                         }
                         await new Promise<void>((_resolve, reject) => {
+                          const rejectAborted = () =>
+                            reject(
+                              signal.reason instanceof Error
+                                ? signal.reason
+                                : new Error("batch aborted"),
+                            );
                           if (signal.aborted) {
-                            reject(signal.reason);
+                            rejectAborted();
                             return;
                           }
-                          signal.addEventListener("abort", () => reject(signal.reason), {
-                            once: true,
-                          });
+                          signal.addEventListener("abort", rejectAborted, { once: true });
                         });
                       }
                       await providerRuntimeBatchGate;
@@ -370,6 +399,7 @@ describe("memory index", () => {
     providerRuntimeBatchInvocations = 0;
     providerRuntimeBatchSignals = [];
     providerRuntimeBatchWaitForAbort = false;
+    providerRuntimeSubmissionMode = "none";
     providerRuntimeActiveBatchCalls = 0;
     providerRuntimeMaxActiveBatchCalls = 0;
     providerCloseCalls = 0;
@@ -1250,30 +1280,92 @@ describe("memory index", () => {
     }
   });
 
-  it("keeps fail-closed native batches selected without inline fallback", async () => {
+  it("durably quarantines ambiguous native submissions across retries and manager restarts", async () => {
     providerRuntimeBatchFailureMode = "error";
+    providerRuntimeSubmissionMode = "ambiguous";
     providerRuntimeBatchErrors = [
       new Error("memory embeddings batch timed out"),
       new Error("memory embeddings batch timed out again"),
     ];
-    const manager = await getFreshManager(
-      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
-    );
+    const cfg = createCfg({ provider: "batch-wide-test", batchEnabled: true });
+    const manager = await getFreshManager(cfg);
     try {
       await expect(manager.sync({ reason: "test" })).rejects.toThrow(
         "memory embeddings batch timed out",
       );
+      expect(manager.status().batch?.submissionQuarantine).toMatchObject({
+        malformed: false,
+        submissions: [{ submissionId: "openclaw-memory-test-1" }],
+      });
       await expect(manager.sync({ reason: "test", force: true })).rejects.toThrow(
-        "memory embeddings batch timed out again",
+        "memory embedding batch submission quarantined",
       );
 
-      expect(providerRuntimeBatchCalls).toHaveLength(2);
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
       expect(embedBatchCalls).toBe(0);
       expect(manager.status().batch).toMatchObject({
         enabled: true,
-        failures: 2,
-        lastError: "memory embeddings batch timed out again",
+        failures: 1,
+        lastError: "memory embeddings batch timed out",
+        submissionQuarantine: {
+          malformed: false,
+          submissions: [
+            {
+              provider: "batch-wide-test",
+              submissionId: "openclaw-memory-test-1",
+            },
+          ],
+        },
       });
+    } finally {
+      await manager.close?.();
+    }
+
+    const restarted = await getFreshManager(cfg);
+    try {
+      await expect(restarted.sync({ reason: "test", force: true })).rejects.toThrow(
+        "memory embedding batch submission quarantined",
+      );
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      expect(restarted.clearBatchSubmissionQuarantine()).toBe(true);
+      await expect(restarted.sync({ reason: "test", force: true })).rejects.toThrow(
+        "memory embeddings batch timed out again",
+      );
+      expect(providerRuntimeBatchCalls).toHaveLength(2);
+      expect(restarted.status().batch?.submissionQuarantine?.submissions).toHaveLength(1);
+    } finally {
+      await restarted.close?.();
+    }
+  });
+
+  it("keeps accepted batch ownership until local embeddings commit, then clears it", async () => {
+    providerRuntimeBatchFailureMode = "error";
+    providerRuntimeSubmissionMode = "accepted";
+    const manager = await getFreshManager(
+      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
+    );
+    try {
+      await manager.sync({ reason: "test" });
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      expect(manager.status().batch?.submissionQuarantine).toBeUndefined();
+      expect(embedBatchCalls).toBe(0);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("does not quarantine a definitive native batch create rejection", async () => {
+    providerRuntimeBatchFailureMode = "error";
+    providerRuntimeSubmissionMode = "rejected";
+    providerRuntimeBatchErrors = [new Error("definitive create rejection")];
+    const manager = await getFreshManager(
+      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
+    );
+    try {
+      await expect(manager.sync({ reason: "test" })).rejects.toThrow("definitive create rejection");
+      expect(manager.status().batch?.submissionQuarantine).toBeUndefined();
+      await expect(manager.sync({ reason: "test", force: true })).resolves.toBeUndefined();
+      expect(providerRuntimeBatchCalls).toHaveLength(2);
     } finally {
       await manager.close?.();
     }
