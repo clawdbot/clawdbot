@@ -175,6 +175,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         provider,
         modelId,
         model: effectiveModel,
+        contextTokenBudget,
         agentId: sessionAgentId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? sandboxSessionKey,
