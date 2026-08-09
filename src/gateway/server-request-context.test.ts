@@ -243,6 +243,7 @@ describe("createGatewayRequestContext", () => {
       authenticatedUserProfile: {
         profileId: "profile-ada",
         displayName: "Ada",
+        avatarRevision: "avatar-old-png",
         hasAvatar: true,
         updatedAt: 1,
       },
@@ -257,6 +258,7 @@ describe("createGatewayRequestContext", () => {
       authenticatedUserProfile: {
         profileId: "profile-ada",
         displayName: "Ada",
+        avatarRevision: "avatar-old-png",
         hasAvatar: true,
         updatedAt: 1,
       },
@@ -271,6 +273,7 @@ describe("createGatewayRequestContext", () => {
       authenticatedUserProfile: {
         profileId: "profile-grace",
         displayName: "Grace",
+        avatarRevision: "1",
         hasAvatar: false,
         updatedAt: 1,
       },
@@ -279,10 +282,13 @@ describe("createGatewayRequestContext", () => {
     const clients = new Set([first, second, unrelated]) as never;
     const params = makeContextParams({ clients });
     const context = createGatewayRequestContext(params);
+    const capturedFirstProfile = first.authenticatedUserProfile;
+    const readCapturedDisplayName = () => capturedFirstProfile.displayName;
 
     context.refreshConnectedUserProfile?.({
       id: "profile-ada",
       displayName: "Augusta Ada",
+      avatarRevision: "avatar-new-png",
       hasAvatar: true,
       updatedAt: 2,
     });
@@ -290,9 +296,12 @@ describe("createGatewayRequestContext", () => {
     expect(first.authenticatedUserProfile).toEqual({
       profileId: "profile-ada",
       displayName: "Augusta Ada",
+      avatarRevision: "avatar-new-png",
       hasAvatar: true,
       updatedAt: 2,
     });
+    expect(first.authenticatedUserProfile).toBe(capturedFirstProfile);
+    expect(readCapturedDisplayName()).toBe("Augusta Ada");
     expect(second.authenticatedUserProfile).toEqual(first.authenticatedUserProfile);
     expect(unrelated.authenticatedUserProfile.displayName).toBe("Grace");
     expect(params.broadcast).toHaveBeenCalledWith(
@@ -304,7 +313,7 @@ describe("createGatewayRequestContext", () => {
               id: "profile-ada",
               email: "ada@example.test",
               name: "Augusta Ada",
-              avatarUrl: "/api/users/profile-ada/avatar?v=2",
+              avatarUrl: "/api/users/profile-ada/avatar?v=avatar-new-png",
             },
           }),
           expect.objectContaining({
@@ -312,7 +321,7 @@ describe("createGatewayRequestContext", () => {
               id: "profile-ada",
               email: "ada@work.test",
               name: "Augusta Ada",
-              avatarUrl: "/api/users/profile-ada/avatar?v=2",
+              avatarUrl: "/api/users/profile-ada/avatar?v=avatar-new-png",
             },
           }),
         ]),
@@ -324,7 +333,7 @@ describe("createGatewayRequestContext", () => {
     );
   });
 
-  it("removes the presence avatar URL when a changed profile has no avatar", () => {
+  it("preserves the Gravatar-backed route when a changed profile has no upload", () => {
     const client = {
       ...makeGatewayClient({
         connId: "ada-avatar-removed",
@@ -334,6 +343,7 @@ describe("createGatewayRequestContext", () => {
       authenticatedUserProfile: {
         profileId: "profile-ada-avatar-removed",
         displayName: "Ada",
+        avatarRevision: "avatar-upload-png",
         hasAvatar: true,
         updatedAt: 1,
       },
@@ -345,6 +355,7 @@ describe("createGatewayRequestContext", () => {
     context.refreshConnectedUserProfile?.({
       id: "profile-ada-avatar-removed",
       displayName: "Ada",
+      avatarRevision: "profile-updated-2",
       hasAvatar: false,
       updatedAt: 2,
     });
@@ -359,7 +370,95 @@ describe("createGatewayRequestContext", () => {
       id: "profile-ada-avatar-removed",
       email: "ada@example.test",
       name: "Ada",
+      avatarUrl: "/api/users/profile-ada-avatar-removed/avatar?v=profile-updated-2",
     });
+  });
+
+  it("keeps Tailscale provider identities out of refreshed presence email", () => {
+    const client = {
+      ...makeGatewayClient({
+        connId: "ada-tailscale",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      authenticatedUserProfile: {
+        profileId: "profile-ada-tailscale",
+        displayName: "Ada",
+        avatarRevision: "avatar-tailscale-png",
+        hasAvatar: true,
+        updatedAt: 1,
+      },
+      presenceKey: "profile-refresh-ada-tailscale",
+    };
+    const params = makeContextParams({ clients: new Set([client]) as never });
+    const context = createGatewayRequestContext(params);
+
+    context.refreshConnectedUserProfile?.({
+      id: "profile-ada-tailscale",
+      displayName: "Augusta Ada",
+      avatarRevision: "avatar-tailscale-new-png",
+      hasAvatar: true,
+      updatedAt: 2,
+    });
+
+    const presence = vi.mocked(params.broadcast).mock.calls[0]?.[1] as {
+      presence?: Array<{ user?: { id?: string; email?: string } }>;
+    };
+    expect(
+      presence.presence?.find((entry) => entry.user?.id === "profile-ada-tailscale")?.user,
+    ).toEqual({
+      id: "profile-ada-tailscale",
+      name: "Augusta Ada",
+      avatarUrl: "/api/users/profile-ada-tailscale/avatar?v=avatar-tailscale-new-png",
+    });
+  });
+
+  it("uses distinct hash revisions for rapid avatar refreshes", () => {
+    const client = {
+      ...makeGatewayClient({
+        connId: "ada-rapid-avatar",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserId: "ada@example.test",
+      authenticatedUserProfile: {
+        profileId: "profile-ada-rapid-avatar",
+        displayName: "Ada",
+        avatarRevision: "avatar-first-png",
+        hasAvatar: true,
+        updatedAt: 2,
+      },
+      presenceKey: "profile-refresh-ada-rapid-avatar",
+    };
+    const params = makeContextParams({ clients: new Set([client]) as never });
+    const context = createGatewayRequestContext(params);
+
+    context.refreshConnectedUserProfile?.({
+      id: "profile-ada-rapid-avatar",
+      displayName: "Ada",
+      avatarRevision: "avatar-second-png",
+      hasAvatar: true,
+      updatedAt: 2,
+    });
+    context.refreshConnectedUserProfile?.({
+      id: "profile-ada-rapid-avatar",
+      displayName: "Ada",
+      avatarRevision: "avatar-third-png",
+      hasAvatar: true,
+      updatedAt: 2,
+    });
+
+    const avatarUrls = vi.mocked(params.broadcast).mock.calls.map(([, payload]) => {
+      const presence = payload as {
+        presence?: Array<{ user?: { id?: string; avatarUrl?: string } }>;
+      };
+      return presence.presence?.find((entry) => entry.user?.id === "profile-ada-rapid-avatar")?.user
+        ?.avatarUrl;
+    });
+    expect(avatarUrls).toEqual([
+      "/api/users/profile-ada-rapid-avatar/avatar?v=avatar-second-png",
+      "/api/users/profile-ada-rapid-avatar/avatar?v=avatar-third-png",
+    ]);
   });
 
   it("preserves only clients that handle each approval kind", () => {

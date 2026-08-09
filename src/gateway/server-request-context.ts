@@ -8,13 +8,13 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { upsertPresence } from "../infra/system-presence.js";
+import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import type { SessionCompanionService } from "./session-companion.js";
 import type { SessionObserverService } from "./session-observer-contract.js";
-import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 type GatewayRequestContextClient = GatewayClient & {
   socket: { close: (code: number, reason: string) => void };
@@ -267,27 +267,31 @@ export function createGatewayRequestContext(
     refreshConnectedUserProfile: (profile) => {
       let presenceChanged = false;
       for (const gatewayClient of params.clients) {
-        if (gatewayClient.authenticatedUserProfile?.profileId !== profile.id) {
+        const authenticatedUserProfile = gatewayClient.authenticatedUserProfile;
+        if (authenticatedUserProfile?.profileId !== profile.id) {
           continue;
         }
-        gatewayClient.authenticatedUserProfile = {
+        Object.assign(authenticatedUserProfile, {
           profileId: profile.id,
           displayName: profile.displayName,
+          avatarRevision: profile.avatarRevision,
           hasAvatar: profile.hasAvatar,
           updatedAt: profile.updatedAt,
-        };
+        });
         if (!gatewayClient.presenceKey || !gatewayClient.authenticatedUserId) {
           continue;
         }
         upsertPresence(gatewayClient.presenceKey, {
-          user: {
-            id: profile.id,
-            email: gatewayClient.authenticatedUserId,
-            ...(profile.displayName ? { name: profile.displayName } : {}),
-            ...(profile.hasAvatar
-              ? { avatarUrl: `${formatUserProfileAvatarPath(profile.id)}?v=${profile.updatedAt}` }
-              : {}),
-          },
+          user: buildAuthenticatedPresenceUser({
+            authenticatedUserId: gatewayClient.authenticatedUserId,
+            authenticatedUserIsTailscaleProvider:
+              gatewayClient.authenticatedUserIsTailscaleProvider,
+            authenticatedUserProfile: {
+              profileId: profile.id,
+              displayName: profile.displayName,
+              avatarRevision: profile.avatarRevision,
+            },
+          }),
         });
         presenceChanged = true;
       }

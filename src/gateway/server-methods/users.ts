@@ -12,6 +12,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   ensureProfileForEmail,
+  getUserProfileDisplay,
   getUserProfileListItem,
   linkEmail,
   listProfiles,
@@ -22,6 +23,17 @@ import {
 } from "../../state/user-profiles.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+
+function refreshConnectedProfile(
+  context: GatewayRequestHandlerOptions["context"],
+  profile: { id: string; updatedAt: number },
+): void {
+  const display = getUserProfileDisplay(profile.id);
+  context.refreshConnectedUserProfile?.({
+    ...display,
+    updatedAt: profile.updatedAt,
+  });
+}
 
 function decodeBase64(value: string): Uint8Array | undefined {
   const trimmed = value.trim();
@@ -169,7 +181,7 @@ export const usersHandlers: GatewayRequestHandlers = {
         return;
       }
       const profile = setDisplayName(params.profileId, params.displayName);
-      context.refreshConnectedUserProfile?.(profile);
+      refreshConnectedProfile(context, profile);
       respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
@@ -202,7 +214,7 @@ export const usersHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error.code));
         return;
       }
-      context.refreshConnectedUserProfile?.(result.value);
+      refreshConnectedProfile(context, result.value);
       respond(true, { profile: result.value });
     } catch (error) {
       respond(false, undefined, profileError(error));

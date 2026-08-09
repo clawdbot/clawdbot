@@ -80,6 +80,7 @@ export type GatewayClient = {
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
+    avatarRevision?: string;
     hasAvatar: boolean;
     updatedAt: number;
   };
@@ -269,6 +270,7 @@ export type GatewayRequestContext = {
   refreshConnectedUserProfile?: (profile: {
     id: string;
     displayName: string | null;
+    avatarRevision: string;
     hasAvatar: boolean;
     updatedAt: number;
   }) => void;

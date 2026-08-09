@@ -13,11 +13,13 @@ const listProfiles = vi.hoisted(() => vi.fn());
 const setAvatar = vi.hoisted(() => vi.fn());
 const setDisplayName = vi.hoisted(() => vi.fn());
 const ensureProfileForEmail = vi.hoisted(() => vi.fn());
+const getUserProfileDisplay = vi.hoisted(() => vi.fn());
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
 const resolveUserProfileId = vi.hoisted(() => vi.fn());
 
 vi.mock("../../state/user-profiles.js", () => ({
   ensureProfileForEmail,
+  getUserProfileDisplay,
   getUserProfileListItem,
   linkEmail,
   listProfiles,
@@ -60,12 +62,19 @@ describe("users gateway methods", () => {
 
   beforeEach(() => {
     ensureProfileForEmail.mockReset();
+    getUserProfileDisplay.mockReset();
     getUserProfileListItem.mockReset();
     resolveUserProfileId.mockReset();
     linkEmail.mockReset();
     listProfiles.mockReset();
     setAvatar.mockReset();
     setDisplayName.mockReset();
+    getUserProfileDisplay.mockReturnValue({
+      id: profile.id,
+      displayName: profile.displayName,
+      avatarRevision: String(profile.updatedAt),
+      hasAvatar: profile.hasAvatar,
+    });
   });
 
   it("lists profiles through the read method", async () => {
@@ -186,7 +195,13 @@ describe("users gateway methods", () => {
     );
 
     expect(validateUsersSetDisplayNameResult(respond.mock.calls[0]?.[1])).toBe(true);
-    expect(refreshConnectedUserProfile).toHaveBeenCalledWith(profile);
+    expect(refreshConnectedUserProfile).toHaveBeenCalledWith({
+      id: profile.id,
+      displayName: profile.displayName,
+      avatarRevision: "1",
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    });
   });
 
   it("returns protocol-complete avatar mutations", async () => {
@@ -199,6 +214,12 @@ describe("users gateway methods", () => {
     setAvatar.mockReturnValue({
       ok: true,
       value: updatedProfile,
+    });
+    getUserProfileDisplay.mockReturnValue({
+      id: profile.id,
+      displayName: profile.displayName,
+      avatarRevision: "avatar-sha256-png",
+      hasAvatar: true,
     });
     const refreshConnectedUserProfile = vi.fn();
 
@@ -214,7 +235,13 @@ describe("users gateway methods", () => {
     );
 
     expect(validateUsersSetAvatarResult(respond.mock.calls[0]?.[1])).toBe(true);
-    expect(refreshConnectedUserProfile).toHaveBeenCalledWith(updatedProfile);
+    expect(refreshConnectedUserProfile).toHaveBeenCalledWith({
+      id: updatedProfile.id,
+      displayName: updatedProfile.displayName,
+      avatarRevision: "avatar-sha256-png",
+      hasAvatar: true,
+      updatedAt: updatedProfile.updatedAt,
+    });
   });
 
   it("rejects blank email aliases as invalid requests", async () => {

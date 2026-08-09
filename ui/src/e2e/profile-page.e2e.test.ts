@@ -1,8 +1,8 @@
 // Control UI tests cover the settings profile page against a mocked Gateway.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, type Page } from "playwright/test";
+import { it } from "vitest";
 import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
@@ -244,9 +244,7 @@ suite.define(() => {
 
         await publishAvatarRevision(3);
         await expect.poll(() => avatarRequests.length).toBe(2);
-        await expect(page.locator(".sidebar-identity-card__name").textContent()).resolves.toBe(
-          updatedDisplayName,
-        );
+        await expect(page.locator(".sidebar-identity-card__name")).toHaveText(updatedDisplayName);
         expect(
           await originalSidebarImage?.evaluate((image) =>
             image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
