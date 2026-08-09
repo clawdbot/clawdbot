@@ -209,9 +209,13 @@ describe("gateway chat metadata lifecycle composition", () => {
     const lifecycle = await createLifecycle();
     await lifecycle.attachContext(context, sidecars);
     await expectAvailable(lifecycle, false);
+    const profileStore = mocks.preparedAuthStore;
+    if (!profileStore) {
+      throw new Error("expected unresolved prepared auth store");
+    }
 
     reportEmbeddedRunSuccessfulAuthBinding({
-      profileStore: mocks.preparedAuthStore,
+      profileStore,
       apiKeyInfo: null,
       attempt: {
         runtimeArtifact: {
