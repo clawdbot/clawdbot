@@ -12,13 +12,10 @@ import {
   workerSshRemoteCommand,
 } from "./ssh.js";
 import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncRequest } from "./tunnel-contract.js";
-import {
-  REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS,
-  REMOTE_WORKSPACE_MANIFEST_JS,
-  REMOTE_WORKSPACE_RSYNC_RECEIVER_JS,
-} from "./workspace-sync-scripts.js";
+import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
+export const WORKER_WORKSPACE_RSYNC_DESTINATION = "openclaw-rsync-destination";
 
 export type WorkerWorkspaceActionsOptions = {
   environmentId: string;
@@ -27,6 +24,7 @@ export type WorkerWorkspaceActionsOptions = {
   getPrepared: () => PreparedWorkerSsh | undefined;
   runner: { run(argv: string[], options: CommandOptions): Promise<SpawnResult> };
   tasks: Set<Promise<unknown>>;
+  bundleHash: string;
 };
 
 export function waitForQuiescenceRenewal(
@@ -77,39 +75,42 @@ export function workerWorkspaceRsyncRemoteCommand(
   ]);
 }
 
+type WorkerWorkspaceRsyncReceiverMode = "accepted-next" | "git-pack" | "workspace-root";
+
 function workerWorkspaceRsyncReceiverPath(params: {
+  receiverEntryPath: string;
   remoteWorkspaceDir: string;
   canonicalHome: string;
   remoteRelative: string;
-  remoteTarget: string;
+  mode: WorkerWorkspaceRsyncReceiverMode;
   nonce: string;
 }): string {
-  return workerSshRemoteCommand([
-    "node",
-    "-e",
-    REMOTE_WORKSPACE_RSYNC_RECEIVER_JS,
-    params.remoteWorkspaceDir,
-    params.canonicalHome,
-    params.remoteRelative,
-    params.nonce,
-    params.remoteTarget,
-  ]);
+  const context = Buffer.from(
+    JSON.stringify([params.remoteWorkspaceDir, params.canonicalHome, params.remoteRelative]),
+  ).toString("base64url");
+  const command = ["node", params.receiverEntryPath, params.mode, context, params.nonce];
+  if (command.some((word) => !/^[A-Za-z0-9_./-]+$/u.test(word))) {
+    throw new Error("Worker workspace rsync receiver command is not shell-safe");
+  }
+  return command.join(" ");
 }
 
 export function createWorkerWorkspaceRsyncReceiverPathFactory(params: {
+  receiverEntryPath: string;
   remoteWorkspaceDir: string;
   canonicalHome: string;
   remoteRelative: string;
-}): (remoteTarget: string) => string {
-  return (remoteTarget) =>
+}): (mode: "git-pack" | "workspace-root") => string {
+  return (mode) =>
     workerWorkspaceRsyncReceiverPath({
       ...params,
-      remoteTarget,
+      mode,
       nonce: randomBytes(16).toString("hex"),
     });
 }
 
 export function workerAcceptedWorkspaceRsyncReceiverPath(params: {
+  receiverEntryPath: string;
   remoteWorkspaceDir: string;
   nonce: string;
 }): string {
@@ -120,15 +121,21 @@ export function workerAcceptedWorkspaceRsyncReceiverPath(params: {
   }
   const canonicalHome = params.remoteWorkspaceDir.slice(0, markerIndex);
   const remoteRelative = params.remoteWorkspaceDir.slice(markerIndex + 1);
-  return workerSshRemoteCommand([
-    "node",
-    "-e",
-    REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS,
-    params.remoteWorkspaceDir,
+  return workerWorkspaceRsyncReceiverPath({
+    receiverEntryPath: params.receiverEntryPath,
+    remoteWorkspaceDir: params.remoteWorkspaceDir,
     canonicalHome,
     remoteRelative,
-    params.nonce,
-  ]);
+    mode: "accepted-next",
+    nonce: params.nonce,
+  });
+}
+
+export function workerWorkspaceRsyncReceiverEntryPath(bundleHash: string): string {
+  if (!/^[a-f0-9]{64}$/u.test(bundleHash)) {
+    throw new Error("Worker workspace rsync receiver bundle hash is invalid");
+  }
+  return `.openclaw-worker/${bundleHash}/dist/worker/workspace-rsync-receiver.js`;
 }
 
 export function workerWorkspaceSshArgv(

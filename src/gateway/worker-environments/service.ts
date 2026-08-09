@@ -1082,7 +1082,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         !inState(record, "ready", "idle", "attached") ||
         record.destroyRequestedAtMs !== null ||
         !record.leaseId ||
-        !record.sshEndpoint
+        !record.sshEndpoint ||
+        !record.bootstrapReceipt
       ) {
         throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
       }
@@ -1103,6 +1104,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       // lock while SSH connects so drain/destroy can fence an indefinitely reconnecting start.
       startup = tunnels.start({
         ...request,
+        bundleHash: record.bootstrapReceipt.bundleHash,
         gateway,
         ssh: record.sshEndpoint,
         resolveIdentity: identityResolverFor(record, provider, record.leaseId),

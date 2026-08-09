@@ -77,12 +77,14 @@ rmdir -- "$directory" 2>/dev/null || true
 `;
 
 type WorkerTunnelStartRequest = WorkerTunnelRequest & {
+  bundleHash: string;
   gateway: { host: "127.0.0.1" | "::1"; port: number };
   ssh: WorkerSshEndpoint;
   resolveIdentity: WorkerSshIdentityResolver;
 };
 
 type TunnelEntry = {
+  bundleHash: string;
   environmentId: string;
   ownerEpoch: number;
   gateway: WorkerTunnelStartRequest["gateway"];
@@ -229,6 +231,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
       getPrepared: () => entry.prepared,
       runner,
       tasks: entry.workspaceTasks,
+      bundleHash: entry.bundleHash,
     }),
     stop: () => stop(entry.environmentId, entry.ownerEpoch),
   });
@@ -413,6 +416,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     void readiness.promise.catch(() => undefined);
     const entry: TunnelEntry = {
       environmentId: request.environmentId,
+      bundleHash: request.bundleHash,
       ownerEpoch: request.ownerEpoch,
       gateway: request.gateway,
       remoteDirectory,

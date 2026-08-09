@@ -2195,7 +2195,10 @@ describe("worker environment service", () => {
       ownerEpoch: 1,
     });
     expect(tunnelManager.start).toHaveBeenCalledWith(
-      expect.objectContaining({ gateway: { host: "127.0.0.1", port: 18_789 } }),
+      expect.objectContaining({
+        bundleHash: BUNDLE_HASH,
+        gateway: { host: "127.0.0.1", port: 18_789 },
+      }),
     );
     expect(workerService.get("worker-tunnel")).toMatchObject({ tunnelStatus: "connected" });
 

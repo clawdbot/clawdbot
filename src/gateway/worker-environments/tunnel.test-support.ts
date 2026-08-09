@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {
@@ -32,6 +34,7 @@ export const SSH: WorkerSshEndpoint = {
   hostKey: HOST_KEY,
   keyRef: { source: "file", provider: "workers", id: "/identity" },
 };
+export const BUNDLE_HASH = "a".repeat(64);
 export const PWD_COMMAND = { transportRetry: "idempotent", argv: ["pwd"] } as const;
 
 export function success(stdout = "", stderr = ""): SpawnResult {
@@ -47,7 +50,75 @@ export function success(stdout = "", stderr = ""): SpawnResult {
 
 export function rsyncReceiverNonce(argv: readonly string[]): string | undefined {
   const remotePath = argv.find((arg) => arg.startsWith("--rsync-path="));
-  return remotePath ? /'([a-f0-9]{32})' '[^']+'$/u.exec(remotePath)?.[1] : undefined;
+  const words = remotePath?.slice("--rsync-path=".length).split(" ");
+  return words?.length === 5 && /^[a-f0-9]{32}$/u.test(words[4] ?? "") ? words[4] : undefined;
+}
+
+function rsyncReceiverInvocation(argv: readonly string[]) {
+  const remotePath = argv.find((arg) => arg.startsWith("--rsync-path="));
+  const words = remotePath?.slice("--rsync-path=".length).split(" ");
+  if (!words || words.length !== 5 || words[0] !== "node") {
+    return undefined;
+  }
+  const [node, receiverEntryPath, mode, encodedContext, nonce] = words;
+  if (
+    !node ||
+    !receiverEntryPath ||
+    !["workspace-root", "git-pack", "accepted-next"].includes(mode ?? "") ||
+    !encodedContext ||
+    !/^[a-f0-9]{32}$/u.test(nonce ?? "")
+  ) {
+    return undefined;
+  }
+  const [workspace] = JSON.parse(Buffer.from(encodedContext, "base64url").toString("utf8")) as [
+    string,
+    string,
+    string,
+  ];
+  const target =
+    mode === "git-pack"
+      ? path.join(workspace, ".openclaw-base.pack")
+      : mode === "accepted-next"
+        ? path.join(
+            path.dirname(workspace),
+            `.openclaw-accepted-${createHash("sha256").update(workspace).digest("hex")}-${nonce}`,
+            "next",
+          )
+        : workspace;
+  return { receiverEntryPath, target };
+}
+
+export async function prepareLocalWorkspaceRsyncBoundary(
+  remoteHome: string,
+  argv: readonly string[],
+): Promise<{ argv: string[]; receiverTarget: string }> {
+  const invocation = rsyncReceiverInvocation(argv);
+  if (!invocation) {
+    throw new Error("test rsync transfer is missing its bundled receiver invocation");
+  }
+  const receiverEntry = path.join(remoteHome, invocation.receiverEntryPath);
+  const installRoot = path.join(remoteHome, ".openclaw-worker", BUNDLE_HASH);
+  await fs.mkdir(path.dirname(receiverEntry), { recursive: true });
+  await fs.writeFile(path.join(installRoot, "package.json"), '{"type":"module"}\n');
+  const tsxApi = import.meta.resolve("tsx/esm/api");
+  const sourceEntry = pathToFileURL(path.resolve("src/worker/workspace-rsync-receiver.ts")).href;
+  await fs.writeFile(
+    receiverEntry,
+    `import { tsImport } from ${JSON.stringify(tsxApi)};\nawait tsImport(${JSON.stringify(sourceEntry)}, import.meta.url);\n`,
+  );
+  const fakeSsh = path.join(remoteHome, ".openclaw-test-ssh");
+  await fs.writeFile(
+    fakeSsh,
+    '#!/bin/sh\nset -eu\nwhile [ "$#" -gt 0 ]; do\n  case "$1" in -l|-p) shift 2 ;; -*) shift ;; *) shift; break ;; esac\ndone\ncd "$HOME"\nif [ -n "${OPENCLAW_TEST_RECEIVER_PATH:-}" ]; then PATH=$OPENCLAW_TEST_RECEIVER_PATH; export PATH; fi\nexec sh -c "$*"\n',
+    { mode: 0o755 },
+  );
+  const localArgv = [...argv];
+  const remoteShellIndex = localArgv.indexOf("-e");
+  if (remoteShellIndex < 0) {
+    throw new Error("test rsync transfer is missing its remote shell");
+  }
+  localArgv[remoteShellIndex + 1] = fakeSsh;
+  return { argv: localArgv, receiverTarget: invocation.target };
 }
 
 function shellQuoted(value: string): string {
@@ -183,6 +254,7 @@ export function localWorkspaceRunner(
     argv: string[],
     localArgv: string[],
     options: CommandOptions,
+    receiverTarget?: string,
   ) => Promise<SpawnResult | undefined>,
   onCommandCompleted?: (argv: readonly string[], result: SpawnResult) => void,
 ) {
@@ -200,16 +272,24 @@ export function localWorkspaceRunner(
         return await runCommandWithTimeout(argv, options);
       }
       if (argv[0] === "rsync") {
+        if (argv.some((arg) => arg.startsWith("--rsync-path="))) {
+          const boundary = await prepareLocalWorkspaceRsyncBoundary(remoteHome, argv);
+          const boundaryOptions = {
+            ...options,
+            baseEnv: { ...options.baseEnv, HOME: remoteHome },
+          };
+          const intercepted = await onRsync?.(
+            argv,
+            boundary.argv,
+            boundaryOptions,
+            boundary.receiverTarget,
+          );
+          return intercepted ?? (await runCommandWithTimeout(boundary.argv, boundaryOptions));
+        }
         const localArgv = [...argv];
         const remoteShellIndex = localArgv.indexOf("-e");
         if (remoteShellIndex >= 0) {
           localArgv.splice(remoteShellIndex, 2);
-        }
-        const remoteReceiverIndex = localArgv.findIndex((arg) => arg.startsWith("--rsync-path="));
-        if (remoteReceiverIndex >= 0) {
-          // Local transfers do not have a remote shell; boundary cases that need
-          // receiver ownership launch the production wrapper explicitly below.
-          localArgv.splice(remoteReceiverIndex, 1);
         }
         for (let index = localArgv.indexOf("--") + 1; index < localArgv.length; index += 1) {
           const candidate = localArgv[index];
@@ -292,6 +372,7 @@ export function startTestTunnel(
   return manager.start({
     environmentId,
     ownerEpoch,
+    bundleHash: BUNDLE_HASH,
     ssh,
     gateway: { host: "127.0.0.1", port: 18789 },
     resolveIdentity,

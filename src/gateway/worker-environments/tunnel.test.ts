@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createWorkerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import {
+  BUNDLE_HASH,
   PWD_COMMAND,
   SSH,
   deferred,
@@ -137,6 +138,7 @@ describe("worker tunnel manager", () => {
       sleep: async () => {},
     });
     const request = {
+      bundleHash: BUNDLE_HASH,
       environmentId: "worker:port-reconnect",
       ownerEpoch: 1,
       ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
@@ -280,6 +282,7 @@ describe("worker tunnel manager", () => {
     await sleepStarted.promise;
 
     const reconnecting = manager.start({
+      bundleHash: BUNDLE_HASH,
       environmentId: "worker:drain",
       ownerEpoch: 8,
       ssh: SSH,
@@ -316,6 +319,7 @@ describe("worker tunnel manager", () => {
     const fake = fakeRunner();
     const manager = createWorkerTunnelManager({ runner: fake.runner, sleep: async () => {} });
     const initialRequest = {
+      bundleHash: BUNDLE_HASH,
       environmentId: "worker:replacement",
       ownerEpoch: 1,
       ssh: SSH,
@@ -335,6 +339,7 @@ describe("worker tunnel manager", () => {
     const releaseStop = deferred<void>();
     staleReconnect.blockStopUntil(releaseStop.promise);
     const replacement = manager.start({
+      bundleHash: BUNDLE_HASH,
       environmentId: "worker:replacement",
       ownerEpoch: 2,
       ssh: SSH,

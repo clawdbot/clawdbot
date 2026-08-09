@@ -2021,6 +2021,31 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
+  it("runs macOS CI tests for workspace rsync receiver owners", () => {
+    for (const changedPath of [
+      "src/worker/workspace-rsync-receiver.ts",
+      "src/gateway/worker-environments/workspace-sync.ts",
+      "src/gateway/worker-environments/workspace-sync-helpers.ts",
+      "src/gateway/worker-environments/workspace-accepted-sync.ts",
+      "src/gateway/worker-environments/workspace-accepted-remote-script.ts",
+      "src/gateway/worker-environments/workspace-mutation-remote-script.ts",
+      "src/gateway/worker-environments/workspace-rsync-path.test.ts",
+    ]) {
+      const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
+        env: { PATH: "/usr/bin" },
+        platform: "linux",
+        swiftlintAvailable: false,
+      });
+
+      expect(plan.commands).toContainEqual(
+        expect.objectContaining({
+          name: "macOS app CI tests",
+          args: ["test:macos:ci"],
+        }),
+      );
+    }
+  });
+
   it("runs the native state schema guard for either contract owner", () => {
     for (const changedPath of [
       "apps/shared/OpenClawKit/Sources/OpenClawNativeState/OpenClawNativeStateSQLite.swift",
