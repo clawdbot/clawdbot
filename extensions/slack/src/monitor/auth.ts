@@ -519,9 +519,10 @@ export async function authorizeSlackSystemEventSender(params: {
     const info: {
       name?: string;
       type?: "im" | "mpim" | "channel" | "group";
-    } = await (params.eventScope
-      ? params.ctx.resolveChannelName(channelId, params.eventScope)
-      : params.ctx.resolveChannelName(channelId)
+    } = await (
+      params.eventScope
+        ? params.ctx.resolveChannelName(channelId, params.eventScope)
+        : params.ctx.resolveChannelName(channelId)
     ).catch(() => ({}));
     channelName = info.name;
     const resolvedTypeSource = params.channelType ?? info.type;
@@ -567,9 +568,10 @@ export async function authorizeSlackSystemEventSender(params: {
     }
   }
 
-  const senderInfo: { name?: string } = await (params.eventScope
-    ? params.ctx.resolveUserName(senderId, params.eventScope)
-    : params.ctx.resolveUserName(senderId)
+  const senderInfo: { name?: string } = await (
+    params.eventScope
+      ? params.ctx.resolveUserName(senderId, params.eventScope)
+      : params.ctx.resolveUserName(senderId)
   ).catch(() => ({}));
   const senderName = senderInfo.name;
   const ingressChannelType = channelType ?? "channel";

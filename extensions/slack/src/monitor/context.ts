@@ -9,10 +9,8 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import type { SessionScope } from "openclaw/plugin-sdk/config-contracts";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
-import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-runtime";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -37,11 +35,8 @@ import {
   type SlackSuggestedPromptsInput,
   updateSlackSuggestedPrompts,
 } from "./suggested-prompts.js";
-import {
-  qualifySlackConversationId,
-  qualifySlackRoutePeerId,
-  resolveSlackEnterpriseMainDmSessionKey,
-} from "./workspace-routing.js";
+import { resolveSlackSystemEventRouteSessionKey } from "./system-event-session.js";
+import { qualifySlackRoutePeerId } from "./workspace-routing.js";
 
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 export { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./suggested-prompts.js";
@@ -408,74 +403,19 @@ export function createSlackMonitorContext(params: {
         ? `slack:group:${channelId}`
         : `slack:channel:${channelId}`;
     const chatType = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
-    // Resolve through shared channel/account bindings so system events route to
-    // the same agent session as regular inbound messages.
-    try {
-      const peerKind = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
-      const peerId = isDirectMessage ? senderId : channelId;
-      if (peerId) {
-        let route = resolveAgentRoute({
-          cfg: params.cfg,
-          channel: "slack",
-          accountId: params.accountId,
-          teamId: p.eventScope?.teamId ?? params.teamId,
-          peer: {
-            kind: peerKind,
-            id: qualifySlackRoutePeerId({
-              id: peerId,
-              kind: isDirectMessage ? "user" : "channel",
-              eventScope: p.eventScope,
-            }),
-          },
-        });
-        if (p.eventScope && isDirectMessage && route.dmScope === "main") {
-          const sessionKey = resolveSlackEnterpriseMainDmSessionKey({
-            baseSessionKey: route.sessionKey,
-            accountId: params.accountId,
-            eventScope: p.eventScope,
-          });
-          route = { ...route, sessionKey, mainSessionKey: sessionKey };
-        }
-        const threadTs = normalizeOptionalString(p.threadTs);
-        const baseConversationId = qualifySlackConversationId(
-          isDirectMessage ? `user:${senderId}` : channelId,
-          p.eventScope,
-        );
-        const threadBindingRoute = !p.eventScope && threadTs
-          ? resolveRuntimeConversationBindingRoute({
-              route,
-              conversation: {
-                channel: "slack",
-                accountId: params.accountId,
-                conversationId: threadTs,
-                parentConversationId: baseConversationId,
-              },
-            })
-          : null;
-        const runtimeRoute = p.eventScope
-          ? { route, bindingRecord: null, boundSessionKey: undefined }
-          : threadBindingRoute?.boundSessionKey || threadBindingRoute?.bindingRecord
-            ? threadBindingRoute
-            : resolveRuntimeConversationBindingRoute({
-                route,
-                conversation: {
-                  channel: "slack",
-                  accountId: params.accountId,
-                  conversationId: baseConversationId,
-                },
-              });
-        if (runtimeRoute.boundSessionKey) {
-          return runtimeRoute.route.sessionKey;
-        }
-        return resolveThreadSessionKeys({
-          baseSessionKey: runtimeRoute.route.sessionKey,
-          threadId: threadTs,
-          parentSessionKey:
-            threadTs && params.threadInheritParent ? runtimeRoute.route.sessionKey : undefined,
-        }).sessionKey;
-      }
-    } catch {
-      // Fall through to legacy key derivation.
+    const routedSessionKey = resolveSlackSystemEventRouteSessionKey({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      teamId: params.teamId,
+      threadInheritParent: params.threadInheritParent,
+      channelId,
+      channelType,
+      senderId,
+      threadTs: p.threadTs,
+      eventScope: p.eventScope,
+    });
+    if (routedSessionKey) {
+      return routedSessionKey;
     }
 
     const fallbackFrom = p.eventScope

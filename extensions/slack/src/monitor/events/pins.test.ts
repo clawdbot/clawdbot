@@ -207,10 +207,7 @@ describe("registerSlackPinEvents", () => {
       "D1",
       expect.objectContaining({ teamId: "T111" }),
     );
-    expect(resolveUserName).toHaveBeenCalledWith(
-      "U1",
-      expect.objectContaining({ teamId: "T222" }),
-    );
+    expect(resolveUserName).toHaveBeenCalledWith("U1", expect.objectContaining({ teamId: "T222" }));
   });
 
   it("rejects enterprise pin events without validated listener scope", async () => {

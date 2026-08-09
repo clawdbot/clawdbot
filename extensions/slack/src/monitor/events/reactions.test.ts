@@ -11,8 +11,7 @@ type SlackSystemEventTestOverrides =
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
 }));
-type ReactionHandler =
-  import("./system-event-test-harness.js").SlackSystemEventHandler;
+type ReactionHandler = import("./system-event-test-harness.js").SlackSystemEventHandler;
 
 type ReactionRunInput = {
   handler?: "added" | "removed";
@@ -362,10 +361,7 @@ describe("registerSlackReactionEvents", () => {
       "D1",
       expect.objectContaining({ teamId: "T222" }),
     );
-    expect(resolveUserName).toHaveBeenCalledWith(
-      "U1",
-      expect.objectContaining({ teamId: "T111" }),
-    );
+    expect(resolveUserName).toHaveBeenCalledWith("U1", expect.objectContaining({ teamId: "T111" }));
   });
 
   it("rejects enterprise reaction events without validated listener scope", async () => {

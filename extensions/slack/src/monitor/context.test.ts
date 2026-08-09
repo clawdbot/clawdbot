@@ -164,12 +164,8 @@ describe("createSlackMonitorContext resolveSlackSystemEventSessionKey", () => {
         eventScope: createEnterpriseEventScope(teamId),
       });
 
-    expect(resolveForTeam("T111")).toBe(
-      "agent:main:slack:channel:team:t111:channel:c_shared",
-    );
-    expect(resolveForTeam("T222")).toBe(
-      "agent:main:slack:channel:team:t222:channel:c_shared",
-    );
+    expect(resolveForTeam("T111")).toBe("agent:main:slack:channel:team:t111:channel:c_shared");
+    expect(resolveForTeam("T222")).toBe("agent:main:slack:channel:team:t222:channel:c_shared");
   });
 
   it("partitions enterprise main DM system events by workspace", () => {
