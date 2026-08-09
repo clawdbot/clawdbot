@@ -731,6 +731,9 @@ function resolvePluginHarnessToolPolicies(
 ): ResolvedPluginHarnessToolPolicies {
   const messageProvider = params.messageProvider ?? params.messageChannel;
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
+  // Plugin harnesses own native capabilities; OpenClaw requester policies can only preserve
+  // that surface or hide it all.
+  // Do not pass conversationToolPolicy here: a partial policy would erase unrelated tools.
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: params.config,
     sessionId: params.sessionId,

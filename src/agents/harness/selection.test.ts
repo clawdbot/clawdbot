@@ -1131,6 +1131,43 @@ describe("runAgentHarnessAttempt", () => {
     expect(attempt?.extraSystemPrompt).toContain("this sender is not allowed by policy");
   });
 
+  it("keeps partial conversation policy out of ACP native capability filtering", async () => {
+    const received: Array<{
+      conversationToolPolicy: EmbeddedRunAttemptParams["conversationToolPolicy"];
+      toolsAllow: string[] | undefined;
+    }> = [];
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
+      received.push({
+        conversationToolPolicy: attempt.conversationToolPolicy,
+        toolsAllow: attempt.toolsAllow,
+      });
+      return createAttemptResult("codex");
+    });
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    for (const toolsAllow of [undefined, ["Read", "Bash"]]) {
+      await runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        conversationToolPolicy: { deny: ["exec"] },
+        toolsAllow,
+      });
+    }
+
+    expect(received).toEqual([
+      { conversationToolPolicy: { deny: ["exec"] }, toolsAllow: undefined },
+      { conversationToolPolicy: { deny: ["exec"] }, toolsAllow: ["Read", "Bash"] },
+    ]);
+  });
+
   it("adds chat policy wording for plugin harness group deny-all", async () => {
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
     registerAgentHarness(
