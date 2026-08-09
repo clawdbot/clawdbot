@@ -5,7 +5,7 @@ import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
-const SCRIPT = resolve("scripts/release-preflight.mts");
+const SCRIPT = resolve("scripts/release-preflight.mjs");
 const CHECK_COMMANDS = [
   "pnpm deps:root-ownership:check",
   "node scripts/generate-npm-package-lock.mjs --all",
@@ -127,14 +127,14 @@ function readPnpmLog(logPath: string): string[] {
   return readFileSync(logPath, "utf8").trimEnd().split("\n").filter(Boolean);
 }
 
-describe("scripts/release-preflight.mts", () => {
+describe("scripts/release-preflight.mjs", () => {
   it("rejects unknown arguments before running release checks", () => {
     const result = runPreflight(["--fiix"]);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Unknown release preflight argument: --fiix");
     expect(result.stderr).toContain(
-      "Usage: node --import tsx scripts/release-preflight.mts [--check|--fix] [--scope name] [--jobs count]",
+      "Usage: node scripts/release-preflight.mjs [--check|--fix] [--scope name] [--jobs count]",
     );
     expect(result.stdout).toBe("");
   });

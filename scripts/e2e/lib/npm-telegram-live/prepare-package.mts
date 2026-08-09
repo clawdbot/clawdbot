@@ -1,7 +1,10 @@
 // Prepares the trusted harness manifest for npm Telegram live E2E scenarios.
 import fs from "node:fs";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { privateLocalOnlyPluginSdkEntrypoints } from "../../../lib/plugin-sdk-entries.mts";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 const packageJsonPaths = process.argv.slice(2);
 if (packageJsonPaths.length !== 1) {

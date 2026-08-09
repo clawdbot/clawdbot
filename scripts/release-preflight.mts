@@ -428,9 +428,9 @@ function parseArgs(argv: string[]) {
 
 function printUsage(writeLine: (line: string) => void): void {
   writeLine(
-    "Usage: node --import tsx scripts/release-preflight.mts [--check|--fix] [--scope name] [--jobs count]",
+    "Usage: node scripts/release-preflight.mjs [--check|--fix] [--scope name] [--jobs count]",
   );
-  writeLine("       node --import tsx scripts/release-preflight.mts --macos-versions-only");
+  writeLine("       node scripts/release-preflight.mjs --macos-versions-only");
   writeLine("");
   writeLine("  --check       verify generated release artifacts without writing changes (default)");
   writeLine("  --fix         refresh generated release artifacts, then verify them");

@@ -180,7 +180,6 @@ describe("check-cli-startup-memory", () => {
       return;
     }
 
-<<<<<<< HEAD
     const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
     const result = spawnSync(process.execPath, ["scripts/check-cli-startup-memory.mjs", "--json"], {
       cwd: path.resolve(__dirname, "..", ".."),
@@ -190,37 +189,18 @@ describe("check-cli-startup-memory", () => {
         TMPDIR: tempRoot,
         TEMP: tempRoot,
         TMP: tempRoot,
-=======
-    const tempRoot = makeTempRoot();
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/check-cli-startup-memory.mts", "--json"],
-      {
-        cwd: path.resolve(__dirname, "..", ".."),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          TMPDIR: tempRoot,
-          TEMP: tempRoot,
-          TMP: tempRoot,
-        },
->>>>>>> ba47c995452 (refactor(scripts): migrate JavaScript tools to TypeScript)
       },
-    );
+    });
 
     expect(result.status).not.toBe(0);
     expect(readdirSync(tempRoot)).toEqual([]);
   });
 
   it("reports CLI argument errors without a Node stack trace", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/check-cli-startup-memory.mts", "--wat"],
-      {
-        cwd: path.resolve(__dirname, "..", ".."),
-        encoding: "utf8",
-      },
-    );
+    const result = spawnSync(process.execPath, ["scripts/check-cli-startup-memory.mjs", "--wat"], {
+      cwd: path.resolve(__dirname, "..", ".."),
+      encoding: "utf8",
+    });
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");

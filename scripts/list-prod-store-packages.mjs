@@ -2,37 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
-
-type DependencyValue = {
-  from?: string;
-  name?: string;
-  version?: string | { version?: string };
-  resolved?: string;
-  dependencies?: Record<string, DependencyValue>;
-};
-type PackageEntry = { os?: unknown; cpu?: unknown; libc?: unknown };
-type SnapshotEntry = {
-  dependencies?: Record<string, string | { version?: string }>;
-  optionalDependencies?: Record<string, string | { version?: string }>;
-};
-type ImporterEntry = {
-  dependencies?: Record<string, { version?: string }>;
-  optionalDependencies?: Record<string, { version?: string }>;
-};
-type Lockfile = {
-  packages?: Record<string, PackageEntry>;
-  snapshots?: Record<string, SnapshotEntry>;
-  importers?: Record<string, ImporterEntry>;
-};
-
-const specs = new Set<string>();
+const specs = new Set();
 const target = {
   cpu: process.arch,
   libc: detectLibc(),
   os: process.platform,
 };
-
-function packageSpec(name: unknown, version: unknown): string | undefined {
+function packageSpec(name, version) {
   if (typeof name !== "string" || !name || typeof version !== "string" || !version) {
     return undefined;
   }
@@ -52,18 +28,14 @@ function packageSpec(name: unknown, version: unknown): string | undefined {
   }
   return `${name}@${normalizedVersion}`;
 }
-
-function detectLibc(): string | undefined {
+function detectLibc() {
   if (process.platform !== "linux") {
     return undefined;
   }
-  const report = process.report?.getReport?.() as
-    | { header?: { glibcVersionRuntime?: unknown } }
-    | undefined;
+  const report = process.report?.getReport?.();
   return report?.header?.glibcVersionRuntime ? "glibc" : "musl";
 }
-
-function matchesTargetSelector(selector: unknown, value: string | undefined): boolean {
+function matchesTargetSelector(selector, value) {
   if (!Array.isArray(selector) || !value) {
     return true;
   }
@@ -74,22 +46,16 @@ function matchesTargetSelector(selector: unknown, value: string | undefined): bo
   const allowed = selector.filter((entry) => typeof entry === "string" && !entry.startsWith("!"));
   return allowed.length === 0 || allowed.includes(value);
 }
-
-function packageEntryForSpec(
-  lockfile: Lockfile | undefined,
-  spec: string,
-): PackageEntry | undefined {
+function packageEntryForSpec(lockfile, spec) {
   return lockfile?.packages?.[spec] ?? lockfile?.packages?.[`/${spec}`];
 }
-
-function normalizeLockfilePackageKey(key: unknown): string | undefined {
+function normalizeLockfilePackageKey(key) {
   if (typeof key !== "string") {
     return undefined;
   }
   return (key.startsWith("/") ? key.slice(1) : key).replace(/\(.+\)$/, "");
 }
-
-function snapshotForSpec(lockfile: Lockfile | undefined, spec: string): SnapshotEntry | undefined {
+function snapshotForSpec(lockfile, spec) {
   const snapshots = lockfile?.snapshots;
   if (!snapshots) {
     return undefined;
@@ -100,8 +66,7 @@ function snapshotForSpec(lockfile: Lockfile | undefined, spec: string): Snapshot
     Object.entries(snapshots).find(([key]) => normalizeLockfilePackageKey(key) === spec)?.[1]
   );
 }
-
-function packageSupportsTarget(lockfile: Lockfile | undefined, spec: string): boolean {
+function packageSupportsTarget(lockfile, spec) {
   const entry = packageEntryForSpec(lockfile, spec);
   return (
     matchesTargetSelector(entry?.os, target.os) &&
@@ -109,23 +74,20 @@ function packageSupportsTarget(lockfile: Lockfile | undefined, spec: string): bo
     matchesTargetSelector(entry?.libc, target.libc)
   );
 }
-
-function addSpec(lockfile: Lockfile | undefined, spec: string | undefined): void {
+function addSpec(lockfile, spec) {
   if (spec && packageSupportsTarget(lockfile, spec)) {
     specs.add(spec);
   }
 }
-
-function parseListRoots(): DependencyValue[] {
+function parseListRoots() {
   const input = fs.readFileSync(0, "utf8").trim();
   if (!input) {
     return [];
   }
-  const parsed: unknown = JSON.parse(input);
-  return (Array.isArray(parsed) ? parsed : [parsed]) as DependencyValue[];
+  const parsed = JSON.parse(input);
+  return Array.isArray(parsed) ? parsed : [parsed];
 }
-
-function visitListNode(lockfile: Lockfile | undefined, node: DependencyValue): void {
+function visitListNode(lockfile, node) {
   for (const dep of Object.values(node.dependencies ?? {})) {
     const name = dep.from || dep.name;
     const spec = packageSpec(name, dep.version);
@@ -135,8 +97,7 @@ function visitListNode(lockfile: Lockfile | undefined, node: DependencyValue): v
     visitListNode(lockfile, dep);
   }
 }
-
-function addImporterRoots(lockfile: Lockfile | undefined): void {
+function addImporterRoots(lockfile) {
   for (const importer of Object.values(lockfile?.importers ?? {})) {
     for (const deps of [importer.dependencies, importer.optionalDependencies]) {
       for (const [name, dep] of Object.entries(deps ?? {})) {
@@ -145,23 +106,21 @@ function addImporterRoots(lockfile: Lockfile | undefined): void {
     }
   }
 }
-
-function readLockfile(): Lockfile | undefined {
+function readLockfile() {
   const lockfilePath = path.join(process.cwd(), "pnpm-lock.yaml");
   if (!fs.existsSync(lockfilePath)) {
     return undefined;
   }
-  return parse(fs.readFileSync(lockfilePath, "utf8")) as Lockfile;
+  return parse(fs.readFileSync(lockfilePath, "utf8"));
 }
-
-function addSnapshotClosure(lockfile: Lockfile | undefined): void {
+function addSnapshotClosure(lockfile) {
   const snapshots = lockfile?.snapshots;
   const packages = lockfile?.packages;
   if (!snapshots || !packages) {
     return;
   }
   const pending = [...specs];
-  const visited = new Set<string>();
+  const visited = new Set();
   while (pending.length > 0) {
     const spec = pending.pop();
     if (!spec || visited.has(spec)) {
@@ -172,7 +131,7 @@ function addSnapshotClosure(lockfile: Lockfile | undefined): void {
     if (!snapshot) {
       continue;
     }
-    const addDependencySpec = (name: string, version: string | { version?: string }): void => {
+    const addDependencySpec = (name, version) => {
       const depSpec = packageSpec(name, typeof version === "string" ? version : version.version);
       if (
         !depSpec ||
@@ -193,12 +152,10 @@ function addSnapshotClosure(lockfile: Lockfile | undefined): void {
     }
   }
 }
-
 const lockfile = readLockfile();
 for (const root of parseListRoots()) {
   visitListNode(lockfile, root);
 }
 addImporterRoots(lockfile);
 addSnapshotClosure(lockfile);
-
 process.stdout.write([...specs].toSorted((a, b) => a.localeCompare(b)).join("\n"));

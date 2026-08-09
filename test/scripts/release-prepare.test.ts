@@ -74,7 +74,7 @@ describe("release preparation plan", () => {
       "--write",
     ]);
     expect(expectDefined(steps[1], "release preflight preparation step").args).toEqual([
-      "scripts/release-preflight.mts",
+      "scripts/release-preflight.mjs",
       "--fix",
       "--scope",
       "version",

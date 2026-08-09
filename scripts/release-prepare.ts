@@ -141,9 +141,7 @@ export function createReleasePrepareSteps(
   }
 
   const preflightArgs = [
-    "--import",
-    "tsx",
-    "scripts/release-preflight.mts",
+    "scripts/release-preflight.mjs",
     args.mode === "write" ? "--fix" : "--check",
     "--scope",
     "version",
