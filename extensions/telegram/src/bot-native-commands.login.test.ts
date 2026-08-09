@@ -12,6 +12,7 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
@@ -44,7 +45,7 @@ function registerLoginCommand(params: {
     const result = await botHarness.bot.api.sendMessage(100, text, {});
     return { messageId: String(result.message_id), chatId: "100" };
   });
-  registerTelegramNativeCommands({
+  const nativeCommandCallbackDispatcher = registerTelegramNativeCommands({
     ...nativeParams,
     telegramDeps: {
       ...nativeParams.telegramDeps,
@@ -59,6 +60,7 @@ function registerLoginCommand(params: {
   return {
     ...botHarness,
     handler,
+    nativeCommandCallbackDispatcher,
     sendMessageTelegram,
   };
 }
@@ -209,48 +211,45 @@ describe("registerTelegramNativeCommands /login", () => {
         profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
       };
     });
-    const { callbackHandlers, editMessageReplyMarkup, sendMessage } = registerLoginCommand({
+    const { nativeCommandCallbackDispatcher, sendMessage } = registerLoginCommand({
       cfg: {
         commands: { native: true, ownerAllowFrom: ["200"] },
         agents: { list: [{ id: "main", default: true }] },
       } as OpenClawConfig,
       loginFlow,
     });
-    const callbackHandler = callbackHandlers[0];
-    if (!callbackHandler) {
-      throw new Error("expected login callback handler to be registered");
+    if (!nativeCommandCallbackDispatcher) {
+      throw new Error("expected login callback dispatcher to be registered");
     }
-    const next = vi.fn(async () => undefined);
-
-    await callbackHandler(
-      {
-        callbackQuery: {
-          id: "login-button",
-          data: "tgcmd:/login codex",
-          from: { id: 200, username: "bob" },
-          message: {
-            message_id: 10,
-            date: Math.floor(Date.now() / 1000),
-            chat: { id: 100, type: "private" },
-            reply_markup: {
-              inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
-            },
-          },
+    const callbackQuery = {
+      id: "login-button",
+      chat_instance: "login-button-chat",
+      data: "tgcmd:/login codex",
+      from: { id: 200, is_bot: false, first_name: "Bob", username: "bob" },
+      message: {
+        message_id: 10,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: 100, type: "private" as const, first_name: "Owner" },
+        reply_markup: {
+          inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
         },
       },
-      next,
-    );
+    };
 
-    expect(next).not.toHaveBeenCalled();
+    await expect(
+      nativeCommandCallbackDispatcher({
+        commandText: "/login codex",
+        botUser: telegramBotInfoForTest,
+        callbackQuery,
+      }),
+    ).resolves.toEqual({ handled: true, clearButtons: true });
+
     expect(loginFlow).toHaveBeenCalledOnce();
     expect(sendMessage).toHaveBeenCalledWith(
       100,
       expect.stringContaining("Code: <code>BUTTON-CODE</code>"),
       expect.objectContaining({ parse_mode: "HTML" }),
     );
-    expect(editMessageReplyMarkup).toHaveBeenCalledWith(100, 10, {
-      reply_markup: { inline_keyboard: [] },
-    });
     expect(sendMessage.mock.calls.map((call) => String(call[1]))).not.toContain(
       "Codex login complete. Try your request again now.",
     );

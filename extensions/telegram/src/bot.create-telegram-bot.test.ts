@@ -2079,7 +2079,10 @@ describe("createTelegramBot", () => {
     });
   });
 
-  it("terminalizes native callbacks after inline buttons are disabled", async () => {
+  it.each([
+    ["ordinary native command", "tgcmd:/fast status"],
+    ["native Codex login", "tgcmd:/login codex"],
+  ])("terminalizes %s callbacks after inline buttons are disabled", async (_name, data) => {
     const pluginHandler = vi.fn(async () => ({ handled: true }));
     registerPluginInteractiveHandler("disabled-native-collision", {
       channel: "telegram",
@@ -2100,11 +2103,11 @@ describe("createTelegramBot", () => {
     await getCallbackHandler()(
       makeCallbackRetryContext({
         id: "cbq-disabled-native",
-        data: "tgcmd:/fast status",
+        data,
         messageId: 10,
         message: {
           reply_markup: {
-            inline_keyboard: [[{ text: "Status", callback_data: "tgcmd:/fast status" }]],
+            inline_keyboard: [[{ text: "Action", callback_data: data }]],
           },
         },
       }),
@@ -2119,6 +2122,40 @@ describe("createTelegramBot", () => {
       1234,
       "This action is no longer available.",
       undefined,
+    );
+  });
+
+  it("keeps the login action when the callback sender is not an owner", async () => {
+    loadConfig.mockReturnValue({
+      commands: { native: true, ownerAllowFrom: ["999"] },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    await getCallbackHandler()(
+      makeCallbackRetryContext({
+        id: "cbq-login-nonowner",
+        data: "tgcmd:/login codex",
+        messageId: 10,
+        message: {
+          reply_markup: {
+            inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
+          },
+        },
+      }),
+    );
+
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      "Only a configured OpenClaw owner can start Codex login from Telegram.",
+      {},
     );
   });
 

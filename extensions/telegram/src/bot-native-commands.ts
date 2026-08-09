@@ -121,10 +121,7 @@ import {
 } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
-import {
-  buildTelegramNativeCommandCallbackData,
-  parseTelegramNativeCommandCallbackData,
-} from "./native-command-callback-data.js";
+import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
 
@@ -656,7 +653,14 @@ export type RegisterTelegramHandlerParams = {
     promptContext?: import("./bot-message-context.types.js").TelegramPromptContextEntry[],
   ) => Promise<TelegramMessageProcessingResult>;
   logger: ReturnType<typeof getChildLogger>;
+  nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher;
 };
+
+type TelegramNativeCommandCallbackDispatcher = (params: {
+  botUser: Context["me"];
+  callbackQuery: NonNullable<Context["callbackQuery"]>;
+  commandText: string;
+}) => Promise<{ handled: boolean; clearButtons: boolean }>;
 
 function resolveTelegramNativeCommandDisableBlockStreaming(
   telegramCfg: TelegramAccountConfig,
@@ -920,7 +924,7 @@ export const registerTelegramNativeCommands = ({
   shouldSkipUpdate,
   telegramDeps = defaultTelegramNativeCommandDeps,
   opts,
-}: RegisterTelegramNativeCommandsParams) => {
+}: RegisterTelegramNativeCommandsParams): TelegramNativeCommandCallbackDispatcher | undefined => {
   const boundRoute =
     nativeEnabled && nativeSkillsEnabled
       ? resolveAgentRoute({ cfg, channel: "telegram", accountId })
@@ -1237,20 +1241,21 @@ export const registerTelegramNativeCommands = ({
   };
 
   let handleLoginCallback:
-    | ((ctx: Context, msg: NonNullable<Context["message"]>, rawText: string) => Promise<void>)
+    | ((
+        botUser: Context["me"],
+        msg: NonNullable<Context["message"]>,
+        rawText: string,
+      ) => Promise<boolean | undefined>)
     | undefined;
   if (nativeCommandsToHandle.length > 0 || pluginCatalog.commands.length > 0) {
     for (const command of nativeCommandsToHandle) {
       const normalizedCommandName = normalizeTelegramCommandName(command.name);
       const commandDefinition = findCommandByNativeName(command.name, "telegram");
       const handleNativeCommand = async (
-        ctx: Context,
+        botUser: Context["me"],
         msg: NonNullable<Context["message"]>,
         rawText: string,
-      ) => {
-        if (shouldSkipUpdate(ctx)) {
-          return;
-        }
+      ): Promise<boolean | undefined> => {
         const runtimeCfg = loadFreshRuntimeConfig();
         const runtimeTelegramCfg = resolveFreshTelegramConfig(runtimeCfg);
         const turnSettings = resolveTelegramMessageTurnSettings({
@@ -1350,20 +1355,20 @@ export const registerTelegramNativeCommands = ({
             await sendLoginMessage(
               "Only a configured OpenClaw owner can start Codex login from Telegram.",
             );
-            return;
+            return false;
           }
           if (isGroup) {
             await sendLoginMessage(
               "For safety, Codex login codes are only sent in a private chat with this bot. DM this bot `/login codex` to pair Codex.",
             );
-            return;
+            return true;
           }
           const loginProvider = codexChannelLoginRuntime.resolveProvider(
             resolveTelegramCodexLoginProviderInput(commandArgs),
           );
           if (!loginProvider) {
             await sendLoginMessage("Unsupported login provider. Use `/login codex`.");
-            return;
+            return false;
           }
           const flowKey = buildTelegramCodexLoginFlowKey({
             accountId: route.accountId,
@@ -1380,12 +1385,13 @@ export const registerTelegramNativeCommands = ({
             await sendLoginMessage(
               "A Codex login code is already active for this Telegram chat. Complete it, or wait for it to expire before requesting a new one.",
             );
-            return;
+            return true;
           }
           const flowSignal = opts.accountAbortSignal
             ? AbortSignal.any([reservation.record.signal, opts.accountAbortSignal])
             : reservation.record.signal;
           const deviceCodeDelivered = createDeferred<void>();
+          let deviceCodeWasDelivered = false;
           // Device-code delivery releases Telegram's serialized chat lane. The
           // reservation and account signal still own polling through completion.
           const completion = (async () => {
@@ -1407,7 +1413,7 @@ export const registerTelegramNativeCommands = ({
                 isGroup,
                 senderId,
                 threadSpec,
-                botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+                botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(botUser),
                 resolveThreadSessionKeys: nativeCommandRuntime.resolveThreadSessionKeys,
               });
               const targetSessionEntryAtStart = nativeCommandRuntime.getSessionEntry({
@@ -1426,6 +1432,7 @@ export const registerTelegramNativeCommands = ({
                   flowSignal.throwIfAborted();
                   await sendLoginDeviceCode(deviceCode);
                   flowSignal.throwIfAborted();
+                  deviceCodeWasDelivered = true;
                   deviceCodeDelivered.resolve();
                 },
                 unsupportedPromptMessage:
@@ -1534,7 +1541,7 @@ export const registerTelegramNativeCommands = ({
             });
           });
           await Promise.race([deviceCodeDelivered.promise, completion]);
-          return;
+          return deviceCodeWasDelivered;
         }
 
         let cachedTargetSessionKey: string | undefined;
@@ -1556,7 +1563,7 @@ export const registerTelegramNativeCommands = ({
             isGroup,
             senderId,
             threadSpec,
-            botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+            botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(botUser),
             resolveThreadSessionKeys: (await resolveNativeCommandRuntime())
               .resolveThreadSessionKeys,
           });
@@ -1894,15 +1901,19 @@ export const registerTelegramNativeCommands = ({
             ...deliveryBaseOptions,
           });
         }
+        return false;
       };
       if (nativeEnabled) {
         bot.command(normalizedCommandName, async (ctx) => {
+          if (shouldSkipUpdate(ctx)) {
+            return;
+          }
           const msg = ctx.message;
           if (!msg) {
             return;
           }
           await handleNativeCommand(
-            ctx,
+            ctx.me,
             msg,
             typeof ctx.match === "string" ? ctx.match.trim() : "",
           );
@@ -2142,54 +2153,38 @@ export const registerTelegramNativeCommands = ({
     }
   }
 
-  if (handleLoginCallback) {
-    bot.on("callback_query:data", async (ctx, next) => {
-      const commandText = parseTelegramNativeCommandCallbackData(ctx.callbackQuery.data);
-      if (!commandText) {
-        await next();
-        return;
-      }
-      const commandBody = commandText.slice(1).trim();
-      const separatorIndex = commandBody.search(/\s/u);
-      const commandName = (
-        separatorIndex === -1 ? commandBody : commandBody.slice(0, separatorIndex)
-      )
-        .split("@", 1)[0]
-        ?.toLowerCase();
-      const commandDefinition = commandName
-        ? findCommandByNativeName(commandName, "telegram")
-        : undefined;
-      if (commandDefinition?.key !== "login") {
-        await next();
-        return;
-      }
-      const callbackMessage = ctx.callbackQuery.message;
-      if (!callbackMessage || callbackMessage.date <= 0) {
-        return;
-      }
-      const chat = callbackMessage.chat;
-      if (chat.type === "channel") {
-        return;
-      }
-      const rawText = separatorIndex === -1 ? "" : commandBody.slice(separatorIndex + 1).trim();
-      const message = {
-        ...callbackMessage,
-        chat,
-        from: ctx.callbackQuery.from,
-        text: commandText,
-      };
-      await handleLoginCallback(ctx, message, rawText);
-      if ((callbackMessage.reply_markup?.inline_keyboard.length ?? 0) > 0) {
-        await withTelegramApiErrorLogging({
-          operation: "editMessageReplyMarkup",
-          runtime,
-          fn: () =>
-            bot.api.editMessageReplyMarkup(callbackMessage.chat.id, callbackMessage.message_id, {
-              reply_markup: { inline_keyboard: [] },
-            }),
-        }).catch(() => {});
-      }
-    });
+  if (!handleLoginCallback) {
+    return undefined;
   }
+  return async ({ botUser, callbackQuery, commandText }) => {
+    const commandBody = commandText.slice(1).trim();
+    const separatorIndex = commandBody.search(/\s/u);
+    const commandName = (separatorIndex === -1 ? commandBody : commandBody.slice(0, separatorIndex))
+      .split("@", 1)[0]
+      ?.toLowerCase();
+    const commandDefinition = commandName
+      ? findCommandByNativeName(commandName, "telegram")
+      : undefined;
+    if (commandDefinition?.key !== "login") {
+      return { handled: false, clearButtons: false };
+    }
+    const callbackMessage = callbackQuery.message;
+    if (!callbackMessage || callbackMessage.date <= 0) {
+      return { handled: true, clearButtons: false };
+    }
+    const chat = callbackMessage.chat;
+    if (chat.type === "channel") {
+      return { handled: true, clearButtons: false };
+    }
+    const rawText = separatorIndex === -1 ? "" : commandBody.slice(separatorIndex + 1).trim();
+    const message = {
+      ...callbackMessage,
+      chat,
+      from: callbackQuery.from,
+      text: commandText,
+    };
+    const clearButtons = (await handleLoginCallback(botUser, message, rawText)) === true;
+    return { handled: true, clearButtons };
+  };
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -25,7 +25,6 @@ export function createNativeCommandTestParams(
           sendMessage: vi.fn().mockResolvedValue(undefined),
         },
         command: vi.fn(),
-        on: vi.fn(),
       } as unknown as NativeCommandTestParams["bot"]),
     cfg: params.cfg ?? ({} as OpenClawConfig),
     runtime:
