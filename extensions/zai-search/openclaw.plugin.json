@@ -1,0 +1,54 @@
+{
+  "id": "zai-search",
+  "name": "Z.AI Web Search",
+  "description": "Assistant Z.AI Web Search provider plugin using the MCP web_search_prime endpoint.",
+  "icon": "https://cdn.simpleicons.org/zai",
+  "activation": {
+    "onStartup": false
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "zai-search",
+        "authMethods": ["api-key"],
+        "envVars": ["ZAI_API_KEY", "Z_AI_API_KEY"]
+      }
+    ]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Z.AI API Key",
+      "help": "Z.AI API key (same key used for models). Falls back to ZAI_API_KEY env var.",
+      "sensitive": true,
+      "placeholder": "zai-..."
+    },
+    "webSearch.baseUrl": {
+      "label": "Z.AI MCP Base URL",
+      "help": "Override Z.AI MCP web search endpoint. Defaults to https://api.z.ai/api/mcp/web_search_prime/mcp."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["zai-search"]
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": ["string", "object"]
+          }
+        }
+      }
+    }
+  }
+}
