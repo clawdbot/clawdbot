@@ -8,7 +8,7 @@ import {
 } from "./conversation-store-state.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 
-export type LegacyConversationMigrationSource = {
+type LegacyConversationMigrationSource = {
   filePath: string;
   state: MSTeamsLegacyConversationStoreData;
   archived: boolean;
