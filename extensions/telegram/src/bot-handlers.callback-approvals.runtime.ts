@@ -1,3 +1,4 @@
+import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
@@ -14,10 +15,6 @@ import {
   TelegramRetryableCallbackError,
 } from "./bot-handlers.callback-errors.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
-import {
-  resolveTelegramApproval,
-  resolveTelegramLegacyApproval,
-} from "./exec-approval-resolver.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalAuthorizedSender,
@@ -90,11 +87,12 @@ export function createTelegramCallbackApprovalRuntime(params: {
   };
 
   const resolveCanonicalApproval = async (approvalCallback: TelegramApprovalCallback) =>
-    await (telegramDeps.resolveApproval ?? resolveTelegramApproval)({
+    await (telegramDeps.resolveApproval ?? resolveApprovalOverGateway)({
       cfg: runtimeCfg,
       approvalId: approvalCallback.approvalId,
       approvalKind: approvalCallback.approvalKind,
       decision: approvalCallback.decision,
+      channel: "telegram",
       senderId,
     });
 
@@ -178,7 +176,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
       return;
     }
 
-    const resolveLegacy = telegramDeps.resolveLegacyApproval ?? resolveTelegramLegacyApproval;
+    const resolveLegacy = telegramDeps.resolveLegacyApproval ?? resolveApprovalOverGateway;
     for (const approvalKind of approvalKinds) {
       const canonicalCallback: TelegramApprovalCallback = {
         type: "approval",
@@ -191,9 +189,10 @@ export function createTelegramCallbackApprovalRuntime(params: {
         await resolveLegacy({
           cfg: runtimeCfg,
           approvalId: approvalCallback.approvalId,
-          approvalKind,
           decision: approvalCallback.decision,
+          channel: "telegram",
           senderId,
+          resolveMethod: approvalKind,
         });
         await terminalizeApprovalMessage(
           buildTelegramLegacyApprovalTerminalText({

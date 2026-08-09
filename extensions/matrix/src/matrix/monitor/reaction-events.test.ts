@@ -43,10 +43,12 @@ type MatrixReactionClient = MatrixReactionParams["client"];
 type MatrixReactionCore = MatrixReactionParams["core"];
 type MatrixReactionEvent = MatrixReactionParams["event"];
 
-vi.mock("../../exec-approval-resolver.js", () => ({
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: (...args: unknown[]) => resolveMatrixApproval(...args),
+}));
+vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
   isApprovalNotFoundError: (err: unknown) =>
     err instanceof Error && /unknown or expired approval id/i.test(err.message),
-  resolveMatrixApproval: (...args: unknown[]) => resolveMatrixApproval(...args),
 }));
 
 vi.mock("../send.js", () => ({
@@ -190,6 +192,7 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "matrix",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -259,6 +262,7 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       approvalKind: "exec",
       decision: "deny",
+      channel: "matrix",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -286,6 +290,7 @@ describe("matrix approval reactions", () => {
       approvalId: "req-123",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "matrix",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -321,6 +326,7 @@ describe("matrix approval reactions", () => {
       approvalId: "plugin:req-123",
       approvalKind: "plugin",
       decision: "allow-once",
+      channel: "matrix",
       senderId: "@owner:example.org",
     });
     expect(core.system.enqueueSystemEvent).not.toHaveBeenCalled();

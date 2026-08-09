@@ -43,6 +43,7 @@ export {
   setAuthProfileOrder,
   upsertAuthProfile,
   upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
 } from "./auth-profiles/profiles.js";
 export {
   repairOAuthProfileIdMismatch,

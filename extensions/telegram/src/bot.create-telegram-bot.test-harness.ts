@@ -22,7 +22,11 @@ type ReadSessionUpdatedAtFn =
 type SessionEntry = import("openclaw/plugin-sdk/session-store-runtime").SessionEntry;
 type SessionStore = Record<string, SessionEntry>;
 type LoadSessionStoreFn = (storePath?: string, opts?: unknown) => SessionStore;
-type ResolveTelegramApprovalForTest = NonNullable<TelegramBotDeps["resolveApproval"]>;
+type ResolveTelegramApprovalForTest = (
+  params:
+    | Parameters<NonNullable<TelegramBotDeps["resolveApproval"]>>[0]
+    | Parameters<NonNullable<TelegramBotDeps["resolveLegacyApproval"]>>[0],
+) => ReturnType<NonNullable<TelegramBotDeps["resolveApproval"]>>;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<

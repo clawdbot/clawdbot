@@ -76,6 +76,7 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   removeProviderAuthProfilesWithLock: mocks.removeProviderAuthProfilesWithLock,
   upsertAuthProfile: mocks.upsertAuthProfile,
   upsertAuthProfileWithLock: mocks.upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow: mocks.upsertAuthProfileWithLock,
 }));
 
 vi.mock("../../agents/auth-profiles/store.js", () => ({

@@ -1,10 +1,16 @@
 // Telegram plugin module implements bot deps behavior.
+import {
+  resolveApprovalOverGateway,
+  type ApprovalResolveResult,
+} from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelMessageReplyPipeline,
   deliverInboundReplyWithMessageSendContext,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   recordInboundSession,
@@ -28,13 +34,29 @@ import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
-import {
-  resolveTelegramApproval,
-  resolveTelegramLegacyApproval,
-} from "./exec-approval-resolver.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { editMessageTelegram } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
+
+type ResolveTelegramApproval = (params: {
+  cfg: OpenClawConfig;
+  approvalId: string;
+  approvalKind: "exec" | "plugin";
+  decision: ExecApprovalReplyDecision;
+  channel: "telegram";
+  senderId?: string | null;
+  gatewayUrl?: string;
+}) => Promise<ApprovalResolveResult>;
+
+type ResolveTelegramLegacyApproval = (params: {
+  cfg: OpenClawConfig;
+  approvalId: string;
+  decision: ExecApprovalReplyDecision;
+  channel: "telegram";
+  senderId?: string | null;
+  gatewayUrl?: string;
+  resolveMethod: "exec" | "plugin";
+}) => Promise<void>;
 
 export type TelegramBotDeps = {
   getRuntimeConfig: typeof getRuntimeConfig;
@@ -57,8 +79,8 @@ export type TelegramBotDeps = {
   listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
   syncTelegramMenuCommands?: typeof syncTelegramMenuCommands;
   wasSentByBot: typeof wasSentByBot;
-  resolveApproval?: typeof resolveTelegramApproval;
-  resolveLegacyApproval?: typeof resolveTelegramLegacyApproval;
+  resolveApproval?: ResolveTelegramApproval;
+  resolveLegacyApproval?: ResolveTelegramLegacyApproval;
   createTelegramDraftStream?: typeof createTelegramDraftStream;
   deliverReplies?: typeof deliverReplies;
   deliverInboundReplyWithMessageSendContext?: typeof deliverInboundReplyWithMessageSendContext;
@@ -130,10 +152,10 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
     return wasSentByBot;
   },
   get resolveApproval() {
-    return resolveTelegramApproval;
+    return resolveApprovalOverGateway;
   },
   get resolveLegacyApproval() {
-    return resolveTelegramLegacyApproval;
+    return resolveApprovalOverGateway;
   },
   get createTelegramDraftStream() {
     return createTelegramDraftStream;

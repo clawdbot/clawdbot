@@ -19,6 +19,7 @@ import {
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   asDateTimestampMs,
@@ -28,7 +29,7 @@ import {
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
-import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
+import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
   buildIMessageApprovalConversationKeyForInbound,
   buildIMessageApprovalConversationKeyForTarget,
@@ -78,7 +79,9 @@ export type PendingIMessageApprovalReactionPollTarget = {
   expiresAtMs: number;
 };
 
-const resolverRuntimeLoader = createLazyRuntimeModule(() => import("./approval-resolver.js"));
+const resolverRuntimeLoader = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
+);
 const pendingReactionPollTargets = new Map<string, PendingIMessageApprovalReactionPollTarget>();
 
 const loadApprovalResolver = resolverRuntimeLoader;
@@ -684,13 +687,14 @@ export async function handleIMessageApprovalReaction(params: {
     return { handled: true, stopPolling: false };
   }
 
-  const { isApprovalNotFoundError, resolveIMessageApproval } = await loadApprovalResolver();
+  const { resolveApprovalOverGateway } = await loadApprovalResolver();
   try {
-    const result = await resolveIMessageApproval({
+    const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: target.approvalId,
       approvalKind: target.approvalKind,
       decision: target.decision,
+      channel: "imessage",
       senderId: event.actorHandle,
       gatewayUrl: params.gatewayUrl,
       ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),

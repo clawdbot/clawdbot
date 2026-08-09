@@ -12,8 +12,8 @@ import {
   applyAuthProfileConfig,
   ensureAuthProfileStore,
   normalizeGithubCopilotDomain,
-  upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
+import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -63,23 +63,12 @@ type DeviceTokenResponse =
 const GITHUB_DEVICE_ACCESS_DENIED = Symbol("github-device-access-denied");
 const GITHUB_DEVICE_EXPIRED = Symbol("github-device-expired");
 
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
 class GitHubDeviceFlowError extends Error {
   readonly kind: symbol;
   constructor(kind: symbol, message: string) {
     super(message);
     this.kind = kind;
     this.name = "GitHubDeviceFlowError";
-  }
-}
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
   }
 }
 
