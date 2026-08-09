@@ -104,6 +104,11 @@ type ChatRunToolRecipientState = {
   finalizedAt?: number;
 };
 
+type PendingChatDeltaFlush = {
+  timer: NodeJS.Timeout;
+  flush: () => void;
+};
+
 type ChatRunRecord = {
   registrations?: ChatRunEntry[];
   rawBuffer?: string;
@@ -115,9 +120,9 @@ type ChatRunRecord = {
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
-  /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
-  deltaLastBroadcastLen?: number;
   deltaLastBroadcastText?: string;
+  /** Fixed-deadline trailing wake-up owned by this run's buffered state. */
+  pendingDeltaFlush?: PendingChatDeltaFlush;
   agentText?: {
     assistant?: ChatRunAgentTextState;
     thinking?: ChatRunAgentTextState;
@@ -151,6 +156,14 @@ function createChatRunRecordStore(): ChatRunRecordStore {
     runs.delete(runId);
   };
   return { runs, getOrCreate, releaseIfEmpty };
+}
+
+function clearPendingChatDeltaFlush(record: ChatRunRecord): void {
+  if (!record.pendingDeltaFlush) {
+    return;
+  }
+  clearTimeout(record.pendingDeltaFlush.timer);
+  delete record.pendingDeltaFlush;
 }
 
 export type ChatRunRegistry = {
@@ -272,13 +285,16 @@ export function createChatRunState(): ChatRunState {
     delete record.progressSnapshot;
     delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
-    delete record.deltaLastBroadcastLen;
     delete record.deltaLastBroadcastText;
+    clearPendingChatDeltaFlush(record);
     delete record.agentText;
     store.releaseIfEmpty(runId);
   };
 
   const clear = () => {
+    for (const record of store.runs.values()) {
+      clearPendingChatDeltaFlush(record);
+    }
     store.runs.clear();
   };
 
