@@ -187,6 +187,7 @@
     "!dist/plugin-sdk/model-ref-parse.d.ts",
     "!dist/plugin-sdk/outbound-echo-runtime.d.ts",
     "!dist/plugin-sdk/plugin-state-store-runtime.d.ts",
+    "!dist/plugin-sdk/secret-provider-alias.d.ts",
     "!dist/plugin-sdk/session-store-paths.d.ts",
     "!dist/plugin-sdk/runtime-doctor.d.ts",
     "!dist/plugin-sdk/runtime-fetch.d.ts",
@@ -415,6 +416,9 @@
     },
     "./plugin-sdk/outbound-echo-runtime": {
       "default": "./dist/plugin-sdk/outbound-echo-runtime.js"
+    },
+    "./plugin-sdk/secret-provider-alias": {
+      "default": "./dist/plugin-sdk/secret-provider-alias.js"
     },
     "./plugin-sdk/session-store-paths": {
       "default": "./dist/plugin-sdk/session-store-paths.js"

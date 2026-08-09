@@ -363,6 +363,7 @@ describe("cron tool", () => {
         { id: "job-current", name: "current" },
         { id: "job-other", name: "other" },
       ],
+      snapshotRevision: "self-list-one-page",
       total: 2,
       offset: 0,
       limit: 2,
@@ -411,6 +412,7 @@ describe("cron tool", () => {
           id: `job-old-${index}`,
           name: `old ${index}`,
         })),
+        snapshotRevision: "self-list-paged",
         total: 201,
         offset: 0,
         limit: 200,
@@ -420,6 +422,7 @@ describe("cron tool", () => {
       })
       .mockResolvedValueOnce({
         jobs: [{ id: "job-current", name: "current" }],
+        snapshotRevision: "self-list-paged",
         total: 201,
         offset: 200,
         limit: 200,
@@ -473,9 +476,91 @@ describe("cron tool", () => {
     });
   });
 
+  it("restarts the scoped list when the current job moves behind the page boundary", async () => {
+    const stableJobs = Array.from({ length: 199 }, (_, index) => ({
+      id: `stable-${index}`,
+      name: `stable ${index}`,
+    }));
+    callGatewayMock
+      .mockResolvedValueOnce({
+        jobs: [{ id: "stale-only", name: "stale" }, ...stableJobs],
+        snapshotRevision: "revision-a",
+        total: 201,
+        offset: 0,
+        limit: 200,
+        hasMore: true,
+        nextOffset: 200,
+      })
+      .mockResolvedValueOnce({
+        jobs: [],
+        snapshotRevision: "revision-b",
+        total: 200,
+        offset: 200,
+        limit: 200,
+        hasMore: false,
+        nextOffset: null,
+      })
+      .mockResolvedValueOnce({
+        jobs: [...stableJobs, { id: "job-current", name: "current" }],
+        snapshotRevision: "revision-b",
+        total: 200,
+        offset: 0,
+        limit: 200,
+        hasMore: false,
+        nextOffset: null,
+      });
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    const result = await tool.execute("call-list-boundary-churn", { action: "list" });
+
+    expect(callGatewayMock.mock.calls.map((call) => call[0].params.offset)).toEqual([0, 200, 0]);
+    expect(result.details).toEqual({
+      jobs: [{ id: "job-current", name: "current" }],
+      total: 1,
+      offset: 0,
+      limit: 1,
+      hasMore: false,
+      nextOffset: null,
+    });
+  });
+
+  it("rejects a scoped list after repeated snapshot churn", async () => {
+    callGatewayMock.mockImplementation(async ({ params }: { params: Record<string, unknown> }) => {
+      const callNumber = callGatewayMock.mock.calls.length;
+      const offset = params.offset as number;
+      if (offset === 0) {
+        return {
+          jobs: Array.from({ length: 200 }, (_, index) => ({ id: `job-${callNumber}-${index}` })),
+          snapshotRevision: `revision-${callNumber}-a`,
+          total: 201,
+          offset: 0,
+          limit: 200,
+          hasMore: true,
+          nextOffset: 200,
+        };
+      }
+      return {
+        jobs: [],
+        snapshotRevision: `revision-${callNumber}-b`,
+        total: 200,
+        offset: 200,
+        limit: 200,
+        hasMore: false,
+        nextOffset: null,
+      };
+    });
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(tool.execute("call-list-churn", { action: "list" })).rejects.toThrow(
+      "cron.list inventory changed repeatedly while reading current automation",
+    );
+    expect(callGatewayMock).toHaveBeenCalledTimes(8);
+  });
+
   it("does not let requested pagination bypass the scoped current-job scan", async () => {
     callGatewayMock.mockResolvedValueOnce({
       jobs: [{ id: "job-current", name: "current" }],
+      snapshotRevision: "self-list-requested-pagination",
       total: 1,
       offset: 0,
       limit: 200,

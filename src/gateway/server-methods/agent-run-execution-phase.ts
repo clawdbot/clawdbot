@@ -40,6 +40,7 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import type { AgentTurnContext, AgentTurnPrincipal } from "../agent-turn/types.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -109,8 +110,8 @@ export function startAgentRunExecution(params: {
   restoredCronContinuation?: RestoredCronContinuation;
   canUseInternalRuntimeHandoff: boolean;
   execApprovalFollowupApprovalId?: string;
-  client: GatewayRequestHandlerOptions["client"];
-  context: GatewayRequestHandlerOptions["context"];
+  client: AgentTurnPrincipal | null;
+  context: AgentTurnContext;
   respond: GatewayRequestHandlerOptions["respond"];
   releaseCronContinuationClaimWithRecovery: (
     outcome?: { terminalOutcome: AgentRunTerminalOutcome },

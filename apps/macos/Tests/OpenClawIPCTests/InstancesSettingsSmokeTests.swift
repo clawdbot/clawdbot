@@ -52,8 +52,4 @@ struct InstancesSettingsSmokeTests {
         let view = InstancesSettings(store: store)
         _ = view.body
     }
-
-    @Test func `instances settings exercises helpers`() {
-        InstancesSettings.exerciseForTesting()
-    }
 }

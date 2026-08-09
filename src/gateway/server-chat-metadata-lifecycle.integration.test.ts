@@ -39,6 +39,7 @@ const context = {
 let sidecars: GatewayPostReadySidecarHandle[] = [];
 
 beforeEach(() => {
+  vi.stubEnv("OPENAI_API_KEY", "");
   resetPreparedModelRuntimeHarness();
   mocks.configuredAgentIds = ["main"];
   mocks.authStorage.getAll.mockReturnValue({
@@ -56,7 +57,33 @@ beforeEach(() => {
   sidecars = [];
 });
 
+function configureAuthFixture(kind: "secret-ref" | "external-oauth" | "unresolved-secret-ref") {
+  if (kind === "external-oauth") {
+    return;
+  }
+  const apiKeyModel = { ...model, api: "openai-responses" as const };
+  mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+    entries: [apiKeyModel],
+    routeVariants: [apiKeyModel],
+  });
+  mocks.authStorage.getAll.mockReturnValue({
+    openai: { type: "api_key", key: "openclaw-secret-ref-configured" },
+  });
+  mocks.preparedAuthStore = {
+    version: 1,
+    profiles: {
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        keyRef: { source: "file", provider: "round4-file", id: "value" },
+        ...(kind === "secret-ref" ? { key: "resolved-at-runtime" } : {}),
+      },
+    },
+  };
+}
+
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const sidecar of sidecars) {
     await sidecar.stop();
   }
@@ -73,13 +100,14 @@ async function createLifecycle() {
 async function publishOwner(): Promise<void> {
   await refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,
-    catalogMode: "static",
+    catalogMode: "live",
     allowGatewaySubagentBinding: true,
   });
 }
 
 async function expectAvailable(
   lifecycle: Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>,
+  expectedAvailable = true,
 ): Promise<void> {
   const owner = getPreparedModelCatalogOwnerSnapshot({
     agentId: "main",
@@ -95,7 +123,7 @@ async function expectAvailable(
     agentId: "main",
     snapshot: owner.modelCatalog,
     metadataSnapshot: owner.metadataSnapshot,
-    preparedAuthStore: { version: 1, profiles: {} },
+    preparedAuthStore: mocks.preparedAuthStore ?? { version: 1, profiles: {} },
     preparedRuntimeAuthModes: owner.authModes,
   });
   const [metadata, modelsList] = await Promise.all([
@@ -122,11 +150,29 @@ async function expectAvailable(
   const listedModel = modelsList.models.find(
     (candidate) => candidate.id === "gpt-5.4" && candidate.provider === "openai",
   );
-  expect(metadataModel?.available).toBe(listedModel?.available);
-  expect(listedModel?.available).toBe(true);
+  expect({
+    chatMetadata: metadataModel?.available,
+    modelsList: listedModel?.available,
+  }).toEqual({
+    chatMetadata: expectedAvailable,
+    modelsList: expectedAvailable,
+  });
 }
 
 describe("gateway chat metadata lifecycle composition", () => {
+  it.each([
+    ["SecretRef-only runtime auth", "secret-ref", true],
+    ["external CLI OAuth bootstrap", "external-oauth", true],
+    ["unresolved SecretRef", "unresolved-secret-ref", false],
+  ] as const)("converges chat metadata and models.list for %s", async (_, kind, available) => {
+    configureAuthFixture(kind);
+    await publishOwner();
+    const lifecycle = await createLifecycle();
+    await lifecycle.attachContext(context, sidecars);
+
+    await expectAvailable(lifecycle, available);
+  });
+
   it("catches up when the prepared owner publishes before attachment", async () => {
     await publishOwner();
     const lifecycle = await createLifecycle();

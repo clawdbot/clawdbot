@@ -8,6 +8,7 @@
   "doctor-repair-runtime",
   "model-ref-parse",
   "outbound-echo-runtime",
+  "secret-provider-alias",
   "session-store-paths",
   "plugin-state-store-runtime",
   "runtime-doctor-migrations",

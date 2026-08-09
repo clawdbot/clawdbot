@@ -64,6 +64,7 @@ suite.define(() => {
           methodResponses: {
             "cron.list": {
               jobs: [...jobs, undescribedJob],
+              snapshotRevision: "cron-descriptions-fixture",
               total: jobs.length + 1,
               offset: 0,
               limit: 50,

@@ -20,6 +20,8 @@ import {
   isTelegramCommandsAllowFromConfigured,
   resolveTelegramCommandAuthorization,
   resolveTelegramGroupAllowFromContext,
+  resolveTelegramMessageThreadSpec,
+  type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import { enforceTelegramDmAccess, isTelegramDmAccessAllowed } from "./dm-access.js";
 import {
@@ -95,9 +97,8 @@ export function createTelegramHandlerAuthorizationRuntime({
     cfg: OpenClawConfig;
     chatId: number;
     isGroup: boolean;
-    isForum: boolean;
     senderId?: string;
-    messageThreadId?: number;
+    threadSpec: TelegramThreadSpec;
   }): Promise<TelegramEventAuthorizationContextValue> => {
     const authorizationCfg = params.cfg;
     const authorizationTelegramCfg = resolveTelegramAccount({
@@ -118,8 +119,7 @@ export function createTelegramHandlerAuthorizationRuntime({
       allowFrom: authorizationSettings.allowFrom,
       senderId: params.senderId,
       isGroup: params.isGroup,
-      isForum: params.isForum,
-      messageThreadId: params.messageThreadId,
+      threadSpec: params.threadSpec,
       groupAllowFrom: authorizationSettings.groupAllowFrom,
       readChannelAllowFromStore: telegramDeps.readChannelAllowFromStore,
       resolveTelegramGroupConfig,
@@ -312,7 +312,6 @@ export function createTelegramHandlerAuthorizationRuntime({
     chatId: number;
     isGroup: boolean;
     isForum: boolean;
-    messageThreadId?: number;
     senderId: string;
     senderUsername: string;
     requireConfiguredGroup: boolean;
@@ -323,9 +322,8 @@ export function createTelegramHandlerAuthorizationRuntime({
       cfg: authorizationCfg,
       chatId: params.chatId,
       isGroup: params.isGroup,
-      isForum: params.isForum,
       senderId: params.senderId,
-      messageThreadId: params.messageThreadId,
+      threadSpec: resolveTelegramMessageThreadSpec(params.msg, params.isForum),
     });
     const {
       dmPolicy,

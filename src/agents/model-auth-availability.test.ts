@@ -56,6 +56,7 @@ function evaluate(params: {
   ref?: ModelAuthAvailabilityRef;
   resolution?: ProviderModelRouteResolution | null;
   store?: AuthProfileStore;
+  preparedRuntimeAuthStore?: AuthProfileStore;
   syntheticAuthProviderRefs?: readonly string[];
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
 }) {
@@ -66,6 +67,7 @@ function evaluate(params: {
     routeResolverFactory: routeResolverFactory(params.resolution ?? dualRoutes),
     syntheticAuthProviderRefs: params.syntheticAuthProviderRefs,
     preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
+    preparedRuntimeAuthStore: params.preparedRuntimeAuthStore,
   }).evaluateModelAuth("openai", params.ref);
 }
 
@@ -155,6 +157,43 @@ describe("createModelAuthAvailabilityResolver", () => {
       });
     },
   );
+
+  it.each([
+    { label: "resolved", key: "runtime-key", availability: true },
+    { label: "unresolved", key: undefined, availability: undefined },
+  ])("uses an exact $label prepared SecretRef profile", ({ key, availability }) => {
+    const keyRef = { source: "file" as const, provider: "vault", id: "value" };
+    const persisted = authStore({
+      "openai:default": { type: "api_key", provider: "openai", keyRef },
+    });
+    const preparedRuntimeAuthStore = authStore({
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        keyRef,
+        ...(key ? { key } : {}),
+      },
+    });
+
+    expect(
+      evaluate({
+        cfg: {
+          secrets: {
+            providers: {
+              vault: { source: "file", path: "/tmp/test-secret", mode: "singleValue" },
+            },
+          },
+        },
+        store: persisted,
+        preparedRuntimeAuthStore,
+      }),
+    ).toMatchObject({
+      availability,
+      evidence: "profile",
+      selectedProfileId: "openai:default",
+      selectedRoute: platformRoute,
+    });
+  });
 
   it("keeps a selected profile with missing credential material unavailable", () => {
     expect(

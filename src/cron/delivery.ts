@@ -1,4 +1,6 @@
 /** Sends cron announce payloads and best-effort failure notifications. */
+
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
@@ -94,7 +96,7 @@ async function deliverCronAnnouncePayload(params: {
     session: ReturnType<typeof buildOutboundSessionContext>;
     identity: ReturnType<typeof resolveAgentOutboundIdentity>;
   };
-  message: string;
+  payload: ReplyPayload;
   abortSignal: AbortSignal;
 }): Promise<void> {
   // Cron delivery is durable and non-best-effort for primary announces; partial
@@ -105,7 +107,7 @@ async function deliverCronAnnouncePayload(params: {
     to: params.delivery.resolvedTarget.to,
     accountId: params.delivery.resolvedTarget.accountId,
     threadId: params.delivery.resolvedTarget.threadId,
-    payloads: [{ text: params.message }],
+    payloads: [params.payload],
     session: params.delivery.session,
     identity: params.delivery.identity,
     bestEffort: false,
@@ -124,7 +126,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   agentId: string;
   jobId: string;
   target: CronAnnounceTarget;
-  message: string;
+  payload: ReplyPayload;
   abortSignal: AbortSignal;
 }): Promise<void> {
   const delivery = await resolveCronAnnounceDelivery(params);
@@ -138,7 +140,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
     deps: params.deps,
     cfg: params.cfg,
     delivery,
-    message: params.message,
+    payload: params.payload,
     abortSignal: params.abortSignal,
   });
 }
@@ -150,7 +152,7 @@ export async function sendFailureNotificationAnnounce(
   agentId: string,
   jobId: string,
   target: CronAnnounceTarget,
-  message: string,
+  payload: ReplyPayload,
 ): Promise<void> {
   const abortController = new AbortController();
   let resolvedTarget: SuccessfulDeliveryTarget | undefined;
@@ -177,7 +179,7 @@ export async function sendFailureNotificationAnnounce(
           deps,
           cfg,
           delivery,
-          message,
+          payload,
           abortSignal: abortController.signal,
         });
       })(),

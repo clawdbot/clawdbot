@@ -272,6 +272,8 @@ describe("worker turn launcher", () => {
       destroyRequestedAtMs: null,
       tunnelStatus: "connected",
       state: "attached",
+      desktop: null,
+      desktopAvailable: false,
       leaseId: "lease-worker-turn",
       sshEndpoint: {
         host: "worker.example.test",

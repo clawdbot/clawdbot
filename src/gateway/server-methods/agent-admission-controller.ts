@@ -11,6 +11,7 @@ import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
+import type { AgentTurnContext } from "../agent-turn/types.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { loadSessionEntry } from "../session-utils.js";
 import type { AgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
@@ -34,7 +35,7 @@ export function createAgentAdmissionController(params: {
   agentDedupeKeys: string[];
   preAcceptedReservedSessionKey?: string;
   expectedSession?: ExpectedExistingSessionConstraint;
-  context: GatewayRequestHandlerOptions["context"];
+  context: AgentTurnContext;
   respond: GatewayRequestHandlerOptions["respond"];
   dedupeLifecycle: AgentDedupeLifecycle;
   getRequestedSessionKey: () => string | undefined;

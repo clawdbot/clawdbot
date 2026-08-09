@@ -13,10 +13,6 @@ const checker = createExtensionImportBoundaryChecker({
 });
 
 /**
- * Collects test-helper extension import boundary inventory.
- */
-export const collectTestHelperExtensionImportBoundaryInventory = checker.collectInventory;
-/**
  * Entrypoint for the test-helper extension import boundary checker.
  */
 export const main = checker.main;
