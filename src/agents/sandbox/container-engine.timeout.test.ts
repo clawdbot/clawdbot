@@ -1,9 +1,7 @@
 // Container-engine timeout tests cover the typed fail-closed error for a
 // wedged engine and back-compat for calls that request no timeout.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS } from "./constants.js";
-import { DOCKER_SANDBOX_ENGINE, execContainerRaw } from "./container-engine.js";
-import { ensureSandboxContainer } from "./docker.js";
 import type { SandboxConfig } from "./types.js";
 
 type SpawnOptions = { timeout?: number };
@@ -67,6 +65,27 @@ vi.mock("./registry.js", () => ({
   updateRegistry: registryMocks.updateRegistry,
 }));
 
+let DOCKER_SANDBOX_ENGINE: typeof import("./container-engine.js").DOCKER_SANDBOX_ENGINE;
+let execContainerRaw: typeof import("./container-engine.js").execContainerRaw;
+let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
+
+// Shards run with --isolate=false, so a shared worker may already hold an
+// unmocked module graph; re-import through vi.doMock like the sibling suites.
+async function loadFreshContainerEngineForTest() {
+  vi.resetModules();
+  vi.doMock("../../process/exec.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../process/exec.js")>()),
+    spawnCommand: spawnContainerEngineProcess,
+  }));
+  vi.doMock("./registry.js", () => ({
+    readRegistryEntry: registryMocks.readRegistryEntry,
+    removeRegistryEntry: registryMocks.removeRegistryEntry,
+    updateRegistry: registryMocks.updateRegistry,
+  }));
+  ({ DOCKER_SANDBOX_ENGINE, execContainerRaw } = await import("./container-engine.js"));
+  ({ ensureSandboxContainer } = await import("./docker.js"));
+}
+
 function wedgedSandboxConfig(): SandboxConfig {
   return {
     mode: "all",
@@ -113,13 +132,21 @@ function wedgedSandboxConfig(): SandboxConfig {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   spawnState.lastOptions = undefined;
   spawnState.wedged = false;
   spawnState.result = undefined;
   registryMocks.readRegistryEntry.mockReset();
   registryMocks.removeRegistryEntry.mockReset();
   registryMocks.updateRegistry.mockReset();
+  await loadFreshContainerEngineForTest();
+});
+
+// Later files share this worker under --isolate=false; leave no doMock behind.
+afterAll(() => {
+  vi.doUnmock("../../process/exec.js");
+  vi.doUnmock("./registry.js");
+  vi.resetModules();
 });
 
 describe("execContainerRaw timeout", () => {
