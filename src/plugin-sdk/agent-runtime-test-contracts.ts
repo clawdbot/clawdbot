@@ -1,5 +1,9 @@
 // Focused public test contracts for native agent-runtime adapters.
 
+export async function loadEmbeddedAgentSubscriberForTest() {
+  return (await import("../agents/embedded-agent-subscribe.js")).subscribeEmbeddedAgentSession;
+}
+
 export {
   AUTH_PROFILE_RUNTIME_CONTRACT,
   createAuthAliasManifestRegistry,
