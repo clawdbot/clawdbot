@@ -27,9 +27,9 @@ import { isLoopbackAddress, resolveClientIp } from "./net.js";
 export interface RateLimitConfig {
   /** Maximum failed attempts before blocking; must be positive, otherwise the default applies.  @default 10 */
   maxAttempts?: number;
-  /** Sliding window duration in milliseconds; must be positive, otherwise the default applies.  @default 60_000 (1 min) */
+  /** Sliding window duration in milliseconds; must be positive, otherwise the default applies. Values below 1 ms clamp to 1 ms.  @default 60_000 (1 min) */
   windowMs?: number;
-  /** Lockout duration in milliseconds after the limit is exceeded; must be positive, otherwise the default applies.  @default 300_000 (5 min) */
+  /** Lockout duration in milliseconds after the limit is exceeded; must be positive, otherwise the default applies. Values below 1 ms clamp to 1 ms.  @default 300_000 (5 min) */
   lockoutMs?: number;
   /** Exempt loopback (localhost) addresses from rate limiting.  @default true */
   exemptLoopback?: boolean;
@@ -168,15 +168,18 @@ function resolvePositiveConfigValue(value: number | undefined, fallback: number)
 
 export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter {
   const maxAttempts = resolvePositiveConfigValue(config?.maxAttempts, DEFAULT_MAX_ATTEMPTS);
+  // Durations resolve with a 1ms floor: resolveTimerTimeoutMs truncates, so a
+  // sub-millisecond value like 0.5 would otherwise collapse to a zero-width
+  // window or an instant lockout.
   const windowMs = resolveTimerTimeoutMs(
     resolvePositiveConfigValue(config?.windowMs, DEFAULT_WINDOW_MS),
     DEFAULT_WINDOW_MS,
-    0,
+    1,
   );
   const lockoutMs = resolveTimerTimeoutMs(
     resolvePositiveConfigValue(config?.lockoutMs, DEFAULT_LOCKOUT_MS),
     DEFAULT_LOCKOUT_MS,
-    0,
+    1,
   );
   const exemptLoopback = config?.exemptLoopback ?? true;
   const pruneIntervalMs = resolvePruneIntervalMs(config?.pruneIntervalMs);
