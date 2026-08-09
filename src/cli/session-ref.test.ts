@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayStoredDeviceAuthUnavailableError } from "../gateway/call.js";
+import { GatewayStoredDeviceAuthUnavailableError, GatewayTransportError } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
@@ -16,6 +16,24 @@ import {
   SessionTargetParseError,
 } from "./session-ref.js";
 import { resolveSessionTarget } from "./session-target.js";
+
+function gatewayTransportError(params: {
+  url: string;
+  message: string;
+  reason?: string;
+  kind?: "closed" | "timeout";
+}): GatewayTransportError {
+  return new GatewayTransportError({
+    kind: params.kind ?? "closed",
+    message: params.message,
+    reason: params.reason,
+    connectionDetails: {
+      url: params.url,
+      urlSource: "cli --url",
+      message: `Gateway target: ${params.url}`,
+    },
+  });
+}
 
 describe("session target parsing", () => {
   beforeEach(() => {
@@ -364,7 +382,7 @@ describe("session target resolution", () => {
       }),
     );
     await expect(resolveSessionTarget({ raw: "gateway.example/main/a1166b81" })).rejects.toThrow(
-      "Approve the request",
+      "openclaw devices approve --latest",
     );
 
     callGatewayMock.mockRejectedValueOnce(
@@ -375,8 +393,44 @@ describe("session target resolution", () => {
       }),
     );
     await expect(resolveSessionTarget({ raw: "gateway.example/main/a1166b81" })).rejects.toThrow(
-      "revoked or rotated. Re-pair",
+      "openclaw devices rotate --device <deviceId> --role operator",
     );
+  });
+
+  it("classifies legacy close reasons before adding reachability hints", async () => {
+    callGatewayMock.mockRejectedValueOnce(
+      gatewayTransportError({
+        url: "wss://gateway.example",
+        message: "gateway closed (1008): pairing required",
+        reason: "pairing required",
+      }),
+    );
+    let pairingError: unknown;
+    try {
+      await resolveSessionTarget({ raw: "gateway.example/main/a1166b81" });
+    } catch (caught) {
+      pairingError = caught;
+    }
+    expect(String(pairingError)).toContain("openclaw devices approve --latest");
+    expect(String(pairingError)).not.toContain("Could not reach gateway");
+
+    callGatewayMock.mockRejectedValueOnce(
+      gatewayTransportError({
+        url: "wss://gateway.example",
+        message: "gateway closed (1008): device token mismatch",
+        reason: "device token mismatch",
+      }),
+    );
+    let tokenError: unknown;
+    try {
+      await resolveSessionTarget({ raw: "gateway.example/main/a1166b81" });
+    } catch (caught) {
+      tokenError = caught;
+    }
+    expect(String(tokenError)).toContain(
+      "openclaw devices rotate --device <deviceId> --role operator",
+    );
+    expect(String(tokenError)).not.toContain("Could not reach gateway");
   });
 
   it("explains how to bootstrap auth when no origin token exists", async () => {
@@ -406,8 +460,38 @@ describe("session target resolution", () => {
     await expect(resolveSessionTarget({ raw: target })).rejects.toThrow(expected);
   });
 
+  it("uses transport connection details for configured-remote bare refs", async () => {
+    callGatewayMock.mockRejectedValue(
+      gatewayTransportError({
+        kind: "timeout",
+        url: "wss://claw.example.ts.net/base",
+        message: "gateway timeout after 10000ms",
+      }),
+    );
+
+    await expect(
+      resolveSessionTarget({
+        raw: "a1166b81",
+        gateway: {
+          config: {
+            gateway: {
+              mode: "remote",
+              remote: { url: "wss://claw.example.ts.net/base" },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      /Could not reach gateway wss:\/\/claw\.example\.ts\.net\/base[\s\S]*Tailscale/u,
+    );
+  });
+
   it("does not mask TLS fingerprint mismatch errors", async () => {
-    const mismatch = new Error("gateway tls fingerprint mismatch");
+    const mismatch = gatewayTransportError({
+      url: "wss://gateway.example",
+      message: "gateway tls fingerprint mismatch",
+      reason: "gateway tls fingerprint mismatch",
+    });
     callGatewayMock.mockRejectedValue(mismatch);
 
     await expect(resolveSessionTarget({ raw: "gateway.example/main/a1166b81" })).rejects.toBe(

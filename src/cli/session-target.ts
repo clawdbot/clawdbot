@@ -2,10 +2,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import {
-  ConnectErrorDetailCodes,
-  readConnectErrorDetailCode,
-} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -14,6 +11,7 @@ import {
   GatewayTransportError,
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";
 import {
   parseSessionTargetInput,
   SessionTargetParseError,
@@ -47,6 +45,7 @@ export async function callSessionTargetGateway<T>(params: {
   method: string;
   request?: unknown;
   requiredScope: "operator.read" | "operator.admin";
+  shortRef?: boolean;
 }): Promise<T> {
   const explicitUrl = params.gateway.url?.trim() || undefined;
   try {
@@ -68,7 +67,7 @@ export async function callSessionTargetGateway<T>(params: {
         : {}),
     });
   } catch (error) {
-    throw shapeTargetError(error, explicitUrl, false);
+    throw shapeTargetError(error, explicitUrl, params.shortRef === true);
   }
 }
 
@@ -118,25 +117,17 @@ function isPriorGatewayShortIdRejection(error: unknown): boolean {
   );
 }
 
-function transportHint(error: unknown, gatewayUrl: string | undefined): Error | null {
-  if (!gatewayUrl || !(error instanceof Error)) {
-    return null;
-  }
-  if (/tls fingerprint/iu.test(error.message)) {
-    return null;
-  }
-  const code = (error as Error & { code?: unknown }).code;
-  const unreachable =
-    error instanceof GatewayTransportError || code === "ECONNREFUSED" || code === "ENOTFOUND";
-  if (!unreachable) {
-    return null;
+function unreachableTargetError(error: Error, gatewayUrl: string | undefined): Error {
+  if (!gatewayUrl) {
+    return error;
   }
   const hostname = new URL(gatewayUrl).hostname;
+  const displayGatewayUrl = projectGatewayUrlForDiagnostics(gatewayUrl);
   const tailscaleHint = hostname.endsWith(".ts.net")
     ? " For this .ts.net host, check that Tailscale is connected and the gateway is reachable on your tailnet."
     : "";
   return new Error(
-    `${error.message}\nCould not reach gateway ${gatewayUrl}. Check whether the gateway is down and whether its tailnet or SSH tunnel is reachable.${tailscaleHint}`,
+    `${error.message}\nCould not reach gateway ${displayGatewayUrl}. Check whether the gateway is down and whether its tailnet or SSH tunnel is reachable.${tailscaleHint}`,
   );
 }
 
@@ -155,25 +146,32 @@ function shapeTargetError(
       `No stored device auth for ${gatewayUrl}. Pass --token or --password once, approve the pairing request in that gateway's Control UI (Settings > Devices), then retry.`,
     );
   }
-  if (error instanceof GatewayClientRequestError) {
-    const detailCode = readConnectErrorDetailCode(error.details);
-    if (detailCode === ConnectErrorDetailCodes.PAIRING_REQUIRED) {
-      return new Error(
-        `${error.message}\nApprove the request in that gateway's Control UI (Settings > Devices), then retry.`,
-      );
-    }
-    if (detailCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH) {
-      return new Error(
-        `Device credentials for ${gatewayUrl ?? "this gateway"} were revoked or rotated. Re-pair this device, then retry.`,
-      );
-    }
-    if (error.gatewayCode === "INVALID_REQUEST" && error.message.includes("No session found")) {
-      return new Error(`${error.message}\n${sessionsListHint(gatewayUrl)}`);
-    }
+  if (!(error instanceof Error)) {
+    return new Error(String(error));
   }
-  return (
-    transportHint(error, gatewayUrl) ?? (error instanceof Error ? error : new Error(String(error)))
-  );
+  // A pin mismatch names the precise trust failure and must never be reclassified as transport.
+  if (/tls fingerprint/iu.test(error.message)) {
+    return error;
+  }
+  if (
+    error instanceof GatewayClientRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes("No session found")
+  ) {
+    return new Error(`${error.message}\n${sessionsListHint(gatewayUrl)}`);
+  }
+  const failure = classifyGatewayConnectFailure({
+    ...(error instanceof GatewayClientRequestError ? { details: error.details } : {}),
+    ...(error instanceof GatewayTransportError ? { reason: error.reason } : {}),
+    message: error.message,
+  });
+  if (failure.kind === "unreachable") {
+    const effectiveGatewayUrl =
+      gatewayUrl ??
+      (error instanceof GatewayTransportError ? error.connectionDetails.url : undefined);
+    return unreachableTargetError(error, effectiveGatewayUrl);
+  }
+  return failure.remediation ? new Error(`${failure.userMessage}\n${failure.remediation}`) : error;
 }
 
 export async function resolveSessionTarget(params: {
@@ -194,16 +192,12 @@ export async function resolveSessionTarget(params: {
     if (parsed.kind !== "url") {
       throw new SessionTargetParseError();
     }
-    try {
-      await callSessionTargetGateway({
-        gateway,
-        method: "status",
-        request: {},
-        requiredScope: params.requiredScope ?? "operator.read",
-      });
-    } catch (error) {
-      throw shapeTargetError(error, gateway.url, false);
-    }
+    await callSessionTargetGateway({
+      gateway,
+      method: "status",
+      request: {},
+      requiredScope: params.requiredScope ?? "operator.read",
+    });
     return {
       parsed,
       gateway,
@@ -220,17 +214,13 @@ export async function resolveSessionTarget(params: {
           ...(parsed.kind === "url" ? { agentId: parsed.agentId } : {}),
         }
       : { key: ref.sessionKey };
-  let result: SessionsResolveResult;
-  try {
-    result = await callSessionTargetGateway<SessionsResolveResult>({
-      gateway,
-      method: "sessions.resolve",
-      request,
-      requiredScope: params.requiredScope ?? "operator.read",
-    });
-  } catch (error) {
-    throw shapeTargetError(error, gateway.url, ref.kind === "short");
-  }
+  const result = await callSessionTargetGateway<SessionsResolveResult>({
+    gateway,
+    method: "sessions.resolve",
+    request,
+    requiredScope: params.requiredScope ?? "operator.read",
+    shortRef: ref.kind === "short",
+  });
   if (result.ok) {
     return { parsed, gateway, sessionKey: result.key };
   }
