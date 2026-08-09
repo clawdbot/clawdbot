@@ -66,6 +66,7 @@ const hoisted = vi.hoisted(() => {
   const refreshPreparedModelRuntimeSnapshots = vi.fn(
     async (_cfg?: unknown, _options?: unknown) => {},
   );
+  const prewarmConfigDrivenReplyRuntime = vi.fn(async () => {});
   const loadAgentRuntimePluginRegistryHandle = vi.fn();
   const prewarmContextWindowCacheAfterReady = vi.fn(async () => {});
   const scheduleGatewayHandlerPrewarm = vi.fn(() => ({ stop: vi.fn() }));
@@ -106,6 +107,7 @@ const hoisted = vi.hoisted(() => {
     getModelRefStatus,
     prepareModelRuntimeSnapshot,
     refreshPreparedModelRuntimeSnapshots,
+    prewarmConfigDrivenReplyRuntime,
     loadAgentRuntimePluginRegistryHandle,
     prewarmContextWindowCacheAfterReady,
     scheduleGatewayHandlerPrewarm,
@@ -210,6 +212,11 @@ vi.mock("../agents/model-selection.js", () => ({
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   publishPreparedModelRuntimeSnapshot: hoisted.prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots: hoisted.refreshPreparedModelRuntimeSnapshots,
+}));
+
+vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
+  getReplyFromConfig: vi.fn(),
+  prewarmConfigDrivenReplyRuntime: hoisted.prewarmConfigDrivenReplyRuntime,
 }));
 
 vi.mock("../agents/runtime-plugins.js", () => ({
@@ -489,6 +496,8 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.prepareModelRuntimeSnapshot.mockResolvedValue({});
     hoisted.refreshPreparedModelRuntimeSnapshots.mockReset();
     hoisted.refreshPreparedModelRuntimeSnapshots.mockResolvedValue(undefined);
+    hoisted.prewarmConfigDrivenReplyRuntime.mockReset();
+    hoisted.prewarmConfigDrivenReplyRuntime.mockResolvedValue(undefined);
     hoisted.loadAgentRuntimePluginRegistryHandle.mockReset();
     hoisted.prewarmContextWindowCacheAfterReady.mockReset();
     hoisted.prewarmContextWindowCacheAfterReady.mockResolvedValue(undefined);
@@ -2222,6 +2231,59 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(prewarmPrimaryModel).toHaveBeenCalledTimes(1);
     expect(startChannels).toHaveBeenCalledTimes(1);
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).not.toHaveBeenCalled();
+  });
+
+  it("awaits reply runtime after model publication and before channels and readiness", async () => {
+    const events: string[] = [];
+    let releaseReplyRuntime: (() => void) | undefined;
+    const trace = createStartupTraceRecorder();
+    hoisted.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(async () => {
+      events.push("model-runtime");
+    });
+    hoisted.prewarmConfigDrivenReplyRuntime.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          events.push("reply-runtime:start");
+          releaseReplyRuntime = () => {
+            events.push("reply-runtime:done");
+            resolve();
+          };
+        }),
+    );
+    const startChannels = vi.fn(async () => {
+      events.push("channels");
+    });
+    const onSidecarsReady = vi.fn(() => {
+      events.push("ready");
+    });
+
+    const startup = startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      startChannels,
+      onSidecarsReady,
+      startupTrace: trace.startupTrace,
+    });
+
+    await waitForGatewayTestState(() => {
+      expect(events).toEqual(["model-runtime", "reply-runtime:start"]);
+    });
+    expect(startChannels).not.toHaveBeenCalled();
+    expect(onSidecarsReady).not.toHaveBeenCalled();
+
+    if (!releaseReplyRuntime) {
+      throw new Error("Expected reply runtime release callback to be initialized");
+    }
+    releaseReplyRuntime();
+    await startup;
+
+    expect(events).toEqual([
+      "model-runtime",
+      "reply-runtime:start",
+      "reply-runtime:done",
+      "channels",
+      "ready",
+    ]);
+    expect(trace.measures).toContain("sidecars.reply-runtime");
   });
 
   it("marks startup main-session orphans before propagating model runtime failure", async () => {

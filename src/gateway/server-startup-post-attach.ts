@@ -1,5 +1,6 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
+import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -706,6 +707,12 @@ export async function startGatewaySidecars(params: {
       params.prewarmPrimaryModel,
     ),
   );
+  // Gateway readiness owns process-stable reply module activation so the first operator turn
+  // does not become the module loader under contention.
+  await measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
+    const { prewarmConfigDrivenReplyRuntime } = await loadGetReplyFromConfigRuntime();
+    await prewarmConfigDrivenReplyRuntime();
+  });
   await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
     await params.refreshChatMetadata?.();
   });
