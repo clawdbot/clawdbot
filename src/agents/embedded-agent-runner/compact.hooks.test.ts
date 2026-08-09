@@ -316,6 +316,14 @@ beforeEach(() => {
 });
 
 describe("compactEmbeddedAgentSessionDirect hooks", () => {
+  const prompt = "please run the deployment status check for production";
+  const liveUserTurn = (timestamp: number, overrides: Record<string, unknown> = {}) => ({
+    role: "user" as const,
+    content: prompt,
+    timestamp,
+    ...overrides,
+  });
+
   beforeEach(() => {
     triggerInternalHook.mockClear();
     hookRunner.hasHooks.mockReset();
@@ -330,6 +338,112 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       details: { ok: true },
     });
     resetCompactSessionStateMocks();
+  });
+
+  it.each([
+    {
+      name: "participants identified only by their display names",
+      messages: [
+        liveUserTurn(1_000, { __openclaw: { senderName: "Alice" } }),
+        liveUserTurn(2_000, { __openclaw: { senderName: "Bob" } }),
+      ],
+      expectedIndexes: [0, 1],
+    },
+    {
+      name: "case-sensitive operator corrections",
+      messages: [
+        liveUserTurn(1_000, { content: "set the deployment token to SecretValueForProduction" }),
+        liveUserTurn(2_000, { content: "set the deployment token to secretvalueforproduction" }),
+      ],
+      expectedIndexes: [0, 1],
+    },
+    {
+      name: "interleaved normal and backdated retries",
+      messages: [90_000, 1_000, 91_000, 2_000, 92_000, 3_000].map((timestamp) =>
+        liveUserTurn(timestamp),
+      ),
+      expectedIndexes: [0, 1],
+    },
+    {
+      name: "retries from the timeline before a distant forward jump",
+      messages: [1_000, 90_000, 2_000].map((timestamp) => liveUserTurn(timestamp)),
+      expectedIndexes: [0, 1],
+    },
+    {
+      name: "late retries after a window-edge primary update",
+      messages: [1_000, 61_000, 2_000].map((timestamp) => liveUserTurn(timestamp)),
+      expectedIndexes: [0],
+    },
+    {
+      name: "late retries after sliding primary updates",
+      messages: [1_000, 2_000, 61_000, 3_000].map((timestamp) => liveUserTurn(timestamp)),
+      expectedIndexes: [0],
+    },
+    {
+      name: "retries from three independently interleaved timelines",
+      messages: [1_000, 90_000, 200_000, 2_000, 91_000, 201_000].map((timestamp) =>
+        liveUserTurn(timestamp),
+      ),
+      expectedIndexes: [0, 1, 2],
+    },
+    {
+      name: "provider-native nontext attachment blocks",
+      messages: [
+        liveUserTurn(1_000, {
+          content: [
+            { type: "text", text: prompt },
+            { type: "input_image", source: "first-attachment" },
+          ],
+        }),
+        liveUserTurn(2_000, {
+          content: [
+            { type: "text", text: prompt },
+            { type: "input_image", source: "second-attachment" },
+          ],
+        }),
+      ],
+      expectedIndexes: [0, 1],
+    },
+    {
+      name: "canonical persisted media attachments",
+      messages: [
+        liveUserTurn(1_000, {
+          __openclaw: { media: [{ path: "/tmp/first.png", contentType: "image/png" }] },
+        }),
+        liveUserTurn(2_000, {
+          __openclaw: { media: [{ path: "/tmp/second.png", contentType: "image/png" }] },
+        }),
+      ],
+      expectedIndexes: [0, 1],
+    },
+    {
+      name: "actual repeated text turns",
+      messages: [liveUserTurn(1_000), liveUserTurn(2_000)],
+      expectedIndexes: [0],
+    },
+  ])("preserves $name in the actual live session before compaction hooks", async ({
+    messages,
+    expectedIndexes,
+  }) => {
+    sessionMessages.splice(0, sessionMessages.length, ...messages);
+    hookRunner.hasHooks.mockReturnValue(true);
+    let observedMessages: unknown[] | undefined;
+    hookRunner.runBeforeCompaction.mockImplementationOnce(async () => {
+      const created = await createAgentSessionMock.mock.results[0]?.value;
+      if (!created) {
+        throw new Error("expected the live compaction session to exist");
+      }
+      observedMessages = structuredClone(created.session.agent.state.messages);
+    });
+
+    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(observedMessages).toEqual(expectedIndexes.map((index) => messages[index]));
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledOnce();
+    expect(mockCallArg(hookRunner.runBeforeCompaction)).toMatchObject({
+      messageCount: expectedIndexes.length,
+    });
   });
 
   it("acquires the normal session lock without process-wide reentry", async () => {
