@@ -196,6 +196,14 @@ export function prepareAgentRequestPreflight(
     );
     return undefined;
   }
+  if (request.modelRunOptions !== undefined && !isOneShotModelRun) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "modelRunOptions requires modelRun=true."),
+    );
+    return undefined;
+  }
   if (requestedModelOverride && !allowModelOverride) {
     params.respond(
       false,

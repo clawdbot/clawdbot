@@ -400,6 +400,7 @@ export function startAgentRunExecution(params: {
           runId: params.runId,
           lane: params.request.lane,
           modelRun: params.request.modelRun === true,
+          streamParams: params.request.modelRunOptions,
           promptMode: params.request.promptMode,
           extraSystemPrompt: params.request.extraSystemPrompt,
           bootstrapContextMode: params.request.bootstrapContextMode,

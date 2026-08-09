@@ -486,6 +486,7 @@ describe("gateway agent handler", () => {
         provider: "ollama",
         model: "llama3.2:latest",
         modelRun: true,
+        modelRunOptions: { maxTokens: 64, temperature: 0 },
         promptMode: "none",
         sessionKey: "agent:main:main",
         inputProvenance: {
@@ -504,6 +505,7 @@ describe("gateway agent handler", () => {
     const callArgs = await waitForAgentCommandCall<{
       message?: string;
       modelRun?: boolean;
+      streamParams?: { maxTokens?: number; temperature?: number };
       promptMode?: string;
     }>();
     expectRecordFields(callArgs, {
@@ -511,9 +513,32 @@ describe("gateway agent handler", () => {
       modelRun: true,
       promptMode: "none",
     });
+    expect(callArgs.streamParams).toEqual({ maxTokens: 64, temperature: 0 });
     expect(callArgs.message).not.toContain("[Inter-session message]");
 
     resetTimeConfig();
+  });
+
+  it("rejects model-run generation settings outside model-run requests", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "unsafe settings",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        modelRunOptions: { maxTokens: 64, temperature: 0 },
+        idempotencyKey: "test-model-run-options-without-model-run",
+      },
+      { reqId: "model-run-options-without-model-run", flushDispatch: false },
+    );
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "modelRunOptions requires modelRun=true.",
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
   it("rejects promptMode none without the stateless model-run contract", async () => {

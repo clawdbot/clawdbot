@@ -70,6 +70,34 @@ const musicCompletionEvent: AgentInternalEvent = {
 };
 
 describe("AgentParamsSchema", () => {
+  it("accepts bounded model-run generation settings", () => {
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "classify",
+        modelRun: true,
+        modelRunOptions: { maxTokens: 64, temperature: 0 },
+        idempotencyKey: "model-run-1",
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    { maxTokens: 0, temperature: 0 },
+    { maxTokens: 64.5, temperature: 0 },
+    { maxTokens: 64, temperature: -0.1 },
+    { maxTokens: 64, temperature: 2.1 },
+    { maxTokens: 64, temperature: 0, unexpected: true },
+  ])("rejects invalid model-run generation settings %#", (modelRunOptions) => {
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "classify",
+        modelRun: true,
+        modelRunOptions,
+        idempotencyKey: "model-run-1",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts the backend expected-session binding", () => {
     expect(
       Value.Check(AgentParamsSchema, {
