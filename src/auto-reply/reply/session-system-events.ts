@@ -21,12 +21,12 @@ import {
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
-// Records system-level session events for restarts, forks, and resets.
-import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
   ackSessionDelivery,
   loadPendingSessionDelivery,
 } from "../../infra/session-delivery-queue-storage.js";
+// Records system-level session events for restarts, forks, and resets.
+import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,

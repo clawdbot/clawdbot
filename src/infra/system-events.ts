@@ -250,9 +250,7 @@ function enqueueOwnedSystemEventEntry(
       if (resolveSystemEventOwnerAgentId(existing) !== normalizedOwnerAgentId) {
         return null;
       }
-      if (
-        isDuplicateSystemEvent(existing, { ...event, ownerAgentId: normalizedOwnerAgentId })
-      ) {
+      if (isDuplicateSystemEvent(existing, { ...event, ownerAgentId: normalizedOwnerAgentId })) {
         return null;
       }
       entry.queue[durableIndex] = event;

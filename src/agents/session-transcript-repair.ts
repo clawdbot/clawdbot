@@ -14,10 +14,7 @@ import {
   normalizeLegacyToolResultId,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
-import {
-  extractToolCallsFromAssistant,
-  extractToolResultIds,
-} from "./tool-call-id.js";
+import { extractToolCallsFromAssistant, extractToolResultIds } from "./tool-call-id.js";
 import {
   isAllowedToolCallName,
   normalizeAllowedToolNames,
