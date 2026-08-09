@@ -16,6 +16,8 @@ vi.mock("../../infra/update-check.js", () => ({
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateAvailable: () => null,
+  getUpdateSchedule: () => null,
+  refreshGatewayUpdateStatus: async () => {},
 }));
 
 vi.mock("../../version.js", () => ({
