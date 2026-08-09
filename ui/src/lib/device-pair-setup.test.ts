@@ -47,10 +47,8 @@ function setupResult(
 function completion(setupId: string): DevicePairSetupCompletion {
   return {
     setupId,
-    deviceId: "device-1",
     deviceName: "Operator’s iPhone",
     access: "full",
-    ts: Date.now(),
   };
 }
 
