@@ -13,6 +13,15 @@ import {
 } from "../tui/tui-session-picker.js";
 import type { ResumeCliOptions } from "./resume-cli.js";
 
+const RESUME_INTERACTIVE_TERMINAL_GUIDANCE =
+  "Session selection requires an interactive terminal. Pass a session key or name: `openclaw resume <query>`.";
+
+function requireInteractiveResumeTerminal() {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error(RESUME_INTERACTIVE_TERMINAL_GUIDANCE);
+  }
+}
+
 async function fetchResumeSessions(opts: ResumeCliOptions) {
   const { GatewayChatClient } = await import("../tui/gateway-chat.js");
   const client = await GatewayChatClient.connect(opts);
@@ -32,7 +41,7 @@ async function fetchResumeSessions(opts: ResumeCliOptions) {
         finish(() => reject(new Error(reason || "Gateway connection closed")));
       client.start();
     });
-    return await loadRecentSessions(client);
+    return await loadRecentSessions(client, { includeGlobal: true });
   } catch (error) {
     const [{ formatTuiErrorMessage }, { resolveGatewayDisconnectState }] = await Promise.all([
       import("../tui/tui-formatters.js"),
@@ -61,11 +70,7 @@ async function promptResumeSession(
       "No recent sessions found. Run `openclaw sessions` to inspect sessions or `openclaw tui` to start one.",
     );
   }
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error(
-      "Session selection requires an interactive terminal. Pass a session key or name: `openclaw resume <query>`.",
-    );
-  }
+  requireInteractiveResumeTerminal();
   const selected = await selectStyled({
     message: "Resume a session",
     options: choices.map((choice) => ({
@@ -107,8 +112,11 @@ function formatResumeCandidate(candidate: SessionPickerChoice): string {
 
 /** Resolve or select one session and run the existing Gateway-backed TUI. */
 export async function runResumeCommand(query: string | undefined, opts: ResumeCliOptions) {
-  const sessions = await fetchResumeSessions(opts);
   const trimmedQuery = query?.trim();
+  if (!trimmedQuery) {
+    requireInteractiveResumeTerminal();
+  }
+  const sessions = await fetchResumeSessions(opts);
   let sessionKey: string | null;
   if (trimmedQuery) {
     const resolution = resolveResumeSession(sessions, trimmedQuery);

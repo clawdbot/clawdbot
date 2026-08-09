@@ -28,12 +28,12 @@ export type ResumeResolution =
 /** Load the same bounded recent-session window used by the TUI Ctrl+P picker. */
 export async function loadRecentSessions(
   client: Pick<TuiBackend, "listSessions">,
-  options: { agentId?: string } = {},
+  options: { agentId?: string; includeGlobal?: boolean } = {},
 ): Promise<TuiSessionEntry[]> {
   const result = await client.listSessions({
     limit: TUI_SESSION_PICKER_LIMIT,
     activeMinutes: TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
-    includeGlobal: false,
+    includeGlobal: options.includeGlobal ?? false,
     includeUnknown: false,
     includeDerivedTitles: true,
     includeLastMessage: true,
