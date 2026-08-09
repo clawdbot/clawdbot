@@ -128,6 +128,7 @@ const BUZZ_MESSAGE_KIND = 9;
 const BUZZ_ROOM_MEMBERSHIP_KIND = 39_002;
 const ACCOUNT_ID = "default";
 const CHANNEL_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
+const SECOND_CHANNEL_ID = "1b8f5c33-9a21-4d0e-8f77-2b6c1d4e5a90";
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const SENDER_PRIVATE_KEY = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
 const SENDER_SECRET = Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex"));
@@ -164,34 +165,53 @@ function gateHandler(text: string): { settle: () => void; fail: (error: Error) =
   return { settle, fail };
 }
 
-function postRoomMessage(text: string, createdAt: number): void {
+function postRoomMessage(text: string, createdAt: number, channelId = CHANNEL_ID): void {
   relayMocks.storedEvents.push(
     finalizeEvent(
       {
         kind: BUZZ_MESSAGE_KIND,
         content: text,
         created_at: createdAt,
-        tags: [["h", CHANNEL_ID]],
+        tags: [["h", channelId]],
       },
       SENDER_SECRET,
     ),
   );
 }
 
-function buildConfig(): OpenClawConfig {
+function publishRoomMembership(channelId: string): void {
+  relayMocks.storedEvents.push({
+    id: `membership-${channelId}`,
+    kind: BUZZ_ROOM_MEMBERSHIP_KIND,
+    pubkey: RELAY_PUBLIC_KEY,
+    created_at: START_SECONDS - 3_600,
+    content: "",
+    sig: "e".repeat(128),
+    tags: [
+      ["d", channelId],
+      ["p", BOT_PUBLIC_KEY, "", "bot"],
+      ["p", SENDER_PUBLIC_KEY, "", "member"],
+    ],
+  });
+}
+
+function buildConfig(channelIds: string[]): OpenClawConfig {
   return {
     channels: {
       buzz: {
         relayUrl: "wss://buzz.example.com",
         privateKey: PRIVATE_KEY,
-        groups: { [CHANNEL_ID]: {} },
+        groups: Object.fromEntries(channelIds.map((channelId) => [channelId, {}])),
       },
     },
   } as OpenClawConfig;
 }
 
-function startGatewayProcess(): { abort: AbortController; lifecycle: Promise<void> } {
-  const cfg = buildConfig();
+function startGatewayProcess(channelIds: string[] = [CHANNEL_ID]): {
+  abort: AbortController;
+  lifecycle: Promise<void>;
+} {
+  const cfg = buildConfig(channelIds);
   const account = resolveBuzzAccount({ cfg });
   const abort = new AbortController();
   const ctx = {
@@ -220,10 +240,11 @@ async function waitForSettled(predicate: () => boolean | Promise<boolean>): Prom
 }
 
 async function runGatewayProcess(
-  params: { until?: () => boolean | Promise<boolean> } = {},
+  params: { until?: () => boolean | Promise<boolean>; channelIds?: string[] } = {},
 ): Promise<void> {
-  const gatewayProcess = startGatewayProcess();
-  await waitForSettled(() => relayMocks.messageFilters.length > 0);
+  const channelIds = params.channelIds ?? [CHANNEL_ID];
+  const gatewayProcess = startGatewayProcess(channelIds);
+  await waitForSettled(() => relayMocks.messageFilters.length >= channelIds.length);
   if (params.until) {
     await waitForSettled(params.until);
   }
@@ -231,15 +252,17 @@ async function runGatewayProcess(
   await gatewayProcess.lifecycle;
 }
 
-function roomSubscriptionSince(): number {
-  const filter = relayMocks.messageFilters.at(0);
+function roomSubscriptionSince(channelId = CHANNEL_ID): number {
+  const filter = relayMocks.messageFilters.find((entry) =>
+    (entry["#h"] as string[] | undefined)?.includes(channelId),
+  );
   expect(filter?.since).toBeTypeOf("number");
   return filter?.since as number;
 }
 
-async function readWatermark(): Promise<number | undefined> {
+async function readWatermark(channelId = CHANNEL_ID): Promise<number | undefined> {
   const store = openBuzzRecoveryWatermarkStore();
-  return (await store?.lookup(ACCOUNT_ID))?.seconds;
+  return (await store?.lookup(`room:${ACCOUNT_ID}:${channelId}`))?.seconds;
 }
 
 function openProcessBoundary(): void {
@@ -265,21 +288,9 @@ beforeEach(() => {
   relayMocks.auth.mockResolvedValue("ok");
   relayMocks.publish.mockResolvedValue("");
   relayMocks.send.mockResolvedValue();
-  relayMocks.storedEvents = [
-    {
-      id: "membership-1",
-      kind: BUZZ_ROOM_MEMBERSHIP_KIND,
-      pubkey: RELAY_PUBLIC_KEY,
-      created_at: START_SECONDS - 3_600,
-      content: "",
-      sig: "e".repeat(128),
-      tags: [
-        ["d", CHANNEL_ID],
-        ["p", BOT_PUBLIC_KEY, "", "bot"],
-        ["p", SENDER_PUBLIC_KEY, "", "member"],
-      ],
-    },
-  ];
+  relayMocks.storedEvents = [];
+  publishRoomMembership(CHANNEL_ID);
+  publishRoomMembership(SECOND_CHANNEL_ID);
   inboundMocks.handleBuzzInbound.mockImplementation(
     async ({ message }: { message: BuzzInboundMessage }) => {
       handled.push(message.text);
@@ -327,7 +338,7 @@ afterEach(() => {
 describe("Buzz gateway cold-start recovery", () => {
   it("resumes from the persisted watermark after a process restart", async () => {
     await runGatewayProcess();
-    expect(roomSubscriptionSince()).toBe(START_SECONDS);
+    expect(roomSubscriptionSince()).toBe(START_SECONDS - LOOKBACK_SECONDS);
 
     openProcessBoundary();
     postRoomMessage("live-msg", START_SECONDS + 10);
@@ -344,11 +355,56 @@ describe("Buzz gateway cold-start recovery", () => {
     expect(handled).toContain("outage-msg");
   });
 
-  it("keeps the first-ever start at the current time", async () => {
-    postRoomMessage("older-than-setup", START_SECONDS - 60);
+  it("recovers the retention window on the first start after an upgrade", async () => {
+    postRoomMessage("downtime-msg", START_SECONDS - 60);
+    postRoomMessage("beyond-retention-msg", START_SECONDS - LOOKBACK_SECONDS - 60);
+    await runGatewayProcess({ until: () => handled.includes("downtime-msg") });
+    expect(roomSubscriptionSince()).toBe(START_SECONDS - LOOKBACK_SECONDS);
+    expect(handled).toContain("downtime-msg");
+    expect(handled).not.toContain("beyond-retention-msg");
+  });
+
+  it("keeps a room configured after the first start at the current time", async () => {
     await runGatewayProcess();
-    expect(roomSubscriptionSince()).toBe(START_SECONDS);
-    expect(handled).toEqual([]);
+
+    openProcessBoundary();
+    postRoomMessage("before-second-room-setup", START_SECONDS + 60, SECOND_CHANNEL_ID);
+    advanceSeconds(600);
+    await runGatewayProcess({ channelIds: [CHANNEL_ID, SECOND_CHANNEL_ID] });
+    expect(roomSubscriptionSince(SECOND_CHANNEL_ID)).toBe(nowSeconds());
+    expect(handled).not.toContain("before-second-room-setup");
+    expect(roomSubscriptionSince(CHANNEL_ID)).toBe(nowSeconds() - LOOKBACK_SECONDS);
+  });
+
+  it("recovers a replay message still queued when the process stops", async () => {
+    await runGatewayProcess();
+
+    openProcessBoundary();
+    const queuedText = "queued-msg";
+    postRoomMessage(queuedText, START_SECONDS + 100);
+    gateHandler(queuedText);
+    const settlers = [];
+    for (let index = 0; index < 8; index += 1) {
+      const text = `running-msg-${index}`;
+      postRoomMessage(text, START_SECONDS + 200 + index);
+      settlers.push(gateHandler(text));
+    }
+    advanceSeconds(600);
+    const gatewayProcess = startGatewayProcess();
+    await waitForSettled(() => handled.length === 8);
+    expect(handled).not.toContain(queuedText);
+    for (const settler of settlers) {
+      settler.settle();
+    }
+    await waitForSettled(async () => (await readWatermark()) !== undefined);
+    expect(await readWatermark()).toBeLessThanOrEqual(START_SECONDS + 100);
+    gatewayProcess.abort.abort();
+    await gatewayProcess.lifecycle;
+
+    openProcessBoundary();
+    advanceSeconds(600);
+    await runGatewayProcess({ until: () => handled.includes(queuedText) });
+    expect(handled).toContain(queuedText);
   });
 
   it("clamps a stale watermark to the retention floor", async () => {

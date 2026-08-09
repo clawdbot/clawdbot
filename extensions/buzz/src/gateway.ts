@@ -93,13 +93,11 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
   const reportWatermarkError = (error: Error) => {
     ctx.log?.warn?.(`[${account.accountId}] Buzz recovery watermark failed: ${error.message}`);
   };
-  const commitRecoveryCheckpoint = async (seconds: number | undefined) => {
-    if (seconds === undefined) {
-      return;
-    }
-    await advanceBuzzRecoveryWatermark({
+  const commitRecoveryCheckpoint = (channelId: string, seconds: number) => {
+    void advanceBuzzRecoveryWatermark({
       store: watermarkStore,
       accountId: account.accountId,
+      channelId,
       seconds,
       onError: reportWatermarkError,
     });
@@ -117,17 +115,24 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
     });
     try {
       const nowSeconds = Math.floor(Date.now() / 1000);
-      const sessionSince = hasAttemptedSession
-        ? nowSeconds - RECONNECT_LOOKBACK_SECONDS
+      const reconnectSince = nowSeconds - RECONNECT_LOOKBACK_SECONDS;
+      const coldStartSince = hasAttemptedSession
+        ? undefined
         : await resolveBuzzColdStartSince({
             store: watermarkStore,
             accountId: account.accountId,
+            channelIds,
             nowSeconds,
             lookbackSeconds: RECONNECT_LOOKBACK_SECONDS,
             onError: reportWatermarkError,
           });
       hasAttemptedSession = true;
-      const recoveryFrontier = createBuzzRecoveryFrontier({ sinceSeconds: sessionSince });
+      const sinceFor = (channelId: string) =>
+        coldStartSince ? (coldStartSince.get(channelId) ?? nowSeconds) : reconnectSince;
+      const recoveryFrontier = createBuzzRecoveryFrontier({
+        sinceFor,
+        onCheckpoint: commitRecoveryCheckpoint,
+      });
       bus = await startBuzzBus({
         accountId: account.accountId,
         relayUrl: account.relayUrl,
@@ -135,34 +140,22 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         authTag: account.authTag,
         profileName,
         channelIds,
-        since: sessionSince,
+        since: sinceFor,
+        recoveryFrontier,
         signal: ctx.abortSignal,
         onMessage: async (message, sessionBus, signal) => {
           // Subscription filters reduce traffic, but relay events remain untrusted.
           if (!isConfiguredBuzzChannel(configuredChannelIds, message.channelId)) {
             return;
           }
-          const token = recoveryFrontier.admit({
-            createdAt: message.createdAt,
-            observedSeconds: Math.floor(Date.now() / 1000),
+          await handleBuzzInbound({
+            account,
+            cfg: ctx.cfg,
+            bus: sessionBus,
+            message,
+            signal,
+            buildContext,
           });
-          try {
-            await handleBuzzInbound({
-              account,
-              cfg: ctx.cfg,
-              bus: sessionBus,
-              message,
-              signal,
-              buildContext,
-            });
-          } catch (error) {
-            recoveryFrontier.abandon(token);
-            throw error;
-          }
-          await commitRecoveryCheckpoint(recoveryFrontier.settle(token));
-        },
-        onHistoryDrained: () => {
-          void commitRecoveryCheckpoint(recoveryFrontier.markBacklogDrained());
         },
         onMessageError: (error) => {
           ctx.log?.error?.(`[${account.accountId}] Buzz message failed: ${error.message}`);

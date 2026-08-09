@@ -121,6 +121,13 @@ function createMockBus(): BuzzBus {
   };
 }
 
+function resolveBusSince(callIndex: number): number {
+  const since = gatewayMocks.startBuzzBus.mock.calls[callIndex]?.[0].since as (
+    channelId: string,
+  ) => number;
+  return since(CHANNEL_ID);
+}
+
 describe("Buzz gateway lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -471,8 +478,8 @@ describe("Buzz gateway lifecycle", () => {
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledTimes(2), {
       timeout: 3_000,
     });
-    const firstSince = gatewayMocks.startBuzzBus.mock.calls[0]?.[0].since as number;
-    const secondSince = gatewayMocks.startBuzzBus.mock.calls[1]?.[0].since as number;
+    const firstSince = resolveBusSince(0);
+    const secondSince = resolveBusSince(1);
     expect(secondSince).toBeLessThanOrEqual(firstSince - 24 * 60 * 60 + 2);
 
     abortController.abort();
@@ -526,7 +533,7 @@ describe("Buzz gateway lifecycle", () => {
       timeout: 3_000,
     });
     expect(invalidateDirectoryCache).toHaveBeenCalledTimes(2);
-    const secondSince = gatewayMocks.startBuzzBus.mock.calls[1]?.[0].since as number;
+    const secondSince = resolveBusSince(1);
     expect(secondSince).toBeGreaterThanOrEqual(reconnectStartedAt - 24 * 60 * 60);
     expect(secondSince).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) - 24 * 60 * 60);
     expect(secondSince).toBeLessThan(createdAt);

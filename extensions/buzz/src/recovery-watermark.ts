@@ -8,6 +8,14 @@ export type BuzzRecoveryWatermark = { seconds: number };
 
 export type BuzzRecoveryWatermarkStore = PluginStateKeyedStore<BuzzRecoveryWatermark>;
 
+function accountStartKey(accountId: string): string {
+  return `account:${accountId}`;
+}
+
+function roomCursorKey(accountId: string, channelId: string): string {
+  return `room:${accountId}:${channelId}`;
+}
+
 export function openBuzzRecoveryWatermarkStore(params?: {
   onError?: (error: Error) => void;
 }): BuzzRecoveryWatermarkStore | undefined {
@@ -32,87 +40,131 @@ function isUsableWatermark(
 export async function resolveBuzzColdStartSince(params: {
   store: BuzzRecoveryWatermarkStore | undefined;
   accountId: string;
+  channelIds: readonly string[];
   nowSeconds: number;
   lookbackSeconds: number;
   onError?: (error: Error) => void;
-}): Promise<number> {
-  const { store, accountId, nowSeconds, lookbackSeconds } = params;
+}): Promise<Map<string, number>> {
+  const { store, accountId, channelIds, nowSeconds, lookbackSeconds } = params;
+  const sinceByRoom = new Map(channelIds.map((channelId) => [channelId, nowSeconds]));
   if (!store) {
-    return nowSeconds;
+    return sinceByRoom;
   }
   try {
-    const persisted = await store.lookup(accountId);
-    if (isUsableWatermark(persisted)) {
-      const floor = nowSeconds - lookbackSeconds;
-      return Math.min(Math.max(persisted.seconds, floor), nowSeconds);
+    const startedBefore = isUsableWatermark(await store.lookup(accountStartKey(accountId)));
+    if (!startedBefore) {
+      await store.register(accountStartKey(accountId), { seconds: nowSeconds });
     }
-    await store.register(accountId, { seconds: nowSeconds });
+    const floor = nowSeconds - lookbackSeconds;
+    for (const channelId of channelIds) {
+      const persisted = await store.lookup(roomCursorKey(accountId, channelId));
+      if (isUsableWatermark(persisted)) {
+        sinceByRoom.set(channelId, Math.min(Math.max(persisted.seconds, floor), nowSeconds));
+        continue;
+      }
+      const since = startedBefore ? nowSeconds : floor;
+      sinceByRoom.set(channelId, since);
+      await store.register(roomCursorKey(accountId, channelId), { seconds: since });
+    }
   } catch (error) {
     params.onError?.(error instanceof Error ? error : new Error(String(error)));
   }
-  return nowSeconds;
+  return sinceByRoom;
 }
 
+export type BuzzRecoveryToken = { channelId: string; id: number };
+
 export type BuzzRecoveryFrontier = {
-  admit: (params: { createdAt: number; observedSeconds: number }) => number;
-  settle: (token: number) => number | undefined;
-  abandon: (token: number) => void;
-  markBacklogDrained: () => number | undefined;
+  admit: (params: {
+    channelId: string;
+    createdAt: number;
+    observedSeconds: number;
+  }) => BuzzRecoveryToken;
+  settle: (token: BuzzRecoveryToken) => void;
+  abandon: (token: BuzzRecoveryToken) => void;
+  markBacklogDrained: () => void;
 };
 
-export function createBuzzRecoveryFrontier(params: { sinceSeconds: number }): BuzzRecoveryFrontier {
-  const outstanding = new Map<number, number>();
-  let committed = params.sinceSeconds;
-  let settledCeiling: number | undefined;
-  let failedFloor = Number.POSITIVE_INFINITY;
+type RoomFrontier = {
+  committed: number;
+  outstanding: Map<number, number>;
+  settledCeiling: number | undefined;
+  failedFloor: number;
+};
+
+export function createBuzzRecoveryFrontier(params: {
+  sinceFor: (channelId: string) => number;
+  onCheckpoint: (channelId: string, seconds: number) => void;
+}): BuzzRecoveryFrontier {
+  const rooms = new Map<string, RoomFrontier>();
   let backlogDrained = false;
   let nextToken = 0;
 
-  const nextCheckpoint = (): number | undefined => {
-    if (!backlogDrained || settledCeiling === undefined) {
-      return undefined;
+  const roomFrontier = (channelId: string): RoomFrontier => {
+    const existing = rooms.get(channelId);
+    if (existing) {
+      return existing;
     }
-    let checkpoint = Math.min(settledCeiling, failedFloor);
-    for (const seconds of outstanding.values()) {
+    const created = {
+      committed: params.sinceFor(channelId),
+      outstanding: new Map<number, number>(),
+      settledCeiling: undefined,
+      failedFloor: Number.POSITIVE_INFINITY,
+    } satisfies RoomFrontier;
+    rooms.set(channelId, created);
+    return created;
+  };
+
+  const publishCheckpoint = (channelId: string, room: RoomFrontier): void => {
+    if (!backlogDrained || room.settledCeiling === undefined) {
+      return;
+    }
+    let checkpoint = Math.min(room.settledCeiling, room.failedFloor);
+    for (const seconds of room.outstanding.values()) {
       checkpoint = Math.min(checkpoint, seconds);
     }
-    if (checkpoint <= committed) {
-      return undefined;
+    if (checkpoint <= room.committed) {
+      return;
     }
-    committed = checkpoint;
-    return committed;
+    room.committed = checkpoint;
+    params.onCheckpoint(channelId, checkpoint);
   };
 
   return {
-    admit({ createdAt, observedSeconds }) {
-      const token = nextToken;
+    admit({ channelId, createdAt, observedSeconds }) {
+      const id = nextToken;
       nextToken += 1;
-      outstanding.set(
-        token,
+      roomFrontier(channelId).outstanding.set(
+        id,
         Number.isFinite(createdAt) ? Math.min(createdAt, observedSeconds) : observedSeconds,
       );
-      return token;
+      return { channelId, id };
     },
-    settle(token) {
-      const seconds = outstanding.get(token);
-      if (seconds === undefined) {
-        return undefined;
-      }
-      outstanding.delete(token);
-      settledCeiling = settledCeiling === undefined ? seconds : Math.max(settledCeiling, seconds);
-      return nextCheckpoint();
-    },
-    abandon(token) {
-      const seconds = outstanding.get(token);
+    settle({ channelId, id }) {
+      const room = roomFrontier(channelId);
+      const seconds = room.outstanding.get(id);
       if (seconds === undefined) {
         return;
       }
-      outstanding.delete(token);
-      failedFloor = Math.min(failedFloor, seconds);
+      room.outstanding.delete(id);
+      room.settledCeiling =
+        room.settledCeiling === undefined ? seconds : Math.max(room.settledCeiling, seconds);
+      publishCheckpoint(channelId, room);
+    },
+    abandon({ channelId, id }) {
+      const room = roomFrontier(channelId);
+      const seconds = room.outstanding.get(id);
+      if (seconds === undefined) {
+        return;
+      }
+      room.outstanding.delete(id);
+      room.failedFloor = Math.min(room.failedFloor, seconds);
     },
     markBacklogDrained() {
       backlogDrained = true;
-      return nextCheckpoint();
+      for (const [channelId, room] of rooms) {
+        publishCheckpoint(channelId, room);
+      }
     },
   };
 }
@@ -120,26 +172,28 @@ export function createBuzzRecoveryFrontier(params: { sinceSeconds: number }): Bu
 export async function advanceBuzzRecoveryWatermark(params: {
   store: BuzzRecoveryWatermarkStore | undefined;
   accountId: string;
+  channelId: string;
   seconds: number;
   onError?: (error: Error) => void;
 }): Promise<void> {
-  const { store, accountId, seconds } = params;
+  const { store, accountId, channelId, seconds } = params;
   if (!store || !Number.isFinite(seconds)) {
     return;
   }
+  const key = roomCursorKey(accountId, channelId);
   const next = { seconds } satisfies BuzzRecoveryWatermark;
   try {
     if (store.update) {
-      await store.update(accountId, (current) =>
+      await store.update(key, (current) =>
         isUsableWatermark(current) && current.seconds >= seconds ? current : next,
       );
       return;
     }
-    const current = await store.lookup(accountId);
+    const current = await store.lookup(key);
     if (isUsableWatermark(current) && current.seconds >= seconds) {
       return;
     }
-    await store.register(accountId, next);
+    await store.register(key, next);
   } catch (error) {
     params.onError?.(error instanceof Error ? error : new Error(String(error)));
   }

@@ -236,7 +236,7 @@ describe("Buzz reconnect history catch-up", () => {
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
       channelIds: [CHANNEL_ID],
-      since: BASE_TIMESTAMP - 60,
+      since: () => BASE_TIMESTAMP - 60,
       onMessage: async (message) => {
         received.push(message.text);
       },
@@ -260,7 +260,7 @@ describe("Buzz reconnect history catch-up", () => {
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
       channelIds: [CHANNEL_ID],
-      since: BASE_TIMESTAMP - 60,
+      since: () => BASE_TIMESTAMP - 60,
       onMessage: async (message) => {
         received.push(message.text);
       },
@@ -283,7 +283,7 @@ describe("Buzz reconnect history catch-up", () => {
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
       channelIds: [CHANNEL_ID],
-      since: BASE_TIMESTAMP - 60,
+      since: () => BASE_TIMESTAMP - 60,
       onMessage: async (message) => {
         received.push(message.text);
       },
@@ -311,7 +311,7 @@ describe("Buzz reconnect history catch-up", () => {
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
       channelIds: [CHANNEL_ID],
-      since: BASE_TIMESTAMP - 60,
+      since: () => BASE_TIMESTAMP - 60,
       onMessage: async (message) => {
         received.push(message.text);
       },
@@ -340,7 +340,7 @@ describe("Buzz reconnect history catch-up", () => {
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
       channelIds: [CHANNEL_ID],
-      since: BASE_TIMESTAMP - 60,
+      since: () => BASE_TIMESTAMP - 60,
       onMessage: async (message) => {
         received.push(message.text);
       },
@@ -370,7 +370,7 @@ describe("Buzz reconnect history catch-up", () => {
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
       channelIds: [CHANNEL_ID],
-      since: BASE_TIMESTAMP - 60,
+      since: () => BASE_TIMESTAMP - 60,
       onMessage: async () => {},
       onFatalError: (error) => {
         fatalErrors.push(error.message);
@@ -394,7 +394,7 @@ describe("Buzz reconnect history catch-up", () => {
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
       channelIds: [CHANNEL_ID],
-      since: BASE_TIMESTAMP - 60,
+      since: () => BASE_TIMESTAMP - 60,
       onMessage: async () => {},
       onFatalError: (error) => {
         fatalErrors.push(error.message);
@@ -421,7 +421,7 @@ describe("Buzz reconnect history catch-up", () => {
       relayUrl: "wss://buzz.example.com",
       privateKey: PRIVATE_KEY,
       channelIds: [CHANNEL_ID],
-      since: BASE_TIMESTAMP - 60,
+      since: () => BASE_TIMESTAMP - 60,
       onMessage: async (message) => {
         received.push(message.text);
       },
