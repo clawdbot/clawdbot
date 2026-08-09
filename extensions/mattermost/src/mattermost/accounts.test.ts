@@ -308,4 +308,43 @@ describe("resolveMattermostReplyToMode", () => {
     expect(separate.progressFinalDelivery).toBe("separate");
     expect(defaultAccount.progressFinalDelivery).toBe("in-place");
   });
+
+  it("inherits root progress mode and options when an account overrides final delivery", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: {
+              mode: "progress",
+              progress: {
+                label: "Root progress",
+                toolProgress: false,
+                commandText: "raw",
+              },
+            },
+            accounts: {
+              work: {
+                streaming: {
+                  progress: {
+                    commandText: "status",
+                    finalDelivery: "separate",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.streamingMode).toBe("progress");
+    expect(account.progressFinalDelivery).toBe("separate");
+    expect(account.config.streaming?.progress).toEqual({
+      label: "Root progress",
+      toolProgress: false,
+      commandText: "status",
+      finalDelivery: "separate",
+    });
+  });
 });

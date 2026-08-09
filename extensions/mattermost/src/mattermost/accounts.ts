@@ -56,7 +56,7 @@ const {
   resolveAccountConfig: mergeMattermostAccountConfig,
 } = createAccountListHelpers<MattermostAccountConfig>("mattermost", {
   omitKeys: ["defaultAccount"],
-  nestedObjectKeys: ["commands"],
+  nestedObjectKeys: ["commands", "streaming"],
   hasImplicitDefaultAccount: (cfg) => {
     const mattermost = cfg.channels?.mattermost;
     return Boolean(
@@ -90,6 +90,15 @@ function resolveMattermostAccountWithMode(params: {
   );
   const baseEnabled = params.cfg.channels?.mattermost?.enabled !== false;
   const merged = mergeMattermostAccountConfig(params.cfg, accountId);
+  const rootProgress = params.cfg.channels?.mattermost?.streaming?.progress;
+  const accountProgress =
+    params.cfg.channels?.mattermost?.accounts?.[accountId]?.streaming?.progress;
+  if (rootProgress && accountProgress && merged.streaming) {
+    merged.streaming.progress = {
+      ...rootProgress,
+      ...accountProgress,
+    };
+  }
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
 
