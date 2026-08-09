@@ -473,11 +473,21 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         return ownerPluginId;
       }
+      // Fail-closed: reject keyed runs whose session ID does not match the
+      // keyed entry. The SQLite accessor cannot scan cross-agent stores, so
+      // an unscoped lookup would throw rather than reject cleanly. Also
+      // covers keys with no persisted entry. Keyless runs are preserved.
+      const resolvedSessionId = normalizeOptionalString(target?.sessionId ?? params.sessionId);
+      if (sessionKey && resolvedSessionId && (!entry || resolvedSessionId !== entry.sessionId)) {
+        throw new Error(
+          `Plugin "${pluginId}" may execute session "${resolvedSessionId}" only through its own session key "${sessionKey}".`,
+        );
+      }
       assertSessionIdentitiesOwned({
         action: "run",
         agentId: ownershipAgentId,
         sessionFiles: [params.sessionFile],
-        sessionIds: [target?.sessionId ?? params.sessionId],
+        sessionIds: [resolvedSessionId],
         sessionKeys: [target?.sessionKey ?? params.sessionKey],
         storePath: ownershipStorePath,
       });

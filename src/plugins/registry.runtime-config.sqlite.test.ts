@@ -94,8 +94,86 @@ describe("plugin registry SQLite session ownership", () => {
             ...runParams,
             sessionId: lockedSessionId,
           }),
-        ).rejects.toThrow('owned by plugin "harness-owner"');
+        ).rejects.toThrow(/may execute session.*only through its own session key/);
         expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+      }
+    });
+  });
+
+  it("rejects a foreign locked session ID from a different agent store", async () => {
+    await withTempHome(async (home) => {
+      const ownKey = "agent:main:own-session";
+      const ownSessionId = "own-session-id";
+      const foreignKey = "agent:researcher:dashboard:foreign-locked";
+      const foreignSessionId = "foreign-locked-session-id";
+      try {
+        // Seed own session in agent main's store
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: ownKey },
+          { sessionId: ownSessionId, updatedAt: 1 },
+        );
+        // Seed foreign locked session in a different agent's store
+        await replaceSessionEntry(
+          { agentId: "researcher", sessionKey: foreignKey },
+          {
+            sessionId: foreignSessionId,
+            updatedAt: 2,
+            agentHarnessId: "test-harness",
+            modelSelectionLocked: true,
+          },
+        );
+
+        const runtime = createPluginRuntime();
+        const runEmbeddedAgent = vi.fn(async () => ({ ok: true })) as unknown as ReturnType<
+          typeof createPluginRuntime
+        >["agent"]["runEmbeddedAgent"];
+        Object.defineProperty(runtime.agent, "runEmbeddedAgent", {
+          configurable: true,
+          value: runEmbeddedAgent,
+        });
+        const pluginRegistry = createTestRegistry(runtime);
+        const ownerRecord = createPluginRecord({
+          id: "harness-owner",
+          source: "/plugins/harness-owner/index.js",
+          origin: "bundled",
+          enabled: true,
+          configSchema: false,
+        });
+        const callerRecord = createPluginRecord({
+          id: "extractor-plugin",
+          source: "/plugins/extractor-plugin/index.js",
+          origin: "bundled",
+          enabled: true,
+          configSchema: false,
+        });
+        const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
+        const callerApi = pluginRegistry.createApi(callerRecord, {
+          config: {} as OpenClawConfig,
+        });
+        ownerApi.registerAgentHarness({
+          id: "test-harness",
+          label: "Test Harness",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("unused");
+          },
+        });
+
+        // Plugin uses its own key + a foreign locked session ID from a different agent.
+        // The pre-scan guard rejects this before any SQLite store listing.
+        await expect(
+          callerApi.runtime.agent.runEmbeddedAgent({
+            sessionId: foreignSessionId,
+            sessionKey: ownKey,
+            workspaceDir: path.join(home, "workspace"),
+            prompt: "continue",
+            timeoutMs: 1,
+            runId: "run-cross-store",
+          } as Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0]),
+        ).rejects.toThrow(/may execute session.*only through its own session key/);
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
       } finally {
         closeOpenClawAgentDatabasesForTest();
       }
