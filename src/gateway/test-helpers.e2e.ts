@@ -56,6 +56,8 @@ export async function connectGatewayClient(params: {
   connectChallengeTimeoutMs?: number;
   preauthHandshakeTimeoutMs?: number;
   requestTimeoutMs?: number;
+  minProtocol?: number;
+  maxProtocol?: number;
   timeoutMs?: number;
   timeoutMessage?: string;
 }) {
@@ -104,6 +106,8 @@ export async function connectGatewayClient(params: {
       ...(params.requestTimeoutMs !== undefined
         ? { requestTimeoutMs: params.requestTimeoutMs }
         : {}),
+      minProtocol: params.minProtocol,
+      maxProtocol: params.maxProtocol,
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",

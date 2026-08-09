@@ -68,6 +68,27 @@ function isCodexMcpServerAllowedForAgent(
   return agentIds.includes(normalizeAgentId(options.agentId));
 }
 
+/**
+ * Applies Codex-only agent scoping before OpenClaw resolves credentials or opens transports.
+ * Session overrides may narrow this result, but cannot widen `codex.agents`.
+ */
+export function resolveCodexMcpToolOverridesForAgent(
+  cfg: OpenClawConfig | undefined,
+  options: Pick<CodexUserMcpServersProjectionOptions, "agentId" | "toolOverrides">,
+): Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny"> | undefined {
+  const deniedServerNames = Object.entries(normalizeConfiguredMcpServers(cfg?.mcp?.servers))
+    .filter(([, server]) => !isCodexMcpServerAllowedForAgent(server, options))
+    .map(([name]) => name);
+  if (deniedServerNames.length === 0) {
+    return options.toolOverrides;
+  }
+  const mcpServers = { ...options.toolOverrides?.mcpServers };
+  for (const serverName of deniedServerNames) {
+    mcpServers[serverName] = false;
+  }
+  return { ...options.toolOverrides, mcpServers };
+}
+
 function readSessionMcpServerOverride(
   options: CodexUserMcpServersProjectionOptions | undefined,
   name: string,

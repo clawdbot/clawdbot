@@ -32,6 +32,8 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
   "claw_package_refs.extension_id",
   "claw_package_refs.extension_mapped_json",
   "claw_package_refs.extension_unavailable_json",
+  "worker_environments.shared_host",
+  "worktrees.run_end_cleanup_json",
 ] as const;
 
 const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {

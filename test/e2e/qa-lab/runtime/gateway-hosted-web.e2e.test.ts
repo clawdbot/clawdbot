@@ -59,7 +59,12 @@ function waitForWebSocketMessage(ws: WebSocket, expected: string): Promise<void>
       5_000,
     );
     ws.on("message", (data) => {
-      if (data.toString() !== expected) {
+      const message = Array.isArray(data)
+        ? Buffer.concat(data).toString("utf8")
+        : Buffer.isBuffer(data)
+          ? data.toString("utf8")
+          : Buffer.from(data).toString("utf8");
+      if (message !== expected) {
         return;
       }
       clearTimeout(timer);
@@ -173,7 +178,7 @@ describe("Gateway hosted web surfaces", () => {
 
           const registerEntry = (
             pluginId: string,
-            entry: typeof adminHttpRpcPlugin | typeof canvasPlugin,
+            entry: typeof adminHttpRpcPlugin,
             pluginConfig: Record<string, unknown> = {},
           ) => {
             entry.register(

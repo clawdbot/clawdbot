@@ -57,7 +57,7 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionTranscriptAppendTarget = {
   agentId?: string;
@@ -491,6 +491,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   sessionKey: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   text?: string;
@@ -523,6 +524,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     ...(params.expectedLifecycleRevision
       ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
       : {}),
+    ...(params.expectedWriterRunId ? { expectedWriterRunId: params.expectedWriterRunId } : {}),
     ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
     ...(params.sessionLifecyclePatch
       ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
@@ -564,6 +566,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   sessionKey: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   message: SessionTranscriptAssistantMessage;
@@ -606,6 +609,16 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   if (
     params.expectedLifecycleRevision !== undefined &&
     entry?.lifecycleRevision !== params.expectedLifecycleRevision
+  ) {
+    return {
+      ok: false,
+      code: "session-rebound",
+      reason: `session rebound for sessionKey: ${sessionKey}`,
+    };
+  }
+  if (
+    params.expectedWriterRunId !== undefined &&
+    (entry as SessionEntry | undefined)?.activeWriterRunId !== params.expectedWriterRunId
   ) {
     return {
       ok: false,
@@ -666,6 +679,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
         ...(params.expectedLifecycleRevision !== undefined
           ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
+          : {}),
+        ...(params.expectedWriterRunId !== undefined
+          ? { expectedWriterRunId: params.expectedWriterRunId }
           : {}),
         ...(params.expectedSessionState
           ? { expectedSessionState: params.expectedSessionState }

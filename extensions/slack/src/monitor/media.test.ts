@@ -841,7 +841,7 @@ describe("resolveSlackMedia", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("returns all successfully downloaded files as an array", async () => {
+  it("preserves Slack metadata on every downloaded file", async () => {
     saveMediaBufferMock.mockImplementation(async (buffer, _contentType) => {
       const text = Buffer.from(buffer).toString("utf8");
       if (text.includes("image a")) {
@@ -873,8 +873,20 @@ describe("resolveSlackMedia", () => {
 
     const result = await resolveSlackMedia({
       files: [
-        { id: "FA", url_private: "https://files.slack.com/a.jpg", name: "a.jpg" },
-        { id: "FB", url_private: "https://files.slack.com/b.png", name: "b.png" },
+        {
+          id: "FA",
+          url_private: "https://files.slack.com/a.jpg",
+          name: "a.jpg",
+          mimetype: "image/jpeg",
+          size: 12,
+        },
+        {
+          id: "FB",
+          url_private: "https://files.slack.com/b.png",
+          name: "b.png",
+          mimetype: "image/png",
+          size: 34,
+        },
       ],
       token: "xoxb-test-token",
       maxBytes: 1024 * 1024,
@@ -885,9 +897,9 @@ describe("resolveSlackMedia", () => {
     const first = expectDefined(media[0], "first Slack media result");
     const second = expectDefined(media[1], "second Slack media result");
     expect(first.path).toBe("/tmp/a.jpg");
-    expect(first.placeholder).toBe("[Slack file: a.jpg (fileId: FA)]");
+    expect(first.placeholder).toBe("[Slack file: a.jpg (image/jpeg, 12 bytes, fileId: FA)]");
     expect(second.path).toBe("/tmp/b.png");
-    expect(second.placeholder).toBe("[Slack file: b.png (fileId: FB)]");
+    expect(second.placeholder).toBe("[Slack file: b.png (image/png, 34 bytes, fileId: FB)]");
   });
 
   it("caps downloads to 8 files for large multi-attachment messages", async () => {
@@ -1753,7 +1765,7 @@ describe("resolveSlackThreadStarter", () => {
           text: "   ",
           user: "U1",
           ts: "1.000",
-          files: [{ id: "FROOT", name: "root.png", mimetype: "image/png" }],
+          files: [{ id: "FROOT", name: "root.png", mimetype: "image/png", size: 512 }],
         },
       ],
     });
@@ -1768,11 +1780,11 @@ describe("resolveSlackThreadStarter", () => {
     });
 
     expect(result).toEqual({
-      text: "[attached: root.png (fileId: FROOT)]",
+      text: "[attached: root.png (image/png, 512 bytes, fileId: FROOT)]",
       userId: "U1",
       botId: undefined,
       ts: "1.000",
-      files: [{ id: "FROOT", name: "root.png", mimetype: "image/png" }],
+      files: [{ id: "FROOT", name: "root.png", mimetype: "image/png", size: 512 }],
     });
     expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
   });

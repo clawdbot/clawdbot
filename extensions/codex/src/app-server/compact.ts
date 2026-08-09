@@ -1,6 +1,7 @@
 /**
  * Native Codex app-server compaction bridge for bound OpenClaw sessions.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   embeddedAgentLog,
   resolveCompactionTimeoutMs,
@@ -45,6 +46,7 @@ import {
   releaseLeasedSharedCodexAppServerClient,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
+import { isSameCodexAppServerThreadOwner } from "./thread-ownership.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 
 // ttlMs: 0 retains keys until the 4,096-entry LRU cap evicts them, after which a
@@ -77,6 +79,7 @@ function watchCodexNativeCompactionCompletion(params: {
   retireUnconfirmedRequest: (reason: string) => Promise<CodexNativeCompactionCompletion>;
   cancel: () => void;
 } {
+  const runOutsideBindingLease = AsyncLocalStorage.snapshot();
   let settled = false;
   let requestStarted = false;
   let abortRequested = false;
@@ -111,8 +114,9 @@ function watchCodexNativeCompactionCompletion(params: {
       return;
     }
     retirementStarted = true;
-    void params
-      .retireUnconfirmed()
+    // Timers started under the short-lived binding lease inherit its async
+    // owner. Remote retirement must not reuse that already-released token.
+    void runOutsideBindingLease(() => params.retireUnconfirmed())
       .then(() => finish({ completed: false, reason }))
       .catch((error: unknown) => {
         embeddedAgentLog.error("failed to retire unconfirmed codex app-server compaction", {
@@ -552,6 +556,7 @@ async function compactCodexNativeThread(
         let releaseThreadSubscription: (() => Promise<void>) | undefined;
         let retainedThreadOwnership: CodexAppServerLiveThreadOwnership | undefined;
         let compactionSucceeded = false;
+        let compactionRequestDefinitelyRejected = false;
         const releaseCompactionThread = async (threadId: string) => {
           if (
             await unsubscribeCodexThreadBestEffort(client, {
@@ -651,84 +656,85 @@ async function compactCodexNativeThread(
           }
         };
         try {
-          if (options.allowNonManualNativeRequest) {
-            const guardedResult = await options.bindingStore.withLease(
-              bindingIdentity,
-              async () => {
-                const currentBinding = await options.bindingStore.read(bindingIdentity);
-                if (params.abortSignal?.aborted) {
-                  return {
-                    started: false as const,
-                    result: skippedCodexNativeCompactionResult(params, {
-                      reason: "codex app-server compaction aborted before native compaction",
-                      code: "aborted_before_native_compaction",
-                      expectedThreadId: binding.threadId,
-                      currentThreadId: currentBinding?.threadId,
-                    }),
-                  };
-                }
-                if (!currentBinding || !isSameNativeCompactionBinding(currentBinding, binding)) {
-                  embeddedAgentLog.warn(
-                    "skipping codex app-server compaction because the thread binding changed",
-                    {
-                      sessionId: params.sessionId,
-                      sessionKey: params.sessionKey,
-                      expectedThreadId: binding.threadId,
-                      currentThreadId: currentBinding?.threadId,
-                    },
-                  );
-                  return {
-                    started: false as const,
-                    result: skippedCodexNativeCompactionResult(params, {
+          const guardedResult = await options.bindingStore.withLease(bindingIdentity, async () => {
+            const currentBinding = await options.bindingStore.read(bindingIdentity);
+            if (params.abortSignal?.aborted) {
+              if (!options.allowNonManualNativeRequest) {
+                params.abortSignal.throwIfAborted();
+              }
+              return {
+                started: false as const,
+                result: skippedCodexNativeCompactionResult(params, {
+                  reason: "codex app-server compaction aborted before native compaction",
+                  code: "aborted_before_native_compaction",
+                  expectedThreadId: binding.threadId,
+                  currentThreadId: currentBinding?.threadId,
+                }),
+              };
+            }
+            if (!currentBinding || !isSameNativeCompactionBinding(currentBinding, binding)) {
+              embeddedAgentLog.warn(
+                "skipping codex app-server compaction because the thread binding changed",
+                {
+                  sessionId: params.sessionId,
+                  sessionKey: params.sessionKey,
+                  expectedThreadId: binding.threadId,
+                  currentThreadId: currentBinding?.threadId,
+                },
+              );
+              return {
+                started: false as const,
+                result: options.allowNonManualNativeRequest
+                  ? skippedCodexNativeCompactionResult(params, {
                       reason: "codex app-server binding changed before native compaction",
                       code: "binding_changed_before_native_compaction",
                       expectedThreadId: binding.threadId,
                       currentThreadId: currentBinding?.threadId,
+                    })
+                  : failedCodexThreadBindingCompactionResult(params, {
+                      threadId: binding.threadId,
+                      reason: "codex app-server binding changed before native compaction",
+                      recovery: "stale_thread_binding",
                     }),
-                  };
-                }
-                binding = currentBinding;
-                const guardedRequestTimeoutMs = Math.min(
+              };
+            }
+            binding = currentBinding;
+            const guardedRequestTimeoutMs = options.allowNonManualNativeRequest
+              ? Math.min(
                   appServer.requestTimeoutMs,
                   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
-                );
-                await acquireThreadSubscription(guardedRequestTimeoutMs);
-                await clearContextEngineProjectionBeforeNativeCompaction({
-                  sessionId: params.sessionId,
-                  bindingStore: options.bindingStore,
-                  identity: bindingIdentity,
+                )
+              : undefined;
+            await acquireThreadSubscription(guardedRequestTimeoutMs);
+            await clearContextEngineProjectionBeforeNativeCompaction({
+              sessionId: params.sessionId,
+              bindingStore: options.bindingStore,
+              identity: bindingIdentity,
+              binding,
+            });
+            try {
+              await beginNativeCompactionRequest(guardedRequestTimeoutMs);
+              return { started: true as const, accepted: true as const };
+            } catch (error) {
+              if (error instanceof CodexAppServerRpcError) {
+                // A server rejection proves native history was untouched; an
+                // ambiguous transport failure must never restore stale context.
+                await options.bindingStore.mutate(bindingIdentity, {
+                  kind: "set",
                   binding,
                 });
-                try {
-                  await beginNativeCompactionRequest(guardedRequestTimeoutMs);
-                  return { started: true as const, accepted: true as const };
-                } catch (error) {
-                  await options.bindingStore.mutate(bindingIdentity, {
-                    kind: "set",
-                    binding,
-                  });
-                  // Retire outside the binding lock: remote detach acquires this
-                  // same lock and would otherwise deadlock the failure path.
-                  return { started: true as const, accepted: false as const, error };
-                }
-              },
-            );
-            if (!guardedResult.started) {
-              return guardedResult.result;
+                compactionRequestDefinitelyRejected = !isCodexThreadNotFoundError(error);
+              }
+              // Retirement can acquire this same generation lease.
+              return { started: true as const, accepted: false as const, error };
             }
-            if (!guardedResult.accepted) {
-              await settleNativeCompactionRequestError(guardedResult.error);
-              throw guardedResult.error;
-            }
-          } else {
-            params.abortSignal?.throwIfAborted();
-            await acquireThreadSubscription();
-            try {
-              await beginNativeCompactionRequest();
-            } catch (error) {
-              await settleNativeCompactionRequestError(error);
-              throw error;
-            }
+          });
+          if (!guardedResult.started) {
+            return guardedResult.result;
+          }
+          if (!guardedResult.accepted) {
+            await settleNativeCompactionRequestError(guardedResult.error);
+            throw guardedResult.error;
           }
           embeddedAgentLog.info("started codex app-server compaction", {
             sessionId: params.sessionId,
@@ -765,16 +771,19 @@ async function compactCodexNativeThread(
         } finally {
           completionWatch.cancel();
           try {
-            if (compactionSucceeded && retainedThreadOwnership) {
+            if (
+              (compactionSucceeded || compactionRequestDefinitelyRejected) &&
+              retainedThreadOwnership
+            ) {
               const ownership = retainedThreadOwnership;
               const currentBinding = await options.bindingStore.read(bindingIdentity);
               // Reset uses this same generation lease; without it compaction
               // could return an obsolete subscription after its owner ended.
               const retained =
-                currentBinding?.threadId === binding.threadId &&
+                isSameCodexAppServerThreadOwner(currentBinding, binding) &&
                 (await options.bindingStore.withLease(bindingIdentity, async () => {
                   const leasedBinding = await options.bindingStore.read(bindingIdentity);
-                  if (leasedBinding?.threadId !== binding.threadId) {
+                  if (!isSameCodexAppServerThreadOwner(leasedBinding, binding)) {
                     return false;
                   }
                   return await retainCodexAppServerLiveThread(
@@ -935,7 +944,7 @@ function isSameNativeCompactionBinding(
   expected: CodexAppServerThreadBinding,
 ): boolean {
   return (
-    current.threadId === expected.threadId &&
+    isSameCodexAppServerThreadOwner(current, expected) &&
     current.authProfileId === expected.authProfileId &&
     current.contextEngine?.engineId === expected.contextEngine?.engineId &&
     current.contextEngine?.policyFingerprint === expected.contextEngine?.policyFingerprint &&

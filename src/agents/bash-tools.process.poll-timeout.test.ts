@@ -4,7 +4,12 @@
  */
 import { afterEach, expect, test, vi } from "vitest";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
-import { addSession, appendOutput, markExited } from "./bash-process-registry.js";
+import {
+  addSession,
+  appendOutput,
+  getFinishedSession,
+  markExited,
+} from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -138,6 +143,84 @@ test("process poll warns when the session times out while poll is waiting", asyn
   }
 });
 
+test.each([
+  {
+    name: "successful zero exit",
+    exitCode: 0,
+    exitSignal: null,
+    ownerStatus: "completed",
+    exitReason: undefined,
+    expectedExit: "code 0",
+  },
+  {
+    name: "successful nonzero exit",
+    exitCode: 7,
+    exitSignal: null,
+    ownerStatus: "completed",
+    exitReason: undefined,
+    expectedExit: "code 7",
+  },
+  {
+    name: "runtime failure without an exit code",
+    exitCode: null,
+    exitSignal: null,
+    ownerStatus: "failed",
+    exitReason: undefined,
+    expectedExit: "unknown exit code",
+  },
+  {
+    name: "timeout after a clean child exit",
+    exitCode: 0,
+    exitSignal: null,
+    ownerStatus: "failed",
+    exitReason: "overall-timeout",
+    expectedExit: "code 0",
+  },
+  {
+    name: "signal failure without an exit code",
+    exitCode: null,
+    exitSignal: "SIGKILL",
+    ownerStatus: "failed",
+    exitReason: "manual-cancel",
+    expectedExit: "signal SIGKILL",
+  },
+] as const)(
+  "preserves the lifecycle owner's $name when completion races a process poll",
+  async ({ name, exitCode, exitSignal, ownerStatus, exitReason, expectedExit }) => {
+    vi.useFakeTimers();
+    try {
+      const sessionId = `sess-terminal-${name.replaceAll(" ", "-")}`;
+      const { processTool, session } = createProcessSessionHarness(sessionId);
+
+      setTimeout(() => {
+        markExited(session, exitCode, exitSignal, ownerStatus, exitReason);
+      }, 10);
+
+      const pendingPoll = pollSession(processTool, "toolcall-terminal-race", sessionId, 1_000);
+      await vi.advanceTimersByTimeAsync(250);
+      const racedPoll = await pendingPoll;
+      const racedDetails = racedPoll.details as { status?: string; exitCode?: number };
+
+      expect(racedDetails.status).toBe(ownerStatus);
+      expect(racedDetails.exitCode).toBe(exitCode ?? undefined);
+      expect(racedPoll.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining(`Process exited with ${expectedExit}.`),
+      });
+      expect(getFinishedSession(sessionId)?.status).toBe(ownerStatus);
+
+      const retainedPoll = await pollSession(processTool, "toolcall-terminal-retained", sessionId);
+      expect(retainedPoll.details).toMatchObject({ status: ownerStatus });
+      expect(retainedPoll.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining(`Process exited with ${expectedExit}.`),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
 test("process poll clamps long waits to 30 seconds", async () => {
   vi.useFakeTimers();
   try {
@@ -263,6 +346,59 @@ test.each([
     } else {
       expect(text).toContain(earlierMarker);
       expect(text).not.toContain("earlier retained output is omitted");
+    }
+    expect(text).not.toContain("discarded at the retention cap");
+  },
+);
+
+test.each([
+  { name: "below the retained tail", outputLength: 1_500, aggregateCap: 1_000 },
+  { name: "above the retained tail", outputLength: 3_500, aggregateCap: 3_000 },
+])(
+  "process poll distinguishes discarded aggregate output $name",
+  async ({ outputLength, aggregateCap }) => {
+    const sessionId = `sess-aggregate-cap-${aggregateCap}`;
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const earlierMarker = "[discarded-output]";
+    const latestMarker = "[latest-retained-output]";
+    const output = `${earlierMarker}${"x".repeat(
+      outputLength - earlierMarker.length - latestMarker.length,
+    )}${latestMarker}`;
+    session.maxOutputChars = aggregateCap;
+
+    appendOutput(session, "stdout", output);
+    const runningLog = await processTool.execute("toolcall-running-aggregate-cap", {
+      action: "log",
+      sessionId,
+    });
+    const runningPoll = await pollSession(processTool, "toolcall-running-aggregate-cap", sessionId);
+    markExited(session, 0, null, "completed");
+
+    const poll = await pollSession(processTool, "toolcall-aggregate-cap", sessionId);
+    const finishedLog = await processTool.execute("toolcall-finished-aggregate-cap", {
+      action: "log",
+      sessionId,
+    });
+    const text = poll.content[0]?.type === "text" ? poll.content[0].text : "";
+    const runningLogText = runningLog.content[0]?.type === "text" ? runningLog.content[0].text : "";
+    const runningPollText =
+      runningPoll.content[0]?.type === "text" ? runningPoll.content[0].text : "";
+    const finishedLogText =
+      finishedLog.content[0]?.type === "text" ? finishedLog.content[0].text : "";
+    const details = poll.details as { aggregated?: string };
+
+    expect(details.aggregated).toHaveLength(aggregateCap);
+    expect(text).not.toContain(earlierMarker);
+    expect(text).toContain(latestMarker);
+    expect(text).toContain("discarded at the retention cap and cannot be recovered");
+    expect(runningLogText).toContain("discarded at the retention cap and cannot be recovered");
+    expect(runningPollText).toContain("discarded at the retention cap and cannot be recovered");
+    expect(finishedLogText).toContain("discarded at the retention cap and cannot be recovered");
+    if (aggregateCap > 2_000) {
+      expect(text).toContain("earlier retained output is omitted");
+      expect(text).toContain("action=log with offset and limit");
+    } else {
+      expect(text).not.toContain("action=log with offset and limit");
     }
   },
 );

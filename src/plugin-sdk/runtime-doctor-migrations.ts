@@ -10,11 +10,16 @@ import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.js";
-import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
+import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
 
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 export { defineChannelAliasMigration } from "../config/channel-alias-migration.js";
+export {
+  createLegacyPrivateNetworkDoctorContract,
+  hasLegacyFlatAllowPrivateNetworkAlias,
+  migrateLegacyFlatAllowPrivateNetworkAlias,
+} from "../config/legacy-private-network-migration.js";
 export type {
   ChannelAliasMigrationSpec,
   StreamingAliasMode,
@@ -48,11 +53,13 @@ export type {
 export type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
-} from "../plugins/doctor-contract-registry.js";
+} from "../plugins/doctor-contract-module.js";
 export {
   archiveLegacyStateSource,
   legacyStateFileExists,
 } from "../plugins/doctor-state-migration-fs.js";
+export { buildLegacyMigrationPreview } from "../channels/plugins/legacy-state-migration-preview.js";
+export { definePluginDoctorMigrationFromPlans } from "./doctor-migration-plan-adapter.js";
 export type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 
 type KeyMoveValue = { value: unknown };

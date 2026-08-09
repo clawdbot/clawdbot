@@ -13,6 +13,7 @@ import {
   resolveIMessageHomeDir,
   resolveLocalIMessageChatDbPath,
 } from "./cli-path.js";
+import { getCachedIMessageRemoteHost } from "./remote-host.js";
 
 export type ResolvedIMessageAccount = {
   accountId: string;
@@ -141,7 +142,10 @@ function normalizeIMessageDbPath(value: string | undefined | null): string {
 function resolveIMessageAccountSourceSignature(account: ResolvedIMessageAccount): string {
   const cliPath = normalizeIMessageCliPath(account.config.cliPath);
   const dbPath = normalizeIMessageDbPath(account.config.dbPath);
-  const remoteHost = account.config.remoteHost?.trim();
+  const remoteHost = getCachedIMessageRemoteHost({
+    cliPath,
+    remoteHost: account.config.remoteHost,
+  });
   // A remote path belongs to the SSH host and must not expand against the local home.
   if (remoteHost) {
     return JSON.stringify([cliPath, dbPath, remoteHost]);
@@ -225,7 +229,11 @@ export function hasExclusiveIMessageLocalDatabase(params: {
   account: ResolvedIMessageAccount;
   cliPath: string;
   dbPath?: string;
+  remoteHost?: string;
 }): boolean {
+  if (params.remoteHost?.trim()) {
+    return false;
+  }
   const otherAccounts = listEnabledIMessageAccounts(params.cfg).filter(
     (candidate) => candidate.accountId !== params.account.accountId,
   );
@@ -236,7 +244,7 @@ export function hasExclusiveIMessageLocalDatabase(params: {
   const selectedDbPath = resolveLocalIMessageChatDbPath({
     cliPath: params.cliPath,
     dbPath: params.dbPath,
-    remoteHost: params.account.config.remoteHost,
+    remoteHost: params.remoteHost ?? params.account.config.remoteHost,
   });
   if (!selectedDbPath) {
     return false;

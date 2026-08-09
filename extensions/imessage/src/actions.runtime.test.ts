@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const createIMessageRpcClientMock = vi.hoisted(() => vi.fn());
 const runIMessageCliJsonCommandMock = vi.hoisted(() => vi.fn());
+const withIMessageRemoteFileMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./cli-output.js", () => ({
   runIMessageCliJsonCommand: runIMessageCliJsonCommandMock,
@@ -14,6 +15,10 @@ vi.mock("./client.js", () => ({
   createIMessageRpcClient: createIMessageRpcClientMock,
 }));
 
+vi.mock("./remote-file.js", () => ({
+  withIMessageRemoteFile: withIMessageRemoteFileMock,
+}));
+
 const { imessageActionsRuntime, findChatGuidForTest, normalizeDirectChatIdentifierForTest } =
   await import("./actions.runtime.js");
 
@@ -21,6 +26,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   createIMessageRpcClientMock.mockReset();
   runIMessageCliJsonCommandMock.mockReset();
+  withIMessageRemoteFileMock.mockReset();
 });
 
 function mockRpcChatList(chats: Array<Record<string, unknown>>) {
@@ -31,6 +37,142 @@ function mockRpcChatList(chats: Array<Record<string, unknown>>) {
 }
 
 describe("imessage actions runtime", () => {
+  it("keeps remote action text and metacharacters inside JSON-RPC params", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const stop = vi.fn().mockResolvedValue(undefined);
+    createIMessageRpcClientMock.mockResolvedValue({ request, stop });
+    const text = "spaces ; $(touch /tmp/nope) `whoami` & | < >";
+
+    await imessageActionsRuntime.editMessage({
+      chatGuid: "iMessage;+;chat with spaces;$()",
+      messageId: "message ; $(id)",
+      text,
+      options: {
+        cliPath: "~/.openclaw/scripts/imsg-ssh",
+        dbPath: "~/Library/Messages/chat.db",
+        remoteHost: "bot@messages-mac",
+        chatGuid: "iMessage;+;chat with spaces;$()",
+      },
+    });
+
+    expect(createIMessageRpcClientMock).toHaveBeenCalledWith({
+      cliPath: "~/.openclaw/scripts/imsg-ssh",
+      dbPath: "~/Library/Messages/chat.db",
+      remoteHost: "bot@messages-mac",
+    });
+    expect(request).toHaveBeenCalledWith(
+      "message.edit",
+      {
+        chat_guid: "iMessage;+;chat with spaces;$()",
+        message_id: "message ; $(id)",
+        text,
+        backwards_compatibility_message: text,
+        part_index: 0,
+      },
+      { timeoutMs: undefined },
+    );
+    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("uses poll.vote RPC only for stable option ids on remote accounts", async () => {
+    const request = vi.fn().mockResolvedValue({ guid: "vote-guid", option_text: "Blue" });
+    createIMessageRpcClientMock.mockResolvedValue({
+      request,
+      stop: vi.fn().mockResolvedValue(undefined),
+    });
+    const options = {
+      cliPath: "/gateway/imsg-ssh",
+      remoteHost: "messages-mac",
+      chatGuid: "chat-guid",
+    };
+
+    await expect(
+      imessageActionsRuntime.sendPollVote({
+        chatGuid: "chat-guid",
+        pollGuid: "poll-guid",
+        optionId: "option-blue",
+        options,
+      }),
+    ).resolves.toEqual({ messageId: "vote-guid", optionText: "Blue" });
+    expect(request).toHaveBeenCalledWith(
+      "poll.vote",
+      { chat_guid: "chat-guid", poll_guid: "poll-guid", option_id: "option-blue" },
+      { timeoutMs: undefined },
+    );
+
+    for (const selector of [{ optionIndex: 2 }, { optionText: "Blue" }]) {
+      await expect(
+        imessageActionsRuntime.sendPollVote({
+          chatGuid: "chat-guid",
+          pollGuid: "poll-guid",
+          ...selector,
+          options,
+        }),
+      ).rejects.toMatchObject({
+        name: "IMessageRemoteUnsupportedError",
+        code: "IMESSAGE_REMOTE_UNSUPPORTED",
+      });
+    }
+    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects nonzero attachment reply parts on remote accounts", async () => {
+    await expect(
+      imessageActionsRuntime.sendRichMessage({
+        chatGuid: "chat-guid",
+        text: "reply",
+        replyToMessageId: "message-guid",
+        partIndex: 1,
+        attachment: {
+          kind: "buffer",
+          filename: "photo.png",
+          buffer: Uint8Array.from([1]),
+        },
+        options: {
+          cliPath: "/gateway/imsg-ssh",
+          remoteHost: "messages-mac",
+          chatGuid: "chat-guid",
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "IMessageRemoteUnsupportedError",
+      code: "IMESSAGE_REMOTE_UNSUPPORTED",
+    });
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("stages remote action files and passes only the remote pathname to RPC", async () => {
+    const request = vi.fn().mockResolvedValue({ guid: "attachment-guid" });
+    createIMessageRpcClientMock.mockResolvedValue({
+      request,
+      stop: vi.fn().mockResolvedValue(undefined),
+    });
+    withIMessageRemoteFileMock.mockImplementation(
+      async ({ use }: { use: (remotePath: string) => Promise<unknown> }) =>
+        await use("/tmp/openclaw-imessage-safe/photo.png"),
+    );
+
+    await imessageActionsRuntime.sendAttachment({
+      chatGuid: "chat-guid",
+      filename: "photo.png",
+      buffer: Uint8Array.from([1, 2, 3]),
+      options: {
+        cliPath: "/gateway/imsg-ssh",
+        remoteHost: "messages-mac",
+        chatGuid: "chat-guid",
+      },
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      "send.attachment",
+      { chat_guid: "chat-guid", file: "/tmp/openclaw-imessage-safe/photo.png" },
+      { timeoutMs: undefined },
+    );
+    expect(runIMessageCliJsonCommandMock).not.toHaveBeenCalled();
+  });
+
   it("passes the configured Messages db path to private API bridge commands", async () => {
     runIMessageCliJsonCommandMock.mockResolvedValue({ success: true });
 
@@ -470,6 +612,36 @@ describe("imessage actions runtime", () => {
         conversationReadOrigin: "direct-operator",
       }),
     ).resolves.toBe("iMessage;+;second");
+
+    expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("isolates chats.list snapshots by resolved remote host", async () => {
+    mockRpcChatList([{ id: 1, guid: "iMessage;+;host-a" }]);
+    mockRpcChatList([{ id: 2, guid: "iMessage;+;host-b" }]);
+    const base = { cliPath: "imsg-host-cache", dbPath: "~/Library/Messages/chat.db" };
+
+    await expect(
+      imessageActionsRuntime.resolveChatGuidForTarget({
+        target: { kind: "chat_id", chatId: 1 },
+        options: { ...base, remoteHost: "host-a" },
+        conversationReadOrigin: "delegated",
+      }),
+    ).resolves.toBe("iMessage;+;host-a");
+    await expect(
+      imessageActionsRuntime.resolveChatGuidForTarget({
+        target: { kind: "chat_id", chatId: 2 },
+        options: { ...base, remoteHost: "host-b" },
+        conversationReadOrigin: "delegated",
+      }),
+    ).resolves.toBe("iMessage;+;host-b");
+    await expect(
+      imessageActionsRuntime.resolveChatGuidForTarget({
+        target: { kind: "chat_id", chatId: 1 },
+        options: { ...base, remoteHost: "host-a" },
+        conversationReadOrigin: "delegated",
+      }),
+    ).resolves.toBe("iMessage;+;host-a");
 
     expect(createIMessageRpcClientMock).toHaveBeenCalledTimes(2);
   });

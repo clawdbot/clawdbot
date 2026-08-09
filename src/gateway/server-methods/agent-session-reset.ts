@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -93,6 +94,7 @@ async function deliverBareSessionResetResult(params: {
   sessionKey: string;
   agentId?: string;
   sessionEntry?: SessionEntry;
+  preparedPlugin?: ChannelPlugin;
   request: {
     replyTo?: string;
     to?: string;
@@ -150,6 +152,7 @@ async function deliverBareSessionResetResult(params: {
     sessionEntry: params.sessionEntry,
     result: result as never,
     payloads: result.payloads as never,
+    preparedPlugin: params.preparedPlugin,
     assertDeliveryCurrent: params.assertCurrent,
   });
 }
@@ -226,6 +229,7 @@ export async function resolveBareSessionResetResult(params: {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     sessionEntry: params.sessionEntry,
+    preparedPlugin: deliveryPlan.plugin,
     request: {
       ...params.request,
       channel: deliveryPlan.resolvedChannel,

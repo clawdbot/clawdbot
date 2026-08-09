@@ -35,7 +35,7 @@ describe("ensurePlaywrightChromium", () => {
       ensurePlaywrightChromium({
         env: { PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: " /snap/bin/chromium " },
         executablePath: "/cache/chromium/chrome",
-        existsSync: (path: string) => path === "/snap/bin/chromium",
+        existsSync: (candidatePath: string) => candidatePath === "/snap/bin/chromium",
         spawnSync,
       }),
     ).toBe(0);
@@ -70,7 +70,7 @@ describe("ensurePlaywrightChromium", () => {
     expect(
       ensurePlaywrightChromium({
         executablePath: "/cache/chromium/chrome",
-        existsSync: (path: string) => path === "/usr/bin/chromium-browser",
+        existsSync: (candidatePath: string) => candidatePath === "/usr/bin/chromium-browser",
         log: (line: string) => logs.push(line),
         spawnSync,
       }),
@@ -102,9 +102,9 @@ describe("ensurePlaywrightChromium", () => {
         cwd: "/repo",
         env: { PATH: noPnpmPath },
         executablePath: "/cache/chromium/chrome",
-        existsSync: (path: string) =>
-          path === "/usr/bin/chromium-browser" ||
-          (managedChromiumInstalled && path === "/cache/chromium/chrome"),
+        existsSync: (candidatePath: string) =>
+          candidatePath === "/usr/bin/chromium-browser" ||
+          (managedChromiumInstalled && candidatePath === "/cache/chromium/chrome"),
         requirePlaywrightChromium: true,
         spawnSync,
         stdio: "pipe",
@@ -215,7 +215,7 @@ describe("ensurePlaywrightChromium", () => {
         ensureFfmpeg: true,
         env: { PATH: noPnpmPath },
         executablePath: "/cache/chromium/chrome",
-        existsSync: (path: string) => path === "/usr/bin/chromium-browser",
+        existsSync: (candidatePath: string) => candidatePath === "/usr/bin/chromium-browser",
         log: (line: string) => logs.push(line),
         spawnSync,
         stdio: "pipe",
@@ -240,15 +240,15 @@ describe("ensurePlaywrightChromium", () => {
 
   it("skips a broken system Chromium binary and uses the first runnable candidate", () => {
     const logs: string[] = [];
-    const spawnSync = vi.fn((path: string) => ({
-      status: path === "/usr/bin/google-chrome" ? 0 : 127,
+    const spawnSync = vi.fn((candidatePath: string) => ({
+      status: candidatePath === "/usr/bin/google-chrome" ? 0 : 127,
     }));
 
     expect(
       ensurePlaywrightChromium({
         executablePath: "/cache/chromium/chrome",
-        existsSync: (path: string) =>
-          path === "/snap/bin/chromium" || path === "/usr/bin/google-chrome",
+        existsSync: (candidatePath: string) =>
+          candidatePath === "/snap/bin/chromium" || candidatePath === "/usr/bin/google-chrome",
         log: (line: string) => logs.push(line),
         spawnSync,
       }),
@@ -431,8 +431,8 @@ describe("ensurePlaywrightChromium", () => {
         cwd: "/repo",
         env: { CI: "1", PATH: noPnpmPath },
         executablePath: "/cache/chromium/chrome",
-        existsSync: (path: string) =>
-          installedSystemChromium && path === "/usr/bin/chromium-browser",
+        existsSync: (candidatePath: string) =>
+          installedSystemChromium && candidatePath === "/usr/bin/chromium-browser",
         getuid: () => 0,
         log: (line: string) => logs.push(line),
         platform: "linux",

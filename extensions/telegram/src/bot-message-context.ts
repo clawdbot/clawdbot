@@ -36,6 +36,7 @@ import {
   extractTelegramForumFlag,
   resolveTelegramForumFlag,
   resolveTelegramBotHasTopicsEnabled,
+  resolveTelegramMessageThreadSpec,
   resolveTelegramThreadSpec,
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
@@ -146,7 +147,7 @@ export const buildTelegramMessageContext = async ({
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
-  const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+  const isDirectMessagesChat = msg.chat.is_direct_messages === true;
   const reactionApi =
     typeof bot.api.setMessageReaction === "function"
       ? bot.api.setMessageReaction.bind(bot.api)
@@ -155,20 +156,21 @@ export const buildTelegramMessageContext = async ({
     typeof bot.api.getChat === "function"
       ? (bot.api.getChat.bind(bot.api) as TelegramGetChat)
       : undefined;
-  const isForum = await resolveTelegramForumFlag({
-    chatId,
-    chatType: msg.chat.type,
-    isGroup,
-    isForum: extractTelegramForumFlag(msg.chat),
-    isTopicMessage: msg.is_topic_message,
-    getChat: getChatApi,
-  });
-  const threadSpec = resolveTelegramThreadSpec({
-    isGroup,
-    isForum,
-    messageThreadId,
-  });
-  const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
+  const isForum = isDirectMessagesChat
+    ? false
+    : await resolveTelegramForumFlag({
+        chatId,
+        chatType: msg.chat.type,
+        isGroup,
+        isForum: extractTelegramForumFlag(msg.chat),
+        isTopicMessage: msg.is_topic_message,
+        getChat: getChatApi,
+      });
+  const threadSpec = resolveTelegramMessageThreadSpec(msg, isForum);
+  const resolvedThreadId =
+    threadSpec.scope === "forum" || threadSpec.scope === "direct-messages"
+      ? threadSpec.id
+      : undefined;
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   let topicName: string | undefined;
@@ -321,6 +323,9 @@ export const buildTelegramMessageContext = async ({
   }
 
   const sendTyping = async () => {
+    if (threadSpec.scope === "direct-messages") {
+      return;
+    }
     await withTelegramApiErrorLogging({
       operation: "sendChatAction",
       fn: () =>
@@ -333,6 +338,9 @@ export const buildTelegramMessageContext = async ({
   };
 
   const sendRecordVoice = async () => {
+    if (threadSpec.scope === "direct-messages") {
+      return;
+    }
     try {
       await withTelegramApiErrorLogging({
         operation: "sendChatAction",

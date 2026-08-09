@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 import {
   expectRealExitWinsOverSigkillFallback,
   expectWaitStaysPendingUntilSigkillFallback,
+  mockLinuxOomWrapperShell,
 } from "./test-support.js";
 
 const { spawnWithFallbackMock, signalProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
@@ -742,6 +743,7 @@ describe("createChildAdapter", () => {
     const originalEnv = process.env.ENV;
     const originalCdpath = process.env.CDPATH;
     setPlatform("linux");
+    const restoreLinuxShell = mockLinuxOomWrapperShell();
     process.env.BASH_ENV = "/tmp/bashenv";
     process.env.ENV = "/tmp/env";
     process.env.CDPATH = "/tmp";
@@ -752,6 +754,7 @@ describe("createChildAdapter", () => {
       });
       expect(adapter.oomScoreWrapperSelected).toBe(true);
     } finally {
+      restoreLinuxShell();
       if (originalBashEnv === undefined) {
         delete process.env.BASH_ENV;
       } else {

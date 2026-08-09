@@ -10,7 +10,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import {
   type HookContext,
@@ -45,6 +45,7 @@ import {
   createConversationsTurnTool,
 } from "./tools/conversation-tools.js";
 import { createCronTool } from "./tools/cron-tool.js";
+import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
@@ -90,6 +91,9 @@ export { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 type CreateOpenClawToolsRuntimeOptions = CreateOpenClawToolsOptions & {
   /** Trusted account used only for Gateway authorization; delivery keeps agentAccountId. */
   gatewayCallerAccountId?: string;
+  cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];
+  resolveCronCreatorToolAuthority?: CronToolOptions["resolveCreatorToolAuthority"];
+  cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
 };
 
 export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions): AnyAgentTool[] {
@@ -323,7 +327,6 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
       allowlist: explicitFactoryAllowlist,
       denylist: explicitFactoryDenylist,
     });
-  const includeSubagentSpawnTool = !embedded || options?.allowGatewaySubagentBinding === true;
   const effectiveCallGateway = embedded ? createEmbeddedCallGateway() : callGateway;
   const includeUpdatePlanTool = shouldIncludeUpdatePlanToolForOpenClawTools({
     config: resolvedConfig,
@@ -356,9 +359,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
                 }),
               ]),
           createCronTool({
-            // attempt-tool-base-prepare preserves the durable store key as runSessionKey.
-            // Cron bindings, wakes, and reminder history need that transcript owner; a
-            // policy-scoped DM key can be empty and cleanup-retired, leaving jobs dangling.
+            // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentAccountId: gatewayCallerAccountId,
             currentDeliveryContext: {
@@ -368,10 +369,11 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
               threadId: options?.currentThreadTs ?? options?.agentThreadId,
             },
             creatorToolAllowlist: options?.cronCreatorToolAllowlist,
+            creatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
+            resolveCreatorToolAuthority: options?.resolveCronCreatorToolAuthority,
+            creatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
             runId: options?.runId,
-            ...(options?.cronSelfRemoveOnlyJobId
-              ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
-              : {}),
+            selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
           createSessionsTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -523,7 +525,7 @@ export function createOpenClawTools(options?: CreateOpenClawToolsRuntimeOptions)
             config: resolvedConfig,
           }),
         ]),
-    ...(includeSubagentSpawnTool
+    ...(!embedded || options?.allowGatewaySubagentBinding === true
       ? [
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,

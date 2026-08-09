@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import {
   stagePostCompactionDelegate,
@@ -52,7 +53,6 @@ import {
 import { writeSessionStore } from "./test-helpers.server.js";
 import {
   setupGatewaySessionsTestHarness,
-  createDeferred,
   getSessionManagerModule,
   sessionStoreEntry,
   createCheckpointFixture,
@@ -1382,8 +1382,8 @@ test("sessions.compaction.restore leaves replacement-session work untouched when
       replacementInterrupted = true;
     },
   });
-  const blockerStarted = createDeferred<void>();
-  const releaseBlocker = createDeferred<void>();
+  const blockerStarted = createDeferred();
+  const releaseBlocker = createDeferred();
   const blocker = runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities: ["main", "agent:main:main", fixture.sessionId],

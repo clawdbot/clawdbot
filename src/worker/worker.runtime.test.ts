@@ -34,6 +34,7 @@ import {
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { rawDataToString } from "../infra/ws.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, WorkerConnectionStoppedError } from "./worker-connection.js";
 import {
@@ -54,6 +55,15 @@ const SESSION_ID = "worker-session";
 const RUN_ID = "worker-run";
 const OWNER_EPOCH = 4;
 const MODEL_REF = { provider: "openai", model: "gpt-5.6-luna" } as const;
+const WORKER_LOOP_REPLAY = {
+  v: 1 as const,
+  type: "openai-responses-compaction",
+  data: "opaque-worker-loop-replay",
+  provider: "openai",
+  api: "openai-responses",
+  model: MODEL_REF.model,
+  baseUrlHash: "ozhevd1smnk8s",
+};
 const BUNDLE_HASH = Array.from({ length: 64 }, () => "a").join("");
 const CREDENTIAL = ["worker", "fixture", "admission"].join("-");
 
@@ -1148,16 +1158,20 @@ describe("worker runtime", () => {
     ).toBe(true);
   });
 
-  it("windows near-limit history for every local tool-loop inference", async () => {
+  it("keeps a pinned replay anchor through repeated local tool-loop inference", async () => {
     const { gateway, launch } = await setup({ inferencePlans: ["tool", "text"] });
     launch.assignment.initialMessages = Array.from(
-      { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES },
+      { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 2 },
       (_value, index): WorkerTranscriptMessage => ({
         role: "user",
         content: [{ type: "text", text: `history-${index}` }],
         timestamp: index + 1,
       }),
     );
+    launch.assignment.initialMessages[2] = {
+      ...assistantMessage([{ type: "text", text: "checkpoint suffix" }], "stop"),
+      providerReplay: structuredClone(WORKER_LOOP_REPLAY),
+    };
 
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
 
@@ -1167,6 +1181,11 @@ describe("worker runtime", () => {
         WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
       );
       expect(request.context.messages[0]?.role).toBe("user");
+      expect(
+        request.context.messages.find(
+          (message) => message.role === "assistant" && message.providerReplay,
+        ),
+      ).toMatchObject({ providerReplay: WORKER_LOOP_REPLAY });
     }
     expect(
       gateway.inferenceRequests[1]?.context.messages.some(
@@ -1181,6 +1200,43 @@ describe("worker runtime", () => {
         .flatMap((request) => request.messages)
         .map((message) => message.role),
     ).toEqual(["user", "assistant", "toolResult", "assistant"]);
+  });
+
+  it("fails before a second inference when the replay unit outgrows the window", async () => {
+    const { gateway, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.initialMessages = Array.from(
+      { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1 },
+      (_value, index): WorkerTranscriptMessage => ({
+        role: "user",
+        content: [{ type: "text", text: `history-${index}` }],
+        timestamp: index + 1,
+      }),
+    );
+    launch.assignment.initialMessages[0] = {
+      ...assistantMessage([{ type: "text", text: "checkpoint suffix" }], "stop"),
+      providerReplay: structuredClone(WORKER_LOOP_REPLAY),
+    };
+
+    await expect(runWorkerDescriptor(launch)).resolves.toEqual({
+      status: "failed",
+      reason: "turn-failed",
+    });
+
+    expect(gateway.inferenceRequests).toHaveLength(1);
+    expect(gateway.inferenceRequests[0]?.context.messages).toHaveLength(
+      WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
+    );
+    expect(gateway.inferenceRequests[0]?.context.messages[0]).toMatchObject({
+      providerReplay: WORKER_LOOP_REPLAY,
+    });
+    const terminal = gateway.transcriptRequests
+      .flatMap((request) => request.messages)
+      .toReversed()
+      .find((message) => message.role === "assistant");
+    expect(terminal).toMatchObject({
+      stopReason: "error",
+      errorMessage: `${WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE} (provider-replay-message-limit)`,
+    });
   });
 });
 

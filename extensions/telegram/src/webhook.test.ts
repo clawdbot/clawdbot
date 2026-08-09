@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import { request, type IncomingMessage } from "node:http";
+import { createServer, request, type IncomingMessage } from "node:http";
 import os from "node:os";
 import nodePath from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -165,13 +165,21 @@ let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
 let webhookStateDir: string | undefined;
 let webhookSpoolDir: string | undefined;
 
-function installTelegramIngressQueueRuntime(resolveStateDir: () => string): void {
+function installTelegramIngressQueueRuntime(
+  resolveStateDir: () => string,
+  queueOpenError?: Error,
+): void {
   setTelegramRuntime({
     state: {
       resolveStateDir,
       openChannelIngressQueue: (
         options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-      ) => createChannelIngressQueue({ ...options, channelId: "telegram" }),
+      ) => {
+        if (queueOpenError) {
+          throw queueOpenError;
+        }
+        return createChannelIngressQueue({ ...options, channelId: "telegram" });
+      },
     },
   } as TelegramRuntime);
 }
@@ -232,6 +240,18 @@ function requireMockCall(mock: unknown, index: number, label: string): unknown[]
     throw new Error(`expected ${label} call ${index}`);
   }
   return call;
+}
+
+function expectWebhookBotScopesAborted(): void {
+  const botParams = requireRecord(
+    requireMockCall(createTelegramBotSpy, 0, "createTelegramBot")[0],
+    "createTelegramBot params",
+  );
+  for (const key of ["fetchAbortSignal", "accountAbortSignal"]) {
+    const signal = botParams[key];
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect((signal as AbortSignal).aborted).toBe(true);
+  }
 }
 
 function mockMessages(mock: unknown): string[] {
@@ -857,6 +877,123 @@ describe("startTelegramWebhook", () => {
       lifecycle: "blocked",
       lastError: "unauthorized",
     });
+  });
+
+  it("preserves the initialization failure when bot shutdown also fails", async () => {
+    const runtimeError = vi.fn();
+    const setStatus = vi.fn();
+    const initializationError = Object.assign(new Error("unauthorized"), { error_code: 401 });
+    initSpy.mockRejectedValueOnce(initializationError);
+    stopSpy.mockRejectedValueOnce(new Error("bot stop failed"));
+
+    await expect(
+      startTelegramWebhook({
+        token: TELEGRAM_TOKEN,
+        port: 0,
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        spoolDir: requireWebhookSpoolDir(),
+        runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
+        setStatus,
+      }),
+    ).rejects.toBe(initializationError);
+
+    expect(stopSpy).toHaveBeenCalledOnce();
+    expect(transportCloseSpies[0]).toHaveBeenCalledOnce();
+    expect(deleteWebhookSpy).not.toHaveBeenCalled();
+    expectWebhookBotScopesAborted();
+    expectMockMessageContains(runtimeError, "telegram webhook bot stop failed: bot stop failed");
+    expectStatusCall(setStatus, { lifecycle: "blocked", lastError: "unauthorized" });
+  });
+
+  it("releases webhook startup resources when its listener port is already occupied", async () => {
+    const blocker = createServer();
+    blocker.listen(0, "127.0.0.1");
+    await once(blocker, "listening");
+    const setStatus = vi.fn();
+
+    try {
+      await expect(
+        startTelegramWebhook({
+          token: TELEGRAM_TOKEN,
+          port: getServerPort(blocker),
+          host: "127.0.0.1",
+          secret: TELEGRAM_SECRET,
+          path: TELEGRAM_WEBHOOK_PATH,
+          spoolDir: requireWebhookSpoolDir(),
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          setStatus,
+        }),
+      ).rejects.toMatchObject({ code: "EADDRINUSE" });
+
+      expect(blocker.listening).toBe(true);
+      expect(initSpy).toHaveBeenCalledOnce();
+      expect(setWebhookSpy).not.toHaveBeenCalled();
+      expect(stopSpy).toHaveBeenCalledOnce();
+      expect(transportCloseSpies[0]).toHaveBeenCalledOnce();
+      expect(deleteWebhookSpy).not.toHaveBeenCalled();
+      expectWebhookBotScopesAborted();
+      expect(
+        setStatus.mock.calls.some(([patch]) => String(patch.lastError).includes("EADDRINUSE")),
+      ).toBe(true);
+    } finally {
+      const closed = once(blocker, "close");
+      blocker.close();
+      await closed;
+    }
+  });
+
+  it("closes an advertised listener when opening its durable ingress queue fails", async () => {
+    const abort = new AbortController();
+    const setStatus = vi.fn();
+    const queueError = new Error("state database unavailable");
+    let advertisedPort: number | undefined;
+    setWebhookSpy.mockImplementationOnce(async (publicUrl: string) => {
+      advertisedPort = Number(new URL(publicUrl).port);
+      return true;
+    });
+    installTelegramIngressQueueRuntime(() => webhookStateDir ?? os.tmpdir(), queueError);
+
+    try {
+      await expect(
+        startTelegramWebhook({
+          token: TELEGRAM_TOKEN,
+          port: 0,
+          host: "127.0.0.1",
+          secret: TELEGRAM_SECRET,
+          path: TELEGRAM_WEBHOOK_PATH,
+          spoolDir: requireWebhookSpoolDir(),
+          abortSignal: abort.signal,
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          setStatus,
+        }),
+      ).rejects.toBe(queueError);
+
+      expect(setWebhookSpy).toHaveBeenCalledOnce();
+      expect(advertisedPort).toBeGreaterThan(0);
+      expect(stopSpy).toHaveBeenCalledOnce();
+      expect(transportCloseSpies[0]).toHaveBeenCalledOnce();
+      expect(deleteWebhookSpy).not.toHaveBeenCalled();
+      expectWebhookBotScopesAborted();
+      expectStatusCall(setStatus, { lastError: "state database unavailable" });
+      expect(setStatus).toHaveBeenLastCalledWith({ mode: "webhook", connected: false });
+
+      const rebound = createServer();
+      try {
+        rebound.listen(advertisedPort, "127.0.0.1");
+        await once(rebound, "listening");
+        expect(rebound.listening).toBe(true);
+      } finally {
+        if (rebound.listening) {
+          const closed = once(rebound, "close");
+          rebound.close();
+          await closed;
+        }
+      }
+    } finally {
+      abort.abort();
+      await waitForWebhookState(() => expect(transportCloseSpies[0]).toHaveBeenCalledOnce());
+    }
   });
 
   it("registers webhook with certificate when webhookCertPath is provided", async () => {

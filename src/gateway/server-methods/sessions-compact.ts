@@ -15,6 +15,7 @@ import {
   resolveSessionWorkStartError,
   SESSION_TOTAL_TOKENS_VERSION,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
+  type SessionEntry,
 } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -23,7 +24,6 @@ import {
   preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -173,14 +173,11 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     const compactRead = await applySessionPatchProjection({
       agentId: target.agentId,
       storePath,
-      resolveTarget: ({ entries }) => {
-        const snapshot = Object.fromEntries(
-          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-        );
+      resolveTarget: ({ store }) => {
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key,
-          store: snapshot,
+          store: store as Record<string, SessionEntry>,
           agentId: requestedAgentId,
         });
         compactPrimaryKey = primaryKey;

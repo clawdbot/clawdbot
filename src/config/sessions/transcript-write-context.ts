@@ -6,6 +6,8 @@ type OwnedSessionTranscriptWriteContext = {
   sessionFile?: string;
   sessionKey?: string;
   sessionTarget?: SessionTranscriptWriteLockTarget;
+  /** Fence each durable mutation at the transaction boundary, not only callback admission. */
+  assertOwned(): void;
   canAdvanceSessionEntryCache?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   publishSessionFileSnapshot?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   withSessionWriteLock: <T>(
@@ -19,6 +21,8 @@ export type SessionTranscriptWriteLockTarget = {
   sessionId?: string;
   sessionKey?: string;
   storePath?: string;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
 };
 
 export type OwnedSessionTranscriptWriteOptions<T> = {
@@ -27,7 +31,7 @@ export type OwnedSessionTranscriptWriteOptions<T> = {
   resolvePublishedEntriesAfterFailure?: () => readonly OwnedSessionTranscriptPublishedEntry[];
 };
 
-export type OwnedSessionTranscriptPublishedEntry =
+type OwnedSessionTranscriptPublishedEntry =
   | { kind: "id"; id: string }
   | { kind: "header"; serialized: string }
   | { kind: "serialized"; serialized: string };
@@ -107,12 +111,43 @@ export function runWithoutOwnedSessionTranscriptWrites<T>(run: () => T): T {
   return ownedTranscriptWriteContext.exit(run);
 }
 
+/** Returns the admitted run fence inherited by nested run-owned transcript writes. */
+export function getOwnedSessionTranscriptWriterFence():
+  | {
+      expectedLifecycleRevision?: string;
+      expectedWriterRunId: string;
+    }
+  | undefined {
+  const target = ownedTranscriptWriteContext.getStore()?.sessionTarget;
+  const expectedWriterRunId = target?.expectedWriterRunId?.trim();
+  if (!expectedWriterRunId) {
+    return undefined;
+  }
+  const expectedLifecycleRevision = target?.expectedLifecycleRevision;
+  return {
+    ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
+    expectedWriterRunId,
+  };
+}
+
 export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResult>(
   context: OwnedSessionTranscriptWriteContext,
   run: (...args: TArgs) => TResult,
 ): (...args: TArgs) => TResult {
   // Bind callbacks that will run later but must still see the parent write-lock context.
   return (...args) => ownedTranscriptWriteContext.run(context, () => run(...args));
+}
+
+/** Revalidates a matching attempt-owned lease immediately before durable mutation. */
+export function assertOwnedSessionTranscriptWrite(params: {
+  sessionFile?: string;
+  sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteLockTarget;
+}): void {
+  const context = ownedTranscriptWriteContext.getStore();
+  if (context && contextMatches({ context, ...params })) {
+    context.assertOwned();
+  }
 }
 
 export async function runWithOwnedSessionTranscriptWriteLock<T>(

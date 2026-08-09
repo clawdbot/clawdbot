@@ -203,7 +203,6 @@ export function createNativeCommandsHarness(params?: {
     telegramCfg: params?.telegramCfg ?? ({} as TelegramAccountConfig),
     nativeEnabled: params?.nativeEnabled ?? true,
     nativeSkillsEnabled: false,
-    nativeDisabledExplicit: false,
     telegramDeps,
     resolveGroupPolicy:
       params?.resolveGroupPolicy ??

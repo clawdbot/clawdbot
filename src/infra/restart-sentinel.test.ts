@@ -52,6 +52,7 @@ import {
   hasRestartSentinel,
   markUpdateRestartSentinelFailure,
   readRestartSentinel,
+  readUpdateInstallReceipt,
   summarizeRestartSentinel,
   trimLogTail,
   writeRestartSentinel,
@@ -540,6 +541,82 @@ describe("restart sentinel", () => {
     });
   });
 
+  it("persists the verified Git install receipt after restart", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const ts = Date.now();
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts,
+        stats: {
+          mode: "git",
+          before: { sha: "aaaaaaaa" },
+          after: { sha: "bbbbbbbb", version: "expected-version" },
+        },
+      });
+
+      await finalizeUpdateRestartSentinelRunningVersion(
+        "actual-version",
+        process.env,
+        "bbbbbbbb1234",
+      );
+      await clearRestartSentinel();
+
+      await expect(readUpdateInstallReceipt()).resolves.toMatchObject({
+        kind: "update",
+        status: "ok",
+        ts,
+        stats: {
+          mode: "git",
+          after: { sha: "bbbbbbbb", version: "actual-version" },
+        },
+      });
+    });
+  });
+
+  it("does not advance install time when a successful Git run keeps the same revision", async () => {
+    await withRestartSentinelStateDir(async () => {
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts: Date.now(),
+        stats: {
+          mode: "git",
+          before: { sha: "aaaaaaaa" },
+          after: { sha: "aaaaaaaa", version: "expected-version" },
+        },
+      });
+
+      await finalizeUpdateRestartSentinelRunningVersion("actual-version", process.env, "aaaaaaaa");
+
+      await expect(readUpdateInstallReceipt()).resolves.toBeNull();
+    });
+  });
+
+  it("rejects a restarted Git revision that does not match the update result", async () => {
+    await withRestartSentinelStateDir(async () => {
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts: Date.now(),
+        stats: {
+          mode: "git",
+          after: { sha: "bbbbbbbb", version: "expected-version" },
+        },
+      });
+
+      await finalizeUpdateRestartSentinelRunningVersion("actual-version", process.env, "cccccccc");
+
+      await expect(readRestartSentinel()).resolves.toMatchObject({
+        payload: {
+          status: "error",
+          stats: { reason: "restart-revision-mismatch" },
+        },
+      });
+      await expect(readUpdateInstallReceipt()).resolves.toBeNull();
+    });
+  });
+
   it("marks update restart failures with a stable reason", async () => {
     await withRestartSentinelStateDir(async () => {
       const ts = Date.now();
@@ -635,6 +712,25 @@ describe("restart success continuation", () => {
 });
 
 describe("control-plane update restart sentinel", () => {
+  it("reports a successful same-revision Git run as already current", () => {
+    const payload = buildUpdateRestartSentinelPayload({
+      result: {
+        status: "ok",
+        mode: "git",
+        before: { sha: "aaaaaaaa" },
+        after: { sha: "aaaaaaaa" },
+        steps: [],
+        durationMs: 42,
+      },
+      meta: {},
+      nowMs: 1,
+    });
+
+    expect(payload.status).toBe("skipped");
+    expect(payload.stats?.reason).toBe("already-current");
+    expect(payload.continuation).toBeUndefined();
+  });
+
   it("keeps restart-health-pending sentinels continuation-free until final success", () => {
     const result = {
       status: "ok" as const,

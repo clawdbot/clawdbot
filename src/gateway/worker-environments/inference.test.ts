@@ -4,7 +4,7 @@ import type {
   WorkerInferenceTerminalFrame,
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
 import {

@@ -694,6 +694,49 @@ describe("sessions page lifecycle", () => {
     expect(page.sessionMutationPending).toBe(false);
   });
 
+  it("destroys a pending cloud worker and reports its terminal state", async () => {
+    const request = vi.fn(() =>
+      Promise.resolve({ status: "unavailable", worker: { state: "destroyed" } }),
+    );
+    const list = vi.fn(async () => ({ count: 0, sessions: [] }) as unknown as SessionsListResult);
+    const sessions = createSessions({ list });
+    const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = await createPage(createContext(gateway, sessions));
+    const toast = document.createElement("openclaw-toast-host");
+    document.body.append(toast);
+    await toast.updateComplete;
+    const row = {
+      key: "agent:main:cloud",
+      label: "Cloud task",
+      placement: {
+        state: "provisioning",
+        generation: 1,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        stateChangedAtMs: 1,
+        environmentId: "environment-1",
+      },
+      hasActiveRun: true,
+    } as GatewaySessionRow;
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+
+    await page.stopCloudWorker(row);
+
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      message: 'Stop the cloud worker for "Cloud task"?',
+      confirmLabel: "Stop worker",
+      danger: true,
+    });
+    expect(request).toHaveBeenCalledWith("environments.destroy", {
+      environmentId: "environment-1",
+    });
+    expect(list).toHaveBeenCalledOnce();
+    expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
+      'Cloud worker for "Cloud task" is destroyed.',
+    );
+    expect(page.sessionMutationPending).toBe(false);
+  });
+
   it("surfaces a rejected custom-group creation on the Sessions page", async () => {
     const groupsPut = vi.fn(async () => {
       throw new Error("group name exceeds 512 characters");

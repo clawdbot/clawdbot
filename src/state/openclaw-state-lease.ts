@@ -21,6 +21,17 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import {
+  OpenClawStateLeaseError,
+  parseOpenClawStateLeaseOwnerPayload,
+  processLeaseIsReclaimable,
+  type OpenClawStateLeaseErrorCode,
+  type OpenClawStateLeaseOwnerPayload,
+  type OpenClawStateLeaseProcessOwner,
+} from "./openclaw-state-lease-owner.js";
+
+export { OpenClawStateLeaseError };
+export type { OpenClawStateLeaseErrorCode };
 
 type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 type AgentLeaseDatabase = Pick<OpenClawAgentKyselyDatabase, "state_leases">;
@@ -29,13 +40,6 @@ type LeaseKysely = ReturnType<typeof getNodeSqliteKysely<LeaseDatabase>>;
 type OpenClawStateLeaseDatabase =
   | { scope: "shared"; options?: OpenClawStateDatabaseOptions }
   | { scope: "agent"; agentId: string; path?: string };
-
-type OpenClawStateLeaseProcessOwner = {
-  pid: number;
-  startTime: number | null;
-  isAlive(pid: number): boolean;
-  readStartTime(pid: number): number | null;
-};
 
 type OpenClawStateLeaseOptions = {
   scope: string;
@@ -67,23 +71,6 @@ export type OpenClawStateLeaseHandle = OpenClawStateLeaseContext & {
   /** Release a manually held process lease during synchronous termination cleanup. */
   releaseSynchronously(): void;
 };
-
-export type OpenClawStateLeaseErrorCode =
-  | "OPENCLAW_STATE_LEASE_INVALID_INPUT"
-  | "OPENCLAW_STATE_LEASE_TIMEOUT"
-  | "OPENCLAW_STATE_LEASE_ABORTED"
-  | "OPENCLAW_STATE_LEASE_LOST"
-  | "OPENCLAW_STATE_LEASE_STORAGE_FAILED";
-
-export class OpenClawStateLeaseError extends Error {
-  readonly code: OpenClawStateLeaseErrorCode;
-
-  constructor(message: string, options: { code: OpenClawStateLeaseErrorCode; cause?: unknown }) {
-    super(message, { cause: options.cause });
-    this.name = "OpenClawStateLeaseError";
-    this.code = options.code;
-  }
-}
 
 const ACQUIRE_BACKOFF = {
   initialMs: 25,
@@ -138,10 +125,12 @@ function leaseError(
   code: OpenClawStateLeaseErrorCode,
   message: string,
   cause?: unknown,
+  ownerPayload?: OpenClawStateLeaseOwnerPayload,
 ): OpenClawStateLeaseError {
   return new OpenClawStateLeaseError(message, {
     code,
     ...(cause === undefined ? {} : { cause }),
+    ...(ownerPayload ? { ownerPayload } : {}),
   });
 }
 
@@ -282,32 +271,9 @@ type LeaseIdentity = {
   processOwner?: OpenClawStateLeaseProcessOwner;
 };
 
-function processLeaseIsReclaimable(
-  row: { expires_at: number | null; payload_json: string | null },
-  processOwner: OpenClawStateLeaseProcessOwner,
-): boolean {
-  let payload: { pid?: unknown; starttime?: unknown } | undefined;
-  try {
-    payload = row.payload_json ? (JSON.parse(row.payload_json) as typeof payload) : undefined;
-  } catch {
-    // A malformed owner can only be reclaimed after its persisted deadline.
-  }
-  const pid = payload?.pid;
-  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
-    return Number(row.expires_at) <= Date.now();
-  }
-  if (!processOwner.isAlive(pid)) {
-    return true;
-  }
-  const observedStartTime = processOwner.readStartTime(pid);
-  return (
-    typeof payload?.starttime === "number" &&
-    Number.isInteger(payload.starttime) &&
-    payload.starttime >= 0 &&
-    observedStartTime !== null &&
-    payload.starttime !== observedStartTime
-  );
-}
+type LeaseAcquireResult =
+  | { status: "acquired"; expiresAt: number }
+  | { status: "contended"; ownerPayload?: OpenClawStateLeaseOwnerPayload };
 
 function tryAcquire(
   params: LeaseIdentity & {
@@ -315,7 +281,7 @@ function tryAcquire(
     operationLabel: string;
     leaseMs: number;
   },
-): number | undefined {
+): LeaseAcquireResult {
   const observed = params.processOwner
     ? withLeaseRead(params.database, (db, kysely) =>
         executeSqliteQueryTakeFirstSync(
@@ -372,7 +338,22 @@ function tryAcquire(
         })
         .onConflict((conflict) => conflict.columns(["scope", "lease_key"]).doNothing()),
     );
-    return inserted.numAffectedRows === 1n ? expiresAt : undefined;
+    if (inserted.numAffectedRows === 1n) {
+      return { status: "acquired", expiresAt };
+    }
+    const contender = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("state_leases")
+        .select("payload_json")
+        .where("scope", "=", params.scope)
+        .where("lease_key", "=", params.key),
+    );
+    const ownerPayload = parseOpenClawStateLeaseOwnerPayload(contender?.payload_json ?? null);
+    return {
+      status: "contended",
+      ...(ownerPayload ? { ownerPayload } : {}),
+    };
   });
 }
 
@@ -528,12 +509,13 @@ export async function acquireOpenClawStateLease(
   const deadline = performance.now() + validated.waitMs;
   let attempt = 0;
   let confirmedExpiresAt: number | undefined;
+  let lastObservedOwnerPayload: OpenClawStateLeaseOwnerPayload | undefined;
   while (confirmedExpiresAt === undefined) {
     if (validated.signal?.aborted) {
       throw abortError(validated.signal, "acquisition", validated.leaseLabel);
     }
     try {
-      confirmedExpiresAt = tryAcquire({
+      const result = tryAcquire({
         database: validated.database,
         operationLabel: validated.operationLabel,
         scope: validated.scope,
@@ -543,6 +525,12 @@ export async function acquireOpenClawStateLease(
         leaseLabel: validated.leaseLabel,
         processOwner: validated.processOwner,
       });
+      if (result.status === "acquired") {
+        confirmedExpiresAt = result.expiresAt;
+        lastObservedOwnerPayload = undefined;
+      } else {
+        lastObservedOwnerPayload = result.ownerPayload;
+      }
     } catch (error) {
       if (error instanceof OpenClawStateLeaseError) {
         throw error;
@@ -572,6 +560,8 @@ export async function acquireOpenClawStateLease(
         throw leaseError(
           "OPENCLAW_STATE_LEASE_TIMEOUT",
           `timed out waiting for ${validated.leaseLabel} ${validated.scope}/${validated.key}`,
+          undefined,
+          lastObservedOwnerPayload,
         );
       }
       break;
@@ -580,6 +570,8 @@ export async function acquireOpenClawStateLease(
       throw leaseError(
         "OPENCLAW_STATE_LEASE_TIMEOUT",
         `timed out waiting for ${validated.leaseLabel} ${validated.scope}/${validated.key}`,
+        undefined,
+        lastObservedOwnerPayload,
       );
     }
     attempt += 1;

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { executeDeps } from "./execute-deps.js";
 import { executePreparedCliRun } from "./execute.js";
 import { setCliRunnerExecuteTestDeps } from "./execute.test-support.js";

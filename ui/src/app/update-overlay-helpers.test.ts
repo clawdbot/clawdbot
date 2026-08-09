@@ -24,6 +24,10 @@ const translations: Record<string, string> = {
     "Update installed but running version did not change — restart may have been blocked.",
   "updates.verificationFailedWithVersions":
     "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
+  "updates.verificationFailedWithIdentity":
+    "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
+  "updates.outcomeUnknown": "The update outcome is unknown.",
+  "common.unknown": "Unknown",
   "updates.postRestart.restartUnhealthy":
     "The replacement process never became healthy and the previous process stayed up.",
   "updates.postRestart.default": "Check the gateway logs for the replacement failure.",
@@ -51,6 +55,7 @@ async function verifyUpdate(params: {
   response: unknown;
   hello?: GatewayHelloOk | null;
   advanceToMs?: number;
+  onVerifiedInstall?: (identity: { version: string | null; sha: string | null }) => void;
 }): Promise<ApplicationStatusBanner | null | undefined> {
   vi.useFakeTimers();
   vi.setSystemTime(0);
@@ -72,6 +77,7 @@ async function verifyUpdate(params: {
     publishBanner: (value) => {
       banner = value;
     },
+    ...(params.onVerifiedInstall ? { onVerifiedInstall: params.onVerifiedInstall } : {}),
   });
 
   await controller.verify(client, 1);
@@ -106,7 +112,16 @@ describe("update schedule hydration", () => {
     const updateSchedule = {
       channel: "dev",
       autoEnabled: true,
-      install: { kind: "git" },
+      install: {
+        kind: "git",
+        git: {
+          status: "behind",
+          currentSha: "a".repeat(40),
+          commitAtMs: 1_000,
+          installedAtMs: 2_000,
+          commitsBehind: 3,
+        },
+      },
       target: {
         kind: "git",
         upstreamRef: "origin/main",
@@ -226,7 +241,7 @@ describe("update status localization", () => {
 
     await expect(
       verifyUpdate({
-        pending: { kind: "restart", expected: "2.0.0" },
+        pending: { kind: "restart", expectedVersion: "2.0.0", expectedSha: null },
         response: {
           sentinel: {
             kind: "update",
@@ -237,17 +252,61 @@ describe("update status localization", () => {
       }),
     ).resolves.toEqual({
       tone: "danger",
-      text: "Update installed but running version did not change — restart may have been blocked. Expected v2.0.0, running v1.9.0.",
+      text: "Update finished, but the running install does not match the expected revision. Expected v2.0.0, running v1.9.0.",
     });
     await expect(
       verifyUpdate({
-        pending: { kind: "restart", expected: "2.0.0" },
+        pending: { kind: "restart", expectedVersion: "2.0.0", expectedSha: null },
         response: null,
         advanceToMs: 10_000,
       }),
     ).resolves.toEqual({
       tone: "danger",
-      text: "Update installed but running version did not change — restart may have been blocked.",
+      text: "Update finished, but the running install does not match the expected revision. Expected v2.0.0, running Unknown.",
+    });
+  });
+
+  it("verifies the restarted Git revision before reporting success", async () => {
+    installTranslations();
+    const onVerifiedInstall = vi.fn();
+
+    await expect(
+      verifyUpdate({
+        pending: {
+          kind: "restart",
+          expectedVersion: "2.0.0",
+          expectedSha: "abcdef0123456789",
+        },
+        response: {
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: { after: { version: "2.0.0", sha: "abcdef0" } },
+          },
+        },
+        onVerifiedInstall,
+      }),
+    ).resolves.toBeNull();
+    expect(onVerifiedInstall).toHaveBeenCalledWith({ version: "2.0.0", sha: "abcdef0" });
+
+    await expect(
+      verifyUpdate({
+        pending: {
+          kind: "restart",
+          expectedVersion: "2.0.0",
+          expectedSha: "abcdef0123456789",
+        },
+        response: {
+          sentinel: {
+            kind: "update",
+            status: "ok",
+            stats: { after: { version: "2.0.0", sha: "1234567" } },
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      tone: "danger",
+      text: "Update finished, but the running install does not match the expected revision. Expected abcdef012345, running 1234567.",
     });
   });
 
@@ -256,7 +315,7 @@ describe("update status localization", () => {
 
     await expect(
       verifyUpdate({
-        pending: { kind: "restart", expected: "2.0.0" },
+        pending: { kind: "restart", expectedVersion: "2.0.0", expectedSha: null },
         response: {
           sentinel: {
             kind: "update",
@@ -271,7 +330,7 @@ describe("update status localization", () => {
     });
     await expect(
       verifyUpdate({
-        pending: { kind: "restart", expected: "2.0.0" },
+        pending: { kind: "restart", expectedVersion: "2.0.0", expectedSha: null },
         response: {
           sentinel: {
             kind: "update",
@@ -286,7 +345,7 @@ describe("update status localization", () => {
     });
     await expect(
       verifyUpdate({
-        pending: { kind: "handoff", expected: null },
+        pending: { kind: "handoff", expectedVersion: null, expectedSha: null },
         response: {
           sentinel: {
             kind: "update",

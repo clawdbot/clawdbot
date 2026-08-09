@@ -45,6 +45,7 @@ function createWorkspaceActions(
 ) {
   const prepared = createPreparedSsh();
   return createWorkerWorkspaceActions({
+    bundleHash: "a".repeat(64),
     environmentId: "worker:test",
     ownerSignal: new AbortController().signal,
     isConnected: () => true,

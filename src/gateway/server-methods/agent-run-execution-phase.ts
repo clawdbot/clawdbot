@@ -377,6 +377,7 @@ export function startAgentRunExecution(params: {
       );
 
       dispatchAgentRunFromGateway({
+        cronCreatorAuthority: prepared.cronCreatorAuthority,
         ingressOpts: {
           message,
           images: params.images,

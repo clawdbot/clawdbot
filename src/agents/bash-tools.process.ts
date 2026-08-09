@@ -22,7 +22,7 @@ import {
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
-import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
+import { appendExecTimeoutRetryGuidance, renderExecExitLabel } from "./bash-tools.exec-output.js";
 import {
   handleProcessSendKeys,
   type WritableStdin,
@@ -72,6 +72,12 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
     return "";
   }
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
+}
+
+function retentionCapNote(session: Pick<ProcessSession, "totalOutputChars" | "aggregated">) {
+  return session.totalOutputChars > session.aggregated.length
+    ? "\n\n[earlier output was discarded at the retention cap and cannot be recovered]"
+    : "";
 }
 
 const MAX_POLL_WAIT_MS = 30_000;
@@ -394,8 +400,8 @@ export function createProcessTool(
             if (scopedFinished) {
               resetPollRetrySuggestion(params.sessionId);
               acknowledgeNotifyOnExit(scopedFinished);
-              // Finished polls render a bounded tail; disclose retained content so the
-              // model can recover it through paged logs instead of treating it as complete.
+              // Aggregate-cap loss is permanent; tail omission remains pageable.
+              const aggregateOutputNote = retentionCapNote(scopedFinished);
               const retainedOutputNote =
                 scopedFinished.tail.length < scopedFinished.aggregated.length
                   ? "\n\n[earlier retained output is omitted; use action=log with offset and limit to page]"
@@ -409,12 +415,9 @@ export function createProcessTool(
                         `(no output recorded${
                           scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
+                        aggregateOutputNote +
                         retainedOutputNote +
-                        `\n\nProcess exited with ${
-                          scopedFinished.exitSignal
-                            ? `signal ${scopedFinished.exitSignal}`
-                            : `code ${scopedFinished.exitCode ?? 0}`
-                        }.`,
+                        `\n\nProcess exited with ${renderExecExitLabel(scopedFinished)}.`,
                       scopedFinished.exitReason,
                     ),
                   },
@@ -457,27 +460,17 @@ export function createProcessTool(
           }
           const { stdout, stderr, outputDropped } = drainSession(scopedSession);
           const exited = scopedSession.exited;
-          const exitCode = scopedSession.exitCode ?? 0;
-          const exitSignal = scopedSession.exitSignal ?? undefined;
           if (exited) {
             markTerminalPollObserved(scopedSession);
             acknowledgeNotifyOnExit(scopedSession);
-            const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
-            markExited(
-              scopedSession,
-              scopedSession.exitCode ?? null,
-              scopedSession.exitSignal ?? null,
-              status,
-              scopedSession.exitReason,
-              scopedSession.noOutputTimedOut,
-            );
           }
           const status = exited
-            ? exitCode === 0 && exitSignal == null
+            ? scopedSession.terminalStatus === "completed"
               ? "completed"
               : "failed"
             : "running";
           const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+          const aggregateOutputNote = retentionCapNote(scopedSession);
           const retainedOutputNote = outputDropped
             ? "\n\n[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]"
             : "";
@@ -495,11 +488,10 @@ export function createProcessTool(
                 type: "text",
                 text: appendExecTimeoutRetryGuidance(
                   (output || "(no new output)") +
+                    aggregateOutputNote +
                     retainedOutputNote +
                     (exited
-                      ? `\n\nProcess exited with ${
-                          exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
-                        }.`
+                      ? `\n\nProcess exited with ${renderExecExitLabel(scopedSession)}.`
                       : buildInputWaitHint(runtime) || "\n\nProcess still running."),
                   exited ? scopedSession.exitReason : undefined,
                 ),
@@ -508,7 +500,7 @@ export function createProcessTool(
             details: {
               status,
               sessionId: params.sessionId,
-              exitCode: exited ? exitCode : undefined,
+              exitCode: exited ? (scopedSession.exitCode ?? undefined) : undefined,
               ...(exited && scopedSession.exitSignal != null
                 ? { exitSignal: scopedSession.exitSignal }
                 : {}),
@@ -557,7 +549,10 @@ export function createProcessTool(
                 {
                   type: "text",
                   text:
-                    (slice || "(no output yet)") + logDefaultTailNote + buildInputWaitHint(runtime),
+                    (slice || "(no output yet)") +
+                    logDefaultTailNote +
+                    retentionCapNote(scopedSession) +
+                    buildInputWaitHint(runtime),
                 },
               ],
               details: {
@@ -583,7 +578,13 @@ export function createProcessTool(
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
               content: [
-                { type: "text", text: (slice || "(no output recorded)") + logDefaultTailNote },
+                {
+                  type: "text",
+                  text:
+                    (slice || "(no output recorded)") +
+                    logDefaultTailNote +
+                    retentionCapNote(scopedFinished),
+                },
               ],
               details: {
                 status,

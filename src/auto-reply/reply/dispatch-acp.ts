@@ -90,11 +90,8 @@ function resolveMergedAcpAttachments(entries: OrderedAcpAttachment[]): AcpTurnAt
     })
     .map((entry) => entry.attachment);
 }
-const dispatchAcpSessionRuntimeLoader = createLazyImportLoader(
-  () => import("./dispatch-acp-session.runtime.js"),
-);
 const dispatchAcpTtsRuntimeLoader = createLazyImportLoader(
-  () => import("./dispatch-acp-tts.runtime.js"),
+  () => import("../../tts/tts.runtime.js"),
 );
 const dispatchAcpTranscriptRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-transcript.runtime.js"),
@@ -106,10 +103,6 @@ function loadDispatchAcpManagerRuntime() {
 
 function loadDispatchAcpAuditRuntime() {
   return dispatchAcpAuditRuntimeLoader.load();
-}
-
-function loadDispatchAcpSessionRuntime() {
-  return dispatchAcpSessionRuntimeLoader.load();
 }
 
 function loadDispatchAcpTtsRuntime() {
@@ -388,7 +381,7 @@ async function finalizeAcpTurnOutput(params: {
   }
 
   if (params.shouldEmitResolvedIdentityNotice) {
-    const { readAcpSessionEntry } = await loadDispatchAcpSessionRuntime();
+    const { readAcpSessionEntry } = await loadDispatchAcpManagerRuntime();
     const currentMeta = readAcpSessionEntry({
       cfg: params.cfg,
       sessionKey: params.sessionKey,

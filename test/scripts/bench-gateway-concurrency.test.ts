@@ -151,7 +151,7 @@ describe("gateway concurrency benchmark script", () => {
         { readOutput: () => "mock output" },
       );
       expect(failure).toMatch(
-        /readyz: ok=false status=503 latencyMs=\d+\.\d error=none\n  sessionsList: ok=false status=n\/a latencyMs=\d+\.\d error="sessions\.list failed: unauthorized"\n  controlUi: ok=false status=200 latencyMs=\d+\.\d error="response body did not contain <html"/u,
+        /readyz: ok=false status=503 latencyMs=\d+\.\d error=none\n {2}sessionsList: ok=false status=n\/a latencyMs=\d+\.\d error="sessions\.list failed: unauthorized"\n {2}controlUi: ok=false status=200 latencyMs=\d+\.\d error="response body did not contain <html"/u,
       );
       expect(failure).toContain("gateway stderr tail:\nfirst retained\nlast retained");
       expect(failure).not.toContain("old");

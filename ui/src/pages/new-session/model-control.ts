@@ -2,14 +2,20 @@ import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   resolveGatewayStartupRetryAfterMs,
 } from "@openclaw/gateway-client/browser";
+import type {
+  SessionCatalog,
+  SessionsCatalogListResult,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayAgentRow, GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import {
   buildQualifiedChatModelValue,
   normalizeChatModelProviderId,
   resolvePreferredServerChatModelValue,
 } from "../../lib/chat/model-ref.ts";
 import { resolveChatThinkingSelectState } from "../../lib/chat/thinking.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import {
   renderChatModelControls,
@@ -36,6 +42,8 @@ type NewSessionMetadataLoad = {
   options: NewSessionMetadataLoadOptions;
   selectionGeneration: number;
 };
+
+type CatalogCreateTarget = Pick<SessionCatalog, "id" | "label">;
 
 function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error
@@ -184,6 +192,19 @@ export class NewSessionModelControl {
   private pendingAgent: GatewayAgentRow | undefined;
   private pendingContext: ApplicationContext | undefined;
   private pendingSelectionGeneration = 0;
+  private catalogTargets: CatalogCreateTarget[] = [];
+  private catalogTargetRequestId = 0;
+  private activeCatalogTargetRequest:
+    | {
+        agentId: string;
+        client: NewSessionMetadataClient;
+        controller: AbortController;
+        id: number;
+      }
+    | undefined;
+  private catalogTargetOwner:
+    | { agentId: string; client: NewSessionMetadataClient; loaded: boolean }
+    | undefined;
   selected = "";
   thinkingLevel = "";
 
@@ -193,6 +214,7 @@ export class NewSessionModelControl {
       model: string;
       thinkingLevel: string;
     }) => void = () => undefined,
+    private readonly onCatalogTargetSelect: (catalogId: string) => void = () => undefined,
   ) {}
 
   private get catalog(): ModelCatalogEntry[] {
@@ -207,6 +229,81 @@ export class NewSessionModelControl {
     this.activeMetadataRequest = undefined;
     this.metadataRequestId += 1;
     active.controller.abort();
+  }
+
+  private clearCatalogTargets() {
+    const active = this.activeCatalogTargetRequest;
+    this.activeCatalogTargetRequest = undefined;
+    this.catalogTargetRequestId += 1;
+    active?.controller.abort();
+    const changed = this.catalogTargets.length > 0 || this.catalogTargetOwner !== undefined;
+    this.catalogTargets = [];
+    this.catalogTargetOwner = undefined;
+    if (changed) {
+      this.notify();
+    }
+  }
+
+  loadCatalogTargets(context: ApplicationContext | undefined, agentId: string, enabled: boolean) {
+    const snapshot = context?.gateway.snapshot;
+    const client = snapshot?.client;
+    const normalizedAgentId = normalizeAgentId(agentId);
+    if (
+      !enabled ||
+      snapshot?.phase !== "connected" ||
+      !client ||
+      !normalizedAgentId ||
+      isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") !== true
+    ) {
+      this.clearCatalogTargets();
+      return;
+    }
+    if (
+      this.catalogTargetOwner?.client === client &&
+      this.catalogTargetOwner.agentId === normalizedAgentId &&
+      (this.catalogTargetOwner.loaded || this.activeCatalogTargetRequest)
+    ) {
+      return;
+    }
+
+    this.clearCatalogTargets();
+    const controller = new AbortController();
+    const requestId = ++this.catalogTargetRequestId;
+    this.catalogTargetOwner = { agentId: normalizedAgentId, client, loaded: false };
+    this.activeCatalogTargetRequest = {
+      agentId: normalizedAgentId,
+      client,
+      controller,
+      id: requestId,
+    };
+    void client
+      .request<SessionsCatalogListResult>(
+        "sessions.catalog.list",
+        { agentId: normalizedAgentId, limitPerHost: 1 },
+        { signal: controller.signal },
+      )
+      .then(
+        (result) => {
+          if (this.activeCatalogTargetRequest?.id !== requestId) {
+            return;
+          }
+          this.activeCatalogTargetRequest = undefined;
+          this.catalogTargetOwner = { agentId: normalizedAgentId, client, loaded: true };
+          this.catalogTargets = result.catalogs
+            .filter((catalog) => catalog.capabilities.createSession !== undefined)
+            .map(({ id, label }) => ({ id, label }));
+          this.notify();
+        },
+        () => {
+          if (this.activeCatalogTargetRequest?.id !== requestId) {
+            return;
+          }
+          this.activeCatalogTargetRequest = undefined;
+          this.catalogTargetOwner = { agentId: normalizedAgentId, client, loaded: true };
+          this.catalogTargets = [];
+          this.notify();
+        },
+      );
   }
 
   private updateMetadataState(next: NewSessionMetadataState) {
@@ -288,6 +385,7 @@ export class NewSessionModelControl {
 
   invalidate(resetSelection = false) {
     this.cancelMetadataRequest();
+    this.clearCatalogTargets();
     this.restoringPreference = false;
     if (resetSelection) {
       this.agentId = "";
@@ -518,6 +616,16 @@ export class NewSessionModelControl {
         status: this.metadataState.status,
       },
       modelOverrides: { [sessionKey]: this.selected },
+      modelPickerTargetGroups:
+        this.catalogTargets.length > 0
+          ? [
+              {
+                id: "cliAgents",
+                label: t("newSession.cliAgentsGroup"),
+                options: this.catalogTargets.map(({ id, label }) => ({ value: id, label })),
+              },
+            ]
+          : undefined,
       modelSwitching: false,
       sending: options.sending,
       sessionKey,
@@ -539,6 +647,11 @@ export class NewSessionModelControl {
           this.thinkingLevel = "";
         }
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
+      },
+      onModelPickerTargetSelect: (groupId, catalogId) => {
+        if (groupId === "cliAgents") {
+          this.onCatalogTargetSelect(catalogId);
+        }
       },
       onThinkingSelect: (value) => {
         this.selectionGeneration += 1;

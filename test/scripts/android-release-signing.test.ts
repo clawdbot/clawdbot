@@ -1,10 +1,10 @@
 // Android release signing tests cover encrypted signing asset sync and local materialization.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runAndroidSigningCommandSync } from "../../scripts/lib/android-release-signing-process.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "android-release-signing.mjs");
 const MATCH_PASSWORD = "test-match-password";
@@ -12,13 +12,7 @@ const STORE_PASSWORD = "store_secret_value";
 const KEY_PASSWORD = "key_secret_value";
 const APK_CERTIFICATE_SHA256 = "80dbc62315ea216dd6e8a7060735a866ddc464a48ed50fef29ff0550468b9a63";
 
-const tempRoots: string[] = [];
-
-function makeTempRoot(): string {
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-android-signing-"));
-  tempRoots.push(tempRoot);
-  return tempRoot;
-}
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function runNode(args: string[], env: NodeJS.ProcessEnv = {}) {
   try {
@@ -127,12 +121,6 @@ function writeSigningSources(tempRoot: string) {
   return { keystorePath, propertiesPath };
 }
 
-afterEach(() => {
-  for (const tempRoot of tempRoots.splice(0)) {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
-});
-
 describe("scripts/android-release-signing.mjs", () => {
   it("terminates a hung signing command at its deadline", () => {
     const timeoutMs = 100;
@@ -184,7 +172,7 @@ describe("scripts/android-release-signing.mjs", () => {
   it.runIf(commandAvailable("openssl"))(
     "encrypts, pulls, and materializes Android signing assets without printing secrets",
     () => {
-      const tempRoot = makeTempRoot();
+      const tempRoot = tempRoots.make("openclaw-android-signing-");
       const signingRepo = createSigningRepo(tempRoot);
       const manifestPath = writeManifest(tempRoot, signingRepo);
       const { keystorePath, propertiesPath } = writeSigningSources(tempRoot);
@@ -311,7 +299,7 @@ describe("scripts/android-release-signing.mjs", () => {
   );
 
   it("requires MATCH_PASSWORD before pushing encrypted signing assets", () => {
-    const tempRoot = makeTempRoot();
+    const tempRoot = tempRoots.make("openclaw-android-signing-");
     const manifestPath = writeManifest(tempRoot, path.join(tempRoot, "apps-signing.git"));
     const { keystorePath, propertiesPath } = writeSigningSources(tempRoot);
 

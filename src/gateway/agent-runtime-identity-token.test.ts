@@ -137,6 +137,47 @@ describe("agent runtime identity token", () => {
     nowSpy.mockRestore();
   });
 
+  it("round-trips final cron-cap capture provenance", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      cronToolsAllowCapture: "final-executable-surface",
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toEqual({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      cronToolsAllowCapture: "final-executable-surface",
+    });
+  });
+
+  it("round-trips a signed private cron creator grant only with final provenance", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const cronCreatorAuthorityGrant = { runId: "run-1", token: "opaque-grant" };
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      cronToolsAllowCapture: "final-executable-surface",
+      cronCreatorAuthorityGrant,
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+      cronToolsAllowCapture: "final-executable-surface",
+      cronCreatorAuthorityGrant,
+    });
+    await expect(
+      runtimeToken.mintAgentRuntimeIdentityToken({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        cronCreatorAuthorityGrant,
+      }),
+    ).rejects.toThrow("require final tool-surface provenance");
+  });
+
   it("does not mint local credentials while rejecting invalid presented tokens", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

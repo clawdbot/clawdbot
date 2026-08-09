@@ -4,7 +4,10 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  type DeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import {
@@ -315,11 +318,13 @@ export async function runSubagentAnnounceFlow(params: {
       childRunId: params.childRunId,
     });
 
+    // Continuation: never re-wake a run that is itself a wake continuation.
     const childRunAlreadyWoken = isWakeContinuationRun(params.childRunId);
     if (
       params.wakeOnDescendantSettle === true &&
       childSessionEffectsAllowed() &&
       childCompletionFindings?.trim() &&
+      subagentRegistryRuntime &&
       !childRunAlreadyWoken
     ) {
       const wakeAnnounceId = buildAnnounceIdFromChildRun({

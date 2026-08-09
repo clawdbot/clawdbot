@@ -312,11 +312,12 @@ export function renderSettingsSegmented<T extends string>(props: {
 export function renderSettingsStatus(props: {
   kind: SettingsStatusKind;
   label: unknown;
+  dot?: boolean;
 }): TemplateResult {
   const modifier = props.kind === "muted" ? "" : ` settings-status--${props.kind}`;
   return html`
     <span class="settings-status${modifier}">
-      <span class="settings-status__dot"></span>
+      ${props.dot === false ? nothing : html`<span class="settings-status__dot"></span>`}
       ${props.label}
     </span>
   `;

@@ -1,11 +1,11 @@
 /**
  * Wire protocol between the extension relay server and the OpenClaw Chrome
- * extension. The extension stays a dumb transport: it attaches chrome.debugger,
- * forwards CDP traffic, and manages the OpenClaw tab group. All CDP target
- * semantics (Target.* synthesis for Playwright) live server-side in the bridge.
+ * extension. The extension owns tab eligibility/access, attaches chrome.debugger,
+ * and forwards CDP traffic. All CDP target semantics (Target.* synthesis for
+ * Playwright) live server-side in the bridge.
  */
 
-/** Tab snapshot reported by the extension for tabs shared with OpenClaw. */
+/** Tab snapshot reported by the extension for tabs currently accessible to OpenClaw. */
 export type RelayTabInfo = {
   tabId: number;
   url: string;
@@ -39,7 +39,7 @@ type ExtensionHelloMessage = {
   tabs: RelayTabInfo[];
 };
 
-/** Full refresh of shared tabs; sent on any group membership or tab change. */
+/** Full refresh of accessible tabs; sent on any access-policy or tab change. */
 type ExtensionTabsMessage = {
   type: "tabs";
   tabs: RelayTabInfo[];
@@ -103,15 +103,15 @@ export type ExtensionToRelayMessage =
 export type RelayCommandBody =
   /** Forward a CDP command into an attached tab (or one of its child sessions). */
   | { type: "cdp"; tabId: number; sessionId?: string; method: string; params?: unknown }
-  /** Attach chrome.debugger to a shared tab. Result: { targetId: string }. */
+  /** Attach chrome.debugger to an accessible tab. Result: { targetId: string }. */
   | { type: "attach"; tabId: number }
-  /** Detach chrome.debugger from a tab (tab left the group or client detached). */
+  /** Detach chrome.debugger from a tab (access revoked or client detached). */
   | { type: "detach"; tabId: number }
   /** Open a new tab inside the OpenClaw tab group. Result: { tabId: number }. */
   | { type: "createTab"; url: string; background?: boolean; focus?: boolean }
-  /** Close a shared tab. Result: {}. */
+  /** Close an accessible tab. Result: {}. */
   | { type: "closeTab"; tabId: number }
-  /** Focus a shared tab (window + tab activation). Result: {}. */
+  /** Focus an accessible tab (window + tab activation). Result: {}. */
   | { type: "activateTab"; tabId: number };
 
 /** Keepalive probe; the extension answers with pong. */

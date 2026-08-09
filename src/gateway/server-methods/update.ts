@@ -28,7 +28,11 @@ import {
 } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
-import { normalizeUpdateChannel } from "../../infra/update-channels.js";
+import {
+  normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
+} from "../../infra/update-channels.js";
+import { checkUpdateStatus } from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
 import {
   buildManagedServiceHandoffUnavailableMessage,
@@ -42,10 +46,16 @@ import {
 } from "../../infra/update-post-core-finalize.js";
 import {
   buildUpdateRestartSentinelPayload,
+  normalizeControlPlaneUpdateResult,
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
 import { resolveUpdateInstallSurface, runGatewayUpdate } from "../../infra/update-runner.js";
-import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
+import {
+  getUpdateAvailable,
+  getUpdateSchedule,
+  refreshGatewayUpdateStatus,
+} from "../../infra/update-startup.js";
+import { VERSION } from "../../version.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
   getLatestUpdateRestartSentinel,
@@ -72,6 +82,32 @@ function tryResolveProcessCwd(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+async function resolveGatewayEffectiveUpdateChannel(
+  configChannel: ReturnType<typeof normalizeUpdateChannel>,
+) {
+  const invocationCwd = tryResolveProcessCwd();
+  const root = await resolveOpenClawPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    ...(invocationCwd ? { cwd: invocationCwd } : {}),
+  });
+  const status = await checkUpdateStatus({
+    root,
+    timeoutMs: 2500,
+    fetchGit: false,
+    includeRegistry: false,
+  });
+  if (status.installKind === "unknown") {
+    return null;
+  }
+  return resolveEffectiveUpdateChannel({
+    configChannel,
+    currentVersion: VERSION,
+    installKind: status.installKind,
+    git: status.git,
+  }).channel;
 }
 
 async function readPreUpdateConfigForPostCoreFinalize(): Promise<
@@ -144,10 +180,26 @@ export const updateHandlers: GatewayRequestHandlers = {
       );
       sentinel = getLatestUpdateRestartSentinel();
     }
+    const configChannel = context?.getRuntimeConfig
+      ? normalizeUpdateChannel(context.getRuntimeConfig().update?.channel)
+      : null;
+    if (context?.getRuntimeConfig) {
+      try {
+        await refreshGatewayUpdateStatus(context.getRuntimeConfig());
+      } catch (err) {
+        context.logGateway?.warn(
+          `update.status checkout refresh failed: ${formatUpdateRunErrorMessage(err)}`,
+        );
+      }
+    }
     const schedule = getUpdateSchedule();
+    const effectiveChannel = await resolveGatewayEffectiveUpdateChannel(configChannel).catch(
+      () => null,
+    );
     const result = {
       sentinel,
       updateAvailable: getUpdateAvailable(),
+      ...(effectiveChannel ? { effectiveChannel } : {}),
       ...(schedule ? { schedule } : {}),
     };
     if (!validateUpdateStatusResult(result)) {
@@ -266,6 +318,16 @@ export const updateHandlers: GatewayRequestHandlers = {
         cwd: root,
         argv1: process.argv[1],
       });
+      const effectiveChannel = resolveEffectiveUpdateChannel({
+        configChannel,
+        currentVersion: VERSION,
+        installKind:
+          installSurface.kind === "git"
+            ? "git"
+            : installSurface.kind === "global" || installSurface.kind === "package-root"
+              ? "package"
+              : "unknown",
+      }).channel;
       const supervisor = detectRespawnSupervisor(process.env, process.platform);
       const hasHandoffContext = supervisor
         ? hasManagedServiceHandoffContext(process.env, supervisor)
@@ -312,7 +374,11 @@ export const updateHandlers: GatewayRequestHandlers = {
         };
       } else if (requiresManagedServiceHandoff) {
         const handoffChannel =
-          installSurface.kind === "git" ? undefined : (configChannel ?? undefined);
+          installSurface.kind === "git"
+            ? undefined
+            : effectiveChannel === "extended-stable"
+              ? effectiveChannel
+              : (configChannel ?? undefined);
         const command = formatManagedServiceUpdateCommand({
           timeoutMs,
           ...(handoffChannel ? { channel: handoffChannel } : {}),
@@ -454,7 +520,12 @@ export const updateHandlers: GatewayRequestHandlers = {
           timeoutMs,
           cwd: root,
           argv1: process.argv[1],
-          channel: configChannel ?? undefined,
+          channel:
+            installSurface.kind === "git"
+              ? (configChannel ?? undefined)
+              : effectiveChannel === "extended-stable"
+                ? effectiveChannel
+                : (configChannel ?? undefined),
           ...(adoptedPackageTargetVersion ? { tag: adoptedPackageTargetVersion } : {}),
           ...(adoptedDevTargetRef ? { devTargetRef: adoptedDevTargetRef } : {}),
           allowGatewayServiceRepair: false,
@@ -486,6 +557,8 @@ export const updateHandlers: GatewayRequestHandlers = {
         durationMs: 0,
       };
     }
+
+    result = normalizeControlPlaneUpdateResult(result);
 
     // A failed RPC owns the adopted campaign until it explicitly releases it;
     // only a started handoff may leave "applying" for the successor process.

@@ -87,7 +87,8 @@ export async function getMemoryManagerContextWithPurpose(params: {
     ? {
         manager,
         debug: {
-          ...debug,
+          backend: debug?.backend ?? "builtin",
+          purpose: debug?.purpose ?? params.purpose ?? "default",
           managerMs: debug?.managerMs ?? Math.max(0, Date.now() - startedAt),
         },
       }

@@ -576,6 +576,165 @@ describe.sequential("extension relay HTTP auth v2", () => {
     socket.close();
   });
 
+  it("retires an authenticated silent extension and immediately fails its pending CDP request", async () => {
+    const onStateChange = vi.fn();
+    handle = await startExtensionRelayServer({
+      port: 0,
+      token: KEY,
+      allowLegacyAuth: false,
+      onStateChange,
+    });
+    const extension = await authenticateV2Extension(handle);
+    let client: WebSocket | undefined;
+    let versionConnection: RawHttpConnection | undefined;
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      extension.send(
+        JSON.stringify({
+          type: "hello",
+          userAgent: "test",
+          browserVersion: "Chrome/test",
+          extensionVersion: "2",
+          tabs: [{ tabId: 1, url: "https://example.test", title: "one", active: true }],
+        }),
+      );
+      await vi.waitFor(() => expect(handle?.bridge.extensionConnected).toBe(true));
+
+      const credential = Buffer.from(`openclaw-internal:${handle.internalToken}`).toString(
+        "base64",
+      );
+      client = new WebSocket(`ws://127.0.0.1:${handle.port}/cdp`, {
+        headers: { Authorization: `Basic ${credential}` },
+      });
+      client.on("error", () => {});
+      await once(client, "open");
+      const clientFrames: Array<Record<string, unknown>> = [];
+      client.on("message", (raw: RawData) => {
+        clientFrames.push(JSON.parse(rawDataText(raw)) as Record<string, unknown>);
+      });
+
+      const attachment = once(extension, "message");
+      client.send(
+        JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+      );
+      const [attachmentData] = (await attachment) as [RawData];
+      const attachCommand = JSON.parse(rawDataText(attachmentData)) as {
+        type: string;
+        seq: number;
+      };
+      expect(attachCommand.type).toBe("attach");
+      extension.send(
+        JSON.stringify({
+          type: "result",
+          seq: attachCommand.seq,
+          result: { targetId: "target-1" },
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(clientFrames.some((frame) => frame.method === "Target.attachedToTarget")).toBe(true),
+      );
+      const attached = clientFrames.find((frame) => frame.method === "Target.attachedToTarget");
+      const sessionId = (attached?.params as { sessionId?: string } | undefined)?.sessionId;
+      expect(typeof sessionId).toBe("string");
+
+      for (let index = 0; index < 2; index += 1) {
+        const ping = once(extension, "message");
+        await vi.advanceTimersByTimeAsync(20_000);
+        const [pingData] = (await ping) as [RawData];
+        expect(JSON.parse(rawDataText(pingData))).toEqual({ type: "ping" });
+      }
+      expect(extension.readyState).toBe(WebSocket.OPEN);
+
+      const pending = once(extension, "message");
+      client.send(JSON.stringify({ id: 2, sessionId, method: "Page.getFrameTree" }));
+      const [pendingData] = (await pending) as [RawData];
+      expect(JSON.parse(rawDataText(pendingData))).toMatchObject({
+        type: "cdp",
+        method: "Page.getFrameTree",
+      });
+
+      versionConnection = await RawHttpConnection.connect(handle.port);
+      expect(
+        (
+          await versionConnection.request("GET", "/json/version", "", {
+            Authorization: `Basic ${credential}`,
+          })
+        ).status,
+      ).toBe(200);
+
+      const closed = once(extension, "close");
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(handle.bridge.extensionConnected).toBe(false);
+      await vi.waitFor(() =>
+        expect(clientFrames.find((frame) => frame.id === 2)).toMatchObject({
+          error: { message: "extension disconnected" },
+        }),
+      );
+      const [code, reason] = (await closed) as [number, Buffer];
+      expect(code).toBe(4000);
+      expect(reason.toString()).toBe("extension heartbeat timeout");
+      expect(onStateChange).toHaveBeenCalledTimes(2);
+
+      expect(
+        (
+          await versionConnection.request("GET", "/json/version", "", {
+            Authorization: `Basic ${credential}`,
+          })
+        ).status,
+      ).toBe(503);
+    } finally {
+      versionConnection?.close();
+      client?.terminate();
+      extension.terminate();
+      await handle?.close();
+      handle = null;
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an authenticated extension connected while its real socket answers heartbeat pings", async () => {
+    handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: false });
+    const extension = await authenticateV2Extension(handle);
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      extension.send(
+        JSON.stringify({
+          type: "hello",
+          userAgent: "test",
+          browserVersion: "Chrome/test",
+          extensionVersion: "2",
+          tabs: [{ tabId: 1, url: "https://example.test", title: "initial", active: true }],
+        }),
+      );
+      await vi.waitFor(() => expect(handle?.bridge.extensionConnected).toBe(true));
+
+      for (let index = 0; index < 4; index += 1) {
+        const ping = once(extension, "message");
+        await vi.advanceTimersByTimeAsync(20_000);
+        const [pingData] = (await ping) as [RawData];
+        expect(JSON.parse(rawDataText(pingData))).toEqual({ type: "ping" });
+        extension.send(JSON.stringify({ type: "pong" }));
+        extension.send(
+          JSON.stringify({
+            type: "tabs",
+            tabs: [{ tabId: 1, url: "https://example.test", title: `beat-${index}`, active: true }],
+          }),
+        );
+        await vi.waitFor(() =>
+          expect(handle?.bridge.accessibleTabs()[0]?.title).toBe(`beat-${index}`),
+        );
+      }
+
+      expect(extension.readyState).toBe(WebSocket.OPEN);
+      expect(handle.bridge.extensionConnected).toBe(true);
+    } finally {
+      extension.terminate();
+      await handle?.close();
+      handle = null;
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps an active extension while pending admission is full and recovers after release", async () => {
     handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: true });
     const active = await openExtensionSocket(handle, [

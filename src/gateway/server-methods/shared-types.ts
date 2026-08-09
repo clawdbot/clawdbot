@@ -70,6 +70,7 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
+  presenceKey?: string;
   clientIp?: string;
   /** Client id verified against the server-approved device pairing record. */
   pairedClientId?: string;
@@ -79,6 +80,7 @@ export type GatewayClient = {
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
+    avatarRevision?: string;
     hasAvatar: boolean;
     updatedAt: number;
   };
@@ -91,6 +93,8 @@ export type GatewayClient = {
   /** Signed shared-auth session admitted only to approve its own upgrade pairing. */
   isControlUiDeviceAuthMigration?: boolean;
   internal?: {
+    /** Handshake-attested direct-local transport; never accepted from wire params. */
+    isLocalClient?: true;
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */
@@ -263,6 +267,13 @@ export type GatewayRequestContext = {
     opts?: { role?: string; reason?: string },
   ) => void;
   hasConnectedClientsForDevice?: (deviceId: string) => boolean;
+  refreshConnectedUserProfile?: (profile: {
+    id: string;
+    displayName: string | null;
+    avatarRevision: string;
+    hasAvatar: boolean;
+    updatedAt: number;
+  }) => void;
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
   claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
@@ -275,7 +286,7 @@ export type GatewayRequestContext = {
   nodeRegistry: NodeRegistry;
   /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
-  /** Durable per-session worker placement; absent when cloud workers are disabled. */
+  /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
   workerSessionPlacementService?: WorkerSessionPlacementReader &
     Partial<WorkerSessionPlacementRetirementService>;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */

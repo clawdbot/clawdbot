@@ -10,6 +10,7 @@ import {
   type SandboxContext,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearMemoryPluginState,
   type MemoryFlushPlan,
@@ -31,24 +32,6 @@ type FakeTool = AnyAgentTool & {
   execute: ReturnType<typeof vi.fn>;
   prepareArguments?: ReturnType<typeof vi.fn>;
 };
-
-function createDeferred<T>() {
-  let rejectPromise: ((reason?: unknown) => void) | undefined;
-  let resolvePromise: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
-  return {
-    promise,
-    reject(reason?: unknown) {
-      rejectPromise?.(reason);
-    },
-    resolve(value: T) {
-      resolvePromise?.(value);
-    },
-  };
-}
 
 function flushAsync() {
   return Promise.resolve().then(() => {});

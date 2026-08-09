@@ -627,6 +627,35 @@ describe("formatGitInstallLabel", () => {
 });
 
 describe("checkUpdateStatus", () => {
+  it("does not treat stale remote refs as current when fetch fails", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-fetch-failure-" }, async (base) => {
+      const remoteRoot = path.join(base, "remote");
+      const localRoot = path.join(base, "local");
+      await initGitRepo(remoteRoot);
+      await commitGit(remoteRoot, "initial");
+      await runGit(base, "clone", "--quiet", remoteRoot, localRoot);
+      await runGit(localRoot, "remote", "set-url", "origin", path.join(base, "missing"));
+      const commitAtMs =
+        Number(await runGit(localRoot, "show", "-s", "--format=%ct", "HEAD")) * 1000;
+
+      const status = await checkUpdateStatus({
+        root: localRoot,
+        includeRegistry: false,
+        fetchGit: true,
+        timeoutMs: 5000,
+      });
+
+      expect(status.git).toMatchObject({
+        upstream: "origin/main",
+        upstreamSha: null,
+        commitAtMs,
+        ahead: null,
+        behind: null,
+        fetchOk: false,
+      });
+    });
+  });
+
   it("does not report divergence for unrelated histories", async () => {
     await withTempDir({ prefix: "openclaw-update-check-unrelated-" }, async (base) => {
       const localRoot = path.join(base, "local");
@@ -784,6 +813,31 @@ describe("checkUpdateStatus", () => {
       expect(status.git).toBeUndefined();
       expect(status.registry).toBeUndefined();
       expect(status.deps?.manager).toBe("npm");
+    });
+  });
+
+  it("resolves a status registry channel after detecting the install kind", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-registry-channel-" }, async (root) => {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ packageManager: "npm@10.0.0" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");
+      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+      const resolveRegistryChannel = vi.fn(() => "extended-stable" as const);
+
+      await checkUpdateStatus({
+        root,
+        includeRegistry: false,
+        fetchGit: false,
+        resolveRegistryChannel,
+      });
+
+      expect(resolveRegistryChannel).toHaveBeenCalledWith({
+        installKind: "package",
+        git: undefined,
+      });
     });
   });
 

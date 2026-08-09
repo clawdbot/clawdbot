@@ -873,9 +873,20 @@ catalog, API-key auth, and dynamic model resolution.
         Consumers of `createRealtimeVoiceBridgeSession` may likewise return a
         promise from `onToolCall`; synchronous throws and rejections are routed
         to the session's `onError` callback.
+        The host may pass `sendUserMessage(text, { toolChoice })` while the
+        response state is idle to force one named function for that response;
+        later responses return to the session's configured tool choice.
         Set `handlesInputAudioBargeIn` only when provider VAD confirms an
         interruption by calling `onClearAudio("barge-in")`. Providers that omit
         the flag use OpenClaw's local input-audio fallback detection.
+
+        A browser-session request can include `gatewayControl` when the host has
+        explicitly negotiated server-owned provider control. The provider keeps
+        vendor authentication and signaling private, calls
+        `gatewayControl.bindBridge(bridge)` before connecting the attached
+        control transport, and forwards bridge events through the supplied
+        callbacks. The Gateway remains the owner of tool policy and run
+        lifecycle. Do not infer or enable this mode from a model name alone.
       </Tab>
       <Tab title="Media understanding">
         ```typescript

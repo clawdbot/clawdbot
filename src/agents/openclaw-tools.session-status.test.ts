@@ -201,6 +201,7 @@ function createConfigModuleMock() {
 
 function createModelCatalogModuleMock() {
   return {
+    loadProviderScopedThinkingCatalog: async () => [],
     loadPreparedModelCatalog: async () => [
       {
         provider: "anthropic",

@@ -157,16 +157,11 @@ function normalizeSessionToolOverrides(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-type SessionPatchProjectionEntry = {
-  entry: SessionEntry;
-  sessionKey: string;
-};
-
 /** Project a validated gateway session patch for one session entry. */
 export async function projectSessionsPatchEntry(params: {
   cfg: OpenClawConfig;
-  entries: readonly SessionPatchProjectionEntry[];
   existingEntry?: SessionEntry;
+  isLabelInUse: (label: string) => boolean;
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
@@ -270,13 +265,8 @@ export async function projectSessionsPatchEntry(params: {
       if (!parsed.ok) {
         return invalid(parsed.error);
       }
-      for (const { sessionKey, entry } of params.entries) {
-        if (sessionKey === storeKey) {
-          continue;
-        }
-        if (entry?.label === parsed.label) {
-          return invalid(`label already in use: ${parsed.label}`);
-        }
+      if (params.isLabelInUse(parsed.label)) {
+        return invalid(`label already in use: ${parsed.label}`);
       }
       next.label = parsed.label;
     }
@@ -707,35 +697,4 @@ export async function projectSessionsPatchEntry(params: {
   }
 
   return { ok: true, entry: next };
-}
-
-/** Apply a validated gateway session patch to an in-memory session store entry. */
-export async function applySessionsPatchToStore(params: {
-  cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  storeKey: string;
-  agentId?: string;
-  patch: SessionsPatchParams;
-  archivedBy?: SessionCreatedActor;
-  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
-  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
-  /** Exact harness owner authorized to project its new reserved session row. */
-  authorizedAgentHarnessId?: string;
-}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
-  const projected = await projectSessionsPatchEntry({
-    cfg: params.cfg,
-    entries: Object.entries(params.store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
-    existingEntry: params.store[params.storeKey],
-    storeKey: params.storeKey,
-    agentId: params.agentId,
-    patch: params.patch,
-    archivedBy: params.archivedBy,
-    loadGatewayModelCatalog: params.loadGatewayModelCatalog,
-    providerAuthMetadataSnapshot: params.providerAuthMetadataSnapshot,
-    authorizedAgentHarnessId: params.authorizedAgentHarnessId,
-  });
-  if (projected.ok) {
-    params.store[params.storeKey] = projected.entry;
-  }
-  return projected;
 }

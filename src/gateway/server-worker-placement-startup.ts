@@ -1,7 +1,4 @@
-import {
-  installSessionPlacementAdmissionProvider,
-  installSessionPlacementResetGuard,
-} from "../agents/session-placement-admission.js";
+import { installSessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
 import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
@@ -54,7 +51,7 @@ class WorkerDispatchTargetChangedError extends Error {
 
 /** Serializes reconciliation sweeps against in-flight dispatches so a sweep never
  * observes a placement mid-transition. Dispatches wait out any pending sweep. */
-function coordinateWorkerPlacementDispatch(
+export function coordinateWorkerPlacementDispatch(
   service: WorkerPlacementDispatchService,
 ): WorkerPlacementDispatchService {
   let activeDispatchCount = 0;
@@ -135,7 +132,10 @@ function coordinateWorkerPlacementDispatch(
       ),
     reclaim: async (request) => await runPlacementOperation(() => service.reclaim(request)),
     reconcile: () => runReconciliation(service.reconcile),
-    reconcileActive: () => runReconciliation(service.reconcileActive),
+    reconcileActive: (environmentId) =>
+      environmentId === undefined
+        ? runReconciliation(() => service.reconcileActive())
+        : runExclusivePlacementOperation(() => service.reconcileActive(environmentId)),
   };
 }
 
@@ -522,13 +522,6 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     registerSidecar: (sidecar: WorkerPlacementSidecar) => void;
   }): Promise<WorkerPlacementSidecar | null> => {
     const uninstallPlacementAdmission = installSessionPlacementAdmissionProvider(admissionProvider);
-    const uninstallPlacementResetGuard = installSessionPlacementResetGuard((sessionId) => {
-      const placement = params.placements.get(sessionId);
-      if (!placement || placement.state === "local") {
-        return undefined;
-      }
-      return `cloud worker placement is ${placement.state}`;
-    });
     let placementReconcileInterval: ReturnType<typeof setInterval> | undefined;
     let placementReconcileInFlight: Promise<void> | undefined;
     let stopped = false;
@@ -561,7 +554,6 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         clearInterval(placementReconcileInterval);
         placementReconcileInterval = undefined;
         uninstallPlacementAdmission();
-        uninstallPlacementResetGuard();
         const environmentStop = params.environments.stop();
         const stopResults = await Promise.allSettled([
           ...(placementReconcileInFlight ? [placementReconcileInFlight] : []),

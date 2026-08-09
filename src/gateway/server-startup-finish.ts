@@ -23,6 +23,7 @@ import {
 } from "./server-lifetime-sidecars.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
+import { assertGatewayRestartDatabaseReadiness } from "./server-restart-readiness.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   getRequiredSharedGatewaySessionGeneration,
@@ -107,6 +108,7 @@ export async function finishGatewayStartup(params: {
     controlUiDeviceAuthMigration,
     nodeRegistry,
     workerEnvironmentService,
+    workerEnvironmentStartup,
     workerPlacementRuntime,
     workerPlacementControlAvailable,
     terminalSessions,
@@ -258,8 +260,8 @@ export async function finishGatewayStartup(params: {
         releaseControlUiDeviceAuthMigrationClaim(deviceId, { env: process.env }),
       nodeRegistry,
       ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
-      ...(workerPlacementRuntime
-        ? { workerSessionPlacementService: workerPlacementRuntime.placements }
+      ...(workerEnvironmentStartup
+        ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
         : {}),
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }
@@ -630,6 +632,7 @@ export async function finishGatewayStartup(params: {
     resolveSharedGatewaySessionGenerationForConfig,
     sharedGatewaySessionGenerationState,
     clients,
+    ...(!minimalTestGateway ? { assertRestartReady: assertGatewayRestartDatabaseReadiness } : {}),
     ...(opts.hotReloadRecovery ? { requestRecoveryRestart: opts.hotReloadRecovery } : {}),
     restartRecoveryAvailable: opts.hotReloadRecovery !== undefined,
   });

@@ -472,6 +472,7 @@ suite.define(() => {
         "board.get",
         "chat.metadata",
         "chat.startup",
+        "sessions.patch",
         "workboard.cards.list",
         "workboard.cards.move",
       ],
@@ -511,6 +512,55 @@ suite.define(() => {
           path: path.join(pluginWidgetsProofDir, "01-plugin-widgets-ready.png"),
         });
       }
+
+      const cardElement = page.locator("openclaw-workboard-card-widget");
+      await cardElement.evaluate((element) => {
+        Reflect.set(globalThis, "workboardPluginElementIdentity", element);
+      });
+      const listCountBeforeHide = (await gateway.getRequests("workboard.cards.list")).length;
+      const mode = (value: "chat" | "split") =>
+        page.locator(`wa-radio.settings-segmented__btn[value="${value}"]`);
+
+      await mode("chat").click();
+      await expect
+        .poll(() => page.locator(".board-session-surface").getAttribute("hidden"))
+        .not.toBeNull();
+      await expect
+        .poll(() =>
+          cardElement.evaluate(
+            (element) =>
+              element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
+              Reflect.get(element, "active") === false &&
+              element.isConnected,
+          ),
+        )
+        .toBe(true);
+      await gateway.emitGatewayEvent("plugin.workboard.changed", {
+        epoch: "plugin-widget-e2e-hidden",
+        revision: 2,
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      expect(await gateway.getRequests("workboard.cards.list")).toHaveLength(listCountBeforeHide);
+
+      await mode("split").click();
+      await expect
+        .poll(async () => (await gateway.getRequests("workboard.cards.list")).length)
+        .toBe(listCountBeforeHide + 1);
+      await expect
+        .poll(() =>
+          cardElement.evaluate(
+            (element) =>
+              element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
+              Reflect.get(element, "active") === true &&
+              element.isConnected,
+          ),
+        )
+        .toBe(true);
 
       await cardWidget.getByRole("combobox").selectOption("running");
       const moveRequest = await gateway.waitForRequest("workboard.cards.move");

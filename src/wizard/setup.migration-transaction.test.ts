@@ -1,8 +1,8 @@
 // Transactional onboarding migration tests exercise the classic full-import caller.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import type {
   MigrationApplyResult,
@@ -37,14 +37,8 @@ vi.mock("../config/mutate.js", () => ({
 
 import { runSetupMigrationImport } from "./setup.migration-import.js";
 
-const tempRoots = new Set<string>();
+const tempRoots = createTempDirTracker();
 let previousStateDir: string | undefined;
-
-async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migration-transaction-"));
-  tempRoots.add(root);
-  return root;
-}
 
 function runtime() {
   return {
@@ -269,15 +263,12 @@ afterEach(async () => {
   } else {
     process.env.OPENCLAW_STATE_DIR = previousStateDir;
   }
-  for (const root of tempRoots) {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-  tempRoots.clear();
+  tempRoots.cleanup();
 });
 
 describe("transactional setup migration import", () => {
   it("promotes a Claude import with no model and returns no imported inference", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     mocks.provider = provider({ source });
@@ -294,7 +285,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("rejects deferred activation from providers without a retry-safe contract", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     mocks.provider = provider({ source, deferred: true, retrySafeDeferred: false });
@@ -308,7 +299,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("accepts an already-satisfied retry-safe deferred effect as complete", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     mocks.provider = provider({
@@ -338,7 +329,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("leaves the live target untouched when imported inference verification fails", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     mocks.provider = provider({ source, importModel: true });
@@ -352,7 +343,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("leaves the live target untouched when imported inference repair is cancelled", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     mocks.provider = provider({ source, importModel: true });
@@ -367,7 +358,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("aborts promotion when the source changes after staged apply", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "before\n", "utf8");
     mocks.provider = provider({
@@ -386,7 +377,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("aborts promotion when config changes during staged apply", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     const currentConfig = { value: {} };
@@ -404,7 +395,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("runs deferred activation only after promotion and keeps failures as warnings", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     const liveMemory = path.join(root, "workspace", "MEMORY.md");
@@ -439,7 +430,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("routes deferred config writes through the canonical runtime", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     mocks.provider = provider({
@@ -465,7 +456,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("resumes only deferred activation after promotion without rerunning the import", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     let planCalls = 0;
@@ -511,7 +502,7 @@ describe("transactional setup migration import", () => {
   });
 
   it("retries only deferred items that did not already activate", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-migration-transaction-");
     const source = path.join(root, "source-memory.md");
     await fs.writeFile(source, "remember this\n", "utf8");
     const activationCalls: string[] = [];

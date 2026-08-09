@@ -11,7 +11,11 @@ import {
   resolveRepoToolBinPath,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { pluginSdkEntrypoints, productionPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import {
+  listPluginSdkDeclarationOutputs,
+  pluginSdkEntrypoints,
+  productionPluginSdkEntrypoints,
+} from "./lib/plugin-sdk-entries.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -324,12 +328,10 @@ const ENTRY_SHIMS_INPUTS = [
 export function resolveBoundaryEntryShimRequiredOutputs(env = process.env) {
   const entries =
     env.OPENCLAW_BUILD_PRIVATE_QA === "1" ? pluginSdkEntrypoints : productionPluginSdkEntrypoints;
-  return entries
-    .flatMap((entry) => [
-      `dist/plugin-sdk/${entry}.d.ts`,
-      `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,
-    ])
-    .toSorted((a, b) => a.localeCompare(b));
+  return [
+    ...listPluginSdkDeclarationOutputs(entries),
+    ...entries.map((entry) => `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`),
+  ].toSorted((a, b) => a.localeCompare(b));
 }
 
 function isRelevantTypeInput(filePath) {

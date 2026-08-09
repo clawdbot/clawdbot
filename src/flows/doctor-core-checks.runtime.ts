@@ -32,7 +32,11 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { buildInventoryContinuationToolOpts } from "../agents/tools/continuation-inventory-opts.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { collectUnavailableAgentSkills } from "../commands/doctor-skills-core.js";
-import { gatewayProbeResultSawGateway } from "../commands/gateway-health-auth-diagnostic.js";
+import {
+  GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+  gatewayProbeResultSawGateway,
+  gatewayProbeResultWasRateLimited,
+} from "../commands/gateway-health-auth-diagnostic.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getSystemdCgroupHygieneSummary,
@@ -133,10 +137,22 @@ export async function collectGatewayHealthFindings(
     config: ctx.cfg,
     json: true,
   });
+  const mode = ctx.cfg.gateway?.mode === "remote" ? "remote" : "local";
+  if (gatewayProbeResultWasRateLimited(probe)) {
+    return [
+      {
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+        path: mode === "remote" ? "gateway.remote.url" : "gateway.mode",
+        target: formatGatewayHealthTarget(probeDetails.url),
+        fixHint: "Wait for the temporary authentication lockout to expire, then rerun doctor.",
+      },
+    ];
+  }
   if (gatewayProbeResultSawGateway(probe)) {
     return [];
   }
-  const mode = ctx.cfg.gateway?.mode === "remote" ? "remote" : "local";
   return [
     {
       checkId: "core/doctor/gateway-health",

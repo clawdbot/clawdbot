@@ -162,13 +162,6 @@ openclaw-session-owner-chip {
   padding: 24px;
 }
 
-.login-gate__theme {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 10;
-}
-
 .login-gate__card {
   width: min(520px, 100%);
   margin-block: auto;
@@ -381,64 +374,6 @@ openclaw-session-owner-chip {
 }
 
 /* ===========================================
-   Update Banner
-   =========================================== */
-
-.update-banner {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  margin: 0 calc(-1 * var(--shell-pad)) 0;
-  border-radius: 0;
-  border-left: none;
-  border-right: none;
-  text-align: center;
-  font-weight: 500;
-  padding: 10px 16px;
-}
-
-.update-banner .update-banner__btn {
-  margin-left: 8px;
-  border-color: currentColor;
-  color: currentColor;
-  font-size: 12px;
-  padding: 4px 12px;
-}
-
-.update-banner .update-banner__btn:hover:not(:disabled) {
-  border-color: currentColor;
-  background: color-mix(in srgb, currentColor 14%, transparent);
-}
-
-.update-banner__close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: 8px;
-  padding: 4px;
-  min-width: 24px;
-  min-height: 24px;
-  background: none;
-  border: none;
-  color: currentColor;
-  opacity: 0.7;
-  transition: opacity 0.15s;
-}
-
-.update-banner__close:hover {
-  opacity: 1;
-}
-
-.update-banner__close svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-
-/* ===========================================
    Cards - Refined with depth
    =========================================== */
 
@@ -490,30 +425,12 @@ openclaw-session-owner-chip {
   border-color: var(--border-strong);
 }
 
-.stat-label {
-  color: var(--muted);
-  font-size: 12px; /* was 11px */
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
 .stat-value {
   font-size: 24px;
   font-weight: 700;
   margin-top: 6px;
   letter-spacing: -0.03em;
   line-height: 1.1;
-}
-
-.stat-card {
-  display: grid;
-  gap: 6px;
-}
-
-.note-title {
-  font-weight: 600;
-  letter-spacing: -0.01em;
 }
 
 /* ===========================================
@@ -582,60 +499,6 @@ openclaw-session-owner-chip {
 }
 
 /* ===========================================
-   Skill Toggle Switch
-   =========================================== */
-
-.skill-toggle-wrap {
-  display: inline-flex;
-  align-items: center;
-}
-
-.skill-toggle {
-  appearance: none;
-  width: 36px;
-  height: 20px;
-  border-radius: var(--radius-full);
-  background: var(--border);
-  position: relative;
-  border: none;
-  outline: none;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
-  flex-shrink: 0;
-}
-
-.skill-toggle::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: var(--radius-full);
-  background: white;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-  transition: transform var(--duration-fast) var(--ease-out);
-}
-
-.skill-toggle:checked {
-  background: var(--accent);
-}
-
-.skill-toggle:checked::after {
-  transform: translateX(16px);
-}
-
-.skill-toggle:focus-visible {
-  box-shadow: var(--focus-ring);
-}
-
-.skill-toggle:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* ===========================================
    Buttons - Tactile with personality
    =========================================== */
 
@@ -699,35 +562,6 @@ openclaw-session-owner-chip {
 
 :root[data-theme="openknot"] .btn.primary:hover {
   background: var(--primary-hover);
-}
-
-/* Keyboard shortcut badge (shadcn style) */
-.btn-kbd {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: 6px;
-  padding: 2px 5px;
-  font-family: var(--mono);
-  font-size: 12px; /* was 11px */
-  font-weight: 500;
-  line-height: 1;
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.15);
-  color: inherit;
-  opacity: 0.8;
-}
-
-.btn.primary .btn-kbd {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-:root[data-theme-mode="light"] .btn-kbd {
-  background: rgba(0, 0, 0, 0.08);
-}
-
-:root[data-theme-mode="light"] .btn.primary .btn-kbd {
-  background: rgba(255, 255, 255, 0.25);
 }
 
 .btn.active {
@@ -1290,12 +1124,6 @@ openclaw-session-owner-chip {
   height: 16px;
 }
 
-.form-grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-}
-
 /* ===========================================
    Cron Form
    =========================================== */
@@ -1376,14 +1204,6 @@ openclaw-session-owner-chip {
   white-space: nowrap;
 }
 
-.summary-strip__actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  min-width: 0;
-}
-
 .field input[aria-invalid="true"],
 .field textarea[aria-invalid="true"],
 .field select[aria-invalid="true"] {
@@ -1399,12 +1219,6 @@ openclaw-session-owner-chip {
   .summary-strip__stats {
     width: 100%;
     gap: 8px 18px;
-  }
-
-  .summary-strip__actions {
-    width: 100%;
-    justify-content: flex-start;
-    flex-wrap: wrap;
   }
 }
 
@@ -1713,7 +1527,7 @@ openclaw-chat-session-rail {
 
 .chat-session-rail {
   position: absolute;
-  top: 0;
+  top: 12px;
   right: 12px;
   z-index: 30;
   border: 1px solid var(--border);
@@ -2168,7 +1982,6 @@ openclaw-chat-session-rail {
 
 :root[data-theme-mode="light"] .code-block,
 :root[data-theme-mode="light"] .list-item,
-:root[data-theme-mode="light"] .table-row,
 :root[data-theme-mode="light"] .chip {
   background: var(--bg);
 }
@@ -2468,32 +2281,10 @@ openclaw-chat-session-rail {
   border-color: var(--border-strong);
 }
 
-.list-item-selected {
-  border-color: var(--accent);
-  box-shadow: var(--focus-ring);
-}
-
 .list-main {
   display: grid;
   gap: 4px;
   min-width: 0;
-}
-
-.list-item__detail-button {
-  width: 100%;
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.list-item__detail-button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .list-title {
@@ -2842,42 +2633,6 @@ td.data-table-key-col {
 .data-table-pagination__controls button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-/* Inline form fields for filter bars */
-.field-inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text);
-}
-
-.field-inline span {
-  color: var(--muted);
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.field-inline input[type="text"],
-.field-inline input:not([type]) {
-  padding: 6px 10px;
-  font-size: 13px;
-  color: var(--text);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  outline: none;
-  transition: border-color var(--duration-fast) ease;
-}
-
-.field-inline input:focus-visible {
-  border-color: var(--border-strong);
-  box-shadow: var(--focus-ring);
-}
-
-.field-inline.checkbox {
-  gap: 4px;
 }
 
 /* ===========================================
@@ -3479,12 +3234,6 @@ td.data-table-key-col {
   gap: 14px;
 }
 
-.agents-sidebar {
-  display: grid;
-  gap: 12px;
-  align-self: start;
-}
-
 .agents-toolbar {
   display: flex;
   align-items: center;
@@ -3747,85 +3496,6 @@ td.data-table-key-col {
 .agents-main {
   display: grid;
   gap: 14px;
-}
-
-.agent-list {
-  display: grid;
-  gap: 8px;
-}
-
-.agent-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  text-align: left;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--card);
-  padding: 8px 12px;
-  transition: border-color var(--duration-fast) ease;
-}
-
-.agent-row:hover {
-  border-color: var(--border-strong);
-}
-
-.agent-row.active {
-  border-color: var(--accent);
-  box-shadow: var(--focus-ring);
-}
-
-.agent-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--secondary);
-  display: grid;
-  place-items: center;
-  font-weight: 600;
-}
-
-.agent-avatar--lg {
-  width: 48px;
-  height: 48px;
-  font-size: 20px;
-}
-
-.agent-info {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.agent-title {
-  font-weight: 600;
-}
-
-.agent-sub {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.agent-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: center;
-}
-
-.agent-header-main {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-
-.agent-header-meta {
-  display: grid;
-  justify-items: end;
-  gap: 6px;
-  color: var(--muted);
 }
 
 .agent-file-tabs {
@@ -4234,10 +3904,6 @@ td.data-table-key-col {
 .md-preview-dialog__reader {
   --md-preview-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --md-preview-document-bg: color-mix(in srgb, var(--bg) 92%, var(--panel) 8%);
-  --cm-bg: transparent;
-  --cm-border: color-mix(in srgb, var(--border) 72%, white 10%);
-  --cm-code-bg: color-mix(in srgb, var(--bg-elevated) 72%, black 28%);
-  --cm-inline-code-bg: color-mix(in srgb, var(--secondary) 58%, transparent);
   position: relative;
   width: min(100%, 82ch);
   margin: 0 auto;
@@ -4267,10 +3933,6 @@ td.data-table-key-col {
 .md-preview-dialog__reader > * {
   position: relative;
   z-index: 1;
-}
-
-.md-preview-dialog__reader .cm-preview {
-  background: transparent;
 }
 
 .md-preview-dialog__reader.sidebar-markdown {
@@ -4958,14 +4620,6 @@ td.data-table-key-col {
 }
 
 @media (max-width: 980px) {
-  .agent-header {
-    grid-template-columns: 1fr;
-  }
-
-  .agent-header-meta {
-    justify-items: start;
-  }
-
   .agent-tools-list {
     grid-template-columns: 1fr;
   }
@@ -5105,25 +4759,6 @@ td.data-table-key-col {
 }
 
 @media (max-width: 768px) {
-  .agent-row {
-    padding: 8px 10px;
-    gap: 8px;
-  }
-
-  .agent-avatar--lg {
-    width: 40px;
-    height: 40px;
-    font-size: 18px;
-  }
-
-  .agent-header {
-    gap: 8px;
-  }
-
-  .agent-header-main {
-    gap: 8px;
-  }
-
   .exec-approval-card {
     padding: 16px;
     display: flex;
@@ -5144,15 +4779,6 @@ td.data-table-key-col {
     padding: 8px 10px;
     max-height: 40dvh;
     overflow-y: auto;
-  }
-
-  .table-head {
-    display: none;
-  }
-
-  .table-row {
-    grid-template-columns: 1fr;
-    gap: 6px;
   }
 }
 

@@ -598,7 +598,7 @@ describe("createIMessageTestPlugin", () => {
         const result = await sendDurableMessageBatch({
           cfg,
           channel: "imessage",
-          to: "imessage:+15550004567",
+          to: "+15550004567",
           durability: "required",
           mediaAccess,
           deps: { imessage: nativeSend },
@@ -678,7 +678,7 @@ describe("createIMessageTestPlugin", () => {
         const result = await sendDurableMessageBatch({
           cfg,
           channel: "imessage",
-          to: "imessage:+15550004567",
+          to: "+15550004567",
           durability: "required",
           mediaAccess: { localRoots: [workspaceDir], workspaceDir, readFile },
           deps: { imessage: nativeSend },

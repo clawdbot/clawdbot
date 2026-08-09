@@ -22,9 +22,13 @@ export function readChatPaneMutationAccess(
   sessionKey: string,
 ) {
   return {
-    runtimePatch: readSessionMethodAccess(snapshot, {
+    model: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, model: null },
+    }),
+    effort: readSessionMethodAccess(snapshot, {
+      method: "sessions.patch",
+      params: { key: sessionKey, thinkingLevel: null },
     }),
     unarchive: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
@@ -38,7 +42,8 @@ export function renderChatPaneComposerControls(params: {
   state: ChatPageHost;
   selectedSession: GatewaySessionRow | undefined;
   agentDefaultModel: string | undefined;
-  mutationAccess: SessionMethodAccess;
+  modelAccess: SessionMethodAccess;
+  effortAccess: SessionMethodAccess;
   preferencesBrowserOnly: boolean;
 }) {
   const {
@@ -46,10 +51,10 @@ export function renderChatPaneComposerControls(params: {
     state,
     selectedSession,
     agentDefaultModel,
-    mutationAccess,
+    modelAccess,
+    effortAccess,
     preferencesBrowserOnly,
   } = params;
-  const mutationAllowed = () => mutationAccess.allowed;
   return renderChatControls({
     paneId,
     model: {
@@ -64,20 +69,23 @@ export function renderChatPaneComposerControls(params: {
       modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
       modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
       modelsLoading: state.chatModelsLoading,
-      mutationDisabledReason: mutationAccess.allowed ? undefined : mutationAccess.reason,
+      modelMutationDisabledReason: modelAccess.allowed ? undefined : modelAccess.reason,
+      effortMutationDisabledReason: effortAccess.allowed ? undefined : effortAccess.reason,
       sending: state.chatSending,
       sessionKey: state.sessionKey,
       sessionsResult: state.sessionsResult,
       stream: state.chatStream,
       onRequestUpdate: () => state.requestUpdate?.(),
       onFastModeSelect: (next, targetSessionKey) =>
-        mutationAllowed()
+        effortAccess.allowed
           ? switchChatFastMode(state, next, targetSessionKey)
           : Promise.resolve(false),
       onModelSelect: (next, targetSessionKey) =>
-        mutationAllowed() ? switchChatModel(state, next, targetSessionKey) : Promise.resolve(false),
+        modelAccess.allowed
+          ? switchChatModel(state, next, targetSessionKey)
+          : Promise.resolve(false),
       onThinkingSelect: (next, targetSessionKey) =>
-        mutationAllowed()
+        effortAccess.allowed
           ? switchChatThinkingLevel(state, next, targetSessionKey)
           : Promise.resolve(false),
     },

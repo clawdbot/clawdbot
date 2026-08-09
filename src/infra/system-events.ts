@@ -16,9 +16,22 @@ import {
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { normalizeDiagnosticTraceparent } from "./diagnostic-trace-context.js";
+import { generateSecureUuid } from "./secure-random.js";
 import type { DelegateArtifactDeliveryReceipt } from "./session-delivery-queue-storage.js";
+import {
+  cloneSystemEventOwner,
+  recordSystemEventOwner,
+  resolveSystemEventOptionsOwnerAgentId,
+  resolveSystemEventOwnerAgentId,
+} from "./system-event-ownership.js";
 
 export type SystemEvent = {
+  /**
+   * OpenClaw-assigned opaque identity for one queued occurrence. Preserve it when returning a
+   * snapshot to consume. It changes on replacement or re-enqueue; optional only for legacy
+   * ID-less compatibility.
+   */
+  id?: string;
   text: string;
   ts: number;
   contextKey?: string | null;
@@ -122,13 +135,15 @@ function getOrCreateSessionQueue(sessionKey: string): SessionQueue {
 }
 
 function cloneSystemEvent(event: SystemEvent): SystemEvent {
-  return {
+  const clone = {
     ...event,
     ...(event.deliveryContext ? { deliveryContext: { ...event.deliveryContext } } : {}),
     ...(event.delegateArtifactReceipt
       ? { delegateArtifactReceipt: { ...event.delegateArtifactReceipt } }
       : {}),
   };
+  cloneSystemEventOwner(event, clone);
+  return clone;
 }
 
 export function isSystemEventContextChanged(
@@ -149,6 +164,7 @@ function findDuplicateInQueue(
   sessionDeliveryAckStateDir: string | undefined,
   expectedSessionId: string | undefined,
   delegateArtifactReceipt: DelegateArtifactDeliveryReceipt | undefined,
+  ownerAgentId: string | null,
 ): boolean {
   const incoming = {
     text,
@@ -158,6 +174,7 @@ function findDuplicateInQueue(
     sessionDeliveryAckStateDir,
     expectedSessionId,
     delegateArtifactReceipt,
+    ownerAgentId,
   };
   if (contextKey === null) {
     const last = queue[queue.length - 1];
@@ -176,6 +193,13 @@ export function enqueueSystemEventEntry(
   text: string,
   options: SystemEventOptions,
 ): SystemEvent | null {
+  return enqueueOwnedSystemEventEntry(text, options);
+}
+
+function enqueueOwnedSystemEventEntry(
+  text: string,
+  options: SystemEventOptions,
+): SystemEvent | null {
   if (options.replace) {
     return replaceSystemEventEntry(text, options);
   }
@@ -188,8 +212,10 @@ export function enqueueSystemEventEntry(
   const normalizedContextKey = normalizeContextKey(options.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
   const normalizedTraceparent = normalizeTraceparent(options?.traceparent);
+  const normalizedOwnerAgentId = resolveSystemEventOptionsOwnerAgentId(options);
   applyContextKeyPolicy(entry, normalizedContextKey);
   const event: SystemEvent = {
+    id: generateSecureUuid(),
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
@@ -209,15 +235,24 @@ export function enqueueSystemEventEntry(
       : {}),
     ...(normalizedTraceparent ? { traceparent: normalizedTraceparent } : {}),
   };
+  recordSystemEventOwner(event, normalizedOwnerAgentId);
   if (event.sessionDeliveryAckId) {
+    // An ack id + state dir identifies ONE persisted row, so the slot is located
+    // without regard to owner. A foreign owner claiming the same row is a
+    // conflict, not a second slot: fail closed rather than double-queue it.
     const durableIndex = entry.queue.findIndex(
       (queued) =>
         queued.sessionDeliveryAckId === event.sessionDeliveryAckId &&
         queued.sessionDeliveryAckStateDir === event.sessionDeliveryAckStateDir,
     );
-    if (durableIndex >= 0) {
-      const existing = entry.queue[durableIndex];
-      if (existing && isDuplicateSystemEvent(existing, event)) {
+    const existing = durableIndex >= 0 ? entry.queue[durableIndex] : undefined;
+    if (durableIndex >= 0 && existing) {
+      if (resolveSystemEventOwnerAgentId(existing) !== normalizedOwnerAgentId) {
+        return null;
+      }
+      if (
+        isDuplicateSystemEvent(existing, { ...event, ownerAgentId: normalizedOwnerAgentId })
+      ) {
         return null;
       }
       entry.queue[durableIndex] = event;
@@ -234,6 +269,7 @@ export function enqueueSystemEventEntry(
       event.sessionDeliveryAckStateDir,
       event.expectedSessionId,
       event.delegateArtifactReceipt,
+      normalizedOwnerAgentId,
     )
   ) {
     return null;
@@ -297,7 +333,9 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
   }
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
   const normalizedTraceparent = normalizeTraceparent(options.traceparent);
+  const normalizedOwnerAgentId = resolveSystemEventOptionsOwnerAgentId(options);
   const replacement: SystemEvent = {
+    id: generateSecureUuid(),
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
@@ -314,9 +352,11 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
       : {}),
     ...(normalizedTraceparent ? { traceparent: normalizedTraceparent } : {}),
   };
+  recordSystemEventOwner(replacement, normalizedOwnerAgentId);
   const matching = entry.queue.filter(
     (event) =>
       (event.contextKey ?? null) === normalizedContextKey &&
+      resolveSystemEventOwnerAgentId(event) === normalizedOwnerAgentId &&
       areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
   );
   if (
@@ -339,6 +379,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
   entry.queue = entry.queue.filter(
     (event) =>
       (event.contextKey ?? null) !== normalizedContextKey ||
+      resolveSystemEventOwnerAgentId(event) !== normalizedOwnerAgentId ||
       !areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
   );
   entry.queue.push(replacement);
@@ -360,7 +401,9 @@ function isDuplicateSystemEvent(
     | "sessionDeliveryAckStateDir"
     | "expectedSessionId"
     | "delegateArtifactReceipt"
-  >,
+  > & {
+    ownerAgentId: string | null;
+  },
 ): boolean {
   return (
     existing.text === incoming.text &&
@@ -372,11 +415,12 @@ function isDuplicateSystemEvent(
       existing.delegateArtifactReceipt,
       incoming.delegateArtifactReceipt,
     ) &&
+    resolveSystemEventOwnerAgentId(existing) === incoming.ownerAgentId &&
     areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
   );
 }
 
-function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
+function areLegacySystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
   return (
     left.text === right.text &&
     left.ts === right.ts &&
@@ -386,8 +430,17 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.expectedSessionId === right.expectedSessionId &&
     areDelegateArtifactReceiptsEqual(left.delegateArtifactReceipt, right.delegateArtifactReceipt) &&
     (left.traceparent ?? undefined) === (right.traceparent ?? undefined) &&
+    resolveSystemEventOwnerAgentId(left) === resolveSystemEventOwnerAgentId(right) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
+}
+
+function matchesConsumedSystemEvent(queued: SystemEvent, consumed: SystemEvent): boolean {
+  if (consumed.id !== undefined) {
+    // Queue-owned IDs govern modern consumption; only legacy ID-less snapshots use structure.
+    return queued.id === consumed.id;
+  }
+  return areLegacySystemEventsEqual(queued, consumed);
 }
 
 function resetQueueState(key: string, entry: SessionQueue) {
@@ -418,7 +471,7 @@ export function consumeSystemEventEntries(
   if (
     consumedEntries.length > entry.queue.length ||
     !consumedEntries.every((event, index) =>
-      areSystemEventsEqual(expectDefined(entry.queue[index], "queue entry at index"), event),
+      matchesConsumedSystemEvent(expectDefined(entry.queue[index], "queue entry at index"), event),
     )
   ) {
     // A keyed replacement may remove one inspected entry while a prompt is in flight.
@@ -442,7 +495,7 @@ export function consumeSelectedSystemEventEntries(
   }
   const removed: SystemEvent[] = [];
   for (const consumed of consumedEntries) {
-    const index = entry.queue.findIndex((event) => areSystemEventsEqual(event, consumed));
+    const index = entry.queue.findIndex((event) => matchesConsumedSystemEvent(event, consumed));
     if (index === -1) {
       continue;
     }

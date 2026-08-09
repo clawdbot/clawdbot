@@ -1,3 +1,5 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import {
   waitForControlUiGatewayReady,
@@ -14,8 +16,117 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const captureCliAgentsProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const cliAgentsProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "cli-agents-picker",
+);
+
+function requestHasParam(request: { params?: unknown }, key: string, value: unknown): boolean {
+  return Boolean(
+    request.params &&
+    typeof request.params === "object" &&
+    !Array.isArray(request.params) &&
+    (request.params as Record<string, unknown>)[key] === value,
+  );
+}
 
 suite.define(() => {
+  it("routes a Labs-enabled CLI agent picker row through catalog-target mode", async () => {
+    if (captureCliAgentsProof) {
+      await mkdir(cliAgentsProofDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureCliAgentsProof
+        ? { recordVideo: { dir: cliAgentsProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      cliAgentsEnabled: true,
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.create",
+        "sessions.dispatch",
+        "sessions.catalog.list",
+      ],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: {
+                continueSession: true,
+                archive: false,
+                createSession: { model: "anthropic/claude-opus-4-8" },
+              },
+              hosts: [],
+            },
+            {
+              id: "history-only",
+              label: "History only",
+              capabilities: { continueSession: true, archive: false },
+              hosts: [],
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.catalog.list")).find((request) =>
+            requestHasParam(request, "limitPerHost", 1),
+          ),
+        )
+        .toMatchObject({ params: { agentId: "main", limitPerHost: 1 } });
+
+      await page.locator('[data-chat-model-select="true"]').click();
+      const cliGroup = page.locator('[data-chat-model-target-group="cliAgents"]');
+      await expect.poll(() => cliGroup.isVisible()).toBe(true);
+      await pollLocatorText(cliGroup).toContain("CLI agents");
+      await pollLocatorText(cliGroup).toContain("Claude Code");
+      expect(await cliGroup.textContent()).not.toContain("History only");
+      if (captureCliAgentsProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cliAgentsProofDir, "picker-group.png"),
+        });
+      }
+
+      await cliGroup.getByRole("option", { name: "Claude Code" }).click();
+      await expect.poll(() => new URL(page.url()).searchParams.get("catalog")).toBe("claude");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.catalog.list")).find((request) =>
+            requestHasParam(request, "catalogId", "claude"),
+          ),
+        )
+        .toMatchObject({ params: { agentId: "main", catalogId: "claude" } });
+      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+      expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
+      if (captureCliAgentsProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cliAgentsProofDir, "catalog-target.png"),
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows metadata failure truthfully and recovers the full catalog on retry", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",

@@ -1,9 +1,7 @@
-// Records system-level session events for restarts, forks, and resets.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import {
   markDelegateArtifactDeliveryUnavailable,
@@ -23,6 +21,8 @@ import {
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
+// Records system-level session events for restarts, forks, and resets.
+import { selectAgentSystemEvents } from "../../infra/system-event-ownership.js";
 import {
   ackSessionDelivery,
   loadPendingSessionDelivery,
@@ -257,6 +257,7 @@ async function settleManagedDelivery(
  */
 export async function prepareFormattedSystemEvents(params: {
   cfg: OpenClawConfig;
+  agentId: string;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
@@ -266,13 +267,15 @@ export async function prepareFormattedSystemEvents(params: {
   const blocks: PreparedSystemEventBlock[] = [];
   // Exec completions have a dedicated heartbeat prompt; leave those entries queued
   // so the heartbeat path can consume and deliver them.
-  const selected = selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey), {
-    suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents,
-  });
-  const agentId = resolveAgentIdFromSessionKey(
-    params.sessionKey,
-    resolveDefaultAgentId(params.cfg),
+  // Upstream scopes queued events to the owning agent before generic selection;
+  // keep that ownership filter ahead of our delivery-ack/session filtering.
+  const selected = selectGenericSystemEvents(
+    selectAgentSystemEvents(peekSystemEventEntries(params.sessionKey), params.agentId),
+    { suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents },
   );
+  // Storage must resolve under the SAME agent the ownership filter selected for,
+  // or a global-scope key under a non-default agent reads the wrong store.
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey, params.agentId);
   const currentSessionId = loadSessionEntry({
     agentId,
     sessionKey: params.sessionKey,

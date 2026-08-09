@@ -98,6 +98,19 @@ function createRoundTripProbe(
   };
 }
 
+function prioritizeRoundTripProbeScenario(
+  scenarioIds: readonly string[],
+  options: ReturnType<typeof resolveRttOptions>,
+) {
+  if (!options) {
+    return [...scenarioIds];
+  }
+  return [
+    options.scenarioId,
+    ...scenarioIds.filter((scenarioId) => scenarioId !== options.scenarioId),
+  ];
+}
+
 async function shouldFailPackageTelegramRun(
   result: { summaryPath: string },
   env: NodeJS.ProcessEnv = process.env,
@@ -141,8 +154,15 @@ async function resolveTrustedOpenClawCommand(
 }
 
 async function main() {
-  const { runQaTelegramSuite } =
-    await import("../../extensions/qa-lab/src/live-transports/telegram/cli.runtime.ts");
+  const [
+    { runQaTelegramSuite },
+    { resolveTelegramQaScenarioIds },
+    { DEFAULT_QA_LIVE_PROVIDER_MODE },
+  ] = await Promise.all([
+    import("../../extensions/qa-lab/src/live-transports/telegram/cli.runtime.ts"),
+    import("../../extensions/qa-lab/src/live-transports/telegram/scenario-selection.ts"),
+    import("../../extensions/qa-lab/src/providers/index.ts"),
+  ]);
   const rawSutOpenClawCommand = process.env.OPENCLAW_NPM_TELEGRAM_SUT_COMMAND?.trim();
   if (!rawSutOpenClawCommand) {
     throw new Error("Missing OPENCLAW_NPM_TELEGRAM_SUT_COMMAND.");
@@ -152,18 +172,29 @@ async function main() {
   const repoRoot = path.resolve(process.env.OPENCLAW_NPM_TELEGRAM_REPO_ROOT ?? process.cwd());
   const outputDir = resolvePackageTelegramOutputDir(process.env, repoRoot);
   const scenarioIds = splitCsv(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS);
+  const providerMode =
+    (process.env.OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE as QaProviderMode | undefined) ??
+    DEFAULT_QA_LIVE_PROVIDER_MODE;
+  const primaryModel = process.env.OPENCLAW_NPM_TELEGRAM_MODEL;
+  const resolvedScenarioIds = resolveTelegramQaScenarioIds({
+    providerMode,
+    primaryModel,
+    scenarioIds,
+  });
+  const rttOptions = resolveRttOptions(process.env, scenarioIds);
   const result = await runQaTelegramSuite({
     allowFailures: true,
     failFast: true,
     repoRoot,
     outputDir,
     sutOpenClawCommand,
-    providerMode: process.env.OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE as QaProviderMode | undefined,
-    primaryModel: process.env.OPENCLAW_NPM_TELEGRAM_MODEL,
+    providerMode,
+    primaryModel,
     alternateModel: process.env.OPENCLAW_NPM_TELEGRAM_ALT_MODEL,
     fastMode: parseBoolean(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
     scenarioIds,
-    roundTripProbe: createRoundTripProbe(resolveRttOptions(process.env, scenarioIds)),
+    resolvedScenarioIds: prioritizeRoundTripProbeScenario(resolvedScenarioIds, rttOptions),
+    roundTripProbe: createRoundTripProbe(rttOptions),
     sutAccountId: process.env.OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT,
     credentialSource: resolveCredentialSource(process.env),
     credentialRole: resolveCredentialRole(process.env),
@@ -209,6 +240,7 @@ export const testing = {
   resolveCredentialRole,
   resolveCredentialSource,
   createRoundTripProbe,
+  prioritizeRoundTripProbeScenario,
   resolveRttOptions,
   resolveTrustedOpenClawCommand,
   shouldFailPackageTelegramRun,

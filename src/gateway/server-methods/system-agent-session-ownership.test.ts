@@ -7,8 +7,7 @@ import { SystemAgentWizardAnswerError } from "../../system-agent/chat-engine.js"
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-const setupInferenceMocks = vi.hoisted(() => ({ verifySetupInference: vi.fn() }));
-const delegatedInferenceMocks = vi.hoisted(() => ({
+const inferenceFallbackMocks = vi.hoisted(() => ({
   verifySystemAgentInferenceWithFallback: vi.fn(),
 }));
 const transcriptStoreMocks = vi.hoisted(() => ({
@@ -17,12 +16,9 @@ const transcriptStoreMocks = vi.hoisted(() => ({
   readTranscriptTail: vi.fn(() => []),
 }));
 
-vi.mock("../../system-agent/setup-inference.js", () => ({
-  verifySetupInference: setupInferenceMocks.verifySetupInference,
-}));
 vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback:
-    delegatedInferenceMocks.verifySystemAgentInferenceWithFallback,
+    inferenceFallbackMocks.verifySystemAgentInferenceWithFallback,
 }));
 vi.mock("../../system-agent/transcript-store.js", () => transcriptStoreMocks);
 // Ownership tests exercise fresh-session creation; keep the caretaker greeting
@@ -142,8 +138,7 @@ async function callChat(
 
 beforeEach(() => {
   createdEngines.length = 0;
-  setupInferenceMocks.verifySetupInference.mockResolvedValue({ ok: true, binding: {} });
-  delegatedInferenceMocks.verifySystemAgentInferenceWithFallback.mockResolvedValue({
+  inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValue({
     ok: true,
     binding: {},
   });
@@ -234,7 +229,7 @@ describe("openclaw.chat session ownership", () => {
     });
     expect(expire).not.toHaveBeenCalled();
     expect(engine.dispose).not.toHaveBeenCalled();
-    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
+    expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).not.toHaveBeenCalled();
   });
 
   it("lets the same authenticated principal resume after reconnecting", async () => {
@@ -300,6 +295,10 @@ describe("openclaw.chat session ownership", () => {
       { sessionId: "delegated", delegation },
       makeClient({ connId: "conn-owner", deviceId: "device-owner" }),
     );
+    expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).toHaveBeenCalledWith({
+      requestingAgentId: "main",
+      runtime: expect.anything(),
+    });
     const handle = expectDefined(createdEngines[0], "created delegated engine").handle;
 
     const resumed = await callChat(
@@ -314,6 +313,7 @@ describe("openclaw.chat session ownership", () => {
 
     expect(resumed.ok).toBe(true);
     expect(handle).toHaveBeenCalledWith("continue");
+    expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).toHaveBeenCalledOnce();
   });
 
   it("rejects delegated reuse of a non-delegated session", async () => {
@@ -367,7 +367,7 @@ describe("openclaw.chat session responses", () => {
         details: { code: "system_agent_session_invalidated" },
       },
     });
-    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
+    expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).not.toHaveBeenCalled();
   });
 
   it("rejects a structured answer when the active session has no hosted wizard", async () => {

@@ -26,10 +26,9 @@ import {
 } from "./deliver-types.js";
 import type { DeliveryMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
 
 type OutboundAuditDeliveryContext = {
-  channel: Exclude<OutboundChannel, "none">;
+  channel: string;
   to: string;
   accountId?: string;
   payloads?: readonly ReplyPayload[];

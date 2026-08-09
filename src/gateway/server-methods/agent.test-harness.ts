@@ -297,16 +297,6 @@ vi.mock("../../channels/message/runtime.js", async () => {
   };
 });
 
-vi.mock("../../utils/delivery-context.js", async () => {
-  const actual = await vi.importActual<typeof import("../../utils/delivery-context.js")>(
-    "../../utils/delivery-context.js",
-  );
-  return {
-    ...actual,
-    normalizeSessionDeliveryFields: () => ({}),
-  };
-});
-
 export const makeContext = (): GatewayRequestContext =>
   ({
     dedupe: new Map(),

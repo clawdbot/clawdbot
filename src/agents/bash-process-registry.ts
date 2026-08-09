@@ -7,7 +7,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { readEnvInt } from "./bash-tools.shared.js";
 import { createSessionSlug as createSessionSlugId } from "./session-slug.js";
 
@@ -90,6 +90,8 @@ export interface ProcessSession {
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
+  /** Preserve the lifecycle owner's verdict for polls that captured the running session. */
+  terminalStatus?: Exclude<ProcessStatus, "running">;
   noOutputTimedOut?: boolean;
   exited: boolean;
   /** Process exit observed; backend cleanup still owns the terminal transition. */
@@ -240,13 +242,14 @@ export function markExited(
   session: ProcessSession,
   exitCode: number | null,
   exitSignal: NodeJS.Signals | number | null,
-  status: ProcessStatus,
+  status: Exclude<ProcessStatus, "running">,
   exitReason?: TerminationReason,
   noOutputTimedOut?: boolean,
 ) {
   // Visibility can be cleared before process termination. Keep suspension
   // blocked until the process owner reports the actual terminal transition.
   activeBackgroundExecSessionIds.delete(session.id);
+  session.terminalStatus = status;
   session.exited = true;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
@@ -299,6 +302,11 @@ export function acknowledgeNotifyOnExit(record: {
   }
   remove();
   record.notifyOnExitRemoval = undefined;
+}
+
+/** Reports owner-tracked process liveness even after visibility is removed. */
+export function hasActiveBackgroundExecSession(sessionId: string): boolean {
+  return activeBackgroundExecSessionIds.has(sessionId);
 }
 
 /** Returns the number of live background exec sessions without exposing process details. */

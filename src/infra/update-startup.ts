@@ -37,6 +37,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { readUpdateInstallReceipt, type RestartSentinelPayload } from "./restart-sentinel.js";
 import {
   resolveGatewayRestartDeferralTimeoutMs,
   scheduleGatewaySigusr1Restart,
@@ -46,10 +47,16 @@ import { gatewayUpdateCampaign, type UpdateCampaignController } from "./update-c
 import {
   channelToNpmTag,
   normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
   DEFAULT_PACKAGE_CHANNEL,
   type UpdateChannel,
 } from "./update-channels.js";
-import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
+import {
+  compareSemverStrings,
+  resolveNpmChannelTag,
+  checkUpdateStatus,
+  type UpdateCheckResult,
+} from "./update-check.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "./update-control-plane-sentinel.js";
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
 
@@ -588,13 +595,121 @@ async function resolveStartupInstallStatus(fetchGit: boolean) {
     argv1: process.argv[1],
     cwd: process.cwd(),
   });
-  const status = await checkUpdateStatus({
-    root,
-    timeoutMs: 2500,
-    fetchGit,
-    includeRegistry: false,
-  });
-  return { root, status };
+  const [status, installReceipt] = await Promise.all([
+    checkUpdateStatus({
+      root,
+      timeoutMs: 2500,
+      fetchGit,
+      includeRegistry: false,
+    }),
+    readUpdateInstallReceipt(),
+  ]);
+  return { root, status, installReceipt };
+}
+
+type GitScheduleStatus = NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>;
+
+function gitCommitsMatch(left: string, right: string): boolean {
+  const normalizedLeft = left.trim().toLowerCase();
+  const normalizedRight = right.trim().toLowerCase();
+  return (
+    normalizedLeft.length >= 7 &&
+    normalizedRight.length >= 7 &&
+    (normalizedLeft.startsWith(normalizedRight) || normalizedRight.startsWith(normalizedLeft))
+  );
+}
+
+function resolveGitInstalledAtMs(
+  git: NonNullable<UpdateCheckResult["git"]>,
+  installReceipt: RestartSentinelPayload | null,
+): number | undefined {
+  const receiptSha = installReceipt?.stats?.after?.sha;
+  return installReceipt?.kind === "update" &&
+    installReceipt.status === "ok" &&
+    installReceipt.stats?.mode === "git" &&
+    typeof receiptSha === "string" &&
+    git.sha &&
+    gitCommitsMatch(receiptSha, git.sha)
+    ? installReceipt.ts
+    : undefined;
+}
+
+function resolveGitScheduleStatus(
+  update: UpdateCheckResult,
+  installReceipt: RestartSentinelPayload | null,
+): GitScheduleStatus | undefined {
+  if (update.installKind !== "git") {
+    return undefined;
+  }
+  const git = update.git;
+  const installedAtMs = git ? resolveGitInstalledAtMs(git, installReceipt) : undefined;
+  const metadata = git
+    ? {
+        ...(git.sha ? { currentSha: git.sha } : {}),
+        ...(typeof git.commitAtMs === "number" ? { commitAtMs: git.commitAtMs } : {}),
+        ...(installedAtMs === undefined ? {} : { installedAtMs }),
+      }
+    : {};
+  if (!git || git.error || !git.sha) {
+    return { ...metadata, status: "unavailable", reason: "git-unavailable" };
+  }
+  if (git.fetchOk !== true) {
+    return { ...metadata, status: "unavailable", reason: "fetch-failed" };
+  }
+  if (!git.upstream) {
+    return { ...metadata, status: "unavailable", reason: "no-upstream" };
+  }
+  if (!git.upstreamSha) {
+    return { ...metadata, status: "unavailable", reason: "no-upstream-sha" };
+  }
+  if (git.ahead === null || git.behind === null) {
+    return { ...metadata, status: "unavailable", reason: "comparison-failed" };
+  }
+  if (git.ahead > 0 && git.behind > 0) {
+    return {
+      ...metadata,
+      status: "diverged",
+      commitsAhead: git.ahead,
+      commitsBehind: git.behind,
+    };
+  }
+  if (git.behind > 0) {
+    return { ...metadata, status: "behind", commitsBehind: git.behind };
+  }
+  if (git.ahead > 0) {
+    return { ...metadata, status: "ahead", commitsAhead: git.ahead };
+  }
+  return { ...metadata, status: "current" };
+}
+
+function withInstallStatus(
+  schedule: UpdateScheduleState,
+  update: UpdateCheckResult,
+  includeGitStatus: boolean,
+  installReceipt: RestartSentinelPayload | null,
+): UpdateScheduleState {
+  const git = includeGitStatus ? resolveGitScheduleStatus(update, installReceipt) : undefined;
+  return {
+    ...schedule,
+    install: {
+      kind: update.installKind,
+      ...(git ? { git } : {}),
+    },
+  };
+}
+
+/** Refreshes the read-only Dev checkout comparison used by update.status. */
+export async function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
+  const channel = normalizeUpdateChannel(cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  if (channel !== "dev") {
+    return;
+  }
+  const { status, installReceipt } = await resolveStartupInstallStatus(true);
+  const current =
+    updateScheduleCache?.channel === channel
+      ? updateScheduleCache
+      : { channel, autoEnabled: Boolean(cfg.update?.auto?.enabled) };
+  setUpdateScheduleCache({ next: withInstallStatus(current, status, true, installReceipt) });
 }
 
 async function resolveDevGitCommits(params: {
@@ -724,12 +839,55 @@ export async function runGatewayUpdateCheck(params: {
   if (params.isNixMode) {
     return;
   }
-  const configuredChannel =
-    normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  const configChannel = normalizeUpdateChannel(params.cfg.update?.channel);
   const updateCampaign = params.updateCampaign ?? gatewayUpdateCampaign;
   const auto = resolveAutoUpdatePolicy(params.cfg);
   const autoDisabledByEnv = isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE);
   const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
+  const shouldRunUpdateHints = params.cfg.update?.checkOnStart !== false;
+  const potentialChannel = resolveEffectiveUpdateChannel({
+    configChannel,
+    currentVersion: VERSION,
+    installKind: "package",
+  }).channel;
+  const potentialAutoDesired =
+    (potentialChannel === "stable" || potentialChannel === "beta" || potentialChannel === "dev") &&
+    auto.enabled &&
+    !autoDisabledByEnv &&
+    !autoDisabledByExternalSupervisor;
+  if (!shouldRunUpdateHints && !potentialAutoDesired && configChannel === "extended-stable") {
+    updateCampaign.clear();
+    setUpdateAvailableCache({
+      next: null,
+      onUpdateAvailableChange: params.onUpdateAvailableChange,
+    });
+    const priorSchedule =
+      updateScheduleCache?.channel === potentialChannel ? updateScheduleCache : null;
+    const initialSchedule: UpdateScheduleState = priorSchedule
+      ? { ...priorSchedule, autoEnabled: auto.enabled }
+      : { channel: potentialChannel, autoEnabled: auto.enabled };
+    setUpdateScheduleCache({
+      next: withoutTarget(initialSchedule),
+      onUpdateScheduleChange: params.onUpdateScheduleChange,
+    });
+    return;
+  }
+  const mightUseInstalledExtendedStableChannel =
+    configChannel === null && potentialChannel === "extended-stable";
+  let installStatus: Awaited<ReturnType<typeof resolveStartupInstallStatus>> | undefined;
+  if (
+    configChannel === "extended-stable" ||
+    configChannel === "dev" ||
+    mightUseInstalledExtendedStableChannel
+  ) {
+    installStatus = await resolveStartupInstallStatus(configChannel === "dev");
+  }
+  const configuredChannel = resolveEffectiveUpdateChannel({
+    configChannel,
+    currentVersion: VERSION,
+    installKind: installStatus?.status.installKind ?? "unknown",
+    git: installStatus?.status.git,
+  }).channel;
   const autoDesired =
     (configuredChannel === "stable" ||
       configuredChannel === "beta" ||
@@ -737,7 +895,6 @@ export async function runGatewayUpdateCheck(params: {
     auto.enabled &&
     !autoDisabledByEnv &&
     !autoDisabledByExternalSupervisor;
-  const shouldRunUpdateHints = params.cfg.update?.checkOnStart !== false;
 
   if (updateScheduleCache?.channel !== configuredChannel) {
     updateCampaign.clear();
@@ -804,14 +961,17 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  let installStatus: Awaited<ReturnType<typeof resolveStartupInstallStatus>> | undefined;
-  if (configuredChannel === "extended-stable" || configuredChannel === "dev") {
+  if ((configuredChannel === "extended-stable" || configuredChannel === "dev") && !installStatus) {
     installStatus = await resolveStartupInstallStatus(configuredChannel === "dev");
+  }
+  if (installStatus && (configuredChannel === "extended-stable" || configuredChannel === "dev")) {
     setUpdateScheduleCache({
-      next: {
-        ...(updateScheduleCache ?? initialSchedule),
-        install: { kind: installStatus.status.installKind },
-      },
+      next: withInstallStatus(
+        updateScheduleCache ?? initialSchedule,
+        installStatus.status,
+        configuredChannel === "dev",
+        installStatus.installReceipt,
+      ),
       onUpdateScheduleChange: params.onUpdateScheduleChange,
     });
   }
@@ -895,12 +1055,14 @@ export async function runGatewayUpdateCheck(params: {
   }
 
   installStatus ??= await resolveStartupInstallStatus(false);
-  const { root, status } = installStatus;
+  const { root, status, installReceipt } = installStatus;
   setUpdateScheduleCache({
-    next: {
-      ...(updateScheduleCache ?? initialSchedule),
-      install: { kind: status.installKind },
-    },
+    next: withInstallStatus(
+      updateScheduleCache ?? initialSchedule,
+      status,
+      isDevGit,
+      installReceipt,
+    ),
     onUpdateScheduleChange: params.onUpdateScheduleChange,
   });
 

@@ -25,6 +25,7 @@ extension OnboardingAISetupModel {
 
     struct DetectResult: Decodable {
         struct DetectedCandidate: Decodable {
+            let brandId: String?
             let icon: String?
             let website: String?
             let kind: String
@@ -74,6 +75,7 @@ extension OnboardingAISetupModel {
     }
 
     struct CandidatePresentation: Equatable {
+        let brandId: String?
         let icon: String?
         let website: String?
     }
@@ -118,6 +120,7 @@ extension OnboardingAISetupModel {
 
     struct ManualProvider: Identifiable, Equatable, Decodable {
         let id: String
+        let brandId: String?
         let label: String
         let hint: String?
         let icon: String?
@@ -126,6 +129,7 @@ extension OnboardingAISetupModel {
 
     struct AuthOption: Identifiable, Equatable, Decodable {
         let id: String
+        let brandId: String?
         let label: String
         let hint: String?
         let groupLabel: String?
@@ -141,6 +145,7 @@ extension OnboardingAISetupModel {
         let hint: String
         let website: String
         let icon: String
+        let brandId: String?
     }
 
     struct PrepareOption: Identifiable, Equatable, Decodable {
@@ -378,5 +383,17 @@ extension OnboardingAISetupModel {
         let components = clock.now.duration(to: deadline).components
         let milliseconds = components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
         return max(0, min(capMs, Int(milliseconds)))
+    }
+}
+
+enum OnboardingAISetupError: LocalizedError {
+    case providerCatalogUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .providerCatalogUnavailable:
+            "The Gateway is running an older OpenClaw version that doesn’t provide the " +
+                "supported provider list. Update OpenClaw on the gateway, then try again."
+        }
     }
 }

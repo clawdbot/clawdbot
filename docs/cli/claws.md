@@ -257,6 +257,39 @@ values. A collision-free declaration becomes managed, while an exact existing
 or shared declaration is referenced. Preview, provenance, status, export, and
 removal follow the same ownership policy as other Claw resources.
 
+## Author locally
+
+Create a minimal project, validate its publishable inputs, preview its complete
+OpenClaw add plan offline, and build an immutable package artifact:
+
+```bash
+openclaw claws create ./incident-triage
+openclaw claws validate ./incident-triage
+openclaw claws dev ./incident-triage
+openclaw claws build ./incident-triage --out ./incident-triage-1.0.0.tgz
+```
+
+`create` writes only `package.json` and `CLAW.md` and refuses to merge into a
+nonempty directory. Project validation requires `openclaw.claw` to point to
+the root `CLAW.md`, rejects package scripts and lifecycle hooks, discovers a
+single unambiguous project root, and reports files excluded from the package.
+
+`dev` validates and builds the same artifact that would be published, then
+runs that artifact through the canonical add planner. It does not install
+packages, contact ClawHub, start an agent turn, enable schedules, deliver
+messages, or modify OpenClaw state. Dependencies that require online preflight
+appear as blockers instead of weakening that boundary. Use `--agent-id` or
+`--workspace` to preview collision-free local destinations.
+
+`build` writes a deterministic npm-compatible `.tgz` with a `package/` root.
+Only package metadata, `CLAW.md`, optional `BOOTSTRAP.md`, the OpenClaw profile,
+and sources selected by the manifest are included. Tests, caches, ambient or
+unselected credentials, unselected files, prior artifacts, and source-control
+state remain outside the package. Selected source bytes are package content, so
+authors must not select secret-bearing files. Build refuses to overwrite an
+existing artifact, reports its SHA-256 integrity, and re-opens it through the
+canonical Claw reader before success.
+
 ## Inspect and preview
 
 Validate the source without planning local changes. For OpenClaw profile
