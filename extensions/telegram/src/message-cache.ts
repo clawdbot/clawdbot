@@ -286,11 +286,15 @@ function normalizeMessageNodes(
     promptContextProjectionMarker?: TelegramPromptContextProjectionMarker,
     threadBinding?: TelegramMessageThreadBinding,
   ) => {
+    const embeddedThreadId = parseTelegramMessageThreadId(
+      (message as { message_thread_id?: unknown }).message_thread_id,
+    );
+    const inheritedThread = parseTelegramMessageThreadId(inheritedThreadId);
     const node = normalizeMessageNode(message, {
       threadId:
-        parseTelegramMessageThreadId(
-          (message as { message_thread_id?: unknown }).message_thread_id,
-        ) ?? inheritedThreadId,
+        mode === "authoritative"
+          ? (inheritedThread ?? embeddedThreadId)
+          : (embeddedThreadId ?? inheritedThread),
       ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
       ...(threadBinding ? { threadBinding } : {}),
     });

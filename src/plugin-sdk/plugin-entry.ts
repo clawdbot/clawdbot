@@ -131,6 +131,7 @@ export type {
   TranscriptSourceProvider,
   UnifiedModelCatalogProviderContext,
   UnifiedModelCatalogProviderPlugin,
+  WorkerDesktopEndpoint,
   WorkerLease,
   WorkerLeaseStatus,
   WorkerProfile,

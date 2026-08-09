@@ -104,6 +104,7 @@ describe("LabsPage", () => {
     expect(page.querySelectorAll(".settings-row")).toHaveLength(LAB_FEATURES.length);
     expect(page.textContent).toContain("Code Mode");
     expect(page.textContent).toContain("Swarm");
+    expect(page.textContent).toContain("Cloud Worker Desktop");
     expect(codeModeToggle(page).checked).toBe(true);
 
     const docs = [...page.querySelectorAll<HTMLAnchorElement>(".settings-row__desc a")];
@@ -198,6 +199,13 @@ describe("LabsPage", () => {
       expectedPatch: { logging: { audit: { messages: "direct" } } },
       note: "labs: update auditMessages",
     },
+    {
+      label: "Cloud Worker Desktop",
+      index: 6,
+      sourceConfig: { cloudWorkers: { desktop: false } },
+      expectedPatch: { cloudWorkers: { desktop: true } },
+      note: "labs: update workerDesktop",
+    },
   ])("writes the on value at the registered config path when enabling $label", async (testCase) => {
     const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
     const toggle = labToggle(page, testCase.index, testCase.label);
@@ -247,13 +255,18 @@ describe("LabsPage", () => {
     });
   });
 
-  it("marks only the startup-scoped entry as needing a restart", async () => {
+  it("marks startup-scoped entries as needing a restart", async () => {
     const { page } = await mountPage({});
     const rows = [...page.querySelectorAll(".settings-row")];
 
     const restartRows = rows.filter((row) => row.textContent?.includes("restart"));
-    expect(restartRows).toHaveLength(1);
-    expect(restartRows[0]?.textContent).toContain("Message audit metadata");
+    expect(restartRows).toHaveLength(2);
+    expect(restartRows.map((row) => row.textContent)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Message audit metadata"),
+        expect.stringContaining("Cloud Worker Desktop"),
+      ]),
+    );
   });
 
   it("shows default provenance and reset actions only for overrides", async () => {

@@ -448,6 +448,7 @@ describe("browser copilot background", () => {
     const gatewayScope = "ws://127.0.0.1:18789/";
     const revokeDebugger = vi.fn(async () => undefined);
     const request = vi.fn(async () => ({ ok: true }));
+    const localStorage = storageArea();
     const gateway = {
       ready: true,
       onEvent: vi.fn(),
@@ -460,7 +461,7 @@ describe("browser copilot background", () => {
       chromeApi: {
         runtime: { onConnect: eventHook() },
         tabs: { query: vi.fn(async () => [{ id: 12 }]) },
-        storage: { local: storageArea(), session: storageArea() },
+        storage: { local: localStorage, session: storageArea() },
       } as never,
       getConfig: vi.fn(async () => ({
         relayUrl: "ws://127.0.0.1:18792/browser/extension",
@@ -479,6 +480,7 @@ describe("browser copilot background", () => {
     await controller.onRelayStatus({ ready: true, label: "Browser relay connected" });
     await controller.registry.put(12, { gatewayScope, sessionKey: "session-12" });
     await controller.registry.startRun(12, gatewayScope, "run-12");
+    localStorage.set.mockRejectedValueOnce(new Error("transient session storage failure"));
 
     await controller.onRelayStatus({ ready: false, label: "Browser relay reconnecting" });
 
@@ -488,6 +490,10 @@ describe("browser copilot background", () => {
       runId: "run-12",
     });
     expect(controller.registry.pendingAborts(gatewayScope)).toEqual([]);
+    await expect(
+      controller.onRelayStatus({ ready: true, label: "Browser relay connected" }),
+    ).resolves.toBeUndefined();
+    expect(controller.registry.get(12, gatewayScope)).not.toHaveProperty("activeRunId");
   });
 
   it("restores durable debugger denial before a suspended worker reconnects", async () => {
