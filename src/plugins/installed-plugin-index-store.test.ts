@@ -709,6 +709,62 @@ describe("installed plugin index persistence", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
+  it("preserves passthrough fields and serializes numeric-looking ids canonically", async () => {
+    const stateDir = makeTempDir();
+    await writePersistedInstalledPluginIndex(
+      createIndex({
+        installRecords: {
+          2: { source: "npm", futureMetadata: { retained: true } },
+          10: { source: "path" },
+          1: { source: "archive" },
+        } as InstalledPluginIndex["installRecords"],
+      }),
+      { stateDir },
+    );
+
+    const persisted = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+    expectInstallRecord(persisted, "2", {
+      source: "npm",
+      futureMetadata: { retained: true },
+    });
+    const row = runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare(
+            `SELECT install_records_json
+               FROM installed_plugin_index
+              WHERE index_key = 'installed-plugin-index'`,
+          )
+          .get() as { install_records_json: string },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+    );
+    expect(row.install_records_json).toBe(
+      '{"1":{"source":"archive"},"10":{"source":"path"},"2":{"source":"npm","futureMetadata":{"retained":true}}}',
+    );
+  });
+
+  it("does not allocate a revision or rewrite an invalid predecessor", async () => {
+    const stateDir = makeTempDir();
+    const installRecordsJson = '{"demo":{"source":"bogus"}}';
+    insertPersistedIndexRow(stateDir, { installRecordsJson });
+
+    await expect(writePersistedInstalledPluginIndex(createIndex(), { stateDir })).rejects.toThrow(
+      "Persisted plugin install records are invalid",
+    );
+    const row = runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare(
+            `SELECT install_records_json, updated_at_ms
+               FROM installed_plugin_index
+              WHERE index_key = 'installed-plugin-index'`,
+          )
+          .get() as { install_records_json: string; updated_at_ms: number | bigint },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+    );
+    expect(row).toEqual({ install_records_json: installRecordsJson, updated_at_ms: 123 });
+  });
+
   it("returns null for missing or invalid persisted indexes", async () => {
     const stateDir = makeTempDir();
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();

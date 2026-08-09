@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  preparePostCorePluginInstallRecordsForFreshProcess,
   readPostCorePluginInstallRecordsFile,
   shouldResumePostCoreUpdateInFreshProcess,
+  writePostCorePluginInstallRecordsFile,
 } from "./update-command-post-core.js";
 
 const tempDirs: string[] = [];
@@ -45,6 +47,7 @@ describe("readPostCorePluginInstallRecordsFile", () => {
           source: "npm",
           spec: "@openclaw/demo@1.0.0",
           installPath: "/tmp/demo-plugin",
+          futureMetadata: { retained: true },
         },
       })}\n`,
       "utf-8",
@@ -55,7 +58,35 @@ describe("readPostCorePluginInstallRecordsFile", () => {
         source: "npm",
         spec: "@openclaw/demo@1.0.0",
         installPath: "/tmp/demo-plugin",
+        futureMetadata: { retained: true },
       },
+    });
+  });
+
+  it("fails closed on structurally invalid handoff records", async () => {
+    const dir = await withTempDir();
+    const filePath = path.join(dir, "plugin-install-records.json");
+    await fs.writeFile(filePath, '{"demo":{"source":"bogus"}}\n', "utf-8");
+
+    await expect(readPostCorePluginInstallRecordsFile(filePath)).rejects.toThrow(
+      `Invalid plugin install records in handoff file: ${filePath}`,
+    );
+  });
+
+  it("writes canonical numeric-key order and preserves passthrough fields", async () => {
+    const dir = await withTempDir();
+    const filePath = path.join(dir, "plugin-install-records.json");
+    await writePostCorePluginInstallRecordsFile(filePath, {
+      2: { source: "npm", futureMetadata: { retained: true } },
+      10: { source: "path" },
+      1: { source: "archive" },
+    } as never);
+
+    expect(await fs.readFile(filePath, "utf-8")).toBe(
+      '{"1":{"source":"archive"},"10":{"source":"path"},"2":{"source":"npm","futureMetadata":{"retained":true}}}\n',
+    );
+    await expect(readPostCorePluginInstallRecordsFile(filePath)).resolves.toMatchObject({
+      2: { source: "npm", futureMetadata: { retained: true } },
     });
   });
 
@@ -90,6 +121,33 @@ describe("readPostCorePluginInstallRecordsFile", () => {
     console.info(
       `[post-core install-records live proof] path=${filePath} outcome=malformed-json-rejected`,
     );
+  });
+});
+
+describe("preparePostCorePluginInstallRecordsForFreshProcess", () => {
+  it("preserves passthrough fields and untouched record identity across a downgrade handoff", () => {
+    const untouched = { source: "path" as const, sourcePath: "/tmp/local" };
+    const records = {
+      newer: {
+        source: "npm" as const,
+        resolvedVersion: "9999.0.0",
+        resolvedSpec: "newer@9999.0.0",
+        futureMetadata: { retained: true },
+      },
+      untouched,
+    };
+
+    const prepared = preparePostCorePluginInstallRecordsForFreshProcess({
+      records,
+      targetVersion: "1.0.0",
+    });
+
+    expect(prepared).not.toBe(records);
+    expect(prepared.untouched).toBe(untouched);
+    expect(prepared.newer).toEqual({
+      source: "npm",
+      futureMetadata: { retained: true },
+    });
   });
 });
 

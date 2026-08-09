@@ -11,6 +11,7 @@ import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
 } from "../../config/config.js";
+import { serializePluginInstallRecordMap } from "../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
@@ -302,11 +303,12 @@ export async function writePostCorePluginUpdateResultFile(
   await writeJson(filePath, result, { trailingNewline: true });
 }
 
-async function writePostCorePluginInstallRecordsFile(
+/** @internal exported for focused handoff contract tests. */
+export async function writePostCorePluginInstallRecordsFile(
   filePath: string,
   records: Record<string, PluginInstallRecord>,
 ): Promise<void> {
-  await fs.writeFile(filePath, `${JSON.stringify(records)}\n`, "utf-8");
+  await fs.writeFile(filePath, `${serializePluginInstallRecordMap(records)}\n`, "utf-8");
 }
 
 export async function readPostCorePluginInstallRecordsFile(
@@ -339,7 +341,14 @@ export async function readPostCorePluginInstallRecordsFile(
       { cause: err },
     );
   }
-  return normalizePluginInstallRecordMap(parsed);
+  try {
+    return normalizePluginInstallRecordMap(parsed);
+  } catch (err) {
+    throw new Error(
+      `Invalid plugin install records in handoff file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
+      { cause: err },
+    );
+  }
 }
 
 async function execFileStdout(file: string, args: string[]): Promise<string | undefined> {
@@ -440,7 +449,8 @@ export function resolvePostCoreUpdateChildStdio(
   return platform === "win32" || jsonMode ? "pipe" : "inherit";
 }
 
-function preparePostCorePluginInstallRecordsForFreshProcess(params: {
+/** @internal exported for focused handoff contract tests. */
+export function preparePostCorePluginInstallRecordsForFreshProcess(params: {
   records: Record<string, PluginInstallRecord>;
   targetVersion: string | null;
 }): Record<string, PluginInstallRecord> {

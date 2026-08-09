@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
+  inspectPersistedInstalledPluginIndexInstallRecordsSync,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
   readPersistedInstalledPluginIndexInstallRecords,
@@ -21,6 +22,7 @@ import { recordPluginInstall, type PluginInstallUpdate } from "./installs.js";
 
 export {
   clearLoadInstalledPluginIndexInstallRecordsCache,
+  inspectPersistedInstalledPluginIndexInstallRecordsSync,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
   readPersistedInstalledPluginIndexInstallRecords,

@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  inspectPluginInstallRecordMap,
+  type PluginInstallRecordMapState,
+} from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { isPrereleaseResolutionAllowed, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
@@ -35,7 +39,7 @@ export { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-pl
 function cloneInstallRecords(
   records: Record<string, PluginInstallRecord> | undefined,
 ): Record<string, PluginInstallRecord> {
-  return readRecordMap(records) ?? {};
+  return structuredClone(records ?? {});
 }
 
 const BLOCKED_RECORD_KEYS = new Set(["__proto__", "constructor", "prototype"]);
@@ -43,25 +47,6 @@ const BLOCKED_RECORD_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 function isSafeRecordKey(key: string): boolean {
   return !BLOCKED_RECORD_KEYS.has(key);
 }
-
-function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const records: Record<string, PluginInstallRecord> = {};
-  for (const [pluginId, record] of Object.entries(value).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    if (!isSafeRecordKey(pluginId)) {
-      continue;
-    }
-    if (isRecord(record) && typeof record.source === "string") {
-      records[pluginId] = structuredClone(record) as PluginInstallRecord;
-    }
-  }
-  return records;
-}
-
 function readJsonObjectFileSync(filePath: string): Record<string, unknown> | null {
   const parsed = tryReadJsonSync(filePath);
   return isRecord(parsed) ? parsed : null;
@@ -421,52 +406,46 @@ function mergeRecoveredManagedNpmInstallRecords(
   return merged;
 }
 
-function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
-  index: unknown,
-): Record<string, PluginInstallRecord> | null {
-  return isRecord(index) ? (readRecordMap(index.installRecords) ?? {}) : null;
-}
-
 type InstalledPluginIndexRecordRow = {
   install_records_json: string;
-  plugins_json: string;
 };
 
-function parseJsonColumn(value: string): unknown {
-  return safeParseJson(value);
-}
-
-function readPersistedInstalledPluginIndexForRecords(
+export function inspectPersistedInstalledPluginIndexInstallRecordsSync(
   options: InstalledPluginIndexStoreOptions = {},
-): unknown {
+): PluginInstallRecordMapState {
   const storePath = resolveInstalledPluginIndexStorePath(options);
-  if (!fs.existsSync(storePath)) {
-    return null;
-  }
-  if (options.filePath?.endsWith(".json")) {
-    return null;
+  if (!fs.existsSync(storePath) || options.filePath?.endsWith(".json")) {
+    return { status: "missing" };
   }
   try {
     return withOpenClawStateDatabaseReadOnly(({ db }) => {
+      const hasTable = db
+        .prepare(
+          `SELECT 1
+             FROM sqlite_master
+            WHERE type = 'table' AND name = 'installed_plugin_index'`,
+        )
+        .get();
+      if (!hasTable) {
+        return { status: "missing" };
+      }
       const row = db
         .prepare(
           `
-            SELECT install_records_json, plugins_json
+            SELECT install_records_json
               FROM installed_plugin_index
              WHERE index_key = ?
           `,
         )
         .get("installed-plugin-index") as InstalledPluginIndexRecordRow | undefined;
       if (!row) {
-        return null;
+        return { status: "missing" };
       }
-      return {
-        installRecords: parseJsonColumn(row.install_records_json),
-        plugins: parseJsonColumn(row.plugins_json),
-      };
+      const parsed = safeParseJson(row.install_records_json);
+      return parsed === undefined ? { status: "invalid" } : inspectPluginInstallRecordMap(parsed);
     }, resolveInstalledPluginIndexStateDatabaseOptions(options));
   } catch {
-    return null;
+    return { status: "invalid" };
   }
 }
 
@@ -474,16 +453,28 @@ function readPersistedInstalledPluginIndexForRecords(
 export async function readPersistedInstalledPluginIndexInstallRecords(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<Record<string, PluginInstallRecord> | null> {
-  const parsed = readPersistedInstalledPluginIndexForRecords(options);
-  return extractPluginInstallRecordsFromPersistedInstalledPluginIndex(parsed);
+  const state = inspectPersistedInstalledPluginIndexInstallRecordsSync(options);
+  return state.status === "valid" ? state.records : null;
 }
 
 /** Synchronously reads install records from the persisted installed plugin index. */
 export function readPersistedInstalledPluginIndexInstallRecordsSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> | null {
-  const parsed = readPersistedInstalledPluginIndexForRecords(options);
-  return extractPluginInstallRecordsFromPersistedInstalledPluginIndex(parsed);
+  const state = inspectPersistedInstalledPluginIndexInstallRecordsSync(options);
+  return state.status === "valid" ? state.records : null;
+}
+
+function requireLoadablePluginInstallRecordState(
+  options: InstalledPluginIndexStoreOptions,
+): Record<string, PluginInstallRecord> | null {
+  const state = inspectPersistedInstalledPluginIndexInstallRecordsSync(options);
+  if (state.status === "invalid") {
+    throw new Error(
+      "Persisted plugin install records are invalid. Run openclaw doctor to inspect and repair plugin installation state.",
+    );
+  }
+  return state.status === "valid" ? state.records : null;
 }
 
 function resolveInstallRecordsCacheKey(options: InstalledPluginIndexStoreOptions): string {
@@ -503,11 +494,9 @@ export async function loadInstalledPluginIndexInstallRecords(
     return cloneInstallRecords(cached.records);
   }
   const cacheGeneration = getInstalledPluginIndexInstallRecordsCacheGeneration();
-  const records = cloneInstallRecords(
-    mergeRecoveredManagedNpmInstallRecords(
-      await readPersistedInstalledPluginIndexInstallRecords(params),
-      params,
-    ),
+  const records = mergeRecoveredManagedNpmInstallRecords(
+    requireLoadablePluginInstallRecordState(params),
+    params,
   );
   // A concurrent cache clear means the caller expects fresh data, so retry with the new generation.
   if (cacheGeneration !== getInstalledPluginIndexInstallRecordsCacheGeneration()) {
@@ -526,11 +515,9 @@ export function loadInstalledPluginIndexInstallRecordsSync(
   if (cached) {
     return cloneInstallRecords(cached.records);
   }
-  const records = cloneInstallRecords(
-    mergeRecoveredManagedNpmInstallRecords(
-      readPersistedInstalledPluginIndexInstallRecordsSync(params),
-      params,
-    ),
+  const records = mergeRecoveredManagedNpmInstallRecords(
+    requireLoadablePluginInstallRecordState(params),
+    params,
   );
   setInstalledPluginIndexInstallRecordsCache(cacheKey, { records });
   return cloneInstallRecords(records);

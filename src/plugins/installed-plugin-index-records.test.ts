@@ -905,7 +905,10 @@ describe("plugin index install records store", () => {
       spec: "demo@latest",
       installedAt: "2026-04-25T00:00:00.000Z",
     });
-    expect(removePluginInstallRecordFromRecords(withInstall, "demo")).toEqual(records);
+    expect(withInstall.keep).toBe(records.keep);
+    const removed = removePluginInstallRecordFromRecords(withInstall, "demo");
+    expect(removed).toEqual(records);
+    expect(removed.keep).toBe(records.keep);
   });
 
   it("strips transient install records from config writes", () => {
