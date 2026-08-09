@@ -119,7 +119,7 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
     expect(plan.device?.signedAt).toBe(123);
   });
 
-  it("never persists bootstrap or shared-secret credentials", async () => {
+  it("uses only the preferred bootstrap credential and never persists it", async () => {
     const sign = vi.fn(async () => "signature");
     const store = vi.fn();
     const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
@@ -136,6 +136,7 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
       role: "operator",
       defaultScopes: ["operator.read"],
       bootstrapScopes: ["operator.read", "operator.write"],
+      token: "test-shared-token",
       bootstrapToken: "test-bootstrap-token",
       password: "test-password",
       preferBootstrapToken: true,
@@ -143,7 +144,8 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
     });
 
     expect(plan.auth?.bootstrapToken).toBe("test-bootstrap-token");
-    expect(plan.auth?.password).toBe("test-password");
+    expect(plan.auth?.token).toBeUndefined();
+    expect(plan.auth?.password).toBeUndefined();
     expect(plan.selectedAuth.signatureToken).toBe("test-bootstrap-token");
     expect(sign).toHaveBeenCalledWith(
       "v3|device|openclaw-browser-copilot|ui|operator|operator.read,operator.write|123|test-bootstrap-token|nonce|chrome|extension",

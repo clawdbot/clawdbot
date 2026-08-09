@@ -45,7 +45,6 @@ export function selectGatewayConnectAuth(params: {
   if (params.preferBootstrapToken && bootstrapToken) {
     return {
       authBootstrapToken: bootstrapToken,
-      authPassword,
       signatureToken: bootstrapToken,
       ...stored,
     };
