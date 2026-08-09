@@ -416,12 +416,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     grid-area: session;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
-    min-height: 44px;
-    padding: 10px 12px;
-    font-size: 14px;
-  }
-
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
     grid-area: model;
   }
@@ -440,8 +434,7 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     width: 100%;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select,
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select {
     width: 100%;
     font-size: 14px;
     min-height: 44px;
@@ -492,20 +485,11 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     border-radius: var(--radius-md);
   }
 
-  .stat-label {
-    font-size: 12px; /* was 11px */
-  }
-
   .stat-value {
     font-size: 18px;
   }
 
   /* Forms */
-  .form-grid {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
-
   .field input,
   .field textarea,
   .field select {
@@ -527,21 +511,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   /* Chat */
-  .chat-header {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-  }
-
-  .chat-header__left {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .chat-header__right {
-    justify-content: space-between;
-  }
-
   .chat-session {
     min-width: unset;
     width: 100%;
@@ -571,20 +540,7 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     margin: 0 8px calc(10px + var(--safe-area-bottom));
   }
 
-  .agent-chat__toolbar {
-    align-items: stretch;
-    gap: 8px;
-    padding: 6px 8px;
-  }
-
-  .agent-chat__toolbar-left,
-  .agent-chat__toolbar-right {
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
   .agent-chat__input-btn,
-  .agent-chat__toolbar .btn--ghost,
   .chat-send-btn {
     width: 44px;
     min-width: 44px;
@@ -592,7 +548,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   .agent-chat__input-btn svg,
-  .agent-chat__toolbar .btn--ghost svg,
   .chat-send-btn svg {
     width: 16px;
     height: 16px;

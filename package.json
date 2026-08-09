@@ -2066,7 +2066,6 @@
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vitest/coverage-v8": "4.1.10",
     "esbuild": "0.28.1",
-    "fast-glob": "3.3.3",
     "ipaddr.js": "2.4.0",
     "jscpd": "5.0.12",
     "jsdom": "29.1.1",

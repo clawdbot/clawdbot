@@ -302,9 +302,6 @@ importers:
       esbuild:
         specifier: 0.28.1
         version: 0.28.1
-      fast-glob:
-        specifier: 3.3.3
-        version: 3.3.3
       ipaddr.js:
         specifier: 2.4.0
         version: 2.4.0
@@ -2382,9 +2379,6 @@ importers:
       '@codemirror/view':
         specifier: 6.43.6
         version: 6.43.6
-      '@create-markdown/preview':
-        specifier: 2.0.3
-        version: 2.0.3(shiki@4.3.1)
       '@lezer/highlight':
         specifier: 1.2.3
         version: 1.2.3
@@ -2460,9 +2454,6 @@ importers:
       markdown-it-task-lists:
         specifier: 2.1.1
         version: 2.1.1
-      marked:
-        specifier: 18.0.7
-        version: 18.0.7
       remend:
         specifier: 1.3.0
         version: 1.3.0
@@ -2967,18 +2958,6 @@ packages:
       jest:
         optional: true
       vitest:
-        optional: true
-
-  '@create-markdown/preview@2.0.3':
-    resolution: {integrity: sha512-Vrp8DyuiouryZ3E4NQ7tBgoYQdoekd0+DzN64mZ48QYCw3V+MCb/H2q10SW8KC8XPr931XOMDvKX4I83qpQh3g==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      '@create-markdown/core': '>=2.0.3'
-      shiki: '>=1.0.0'
-    peerDependenciesMeta:
-      '@create-markdown/core':
-        optional: true
-      shiki:
         optional: true
 
   '@csstools/color-helpers@6.1.0':
@@ -10359,10 +10338,6 @@ snapshots:
   '@copilotkit/aimock@1.37.4(vitest@4.1.10)':
     optionalDependencies:
       vitest: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.2)(@vitest/browser-playwright@4.1.10)(@vitest/coverage-v8@4.1.10)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))
-
-  '@create-markdown/preview@2.0.3(shiki@4.3.1)':
-    optionalDependencies:
-      shiki: 4.3.1
 
   '@csstools/color-helpers@6.1.0': {}
 

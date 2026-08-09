@@ -231,10 +231,6 @@
   height: 32px;
 }
 
-.cron-filter-popover__trigger::-webkit-details-marker {
-  display: none;
-}
-
 .cron-filter-popover__trigger svg {
   width: 14px;
   height: 14px;
@@ -777,10 +773,6 @@
   padding: 0;
 }
 
-.cron-job-menu__trigger::-webkit-details-marker {
-  display: none;
-}
-
 /* Invisible full-viewport hit area so clicking anywhere outside closes the menu. */
 .cron-job-menu[open] > .cron-job-menu__trigger::before {
   content: "";
@@ -788,21 +780,6 @@
   inset: 0;
   z-index: 20;
   cursor: default;
-}
-
-.cron-job-menu__panel {
-  position: absolute;
-  z-index: 40;
-  top: calc(100% + 6px);
-  right: 0;
-  min-width: 170px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  padding: var(--space-1);
-  display: grid;
-  gap: 2px;
-  box-shadow: var(--shadow-lg);
 }
 
 .cron-job-menu__item {
@@ -880,14 +857,6 @@
   position: relative;
 }
 
-.cron-filter-dropdown__details > summary {
-  list-style: none;
-}
-
-.cron-filter-dropdown__details > summary::-webkit-details-marker {
-  display: none;
-}
-
 .cron-filter-dropdown__trigger {
   justify-content: space-between;
   text-align: left;
@@ -901,26 +870,6 @@
   color: var(--muted);
 }
 
-.cron-filter-dropdown__panel {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 8px);
-  left: 0;
-  width: min(300px, calc(100vw - 48px));
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  padding: var(--space-3);
-  display: grid;
-  gap: var(--space-3);
-  box-shadow: var(--shadow-lg);
-}
-
-.cron-filter-dropdown__list {
-  display: grid;
-  gap: var(--space-1);
-}
-
 .cron-filter-dropdown__option {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
@@ -928,12 +877,6 @@
   align-items: center;
   color: var(--text);
   font-size: 13px;
-}
-
-.cron-filter-dropdown__option input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  margin: 0;
 }
 
 /* Run entries: flat list separated by hairlines inside the group. */
@@ -1045,15 +988,6 @@
 }
 
 /* ── Responsive ── */
-
-@media (max-width: 1100px) {
-  .cron-filter-dropdown__panel {
-    width: 100%;
-    max-width: none;
-    position: static;
-    margin-top: var(--space-2);
-  }
-}
 
 @media (max-width: 900px) {
   /* Stack table rows into label-free cards; hide the head and secondary cells. */
