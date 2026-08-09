@@ -159,7 +159,6 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     const { passed } = await connectTestWs({
       options: {
-        resolvedAuth: initialAuth,
         getResolvedAuth: () => currentAuth,
       },
     });
