@@ -5,6 +5,7 @@ import type { MattermostClient } from "./client.js";
 import {
   createMattermostDraftPreviewBoundaryController,
   createMattermostDraftStream,
+  MATTERMOST_PROGRESS_POST_TYPE,
 } from "./draft-stream.js";
 
 type RequestRecord = {
@@ -200,6 +201,24 @@ describe("createMattermostDraftStream", () => {
       id: "post-1",
       message: "Failed.",
     });
+  });
+
+  it("creates a typed terminal progress post when no draft exists", async () => {
+    const { calls, stream } = createDraftStreamFixture({
+      rootId: "root-1",
+      postType: MATTERMOST_PROGRESS_POST_TYPE,
+    });
+
+    await expect(stream.retainTerminalText("|\n\nFailed.")).resolves.toBe(true);
+
+    expect(calls.map((call) => [call.path, call.init?.method])).toEqual([["/posts", "POST"]]);
+    expect(parseRequestJson(calls[0]?.init)).toEqual({
+      channel_id: "channel-1",
+      root_id: "root-1",
+      message: "|\n\nFailed.",
+      type: MATTERMOST_PROGRESS_POST_TYPE,
+    });
+    expect(stream.postId()).toBe("post-1");
   });
 
   it("retries a transient strict cleanup failure", async () => {

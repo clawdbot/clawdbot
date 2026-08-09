@@ -49,6 +49,14 @@ describe("createMattermostSeparateProgressController", () => {
     );
   });
 
+  it("rejects a terminal status that was not retained", async () => {
+    const { controller } = createController({ retainTerminalText: async () => false });
+
+    await expect(controller.settleFinal({ visibleReplySent: false }, false)).rejects.toThrow(
+      "terminal progress was not retained",
+    );
+  });
+
   it("logs terminal status failure after a visible error final", async () => {
     const { controller, logVerboseMessage } = createController({
       retainTerminalText: async () => {

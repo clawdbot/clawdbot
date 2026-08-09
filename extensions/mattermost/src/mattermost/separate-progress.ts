@@ -24,7 +24,11 @@ export function createMattermostSeparateProgressController(params: {
     if (!terminalProgressPromise) {
       terminalProgressPromise = params.draftStream
         .retainTerminalText(formatMattermostTerminalProgressText(params.pinnedLabel))
-        .then(() => {});
+        .then((retained) => {
+          if (!retained) {
+            throw new Error("Mattermost terminal progress was not retained");
+          }
+        });
     }
     const attempt = terminalProgressPromise;
     try {
