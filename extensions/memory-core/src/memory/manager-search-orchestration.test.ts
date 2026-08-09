@@ -826,6 +826,41 @@ describe("memory index", () => {
     expect(providerCalls).toHaveLength(0);
   });
 
+  it("does not block querying on session reconciliation", async () => {
+    forceNoProvider = true;
+    const manager = await getPersistentManager(
+      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
+    );
+    await manager.sync({ reason: "test" });
+
+    let releaseSync = () => {};
+    const pendingSync = new Promise<void>((resolve) => {
+      releaseSync = () => resolve();
+    });
+    const syncAdmitted = vi
+      .spyOn(
+        manager as unknown as {
+          syncAdmitted: (params: { reason: string }) => Promise<void>;
+        },
+        "syncAdmitted",
+      )
+      .mockImplementation(async () => await pendingSync);
+
+    Reflect.set(manager, "dirty", false);
+    Reflect.set(manager, "sessionsDirty", true);
+
+    const searchPromise = manager.search("zebra", {
+      maxResults: 5,
+      minScore: 0,
+    });
+    await vi.waitFor(() => expect(syncAdmitted).toHaveBeenCalledWith({ reason: "search" }));
+
+    const results = await searchPromise;
+    expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+    releaseSync();
+    await pendingSync;
+  });
+
   it("waits for dirty sync before querying", async () => {
     forceNoProvider = true;
     const manager = await getPersistentManager(
