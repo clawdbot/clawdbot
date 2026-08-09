@@ -185,7 +185,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   modelTransportId: string;
   modelTransportApi: string;
   modelTransportBaseUrl?: string;
-  requestTransportOverrides: ProviderRouteOverridePresence;
+  requestTransportOverrides?: ProviderRouteOverridePresence;
   authProfileId?: string;
   profileFailureStore: AuthProfileStore;
   attemptAuthProfileStore: AuthProfileStore;
@@ -529,7 +529,7 @@ function completeEmbeddedRun(
     modelId: input.modelTransportId,
     modelApi: input.modelTransportApi,
     ...(input.modelTransportBaseUrl ? { modelBaseUrl: input.modelTransportBaseUrl } : {}),
-    requestTransportOverrides: input.requestTransportOverrides,
+    requestTransportOverrides: input.requestTransportOverrides ?? "none",
     config: input.runParams.config,
     agentHarnessId: input.agentHarnessId,
     pluginHarnessOwnsTransport: input.pluginHarnessOwnsTransport,
