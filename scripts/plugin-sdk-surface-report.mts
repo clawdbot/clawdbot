@@ -331,7 +331,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // -1: text-runtime now names its global-singleton exports explicitly.
       // -1: infra-runtime now names its error exports explicitly.
-      80,
+      // -1: candidate continuation names one more re-export explicitly.
+      79,
       env,
     ),
   };
