@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import { confirmAndStartUpdate } from "./update-confirmation.ts";
+import { confirmAndStartUpdateRuntime } from "./update-confirmation.runtime.ts";
 
 const UPDATE_AVAILABLE: UpdateAvailable = {
   channel: "stable",
@@ -42,7 +42,7 @@ function startUpdate(
   } = {},
 ) {
   const startGatewayUpdate = vi.fn();
-  const settled = confirmAndStartUpdate({
+  const settled = confirmAndStartUpdateRuntime({
     startGatewayUpdate: overrides.startGatewayUpdate ?? startGatewayUpdate,
     updateAvailable:
       overrides.updateAvailable === undefined ? UPDATE_AVAILABLE : overrides.updateAvailable,
@@ -74,7 +74,7 @@ it("states the target, restart impact, and both versions without starting the up
 
   expect(dialog.getAttribute("aria-label")).toBe("Update Gateway");
   expect(modal.textContent).toContain(
-    "This installs the available update on the connected Gateway and restarts it.",
+    "Installs the available update on the connected Gateway and restarts it.",
   );
   expect(modal.textContent).toContain("this Control UI disconnects until the Gateway is back");
   expect(modal.textContent).toContain("Installed v1.0.0 · Available v2.0.0");

@@ -12,9 +12,9 @@ import type {
 import { changedServerUiPrefs, resetServerUiPrefsSync } from "../../app/server-prefs.ts";
 import { loadSettings } from "../../app/settings.ts";
 import {
-  getRenderedModalDialog,
   installDialogPolyfill,
   nextFrame,
+  waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as chatModels from "../chat/models.ts";
@@ -643,7 +643,7 @@ describe("ConfigPage Updates integration", () => {
     // Settings shares the sidebar card's confirmation gate: nothing runs on the click itself.
     expect(runUpdate).not.toHaveBeenCalled();
 
-    const { modal } = await getRenderedModalDialog(document.body);
+    const { modal } = await waitForRenderedModalDialog(document.body);
     [...modal.querySelectorAll("button")]
       .find((button) => button.textContent?.trim() === "Update and restart")
       ?.click();

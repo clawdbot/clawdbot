@@ -7,9 +7,9 @@ import {
   NATIVE_UPDATE_DECLINED_EVENT,
 } from "../app/native-link-routing.ts";
 import {
-  getRenderedModalDialog,
   installDialogPolyfill,
   nextFrame,
+  waitForRenderedModalDialog,
 } from "../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./sidebar-update-card.ts";
@@ -20,7 +20,7 @@ const DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
 async function resolveUpdateConfirmation(
   label: "Cancel" | "Update and restart" | "Update Mac app and restart",
 ) {
-  const { modal } = await getRenderedModalDialog(document.body);
+  const { modal } = await waitForRenderedModalDialog(document.body);
   const button = [...modal.querySelectorAll("button")].find(
     (candidate) => candidate.textContent?.trim() === label,
   );

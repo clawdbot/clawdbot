@@ -57,7 +57,7 @@ suite.define(() => {
         expect(await dialog.getAttribute("aria-label")).toBe("Update Gateway");
         const dialogText = await confirmationCopy(page).textContent();
         expect(dialogText).toContain(
-          "This installs the available update on the connected Gateway and restarts it.",
+          "Installs the available update on the connected Gateway and restarts it.",
         );
         expect(dialogText).toContain("this Control UI disconnects until the Gateway is back");
         expect(dialogText).toContain("Installed v1.0.0 · Available v2.0.0");

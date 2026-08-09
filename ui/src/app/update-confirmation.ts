@@ -1,30 +1,11 @@
 // Canonical confirmation gate for the Control UI's disruptive update action.
-// Every affordance that can start an update routes its first click here: the
-// dialog owns the copy, the safe-cancel default, and the choice between the
-// macOS bridge and `update.run`, so no surface can dispatch an unconfirmed
-// update or drift from the shared policy.
+// Every affordance that can start an update routes its first click here, so no
+// surface dispatches an unconfirmed update or drifts from the shared policy.
+// The dialog itself loads lazily: startup pays nothing for a confirmation the
+// operator has not opened.
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import { showConfirmDialog } from "../components/confirm-dialog.ts";
-import { t } from "../i18n/index.ts";
-import { postNativeUpdate } from "./native-link-routing.ts";
-import { formatUpdateTargetLabel } from "./update-overlay-helpers.ts";
 
-function formatInstalledAndAvailable(
-  updateAvailable: UpdateAvailable | null,
-  updateSchedule: UpdateScheduleState | null,
-): string | undefined {
-  const currentVersion = updateAvailable?.currentVersion?.trim();
-  const installed = currentVersion
-    ? t("updates.target.version", { version: currentVersion })
-    : null;
-  const available = formatUpdateTargetLabel(updateSchedule, updateAvailable);
-  if (installed && available) {
-    return t("updates.confirm.versions", { available, installed });
-  }
-  return installed ?? available ?? undefined;
-}
-
-export async function confirmAndStartUpdate(params: {
+export type ConfirmAndStartUpdateParams = {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
   /**
@@ -34,22 +15,9 @@ export async function confirmAndStartUpdate(params: {
    */
   viaNativeApp: boolean;
   startGatewayUpdate: () => void;
-}): Promise<void> {
-  const confirmed = await showConfirmDialog({
-    title: params.viaNativeApp
-      ? t("chat.sidebar.updateMacAndGateway")
-      : t("chat.sidebar.updateGateway"),
-    message: params.viaNativeApp ? t("updates.confirm.macMessage") : t("updates.confirm.message"),
-    details: formatInstalledAndAvailable(params.updateAvailable, params.updateSchedule),
-    confirmLabel: params.viaNativeApp
-      ? t("updates.confirm.macAction")
-      : t("updates.confirm.action"),
-  });
-  if (!confirmed) {
-    return;
-  }
-  if (params.viaNativeApp && postNativeUpdate()) {
-    return;
-  }
-  params.startGatewayUpdate();
+};
+
+export async function confirmAndStartUpdate(params: ConfirmAndStartUpdateParams): Promise<void> {
+  const { confirmAndStartUpdateRuntime } = await import("./update-confirmation.runtime.ts");
+  await confirmAndStartUpdateRuntime(params);
 }

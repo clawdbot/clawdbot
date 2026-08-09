@@ -372,10 +372,10 @@ export const en: TranslationMap = {
     },
     holdOneHour: "Hold 1 h",
     confirm: {
-      message:
-        "This installs the available update on the connected Gateway and restarts it. Running sessions are interrupted and this Control UI disconnects until the Gateway is back.",
+      message: "Installs the available update on the connected Gateway and restarts it.",
       macMessage:
-        "This hands the update to the OpenClaw Mac app, which installs it and relaunches the Gateway it manages. Running sessions are interrupted and this Control UI disconnects until the Gateway is back.",
+        "Hands this update to the OpenClaw Mac app, which installs it and restarts the Gateway it manages.",
+      impact: "Running sessions are interrupted and this Control UI disconnects until the Gateway is back.",
       versions: "Installed {installed} · Available {available}",
       action: "Update and restart",
       macAction: "Update Mac app and restart",
