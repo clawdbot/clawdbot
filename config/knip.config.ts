@@ -391,6 +391,15 @@ const config = {
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
+    // Tracked in karmaterminal/openclaw#1232, deliberately not patched in the
+    // continuation PR because both change runtime behaviour:
+    //  - resolveTranscriptMediaPath: upstream resolves transcript media paths
+    //    against workspaceDir; this branch does not, so the export is unused.
+    //  - runDescendantWake: upstream's extraction is unreferenced here because
+    //    our inline wakeSubagentRunAfterDescendants subsumes it AND propagates
+    //    "termination-unconfirmed", which upstream's boolean return drops.
+    "src/sessions/user-turn-transcript.media-normalize.ts": ["exports"],
+    "src/agents/subagent-announce-descendant-wake.ts": ["files"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
     "src/boards/board-notices.ts": ["exports"],
