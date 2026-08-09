@@ -14,7 +14,12 @@ const requireFromApp = createRequire(path.join(process.cwd(), "package.json"));
 const packageName = "@openclaw/kitchen-sink";
 const pluginId = "openclaw-kitchen-sink-fixture";
 
-async function assertPrepublishRequests(baseUrl, requestedPackage, version, securityMode = "required") {
+async function assertPrepublishRequests(
+  baseUrl,
+  requestedPackage,
+  version,
+  securityMode = "required",
+) {
   if (!baseUrl || !requestedPackage || !version) {
     throw new Error("assert-prepublish-requests requires <base-url> <package-name> <version>");
   }

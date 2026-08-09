@@ -47,6 +47,7 @@ vi.mock("./scenario-selection.js", () => ({
 }));
 
 import { runQaTelegramCommand, runQaTelegramSuite } from "./cli.runtime.js";
+import { getQaSuiteConfigMutation } from "../../suite-config-mutation.internal.js";
 
 const SUT_COMMAND_ENV = "OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND";
 
@@ -223,18 +224,18 @@ describe("Telegram live QA scenario gate", () => {
     );
   });
 
-  it("forwards the caller-owned gateway config mutation to the flow suite", async () => {
-    const mutateConfig = vi.fn((cfg: OpenClawConfig) => cfg);
+  it("forwards the private harness config mutation to the flow suite", async () => {
+    const configMutation = vi.fn((cfg: OpenClawConfig) => cfg);
 
     await runQaTelegramSuite({
       allowFailures: true,
-      mutateConfig,
+      configMutation,
       providerMode: "mock-openai",
       repoRoot: process.cwd(),
     });
 
-    expect(mocks.runQaFlowSuiteFromRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({ mutateConfig }),
+    expect(getQaSuiteConfigMutation(mocks.runQaFlowSuiteFromRuntime.mock.calls[0]?.[0])).toBe(
+      configMutation,
     );
   });
 
