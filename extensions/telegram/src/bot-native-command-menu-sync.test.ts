@@ -10,6 +10,12 @@ function waitForTelegramMenu(assertion: () => void) {
   return vi.waitFor(assertion, { interval: 1 });
 }
 
+function waitForTelegramMenuTurn() {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 function createDeferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => {
@@ -237,6 +243,67 @@ describe("bot-native-command-menu sync lifecycle", () => {
     ).toBe(true);
   });
 
+  it("treats blank supported localizations as absent for variants, ledger, and hashing", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const accountId = `test-blank-localization-${Date.now()}`;
+    const botId = "876543213";
+    const sync = (description: string) =>
+      syncMenuCommandsWithMocks({
+        deleteMyCommands,
+        setMyCommands,
+        accountId,
+        botToken: `${botId}:test-token`,
+        commandsToRegister: [
+          {
+            command: "cmd",
+            description: "Default",
+            descriptionLocalizations: { fr: description },
+          },
+        ],
+      });
+
+    sync(" ");
+    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
+    expect(ledgerRows.has(botId)).toBe(false);
+    expect(setMyCommands.mock.calls.map(readLanguageCodeFromApiCall)).not.toContain("fr");
+
+    sync("\n");
+    await waitForTelegramMenuTurn();
+
+    expect(deleteMyCommands.mock.calls.length + setMyCommands.mock.calls.length).toBe(4);
+  });
+
+  it("uses neutral descriptions only for blank commands in a sibling-provided locale", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      accountId: `test-sibling-localization-${Date.now()}`,
+      botToken: "876543214:test-token",
+      commandsToRegister: [
+        {
+          command: "blank",
+          description: "Neutral blank",
+          descriptionLocalizations: { fr: " " },
+        },
+        {
+          command: "localized",
+          description: "Neutral localized",
+          descriptionLocalizations: { " FR ": " Français ", fr: "Duplicate" },
+        },
+      ],
+    });
+    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+
+    expect(setMyCommandsPayload(setMyCommands, 2)).toEqual([
+      { command: "blank", description: "Neutral blank" },
+      { command: "localized", description: "Français" },
+    ]);
+  });
+
   it("caps localized command descriptions before registering Telegram variants", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
@@ -432,9 +499,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
       commandsToRegister: commands,
       accountId,
     });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await waitForTelegramMenuTurn();
 
     expect(deleteMyCommands).toHaveBeenCalledTimes(2);
     expect(setMyCommands).toHaveBeenCalledTimes(2);
@@ -466,9 +531,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
       commandsToRegister: [{ command: "skip_test", description: "Skip test command" }],
       accountId,
     });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await waitForTelegramMenuTurn();
 
     expect(deleteMyCommands).toHaveBeenCalledTimes(2);
     expect(setMyCommands).toHaveBeenCalledTimes(2);
@@ -868,13 +931,9 @@ describe("bot-native-command-menu sync lifecycle", () => {
       }),
     ).toBe(true);
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await waitForTelegramMenuTurn();
     sync();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await waitForTelegramMenuTurn();
 
     expect(deleteMyCommands).toHaveBeenCalledTimes(4);
     expect(setMyCommands).toHaveBeenCalledTimes(4);
@@ -882,10 +941,10 @@ describe("bot-native-command-menu sync lifecycle", () => {
     expect(runtimeError).toHaveBeenCalledTimes(1);
   });
 
-  it("resets an unsalvageable malformed ledger once and still completes reconciliation", async () => {
+  it("resets an unsalvageable malformed current ledger once and still completes reconciliation", async () => {
     const botId = "876543211";
     ledgerRows.set(botId, {
-      version: 2,
+      version: 1,
       languageCodes: ["zz", "en-GB", 42],
       unexpected: true,
     });
@@ -909,21 +968,52 @@ describe("bot-native-command-menu sync lifecycle", () => {
     expect(ledgerRows.has(botId)).toBe(false);
     expect(ledgerDeleteCalls).toEqual([botId]);
     expect(runtimeError).toHaveBeenCalledWith(
-      `Telegram command menu locale ledger for bot ${botId} was reset; the unshipped ledger contained non-canonical data (discarded unsupported language codes: en-GB, zz; discarded 3 malformed ledger field(s) or entry(ies)).`,
+      `Telegram command menu locale ledger for bot ${botId} was reset; the unshipped ledger contained non-canonical data (discarded unsupported language codes: en-GB, zz; discarded 2 malformed ledger field(s) or entry(ies)).`,
     );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await waitForTelegramMenuTurn();
     sync();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await waitForTelegramMenuTurn();
 
     expect(deleteMyCommands).toHaveBeenCalledTimes(2);
     expect(setMyCommands).toHaveBeenCalledTimes(2);
     expect(ledgerDeleteCalls).toEqual([botId]);
     expect(runtimeError).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves future locale-ledger versions and fails closed before Telegram API calls", async () => {
+    const botId = "876543215";
+    const futureLedger = { version: 2, languageCodes: [" FR ", "zz", 42], unexpected: true };
+    const originalShape = structuredClone(futureLedger);
+    ledgerRows.set(botId, futureLedger);
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeError = vi.fn();
+    const sync = () =>
+      syncMenuCommandsWithMocks({
+        deleteMyCommands,
+        setMyCommands,
+        runtimeError,
+        accountId: `test-future-ledger-${Date.now()}`,
+        botToken: `${botId}:test-token`,
+        commandsToRegister: [{ command: "cmd", description: "Default" }],
+      });
+
+    sync();
+    await waitForTelegramMenu(() => expect(runtimeError).toHaveBeenCalledTimes(1));
+    sync();
+    await waitForTelegramMenu(() => expect(runtimeError).toHaveBeenCalledTimes(2));
+
+    expect(ledgerRows.get(botId)).toBe(futureLedger);
+    expect(ledgerRows.get(botId)).toEqual(originalShape);
+    expect(ledgerRegisterCalls).toHaveLength(0);
+    expect(ledgerDeleteCalls).toHaveLength(0);
+    expect(deleteMyCommands).not.toHaveBeenCalled();
+    expect(setMyCommands).not.toHaveBeenCalled();
+    for (const [message] of runtimeError.mock.calls) {
+      expect(message).toContain("unsupported future version 2");
+      expect(message.length).toBeLessThanOrEqual(180);
+    }
   });
 
   it("retries after a locale-ledger repair write fails", async () => {
@@ -953,17 +1043,16 @@ describe("bot-native-command-menu sync lifecycle", () => {
       });
 
     sync();
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
+    await waitForTelegramMenu(() => expect(runtimeError).toHaveBeenCalledTimes(1));
     expect(ledgerRows.get(botId)).toBe(rawLedger);
-    expect(
-      setMyCommands.mock.calls.some((call) => readLanguageCodeFromApiCall(call) === "ko"),
-    ).toBe(false);
+    expect(deleteMyCommands).not.toHaveBeenCalled();
+    expect(setMyCommands).not.toHaveBeenCalled();
     expect(runtimeError).toHaveBeenCalledWith(
       `Telegram command menu locale ledger repair failed for bot ${botId}: Error: injected repair failure`,
     );
 
     sync();
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(6));
+    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
     expect(deleteMyCommands).toHaveBeenCalledWith({ language_code: "fr" });
     expect(setMyCommands).toHaveBeenCalledWith([{ command: "cmd", description: "한국어" }], {
       language_code: "ko",
@@ -973,16 +1062,12 @@ describe("bot-native-command-menu sync lifecycle", () => {
       `Telegram command menu locale ledger for bot ${botId} was repaired; the unshipped ledger contained non-canonical data (discarded unsupported language codes: zz).`,
     );
 
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await waitForTelegramMenuTurn();
     sync();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await waitForTelegramMenuTurn();
 
-    expect(deleteMyCommands).toHaveBeenCalledTimes(8);
-    expect(setMyCommands).toHaveBeenCalledTimes(6);
+    expect(deleteMyCommands).toHaveBeenCalledTimes(4);
+    expect(setMyCommands).toHaveBeenCalledTimes(4);
     expect(ledgerRegisterCalls).toHaveLength(3);
     expect(runtimeError).toHaveBeenCalledTimes(2);
   });

@@ -395,6 +395,18 @@ export async function readTelegramMenuLocaleLedger(params: {
     if (stored === undefined) {
       return { store };
     }
+    const storedRecord = isRecord(stored) ? stored : undefined;
+    const storedVersion = storedRecord?.version;
+    if (
+      typeof storedVersion === "number" &&
+      Number.isInteger(storedVersion) &&
+      storedVersion > TELEGRAM_MENU_LOCALE_LEDGER_VERSION
+    ) {
+      params.runtime.error?.(
+        `Telegram command menu locale ledger for bot ${params.botId} uses unsupported future version ${storedVersion}; preserving it unchanged.`,
+      );
+      return null;
+    }
     const normalization = normalizeTelegramMenuLocaleLedger(stored);
     if (normalization.isCanonical) {
       return { store, value: normalization.value };

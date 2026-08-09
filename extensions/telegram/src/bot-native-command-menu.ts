@@ -339,7 +339,7 @@ function updateTelegramCommandLocalizationDigest(
   digest: ReturnType<typeof createHash>,
   localizations: Record<string, string> | undefined,
 ): void {
-  const entries = Object.entries(localizations ?? {}).toSorted(([a], [b]) => a.localeCompare(b));
+  const entries = buildEffectiveTelegramCommandLocalizations(localizations);
   updateTelegramCommandDigestField(digest, String(entries.length));
   for (const [locale, description] of entries) {
     updateTelegramCommandDigestField(digest, locale);
@@ -365,27 +365,34 @@ function hashCommandList(commands: TelegramMenuCommand[]): string {
   const requestedCommands = commands.map((command) => ({
     command: command.command,
     description: command.description,
-    descriptionLocalizations: command.descriptionLocalizations,
+    descriptionLocalizations: buildEffectiveTelegramCommandLocalizations(
+      command.descriptionLocalizations,
+    ),
   }));
   return createHash("sha256").update(JSON.stringify(requestedCommands)).digest("hex").slice(0, 16);
 }
 
-function readLocalizedDescription(
-  command: TelegramMenuCommand,
-  languageCode: LanguageCode,
-): string | undefined {
-  for (const [rawLanguageCode, rawDescription] of Object.entries(
-    command.descriptionLocalizations ?? {},
-  )) {
-    if (normalizeTelegramMenuLanguageCode(rawLanguageCode) !== languageCode) {
-      continue;
-    }
+function buildEffectiveTelegramCommandLocalizations(
+  localizations: Record<string, string> | undefined,
+): Array<[LanguageCode, string]> {
+  const effective = new Map<LanguageCode, string>();
+  for (const [rawLanguageCode, rawDescription] of Object.entries(localizations ?? {})) {
+    const languageCode = normalizeTelegramMenuLanguageCode(rawLanguageCode);
     const description = normalizeOptionalString(rawDescription);
-    if (description) {
-      return description;
+    if (languageCode && description && !effective.has(languageCode)) {
+      effective.set(languageCode, description);
     }
   }
-  return undefined;
+  return [...effective.entries()].toSorted(([a], [b]) => a.localeCompare(b));
+}
+
+function readLocalizedDescription(
+  localizations: Array<[LanguageCode, string]>,
+  languageCode: LanguageCode,
+): string | undefined {
+  return localizations.find(
+    ([effectiveLanguageCode]) => effectiveLanguageCode === languageCode,
+  )?.[1];
 }
 
 function toTelegramBotCommands(commands: TelegramMenuCommand[]): Array<{
@@ -404,21 +411,31 @@ function buildLocalizedCommandVariants(commands: TelegramMenuCommand[]): {
 } {
   const locales = new Set<LanguageCode>();
   const unsupportedLanguageCodes = new Set<string>();
-  for (const command of commands) {
-    for (const rawLanguageCode of Object.keys(command.descriptionLocalizations ?? {})) {
-      const normalized = normalizeTelegramMenuLanguageCode(rawLanguageCode);
-      if (normalized) {
-        locales.add(normalized);
-      } else {
+  const commandsWithLocalizations = commands.map((command) => ({
+    command,
+    localizations: buildEffectiveTelegramCommandLocalizations(command.descriptionLocalizations),
+  }));
+  for (const { command, localizations } of commandsWithLocalizations) {
+    for (const [languageCode] of localizations) {
+      locales.add(languageCode);
+    }
+    for (const [rawLanguageCode, rawDescription] of Object.entries(
+      command.descriptionLocalizations ?? {},
+    )) {
+      if (
+        !normalizeTelegramMenuLanguageCode(rawLanguageCode) &&
+        normalizeOptionalString(rawDescription)
+      ) {
         unsupportedLanguageCodes.add(rawLanguageCode);
       }
     }
   }
   const variants = [...locales].toSorted().map((languageCode) => {
-    const localizedCommands = commands.map((cmd) => ({
-      ...cmd,
-      description: readLocalizedDescription(cmd, languageCode) ?? cmd.description,
-    }));
+    const localizedCommands = commandsWithLocalizations.map(({ command, localizations }) =>
+      Object.assign({}, command, {
+        description: readLocalizedDescription(localizations, languageCode) ?? command.description,
+      }),
+    );
     return {
       languageCode,
       commands: buildCappedTelegramMenuCommands({
@@ -530,6 +547,9 @@ export function syncTelegramMenuCommands(params: {
     const ledgerRead = owner.botId
       ? await readTelegramMenuLocaleLedger({ botId: owner.botId, runtime })
       : null;
+    if (owner.botId && !ledgerRead) {
+      return;
+    }
     const trackedLocales = new Set<LanguageCode>([
       ...processLocales,
       ...(ledgerRead?.value?.languageCodes ?? []),
