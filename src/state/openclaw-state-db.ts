@@ -650,7 +650,16 @@ export function runOpenClawStateWriteTransaction<T>(
     "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
   > = {},
 ): T {
-  const database = openOpenClawStateDatabase(options);
+  const cachedBeforeOpen = options.database ?? getOpenClawStateDatabaseIfOpen(options);
+  let database: OpenClawStateDatabase;
+  try {
+    database = openOpenClawStateDatabase(options);
+  } catch (error) {
+    if (cachedBeforeOpen && isSqliteCorruptionError(error)) {
+      evictCachedOpenClawStateDatabase(cachedBeforeOpen);
+    }
+    throw error;
+  }
   let result: T;
   try {
     result = runSqliteImmediateTransactionSync(

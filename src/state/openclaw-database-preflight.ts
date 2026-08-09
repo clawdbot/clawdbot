@@ -1,14 +1,13 @@
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   collectSqliteSchemaIssues,
@@ -217,7 +216,7 @@ export async function preflightOpenClawStateDatabasePath(
         `SQLite preflight requires a consolidated snapshot with no sidecars; found ${sidecars.join(", ")}. Create a WAL-aware online backup and preflight the resulting standalone file.`,
       );
     }
-    database = openNodeSqliteDatabase(`${pathToFileURL(inspectionPath).href}?mode=ro&immutable=1`, {
+    database = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(inspectionPath), {
       readOnly: true,
     });
     database.exec(

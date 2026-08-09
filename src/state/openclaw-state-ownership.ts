@@ -1,10 +1,9 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export const STATE_SUPERVISION_KEY = "gateway.supervision";
@@ -122,10 +121,9 @@ export function inspectOpenClawStateOwnershipAtPath(
   if (!existsSync(resolvedPath)) {
     return null;
   }
-  const database = openNodeSqliteDatabase(
-    `${pathToFileURL(resolvedPath).href}?mode=ro&immutable=1`,
-    { readOnly: true },
-  );
+  const database = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(resolvedPath), {
+    readOnly: true,
+  });
   try {
     database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
     return inspectOpenClawStateOwnershipFromDatabase(database, resolvedPath);
