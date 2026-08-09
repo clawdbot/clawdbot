@@ -479,7 +479,11 @@ function expectBoundTui(expected: {
   tlsFingerprint?: string;
 }): void {
   expect(runTuiMock).toHaveBeenCalledWith(
-    expect.objectContaining({ deliver: false, boundGateway: expected }),
+    expect.objectContaining({
+      deliver: false,
+      forceProcessExitOnReturn: true,
+      boundGateway: expected,
+    }),
   );
 }
 
@@ -3185,7 +3189,7 @@ describe("runCli exit behavior", () => {
     },
   ])("$name", async ({ snapshot }) => {
     readConfigFileSnapshotMock.mockResolvedValueOnce(snapshot);
-    await runBareCli();
+    await expect(runBareCli()).resolves.toBeUndefined();
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledOnce();
     expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
@@ -3254,7 +3258,11 @@ describe("runCli exit behavior", () => {
 
     expect(readLocalOnboardingStateMock).toHaveBeenCalledWith(configPath, sourceConfig);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(runTuiMock).toHaveBeenCalledWith({ deliver: false, local: true });
+    expect(runTuiMock).toHaveBeenCalledWith({
+      deliver: false,
+      local: true,
+      forceProcessExitOnReturn: true,
+    });
   });
 
   it("does not resume a receipt belonging to the config replaced at the same path", async () => {
@@ -3288,7 +3296,11 @@ describe("runCli exit behavior", () => {
 
     expect(readLocalOnboardingStateMock).toHaveBeenCalledWith(configPath, sourceConfig);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(runTuiMock).toHaveBeenCalledWith({ deliver: false, local: true });
+    expect(runTuiMock).toHaveBeenCalledWith({
+      deliver: false,
+      local: true,
+      forceProcessExitOnReturn: true,
+    });
   });
 
   it("points noninteractive fresh bare root invocations to onboarding automation", async () => {
@@ -3744,7 +3756,11 @@ describe("runCli exit behavior", () => {
 
     await runBareCli();
 
-    expect(runTuiMock).toHaveBeenCalledWith({ deliver: false, local: true });
+    expect(runTuiMock).toHaveBeenCalledWith({
+      deliver: false,
+      local: true,
+      forceProcessExitOnReturn: true,
+    });
   });
 
   it.each([

@@ -603,6 +603,7 @@ describe("finalizeSetupWizard", () => {
     expect(runTui).toHaveBeenCalledWith({
       local: true,
       deliver: false,
+      forceProcessExitOnReturn: true,
       message: undefined,
       timeoutMs: 300_000,
     });
@@ -660,6 +661,7 @@ describe("finalizeSetupWizard", () => {
     expect(runTui).toHaveBeenCalledWith(
       expect.objectContaining({
         config: args.nextConfig,
+        forceProcessExitOnReturn: true,
         boundGateway: {
           url: "ws://127.0.0.1:18789",
           token: gatewayToken,
@@ -867,6 +869,7 @@ describe("finalizeSetupWizard", () => {
     expect(runTui).toHaveBeenCalledWith({
       local: true,
       deliver: false,
+      forceProcessExitOnReturn: true,
       message: "Wake up, my friend!",
       timeoutMs: 300_000,
     });
@@ -1027,6 +1030,7 @@ describe("finalizeSetupWizard", () => {
     expect(runTui).toHaveBeenCalledWith({
       local: true,
       deliver: false,
+      forceProcessExitOnReturn: true,
       message: undefined,
       timeoutMs: 300_000,
     });
@@ -1075,6 +1079,7 @@ describe("finalizeSetupWizard", () => {
       expect(runTui).toHaveBeenCalledWith({
         local: true,
         deliver: false,
+        forceProcessExitOnReturn: true,
         message: "醒醒，我的朋友！",
         timeoutMs: 300_000,
       });

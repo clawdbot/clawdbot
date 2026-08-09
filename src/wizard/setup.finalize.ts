@@ -972,6 +972,8 @@ export async function finalizeSetupWizard(
     if (shouldLaunchTui) {
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
       try {
+        // Setup now hosts the TUI in-process, so arm the final exit fallback
+        // when runtime handles outlive the normal TUI teardown.
         await runTui({
           ...(gatewayProbe.ok
             ? {
@@ -988,6 +990,7 @@ export async function finalizeSetupWizard(
               }
             : { local: true }),
           deliver: false,
+          forceProcessExitOnReturn: true,
           message: shouldSeedBootstrapHatch
             ? t("wizard.finalize.bootstrapHatchMessage")
             : undefined,

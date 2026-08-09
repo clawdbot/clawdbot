@@ -1416,8 +1416,10 @@ async function runCliWithPreparedOutputMode(
           return;
         }
         const { runTui } = await import("../tui/tui.js");
-        await runTui(
-          bareRootLaunchTarget.local
+        // This TUI now shares the CLI process, so keep its final exit fallback armed
+        // in case imported runtime handles survive the normal teardown.
+        await runTui({
+          ...(bareRootLaunchTarget.local
             ? { deliver: false, local: true }
             : {
                 deliver: false,
@@ -1432,8 +1434,9 @@ async function runCliWithPreparedOutputMode(
                     ? { tlsFingerprint: bareRootLaunchTarget.tlsFingerprint }
                     : {}),
                 },
-              },
-        );
+              }),
+          forceProcessExitOnReturn: true,
+        });
         return;
       }
     }
