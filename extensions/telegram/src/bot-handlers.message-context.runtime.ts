@@ -10,6 +10,7 @@ import type {
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
+import type { TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
 import {
@@ -26,7 +27,7 @@ import {
   buildTelegramReplyChain,
   createTelegramMessageCache,
   isTelegramMessageFromCurrentBot,
-  resolveProviderObservedTelegramThreadId,
+  resolveProviderObservedTelegramThreadSpec,
   type TelegramCachedMessageNode,
   type TelegramReplyChainEntry,
 } from "./message-cache.js";
@@ -86,14 +87,18 @@ export function createTelegramMessageContextRuntime({
     return isTelegramSelfSenderName(node.sender) ? `${node.sender} (Telegram sender)` : node.sender;
   };
 
-  const recordMessageForReplyChain = (msg: Message, threadId?: number, botUserId?: number) =>
+  const recordMessageForReplyChain = (
+    msg: Message,
+    providerObservedThread?: TelegramThreadSpec,
+    botUserId?: number,
+  ) =>
     messageCache.record({
       accountId,
       chatId: msg.chat.id,
       msg,
       ...(botUserId !== undefined ? { botUserId } : {}),
-      ...(threadId != null ? { providerObservedThreadId: threadId } : {}),
-      ...(threadId != null ? { threadId } : {}),
+      ...(providerObservedThread ? { providerObservedThread } : {}),
+      ...(providerObservedThread?.id != null ? { threadId: providerObservedThread.id } : {}),
     });
 
   const recordMessageResolvedMedia = (params: {
@@ -136,16 +141,16 @@ export function createTelegramMessageContextRuntime({
   // recovers the originating topic from the same bounded cache that records inbound
   // and outbound messages. `undefined` means "thread unknown", never "General": the
   // caller must not substitute a topic id.
-  const resolveCachedMessageThreadId = async (params: {
+  const resolveCachedMessageThreadSpec = async (params: {
     chatId: number | string;
     messageId: number | string;
-  }): Promise<number | undefined> => {
+  }): Promise<TelegramThreadSpec | undefined> => {
     const node = await messageCache.get({
       accountId,
       chatId: params.chatId,
       messageId: String(params.messageId),
     });
-    return resolveProviderObservedTelegramThreadId(node);
+    return resolveProviderObservedTelegramThreadSpec(node);
   };
 
   const buildReplyChainForMessage = (msg: Message) =>
@@ -314,7 +319,7 @@ export function createTelegramMessageContextRuntime({
     recordMessageForReplyChain,
     recordMessageResolvedMedia,
     recordReplyMessageResolvedMedia,
-    resolveCachedMessageThreadId,
+    resolveCachedMessageThreadSpec,
     buildReplyChainForMessage,
     toReplyChainEntry,
     buildPromptContextForMessage,

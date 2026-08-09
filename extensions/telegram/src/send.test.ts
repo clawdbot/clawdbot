@@ -5465,7 +5465,12 @@ describe("editMessageTelegram", () => {
   ])("refreshes cached $name from Telegram's authoritative edit response", async (testCase) => {
     const storePath = `/tmp/openclaw-telegram-edited-context-${process.pid}-${Date.now()}-${testCase.name}.json`;
     const cfg = { session: { store: storePath } };
-    const chat = { id: -100123, type: "supergroup" as const, title: "Ops" };
+    const chat = {
+      id: -100123,
+      type: "supergroup" as const,
+      title: "Ops",
+      is_forum: true as const,
+    };
     const cache = createTelegramMessageCache({
       scope: resolveTelegramMessageCacheScope(storePath),
     });
@@ -5733,10 +5738,79 @@ describe("sendPollTelegram", () => {
             is_forum: true,
           },
           messageId: 123,
-          messageThreadId: 99,
+          threadSpec: { scope: "forum", id: 99 },
           question: "Ready?",
           options: ["Yes", "No"],
         }),
+      }),
+    ]);
+  });
+
+  it.each([
+    {
+      name: "base private chat",
+      to: "555",
+      chat: { id: 555, type: "private" as const, first_name: "Ada" },
+      expected: { scope: "dm" as const },
+    },
+    {
+      name: "bot-private topic",
+      to: "555:topic:42",
+      chat: { id: 555, type: "private" as const, first_name: "Ada" },
+      messageThreadId: 42,
+      expected: { scope: "dm" as const, id: 42 },
+    },
+    {
+      name: "regular group",
+      to: "-100555",
+      chat: { id: -100555, type: "supergroup" as const, title: "Reviewers" },
+      expected: { scope: "none" as const },
+    },
+  ])("records the canonical $name poll scope", async (testCase) => {
+    const store = await installPollRegistryStore();
+    botApi.getChatMember.mockResolvedValue({ status: "administrator" });
+    botApi.sendPoll.mockResolvedValue({
+      message_id: 126,
+      ...(testCase.messageThreadId === undefined
+        ? {}
+        : { message_thread_id: testCase.messageThreadId }),
+      chat: testCase.chat,
+      poll: { id: `poll-${testCase.expected.scope}` },
+    });
+
+    await expect(
+      sendPollTelegram(
+        testCase.to,
+        { question: "Ready?", options: ["Yes", "No"] },
+        { cfg: TELEGRAM_TEST_CFG, token: "999:token", isAnonymous: false },
+      ),
+    ).resolves.toMatchObject({ pollAnswerRouting: "enabled" });
+    expect(await store.entries()).toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({ threadSpec: testCase.expected }),
+      }),
+    ]);
+  });
+
+  it("preserves the accepted General forum scope when Telegram omits its thread id", async () => {
+    const store = await installPollRegistryStore();
+    botApi.getChatMember.mockResolvedValue({ status: "administrator" });
+    botApi.sendPoll.mockResolvedValue({
+      message_id: 127,
+      chat: { id: -100556, type: "supergroup", title: "Forum", is_forum: true },
+      poll: { id: "poll-general" },
+    });
+
+    await expect(
+      sendPollTelegram(
+        "-100556:topic:1",
+        { question: "Ready?", options: ["Yes", "No"] },
+        { cfg: TELEGRAM_TEST_CFG, token: "999:token", isAnonymous: false },
+      ),
+    ).resolves.toMatchObject({ pollAnswerRouting: "enabled" });
+    expect(await store.entries()).toEqual([
+      expect.objectContaining({
+        value: expect.objectContaining({ threadSpec: { scope: "forum", id: 1 } }),
       }),
     ]);
   });
@@ -5901,6 +5975,7 @@ describe("sendPollTelegram", () => {
       pollId: "poll-fast-answer",
       chat: { id: -1001234567890, type: "supergroup" as const, title: "Reviewers" },
       messageId: 125,
+      threadSpec: { scope: "none" as const },
       question: "Ready?",
       options: ["Yes", "No"],
     };
@@ -5967,7 +6042,7 @@ describe("sendPollTelegram", () => {
     const api = {
       sendPoll: vi.fn(async () => ({
         message_id: 123,
-        chat: { id: 555, type: "private" },
+        chat: { id: 555, type: "private", first_name: "Ada" },
         poll: { id: "poll-anonymous" },
       })),
     };
@@ -6010,7 +6085,7 @@ describe("sendPollTelegram", () => {
     const api = {
       sendPoll: vi.fn(async () => ({
         message_id: 123,
-        chat: { id: 555, type: "private" },
+        chat: { id: 555, type: "private", first_name: "Ada" },
         poll: { id: "poll-write-error" },
       })),
     };
