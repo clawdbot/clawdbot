@@ -395,6 +395,8 @@ export class GatewayClient {
   private opts: GatewayClientOptions;
   private deps: Required<GatewayClientHostDeps>;
   private stopped = false;
+  private useLegacyNodeProtocolEnvelope = false;
+  private legacyNodeProtocolRetryBudgetUsed = false;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
   private approvalRuntimeTokenCompatibilityDisabled = false;
@@ -788,37 +790,49 @@ export class GatewayClient {
     });
     const clientMode = this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND;
     const clientId = this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT;
+    const isBuiltInNodeHost =
+      role === "node" &&
+      clientMode === GATEWAY_CLIENT_MODES.NODE &&
+      clientId === GATEWAY_CLIENT_NAMES.NODE_HOST;
+    const useLegacyNodeProtocolEnvelope =
+      isBuiltInNodeHost &&
+      (this.useLegacyNodeProtocolEnvelope ||
+        (this.opts.maxProtocol === MIN_NODE_PROTOCOL_VERSION &&
+          (this.opts.minProtocol ?? MIN_NODE_PROTOCOL_VERSION) <= MIN_NODE_PROTOCOL_VERSION));
     // Match server admission: only probes and exact node role+mode identities
     // may advertise specialized floors; every other client stays current-only.
     const minProtocol =
       this.opts.minProtocol ??
       (clientMode === GATEWAY_CLIENT_MODES.PROBE
         ? MIN_PROBE_PROTOCOL_VERSION
-        : role === "node" && clientMode === GATEWAY_CLIENT_MODES.NODE
+        : useLegacyNodeProtocolEnvelope
           ? MIN_NODE_PROTOCOL_VERSION
-          : MIN_CLIENT_PROTOCOL_VERSION);
+          : isBuiltInNodeHost
+            ? PROTOCOL_VERSION
+            : role === "node" && clientMode === GATEWAY_CLIENT_MODES.NODE
+              ? MIN_NODE_PROTOCOL_VERSION
+              : MIN_CLIENT_PROTOCOL_VERSION);
+    const maxProtocol =
+      this.opts.maxProtocol ??
+      (useLegacyNodeProtocolEnvelope ? MIN_NODE_PROTOCOL_VERSION : PROTOCOL_VERSION);
     const configuredPlatform = this.opts.platform ?? process.platform;
-    // Protocol-v3 gateways pin Node.js desktop platform aliases before current
-    // canonical IDs existed. Emit the alias up front to avoid persisting a
-    // metadata repair request before a compatibility retry can succeed.
-    const platform =
-      role === "node" &&
-      clientMode === GATEWAY_CLIENT_MODES.NODE &&
-      clientId === GATEWAY_CLIENT_NAMES.NODE_HOST &&
-      minProtocol <= MIN_NODE_PROTOCOL_VERSION
-        ? (resolveLegacyNodePlatform(configuredPlatform) ?? configuredPlatform)
-        : configuredPlatform;
+    // A released v3 Gateway rejects v4 before authentication, so the retry can
+    // reproduce the shipped node-host envelope without mutating v4 pairings.
+    const platform = useLegacyNodeProtocolEnvelope
+      ? (resolveLegacyNodePlatform(configuredPlatform) ?? configuredPlatform)
+      : configuredPlatform;
+    const deviceFamily = useLegacyNodeProtocolEnvelope ? undefined : this.opts.deviceFamily;
 
     return {
       params: {
         minProtocol,
-        maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
+        maxProtocol,
         client: {
           id: clientId,
           displayName: this.opts.clientDisplayName,
           version: this.opts.clientVersion ?? DEFAULT_CLIENT_VERSION,
           platform,
-          deviceFamily: this.opts.deviceFamily,
+          deviceFamily,
           mode: clientMode,
           instanceId: this.opts.instanceId,
         },
@@ -839,6 +853,7 @@ export class GatewayClient {
           signatureToken,
           signedAtMs,
           platform,
+          deviceFamily,
           clientMode,
         }),
       },
@@ -850,6 +865,29 @@ export class GatewayClient {
     };
   }
 
+  private shouldRetryWithLegacyNodeProtocol(error: GatewayProtocolRequestError): boolean {
+    if (
+      this.useLegacyNodeProtocolEnvelope ||
+      this.legacyNodeProtocolRetryBudgetUsed ||
+      this.opts.minProtocol !== undefined ||
+      this.opts.maxProtocol !== undefined ||
+      this.opts.role !== "node" ||
+      this.opts.mode !== GATEWAY_CLIENT_MODES.NODE ||
+      this.opts.clientName !== GATEWAY_CLIENT_NAMES.NODE_HOST ||
+      !(error instanceof GatewayClientRequestError)
+    ) {
+      return false;
+    }
+    const detailCode = readConnectErrorDetailCode(error.details);
+    const expectedProtocol = (error.details as { expectedProtocol?: unknown } | null | undefined)
+      ?.expectedProtocol;
+    return (
+      expectedProtocol === MIN_NODE_PROTOCOL_VERSION &&
+      (detailCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
+        normalizeLowercaseStringOrEmpty(error.message).includes("protocol mismatch"))
+    );
+  }
+
   private buildDeviceConnectParams(params: {
     nonce: string;
     role: string;
@@ -857,12 +895,14 @@ export class GatewayClient {
     signatureToken: string | undefined;
     signedAtMs: number;
     platform: string;
+    deviceFamily: string | undefined;
     clientMode: GatewayClientMode;
   }): ConnectParams["device"] {
     if (!this.opts.deviceIdentity) {
       return undefined;
     }
-    const { nonce, role, scopes, signatureToken, signedAtMs, platform, clientMode } = params;
+    const { nonce, role, scopes, signatureToken, signedAtMs, platform, deviceFamily, clientMode } =
+      params;
     // The signed payload mirrors server verification exactly; keep metadata
     // normalized here so different hosts sign the same logical device facts.
     const payload = buildDeviceAuthPayloadV3({
@@ -875,7 +915,7 @@ export class GatewayClient {
       token: signatureToken ?? null,
       nonce,
       platform,
-      deviceFamily: this.opts.deviceFamily,
+      deviceFamily,
     });
     const signature = this.deps.signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
     return {
@@ -888,6 +928,10 @@ export class GatewayClient {
   }
 
   private handleConnectHello(helloOk: HelloOk, assembled: AssembledConnect): void {
+    if (this.useLegacyNodeProtocolEnvelope && helloOk.protocol > MIN_NODE_PROTOCOL_VERSION) {
+      this.useLegacyNodeProtocolEnvelope = false;
+      this.legacyNodeProtocolRetryBudgetUsed = false;
+    }
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.suppressedTransientPreHelloCleanCloses = 0;
@@ -913,6 +957,13 @@ export class GatewayClient {
     error: GatewayProtocolRequestError,
     assembled: AssembledConnect,
   ) {
+    if (this.shouldRetryWithLegacyNodeProtocol(error)) {
+      this.useLegacyNodeProtocolEnvelope = true;
+      this.legacyNodeProtocolRetryBudgetUsed = true;
+      this.protocol.resetReconnectBackoff(250);
+      this.logDebug("gateway rejected protocol v4; retrying node host with protocol v3");
+      return { closeCode: 1008, closeReason: "connect retry" };
+    }
     const role = this.opts.role ?? "operator";
     const shouldRetryWithDeviceToken = shouldRetryGatewayWithDeviceToken({
       retryBudgetUsed: this.deviceTokenRetryBudgetUsed,

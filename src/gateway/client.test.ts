@@ -1212,7 +1212,7 @@ describe("GatewayClient connect auth payload", () => {
 
   type ProtocolCompatibilityOptions = Pick<
     GatewayClientOptions,
-    "role" | "mode" | "minProtocol" | "maxProtocol"
+    "role" | "mode" | "clientName" | "minProtocol" | "maxProtocol"
   >;
 
   const protocolCompatibilityCases = [
@@ -1226,6 +1226,16 @@ describe("GatewayClient connect auth payload", () => {
       name: "exact node clients",
       options: { role: "node", mode: GATEWAY_CLIENT_MODES.NODE },
       expectedMinProtocol: MIN_NODE_PROTOCOL_VERSION,
+      expectedMaxProtocol: PROTOCOL_VERSION,
+    },
+    {
+      name: "built-in node hosts before a v3 mismatch",
+      options: {
+        role: "node",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      },
+      expectedMinProtocol: PROTOCOL_VERSION,
       expectedMaxProtocol: PROTOCOL_VERSION,
     },
     {
@@ -1309,22 +1319,49 @@ describe("GatewayClient connect auth payload", () => {
   it.each([
     { canonical: "macos", legacy: "darwin" },
     { canonical: "windows", legacy: "win32" },
-  ])("emits legacy $legacy platform metadata for v3-compatible nodes", ({ canonical, legacy }) => {
-    const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
-    const client = createClientWithIdentity(`device-${legacy}`, vi.fn(), {
-      role: "node",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      platform: canonical,
-      deviceFamily: canonical === "macos" ? "Mac" : "Windows",
-      hostDeps: { signDevicePayload },
-    });
+  ])(
+    "retries a released-v3 Gateway with the shipped $legacy metadata envelope",
+    async ({ canonical, legacy }) => {
+      const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
+      const deviceFamily = canonical === "macos" ? "Mac" : "Windows";
+      const client = createClientWithIdentity(`device-${legacy}`, vi.fn(), {
+        role: "node",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        platform: canonical,
+        deviceFamily,
+        hostDeps: { signDevicePayload },
+      });
 
-    const { connect } = startClientAndConnect({ client });
-    expect(connect.params?.client?.platform).toBe(legacy);
-    expect(signDevicePayload.mock.calls.at(-1)?.[1]?.split("|")[9]).toBe(legacy);
-    client.stop();
-  });
+      const { ws: currentWs, connect: currentConnect } = startClientAndConnect({ client });
+      expect(currentConnect.params).toMatchObject({
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: { platform: canonical, deviceFamily },
+      });
+
+      emitConnectFailure(
+        currentWs,
+        currentConnect.id,
+        { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+        "protocol mismatch",
+      );
+      await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
+      const legacyWs = getLatestWs();
+      legacyWs.emitOpen();
+      emitConnectChallenge(legacyWs, "nonce-v3");
+      const legacyConnect = connectRequestFrom(legacyWs);
+
+      expect(legacyConnect.params).toMatchObject({
+        minProtocol: MIN_NODE_PROTOCOL_VERSION,
+        maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+        client: { platform: legacy },
+      });
+      expect(legacyConnect.params?.client).not.toHaveProperty("deviceFamily");
+      expect(signDevicePayload.mock.calls.at(-1)?.[1]?.split("|").slice(9)).toEqual([legacy, ""]);
+      client.stop();
+    },
+  );
 
   it.each(["macos", "windows"])(
     "keeps canonical %s platform metadata for v4-only nodes",

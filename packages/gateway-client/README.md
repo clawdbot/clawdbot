@@ -10,7 +10,9 @@ The current wire protocol is version 4. General clients must advertise exactly v
 [Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol) for
 the complete handshake, authentication, role, scope, and method contracts.
 Exact node identities (`role: "node"` plus `mode: "node"`) and probe clients
-default to `[3, 4]`; explicit `minProtocol` and `maxProtocol` values override
+can use v3. The built-in node host starts with an exact v4 envelope, then retries
+an exact v3 envelope after a v3 Gateway rejects v4; other exact node identities
+default to `[3, 4]`. Explicit `minProtocol` and `maxProtocol` values override
 these derived defaults.
 
 ## Versioning
