@@ -924,7 +924,11 @@ export function createImageTool(options?: {
         }),
       ),
       ...(modelHasVision ? {} : { model: Type.Optional(Type.String()) }),
-      maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
+      maxBytesMb: optionalFiniteNumberSchema({
+        description:
+          "Max image size in MB; caps each image and the combined total for this call. Values above 100 are clamped.",
+        exclusiveMinimum: 0,
+      }),
       maxImages: optionalPositiveIntegerSchema(),
     }),
     execute: async (_toolCallId, args, signal) => {
@@ -987,6 +991,11 @@ export function createImageTool(options?: {
         message: "maxBytesMb must be greater than 0",
       });
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
+      // The effective byte limit is one aggregate budget for the whole
+      // model-originated request: 20 images at the 100 MiB per-image cap would
+      // otherwise retain ~2 GiB of buffers before native/fallback dispatch.
+      // Each load draws from the remaining budget; exhaustion skips the rest.
+      let remainingImageBudgetBytes = maxBytes;
       let imageRoute:
         | { kind: "native" }
         | {
@@ -1039,11 +1048,21 @@ export function createImageTool(options?: {
 
       // MARK: - Load and resolve each image
       const loadedImages: LoadedImageForTool[] = [];
+      let budgetSkippedImageCount = 0;
 
       for (const imageRawInput of imageInputs) {
         // Stop before starting the next sequential download/decode when the run
         // was aborted, so a dead run cannot keep pulling up to maxImages remote images.
         signal?.throwIfAborted();
+        if (remainingImageBudgetBytes !== undefined && remainingImageBudgetBytes <= 0) {
+          // Recorded non-outcome: later images are skipped, not silently
+          // truncated, so the model knows the payload was bounded.
+          budgetSkippedImageCount = imageInputs.length - loadedImages.length;
+          logWarn(
+            `image-tool: request byte budget exhausted; skipping ${budgetSkippedImageCount} image(s)`,
+          );
+          break;
+        }
         const trimmed = imageRawInput.trim();
         const imageRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
         if (!imageRaw) {
@@ -1127,23 +1146,25 @@ export function createImageTool(options?: {
 
         const media = isDataUrl
           ? await (async () => {
-              const decoded = decodeDataUrl(resolvedImage, { maxBytes });
+              const decoded = decodeDataUrl(resolvedImage, {
+                maxBytes: remainingImageBudgetBytes,
+              });
               return await imageWebMedia.optimizeImageBufferForWebMedia({
                 buffer: decoded.buffer,
                 contentType: decoded.mimeType,
-                maxBytes,
+                maxBytes: remainingImageBudgetBytes,
                 imageCompression,
               });
             })()
           : sandboxConfig
             ? await imageWebMedia.loadWebMedia(resolvedPath ?? resolvedImage, {
-                maxBytes,
+                maxBytes: remainingImageBudgetBytes,
                 sandboxValidated: true,
                 readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
                 imageCompression,
               })
             : await imageWebMedia.loadWebMedia(resolvedPath ?? resolvedImage, {
-                maxBytes,
+                maxBytes: remainingImageBudgetBytes,
                 localRoots: mediaLocalRoots,
                 inboundRoots: mediaInboundRoots,
                 ssrfPolicy: remoteMediaSsrfPolicy,
@@ -1155,6 +1176,12 @@ export function createImageTool(options?: {
               });
         if (media.kind !== "image") {
           throw new Error(`Unsupported media type: ${media.kind}`);
+        }
+        if (remainingImageBudgetBytes !== undefined) {
+          remainingImageBudgetBytes = Math.max(
+            0,
+            remainingImageBudgetBytes - media.buffer.byteLength,
+          );
         }
 
         const contentType =
@@ -1172,8 +1199,15 @@ export function createImageTool(options?: {
         });
       }
 
+      // Budget-exhausted skips are a recorded non-outcome: surfaced in result
+      // text (the model must know images are missing) and in details.
+      const budgetSkip =
+        budgetSkippedImageCount > 0 && maxBytes !== undefined
+          ? { count: budgetSkippedImageCount, budgetBytes: maxBytes }
+          : undefined;
+
       if (imageRoute.kind === "native") {
-        return await buildNativeImageToolResult(loadedImages, options?.config);
+        return await buildNativeImageToolResult(loadedImages, options?.config, budgetSkip);
       }
 
       // Do not issue a paid vision-provider call for an already-aborted run.
@@ -1193,7 +1227,22 @@ export function createImageTool(options?: {
         preparedModelRuntime: options?.preparedModelRuntime,
       });
 
-      return buildTextToolResult(result, buildImageToolReferenceDetails(loadedImages));
+      const referenceDetails = buildImageToolReferenceDetails(loadedImages);
+      if (budgetSkip) {
+        referenceDetails.skippedImages = {
+          ...budgetSkip,
+          reason: "request_budget_exhausted",
+        };
+      }
+      return buildTextToolResult(
+        budgetSkip
+          ? {
+              ...result,
+              text: `${result.text}\n\nSkipped ${budgetSkip.count} image(s): the request byte budget was exhausted.`,
+            }
+          : result,
+        referenceDetails,
+      );
     },
   };
 }

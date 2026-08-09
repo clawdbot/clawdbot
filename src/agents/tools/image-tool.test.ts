@@ -2071,7 +2071,12 @@ describe("image tool implicit imageModel config", () => {
             items: { type: "string" },
           },
           model: { type: "string" },
-          maxBytesMb: { type: "number", exclusiveMinimum: 0 },
+          maxBytesMb: {
+            type: "number",
+            description:
+              "Max image size in MB; caps each image and the combined total for this call. Values above 100 are clamped.",
+            exclusiveMinimum: 0,
+          },
           maxImages: { type: "integer", minimum: 1 },
         },
       });
@@ -2861,6 +2866,44 @@ describe("image tool MiniMax VLM routing", () => {
     const cfg = { agents: { defaults: { mediaMaxMb: 75 } } } as OpenClawConfig;
     const result = api!.pickMaxBytes(cfg, undefined);
     expect(result).toBe(75 * 1024 * 1024);
+  });
+
+  it("bounds the aggregate image payload across the 20-image boundary", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    // 20 distinct tiny PNGs (distinct red channel bypasses dedupe). The
+    // request budget fits exactly three loads, so the remaining 17 must be
+    // skipped and recorded instead of accumulating toward the dispatch.
+    const pngs = Array.from({ length: 20 }, (_, i) => {
+      const buf = Buffer.alloc(4, 255);
+      buf[0] = i;
+      return encodePngRgba(buf, 1, 1);
+    });
+    const budgetBytes = pngs[0].byteLength + pngs[1].byteLength + pngs[2].byteLength;
+    const result = await tool.execute("t1", {
+      prompt: "Describe.",
+      images: pngs.map((png) => `data:image/png;base64,${png.toString("base64")}`),
+      // Division by a power of two is exact, so pickMaxBytes floors back to
+      // exactly budgetBytes.
+      maxBytesMb: budgetBytes / (1024 * 1024),
+    });
+
+    // Only the three budgeted images reach the provider.
+    expect(fetch).toHaveBeenCalledTimes(3);
+    const details = result.details as
+      | {
+          images?: unknown[];
+          skippedImages?: { count: number; reason: string; budgetBytes: number };
+        }
+      | undefined;
+    expect(details?.images).toHaveLength(3);
+    expect(details?.skippedImages).toEqual({
+      count: 17,
+      reason: "request_budget_exhausted",
+      budgetBytes,
+    });
+    const text = result.content?.find((block) => block.type === "text")?.text ?? "";
+    expect(text).toContain("Skipped 17 image(s)");
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {

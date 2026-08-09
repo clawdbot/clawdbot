@@ -31,12 +31,17 @@ export function buildImageToolReferenceDetails(
 export async function buildNativeImageToolResult(
   images: readonly LoadedImageForTool[],
   config?: OpenClawConfig,
+  skippedImages?: { count: number; budgetBytes: number },
 ): Promise<AgentToolResult<unknown>> {
   const result: AgentToolResult<unknown> = {
     content: [
       {
         type: "text",
-        text: `Loaded ${images.length} image${images.length === 1 ? "" : "s"} for direct visual inspection.`,
+        text:
+          `Loaded ${images.length} image${images.length === 1 ? "" : "s"} for direct visual inspection.` +
+          (skippedImages
+            ? ` Skipped ${skippedImages.count} image${skippedImages.count === 1 ? "" : "s"}: the request byte budget was exhausted.`
+            : ""),
       },
       ...images.map((image) => ({
         type: "image" as const,
@@ -47,6 +52,9 @@ export async function buildNativeImageToolResult(
     details: {
       transport: "native",
       ...buildImageToolReferenceDetails(images),
+      ...(skippedImages
+        ? { skippedImages: { ...skippedImages, reason: "request_budget_exhausted" } }
+        : {}),
       media: { outbound: false },
     },
   };
