@@ -113,14 +113,38 @@ enum OnboardingRemoteProviderIcon {
     }
 
     private static func isVector(_ data: Data) -> Bool {
-        let bytes = Array(data.prefix(256))
+        // XML declarations, comments, and doctypes routinely precede the <svg>
+        // root (simpleicons, exported assets); scan the bounded prolog for it.
+        let bytes = Array(data.prefix(512))
         var index = bytes.starts(with: [0xEF, 0xBB, 0xBF]) ? 3 : 0
-        while index < bytes.count, [0x09, 0x0A, 0x0C, 0x0D, 0x20].contains(bytes[index]) {
-            index += 1
+        func skip(past terminator: [UInt8]) -> Bool {
+            while index + terminator.count <= bytes.count {
+                if Array(bytes[index..<index + terminator.count]) == terminator {
+                    index += terminator.count
+                    return true
+                }
+                index += 1
+            }
+            return false
         }
-        guard let prefix = String(bytes: bytes[index...].prefix(5), encoding: .utf8)?.lowercased()
-        else { return false }
-        return prefix.hasPrefix("<svg") || prefix.hasPrefix("<?xml")
+        while index < bytes.count {
+            while index < bytes.count, [0x09, 0x0A, 0x0C, 0x0D, 0x20].contains(bytes[index]) {
+                index += 1
+            }
+            guard let head = String(bytes: bytes[index...].prefix(9), encoding: .utf8)?.lowercased()
+            else { return false }
+            if head.hasPrefix("<svg") { return true }
+            if head.hasPrefix("<?xml") {
+                guard skip(past: Array("?>".utf8)) else { return false }
+            } else if head.hasPrefix("<!--") {
+                guard skip(past: Array("-->".utf8)) else { return false }
+            } else if head.hasPrefix("<!doctype") {
+                guard skip(past: Array(">".utf8)) else { return false }
+            } else {
+                return false
+            }
+        }
+        return false
     }
 }
 

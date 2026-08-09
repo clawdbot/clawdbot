@@ -1058,6 +1058,7 @@ struct OnboardingAISetupTests {
         let model = OnboardingAISetupModel()
         let option = OnboardingAISetupModel.AuthOption(
             id: "openai:oauth",
+            brandId: nil,
             label: "OpenAI",
             hint: nil,
             groupLabel: "OpenAI",
@@ -1786,6 +1787,31 @@ struct OnboardingAISetupTests {
 
         #expect(pendingState(defaults) == .none)
         #expect(defaults.object(forKey: onboardingSystemAgentPendingKey) == nil)
+    }
+
+    @Test func `ownerless completed receipt never authorizes a relaunch handoff`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingOwnerlessReceiptGuardTests"))
+        // The durable state a keychain-unavailable activation leaves behind when
+        // its response raced a lease change: an ownerless completed record.
+        _ = markPending(defaults, for: "local")
+        #expect(markCompleted(defaults, for: "local"))
+
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let harness = AISetupHarness(url: url) { _, request, _ in
+            request.method == "openclaw.setup.verify"
+                ? verifiedSetupResponse(id: request.id)
+                : unavailableGatewayResponse(id: request.id)
+        }
+        let model = harness.model(defaults: defaults)
+
+        model.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
+        let outcome = await model.verifyPendingConfiguredInference()
+
+        // Live inference succeeded, but an unbound receipt can belong to
+        // replaced credentials; setup must repeat a fresh activation instead.
+        #expect(outcome == .freshSetupAllowed)
+        #expect(!model.connected)
+        #expect(pendingState(defaults) == .none)
     }
 
     @Test func `activation proceeds ownerless when Keychain binding is unavailable`() async throws {

@@ -25,6 +25,7 @@ extension OnboardingAISetupModel {
 
     struct DetectResult: Decodable {
         struct DetectedCandidate: Decodable {
+            let brandId: String?
             let icon: String?
             let website: String?
             let kind: String
@@ -74,6 +75,7 @@ extension OnboardingAISetupModel {
     }
 
     struct CandidatePresentation: Equatable {
+        let brandId: String?
         let icon: String?
         let website: String?
     }
@@ -118,6 +120,7 @@ extension OnboardingAISetupModel {
 
     struct ManualProvider: Identifiable, Equatable, Decodable {
         let id: String
+        let brandId: String?
         let label: String
         let hint: String?
         let icon: String?
@@ -126,6 +129,7 @@ extension OnboardingAISetupModel {
 
     struct AuthOption: Identifiable, Equatable, Decodable {
         let id: String
+        let brandId: String?
         let label: String
         let hint: String?
         let groupLabel: String?

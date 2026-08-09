@@ -47,6 +47,14 @@ struct OnboardingProviderIconTests {
         #expect(vector.isVector)
         #expect(vector.nsImage.isTemplate)
 
+        // Bundled assets lead with a license comment; the sniffer must scan the
+        // prolog instead of expecting <svg> as the first non-whitespace token.
+        let commented = try #require(OnboardingProviderIcon.resourceURL(for: "ollama"))
+        let commentedData = try Data(contentsOf: commented)
+        #expect(String(bytes: commentedData.prefix(4), encoding: .utf8) == "<!--")
+        let commentedVector = try #require(OnboardingRemoteProviderIcon.decode(commentedData))
+        #expect(commentedVector.isVector)
+
         let png = try #require(Data(base64Encoded:
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
         let raster = try #require(OnboardingRemoteProviderIcon.decode(png))

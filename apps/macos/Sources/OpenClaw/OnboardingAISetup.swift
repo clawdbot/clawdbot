@@ -354,6 +354,15 @@ final class OnboardingAISetupModel {
                         return .freshSetupAllowed
                     }
                 case .completed:
+                    guard self.pendingActivationOwner != nil else {
+                        // Ownerless (keychain-unavailable) receipts carry no auth
+                        // binding, so they can belong to replaced credentials on
+                        // this route. Never let one authorize a handoff — repeat
+                        // a fresh activation instead.
+                        self.pendingActivationVerification = false
+                        clearPendingHandoff(ifOwnedBy: context)
+                        return .freshSetupAllowed
+                    }
                     finishConnected(
                         kind: "existing-model",
                         result: result,
@@ -660,7 +669,12 @@ extension OnboardingAISetupModel {
             self.detectedPrepareOptions = result.prepareOptions
             self.candidatePresentation = Dictionary(
                 result.candidates.map { candidate in
-                    (candidate.kind, CandidatePresentation(icon: candidate.icon, website: candidate.website))
+                    (
+                        candidate.kind,
+                        CandidatePresentation(
+                            brandId: candidate.brandId,
+                            icon: candidate.icon,
+                            website: candidate.website))
                 },
                 uniquingKeysWith: { current, _ in current })
             let providerAuthReconciliationPending = self.providerAuthReconciliationPending
@@ -1105,6 +1119,7 @@ extension OnboardingAISetupModel {
         self.startProviderWizard(
             AuthOption(
                 id: option.id,
+                brandId: option.brandId,
                 label: option.label,
                 hint: option.hint,
                 groupLabel: nil,

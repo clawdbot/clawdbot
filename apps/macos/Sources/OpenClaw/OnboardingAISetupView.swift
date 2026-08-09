@@ -353,7 +353,7 @@ struct OnboardingAISetupView: View {
                 HStack(alignment: .center, spacing: 12) {
                     OnboardingProviderArtwork(
                         icon: presentation?.icon,
-                        brandCandidates: [candidate.kind],
+                        brandCandidates: [presentation?.brandId, candidate.kind],
                         fallbackSymbol: Self.symbol(for: candidate.kind))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(candidate.label)
@@ -582,7 +582,7 @@ struct OnboardingAISetupView: View {
             HStack(spacing: 10) {
                 OnboardingProviderArtwork(
                     icon: option.icon,
-                    brandCandidates: [option.id],
+                    brandCandidates: [option.brandId, option.id],
                     fallbackSymbol: option.kind == "device-code"
                         ? "link.badge.plus"
                         : "person.crop.circle.badge.checkmark")
@@ -782,7 +782,7 @@ struct OnboardingAISetupView: View {
                 if let provider = self.model.selectedManualProvider {
                     OnboardingProviderArtwork(
                         icon: provider.icon,
-                        brandCandidates: [provider.id],
+                        brandCandidates: [provider.brandId, provider.id],
                         fallbackSymbol: "key.fill")
                 }
                 Picker("Provider", selection: self.$model.manualProviderID) {
