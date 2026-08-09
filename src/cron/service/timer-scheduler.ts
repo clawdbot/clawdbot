@@ -27,6 +27,7 @@ import {
   resolveRunConcurrency,
   restoreQueuedCronRunReservationLastError,
   setCronRunCapacityListener,
+  shouldSkipSaturatedScheduledTimerTick,
   tryAcquireCronRunSlots,
 } from "./run-admission.js";
 import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
@@ -170,6 +171,12 @@ function requestImmediateCronRecheck(state: CronServiceState): Promise<void> | u
 
 /** Handles one cron timer tick under the process-wide root work admission. */
 export async function onTimer(state: CronServiceState) {
+  // When the pool is full and a capacity wake-up is already armed, another
+  // watchdog fire cannot reserve work. Skip the Gateway root entirely so
+  // saturated rechecks do not stack process-root admissions (#119083).
+  if (shouldSkipSaturatedScheduledTimerTick(state)) {
+    return;
+  }
   let admission;
   try {
     // A restart signal can be rejected after temporarily closing admission.
@@ -240,7 +247,16 @@ async function onAdmittedTimer(state: CronServiceState) {
         return [];
       }
       const dueCheckNow = state.deps.nowMs();
-      const due = collectRunnableJobs(state, dueCheckNow);
+      // Prefer earliest-due rows when the pool can admit only a prefix of the
+      // runnable set; store order alone is not a fairness schedule.
+      const due = collectRunnableJobs(state, dueCheckNow).toSorted((left, right) => {
+        const leftAt = left.state.nextRunAtMs ?? Number.POSITIVE_INFINITY;
+        const rightAt = right.state.nextRunAtMs ?? Number.POSITIVE_INFINITY;
+        if (leftAt !== rightAt) {
+          return leftAt - rightAt;
+        }
+        return left.id.localeCompare(right.id);
+      });
 
       if (due.length === 0) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs

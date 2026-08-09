@@ -44,6 +44,29 @@ function dispatchWaiters(state: CronServiceState): void {
   }
 }
 
+/** Free scheduled slots that are not already promised to FIFO waiters. */
+export function resolveAvailableCronRunSlots(state: CronServiceState): number {
+  if (state.stopped || state.runAdmission.waiters.length > 0) {
+    return 0;
+  }
+  return Math.max(0, resolveRunConcurrency() - state.runAdmission.active);
+}
+
+/**
+ * True when a watchdog tick cannot admit scheduled work and a capacity wake-up
+ * is already armed. Skipping avoids stacking Gateway roots for no-op rechecks.
+ */
+export function shouldSkipSaturatedScheduledTimerTick(state: CronServiceState): boolean {
+  return (
+    Boolean(state.deps.cronEnabled) &&
+    !state.stopped &&
+    !state.schedulingPaused &&
+    !state.restartRecoveryPending &&
+    resolveAvailableCronRunSlots(state) <= 0 &&
+    state.runAdmission.capacityListener !== null
+  );
+}
+
 /**
  * Acquire only the slots currently available to scheduled work. Unlike the
  * waiter-based path used by direct runs, this never retains a timer batch while
@@ -53,10 +76,10 @@ export function tryAcquireCronRunSlots(
   state: CronServiceState,
   requested: number,
 ): Array<() => void> {
-  if (state.stopped || requested <= 0 || state.runAdmission.waiters.length > 0) {
+  if (requested <= 0) {
     return [];
   }
-  const available = Math.max(0, resolveRunConcurrency() - state.runAdmission.active);
+  const available = resolveAvailableCronRunSlots(state);
   return Array.from({ length: Math.min(requested, available) }, () => acquireCronRunSlot(state));
 }
 

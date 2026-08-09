@@ -22,6 +22,10 @@ import { stop } from "./ops-lifecycle.js";
 import { update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
 import { enqueueRun, run } from "./ops-run.js";
+import {
+  resolveAvailableCronRunSlots,
+  shouldSkipSaturatedScheduledTimerTick,
+} from "./run-admission.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
@@ -1018,6 +1022,23 @@ describe("cron service run admission", () => {
     expect(state.queuedRunReservationsByJobId.has(waitingJob.id)).toBe(false);
     releaseActive.resolve({ status: "ok", summary: "active" });
     await activeRun;
+  });
+
+  it("skips redundant saturated timer ticks once a capacity wake-up is armed", () => {
+    const state = createAdmissionTestState({
+      cronEnabled: true,
+      storePath: "/tmp/unused-cron-store",
+      testAdmissionLimit: 0,
+      log: noopLogger,
+      nowMs: () => Date.now(),
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+    expect(resolveAvailableCronRunSlots(state)).toBe(0);
+    expect(shouldSkipSaturatedScheduledTimerTick(state)).toBe(false);
+    state.runAdmission.capacityListener = () => undefined;
+    expect(shouldSkipSaturatedScheduledTimerTick(state)).toBe(true);
   });
 
   it("leaves saturated scheduled work unreserved so it can be rescheduled", async () => {

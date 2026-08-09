@@ -309,4 +309,49 @@ describe("cron service cross-tick bounded admission", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(state.activeTimerTicks).toBe(0);
   });
+
+  it("admits earliest-due jobs first when only a prefix of the pool is free", async () => {
+    const store = fixtures.makeStorePath();
+    const t0 = Date.parse("2026-02-06T10:05:00.000Z");
+    // Persist later-due first so store order alone would prefer the wrong job.
+    const later = createDueIsolatedJob({
+      id: "later-due",
+      nowMs: t0,
+      nextRunAtMs: t0 + 30_000,
+    });
+    const earlier = createDueIsolatedJob({
+      id: "earlier-due",
+      nowMs: t0,
+      nextRunAtMs: t0,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [later, earlier] });
+
+    const started: string[] = [];
+    const release = createDeferred<{ status: "ok"; summary: string }>();
+    const firstStarted = createDeferred<void>();
+    const runIsolatedAgentJob = vi.fn(async ({ job }: { job: CronJob }) => {
+      started.push(job.id);
+      firstStarted.resolve();
+      return await release.promise;
+    });
+    const state = createAdmissionTestState({
+      availableSlots: 1,
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => t0 + 30_000,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const tick = onTimer(state);
+    await firstStarted.promise;
+    expect(started).toEqual(["earlier-due"]);
+    expect(state.queuedRunReservationsByJobId.has(later.id)).toBe(false);
+    expect(state.runAdmission.capacityListener).toBeTypeOf("function");
+
+    release.resolve({ status: "ok", summary: "done" });
+    await tick;
+  });
 });
