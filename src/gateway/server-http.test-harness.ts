@@ -1,5 +1,6 @@
 // Gateway HTTP test harness.
 // Builds fake requests/responses and dispatches them through Gateway HTTP servers.
+import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { expect, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -91,12 +92,12 @@ export function createResponse(): {
     body = JSON.stringify(chunk);
     resolveEnd();
   });
-  const res = {
+  const res = Object.assign(new EventEmitter(), {
     headersSent: false,
     statusCode: 200,
     setHeader,
     end,
-  } as unknown as ServerResponse;
+  }) as unknown as ServerResponse;
   responseEndPromises.set(res, ended);
   return {
     res,

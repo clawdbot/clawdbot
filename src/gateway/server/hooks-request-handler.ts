@@ -56,6 +56,7 @@ type HookDispatchers = {
   ) => void;
   dispatchAgentHook: (
     value: HookAgentDispatchPayload,
+    context: { abortSignal: AbortSignal },
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
 };
 
@@ -302,6 +303,23 @@ export function createHooksRequestHandler(
       headers,
     });
     const now = Date.now();
+    const dispatchAgentHookForRequest = async (value: HookAgentDispatchPayload) => {
+      const requestAbortController = new AbortController();
+      const abortPendingDispatch = () => {
+        requestAbortController.abort(new Error("hook request disconnected"));
+      };
+      req.once("aborted", abortPendingDispatch);
+      res.once("close", abortPendingDispatch);
+      if (req.aborted || res.destroyed) {
+        abortPendingDispatch();
+      }
+      try {
+        return await dispatchAgentHook(value, { abortSignal: requestAbortController.signal });
+      } finally {
+        req.off("aborted", abortPendingDispatch);
+        res.off("close", abortPendingDispatch);
+      }
+    };
     const resolveDispatchSessionKeyOrRespond = (
       sessionKeyValue: string,
       targetAgentId: string,
@@ -421,7 +439,7 @@ export function createHooksRequestHandler(
         return true;
       }
       const dispatched = await dispatchAgentHookWithReplay(replayKey, now, () =>
-        dispatchAgentHook({
+        dispatchAgentHookForRequest({
           ...normalized.value,
           effectiveAgentId: effectiveTargetAgentId,
           idempotencyKey,
@@ -573,7 +591,7 @@ export function createHooksRequestHandler(
             return true;
           }
           const dispatched = await dispatchAgentHookWithReplay(replayKey, now, () =>
-            dispatchAgentHook({
+            dispatchAgentHookForRequest({
               message: action.message,
               name: action.name ?? "Hook",
               idempotencyKey,

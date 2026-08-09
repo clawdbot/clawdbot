@@ -45,6 +45,7 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 const HOOK_AGENT_START_ADMISSION_TIMEOUT_MS = 15_000;
 const HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR =
   "hook agent run did not start before admission timeout";
+const HOOK_AGENT_REQUEST_DISCONNECTED_ERROR = "hook request disconnected before agent run started";
 const HOOK_AGENT_SESSION_CONFLICT_ERROR =
   "hook agent run was rejected because the target session changed";
 const HOOK_AGENT_PREPARATION_ERROR = "hook agent run failed before entering the agent runner";
@@ -276,6 +277,7 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchAgentHook = async (
     value: HookAgentDispatchPayload,
+    context: { abortSignal: AbortSignal },
   ): Promise<HookAgentDispatchResult> => {
     const sessionKey = value.sessionKey;
     // A hook name is a single-line label: it lands in logs, in cron job `name` fields,
@@ -391,7 +393,7 @@ export function createGatewayHooksRequestHandler(params: {
     });
     let settleAdmission!: (result: HookAgentDispatchResult) => void;
     let admissionSettled = false;
-    let admissionTimedOut = false;
+    let admissionClosed = false;
     let admissionTimer: ReturnType<typeof setTimeout> | undefined;
     const admission = new Promise<HookAgentDispatchResult>((resolve) => {
       settleAdmission = (result) => {
@@ -403,13 +405,27 @@ export function createGatewayHooksRequestHandler(params: {
           clearTimeout(admissionTimer);
           admissionTimer = undefined;
         }
+        context.abortSignal.removeEventListener("abort", abortPendingAdmission);
         resolve(result);
       };
     });
     const admissionTimeoutError = new Error(HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR);
     const startupAbortController = new AbortController();
+    const abortPendingAdmission = () => {
+      if (admissionSettled) {
+        return;
+      }
+      admissionClosed = true;
+      startupAbortController.abort(context.abortSignal.reason);
+      settleAdmission({
+        ok: false,
+        statusCode: 503,
+        error: HOOK_AGENT_REQUEST_DISCONNECTED_ERROR,
+        runId,
+      });
+    };
     admissionTimer = setTimeout(() => {
-      admissionTimedOut = true;
+      admissionClosed = true;
       startupAbortController.abort(admissionTimeoutError);
       settleAdmission(
         createHookAdmissionFailure({
@@ -419,6 +435,10 @@ export function createGatewayHooksRequestHandler(params: {
       );
     }, agentStartAdmissionTimeoutMs);
     admissionTimer.unref?.();
+    context.abortSignal.addEventListener("abort", abortPendingAdmission, { once: true });
+    if (context.abortSignal.aborted) {
+      abortPendingAdmission();
+    }
 
     // Queue identity is fixed when accepted; the isolated runner still receives
     // the original session expression and fresh config, preserving hook routing.
@@ -477,7 +497,7 @@ export function createGatewayHooksRequestHandler(params: {
               settleAdmission({ ok: true, runId });
             },
           });
-          if (admissionTimedOut) {
+          if (admissionClosed) {
             return;
           }
           const summary = resolveHookRunSummary(result);
@@ -551,7 +571,7 @@ export function createGatewayHooksRequestHandler(params: {
             });
           }
         } catch (err) {
-          if (admissionTimedOut) {
+          if (admissionClosed) {
             return;
           }
           settleAdmission(createHookAdmissionFailure({ runId }));
@@ -559,7 +579,7 @@ export function createGatewayHooksRequestHandler(params: {
         }
       }),
     ).catch((err: unknown) => {
-      if (admissionTimedOut) {
+      if (admissionClosed) {
         return;
       }
       settleAdmission(createHookAdmissionFailure({ runId }));
