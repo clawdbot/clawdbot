@@ -4,7 +4,6 @@ import path from "node:path";
 import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemoryExtraPath } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   defaultRuntime,
