@@ -1,13 +1,20 @@
 // Diffs plugin module implements http tests.
 import { createServer } from "node:http";
 import type { Server } from "node:http";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { createDiffsHttpHandler } from "./http.js";
 import type { DiffArtifactStore } from "./store.js";
+import { ensureCuratedViewerRuntimeForTests } from "./test-helpers.js";
 
 const VIEWER_RUNTIME_PATH = "/plugins/diffs/assets/viewer-runtime.js";
 const UNKNOWN_ASSET_PATH = "/plugins/diffs/assets/does-not-exist.js";
 const UNKNOWN_VIEW_PATH = "/plugins/diffs/view/not-an-artifact/not-a-token";
+
+beforeAll(async () => {
+  // viewer-runtime.js is ignored generated output; build the fixture before
+  // serving assets in a clean checkout.
+  await ensureCuratedViewerRuntimeForTests();
+});
 
 type ServedResponse = {
   status: number;
