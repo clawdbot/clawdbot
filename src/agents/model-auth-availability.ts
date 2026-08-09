@@ -596,7 +596,7 @@ export function createModelAuthAvailabilityResolver(
         evidence: "aws-sdk",
       };
     }
-    const preparedRuntimeAuthMode = params.preparedRuntimeAuthModes?.[provider];
+    const preparedRuntimeAuthMode = params.preparedRuntimeAuthModes?.[normalizeProvider(provider)];
     if (preparedRuntimeAuthMode) {
       return {
         availability: modeAllowed(provider, target, preparedRuntimeAuthMode),
