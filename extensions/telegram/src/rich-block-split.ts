@@ -189,11 +189,15 @@ function splitOversizedRichBlock(block: InputRichBlock, limits: RichBlockLimits)
       return pieces.map((inner) => ({ ...block, blocks: inner }));
     }
     const { caption, ...album } = block;
-    return pieces.map((inner, index) =>
-      index === 0 && caption !== undefined
-        ? { ...album, blocks: inner, caption }
-        : { ...album, blocks: inner },
-    );
+    const albumPieces: InputRichBlock[] = [];
+    for (const [index, inner] of pieces.entries()) {
+      albumPieces.push(
+        index === 0 && caption !== undefined
+          ? { ...album, blocks: inner, caption }
+          : { ...album, blocks: inner },
+      );
+    }
+    return albumPieces;
   }
   if (block.type === "table") {
     // Row-splitting a table with rowspans would strand spans across messages;
