@@ -13,7 +13,6 @@ import {
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { resolveCanonicalConfigPath } from "../config/paths.js";
-import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -27,6 +26,10 @@ import { ExitError } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
+import {
+  migrationCheckpointIdentitiesMatch,
+  resolveMigrationCheckpointIdentity,
+} from "./doctor-config-preflight-checkpoint.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import {
   needsRefreshedPluginIndexPersistence,
@@ -172,40 +175,6 @@ function throwStartupMigrationIdentityChanged(): never {
   );
 }
 
-function resolveMigrationCheckpointIdentity(params: {
-  snapshot: ConfigFileSnapshot;
-  baseConfig: OpenClawConfig;
-  pluginMigrationFingerprint: string | null;
-}): MigrationCheckpointIdentity | null {
-  if (!params.snapshot.valid || !params.pluginMigrationFingerprint) {
-    return null;
-  }
-  const stateMigrationInput = resolveStateMigrationConfigInput({
-    snapshot: params.snapshot,
-    baseConfig: params.baseConfig,
-  });
-  const effectiveConfig = stateMigrationInput?.cfg ?? params.baseConfig;
-  const pluginDoctorConfig = stateMigrationInput?.pluginDoctorConfig ?? effectiveConfig;
-  return {
-    effectiveConfigFingerprint: hashRuntimeConfigValue(effectiveConfig),
-    pluginDoctorConfigFingerprint: hashRuntimeConfigValue(pluginDoctorConfig),
-    pluginMigrationFingerprint: params.pluginMigrationFingerprint,
-  };
-}
-
-function migrationCheckpointIdentitiesMatch(
-  left: MigrationCheckpointIdentity | null,
-  right: MigrationCheckpointIdentity | null,
-): boolean {
-  return (
-    left !== null &&
-    right !== null &&
-    left.effectiveConfigFingerprint === right.effectiveConfigFingerprint &&
-    left.pluginDoctorConfigFingerprint === right.pluginDoctorConfigFingerprint &&
-    left.pluginMigrationFingerprint === right.pluginMigrationFingerprint
-  );
-}
-
 /**
  * Runs early doctor config checks before the main config repair flow.
  *
@@ -268,13 +237,45 @@ export async function runDoctorConfigPreflight(
     getBaseSnapshot: () => configSnapshotRead?.pluginMetadataSnapshot,
     env: process.env,
   });
-  const ensureStartupMigrationLease = () => {
+  const ensureStartupMigrationLease = async () => {
     if (startupMigrationLease || !migrationCheckpoint) {
       return;
     }
-    startupMigrationLease = migrationCheckpoint.acquireStartupMigrationLease({
+    startupMigrationLease = await migrationCheckpoint.acquireStartupMigrationLeaseWithWait({
       env: startupMigrationEnv,
     });
+    // Another process may have completed the same work between our pre-lease read and acquisition.
+    // Refresh every checkpoint input under the lease so only work still missing from state runs.
+    configSnapshotRead = await readConfigSnapshotForPreflight();
+    const latestBaseConfig =
+      configSnapshotRead.snapshot.sourceConfig ?? configSnapshotRead.snapshot.config ?? {};
+    migrationCheckpointIdentity = resolveMigrationCheckpointIdentity({
+      snapshot: configSnapshotRead.snapshot,
+      baseConfig: latestBaseConfig,
+      pluginMigrationFingerprint: configSnapshotRead.pluginMigrationFingerprint,
+    });
+    shouldRecordStateCheckpoint =
+      stateMigrationsRequested &&
+      migrationCheckpoint.needsStateMigrationCheckpoint({
+        env: startupMigrationEnv,
+        identity: migrationCheckpointIdentity,
+      });
+    shouldRecordStartupCheckpoint =
+      gatewayStartupCheckpointRequired &&
+      migrationCheckpoint.needsStartupMigrationCheckpoint({
+        env: startupMigrationEnv,
+        identity: migrationCheckpointIdentity,
+      });
+    shouldPersistRefreshedPluginIndex = needsRefreshedPluginIndexPersistence(configSnapshotRead);
+    if (
+      !shouldRecordStateCheckpoint &&
+      !shouldRecordStartupCheckpoint &&
+      !shouldPersistRefreshedPluginIndex
+    ) {
+      startupMigrationLease.release();
+      startupMigrationLease = undefined;
+      return;
+    }
     startupMigrationHeartbeat = setInterval(() => {
       try {
         startupMigrationLease?.heartbeat();
@@ -374,7 +375,7 @@ export async function runDoctorConfigPreflight(
         shouldRecordStartupCheckpoint ||
         shouldPersistRefreshedPluginIndex
       ) {
-        ensureStartupMigrationLease();
+        await ensureStartupMigrationLease();
       }
     }
     // A current state checkpoint proves this root already completed every automatic migration.
@@ -464,7 +465,7 @@ export async function runDoctorConfigPreflight(
     shouldPersistRefreshedPluginIndex =
       migrationCheckpoint !== undefined && needsRefreshedPluginIndexPersistence(configSnapshotRead);
     if (shouldPersistRefreshedPluginIndex) {
-      ensureStartupMigrationLease();
+      await ensureStartupMigrationLease();
     }
     const freshConfigGuardRequired =
       stateMigrations !== undefined ||
