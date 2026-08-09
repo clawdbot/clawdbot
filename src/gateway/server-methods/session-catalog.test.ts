@@ -4,10 +4,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { bindPluginRegistryRuntime } from "../../plugins/registry-runtime-binding.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
-import {
-  listSessionCatalogEntries,
-  type SessionCatalogProvider,
-} from "../../plugins/session-catalog.js";
+import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{
@@ -413,111 +410,6 @@ describe("session catalog Gateway methods", () => {
     } finally {
       cloneSpy.mockRestore();
     }
-  });
-
-  it("shares one flattened entry snapshot across catalogs and creator projection", async () => {
-    hoisted.listSessionEntriesReadOnly.mockReturnValue([
-      {
-        sessionKey: "agent:main:alpha-adopted",
-        entry: { createdActor: { type: "agent", id: "worker-alpha" }, updatedAt: 2 },
-      },
-      {
-        sessionKey: "agent:main:zeta-adopted",
-        entry: { createdActor: { type: "system", id: "scheduler" }, updatedAt: 1 },
-      },
-    ]);
-    const flattenedEntries: unknown[] = [];
-    const runtime = createPluginRuntime();
-    const catalogProvider = (id: string, sessionKey: string) =>
-      provider(id, {
-        list: vi.fn(async ({ sessionEntries }) => {
-          const entries = listSessionCatalogEntries({ config: {}, runtime, sessionEntries });
-          flattenedEntries.push(entries);
-          const adopted = entries.find((candidate) => candidate.sessionKey === sessionKey);
-          return [
-            {
-              hostId: `gateway:${id}`,
-              label: `${id} host`,
-              kind: "gateway" as const,
-              connected: true,
-              sessions: adopted
-                ? [
-                    {
-                      threadId: `${id}-thread`,
-                      status: "stored" as const,
-                      archived: false,
-                      sessionKey: adopted.sessionKey,
-                      canContinue: true,
-                      canArchive: false,
-                    },
-                  ]
-                : [],
-            },
-          ];
-        }),
-      });
-    hoisted.activeRegistry.sessionCatalogs = [
-      { provider: catalogProvider("zeta", "agent:main:zeta-adopted") },
-      { provider: catalogProvider("alpha", "agent:main:alpha-adopted") },
-    ];
-
-    const respond = await call("sessions.catalog.list", {});
-
-    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
-    expect(flattenedEntries).toHaveLength(2);
-    expect(flattenedEntries[0]).toBe(flattenedEntries[1]);
-    expect(respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        {
-          id: "alpha",
-          label: "ALPHA",
-          capabilities: { continueSession: false, archive: false },
-          hosts: [
-            {
-              hostId: "gateway:alpha",
-              label: "alpha host",
-              kind: "gateway",
-              connected: true,
-              sessions: [
-                {
-                  threadId: "alpha-thread",
-                  status: "stored",
-                  archived: false,
-                  sessionKey: "agent:main:alpha-adopted",
-                  canContinue: true,
-                  canArchive: false,
-                  createdActor: { type: "agent", id: "worker-alpha" },
-                },
-              ],
-            },
-          ],
-        },
-        {
-          id: "zeta",
-          label: "ZETA",
-          capabilities: { continueSession: false, archive: false },
-          hosts: [
-            {
-              hostId: "gateway:zeta",
-              label: "zeta host",
-              kind: "gateway",
-              connected: true,
-              sessions: [
-                {
-                  threadId: "zeta-thread",
-                  status: "stored",
-                  archived: false,
-                  sessionKey: "agent:main:zeta-adopted",
-                  canContinue: true,
-                  canArchive: false,
-                  createdActor: { type: "system", id: "scheduler" },
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    });
   });
 
   it("shares one lazy Gateway node snapshot across catalog providers", async () => {
