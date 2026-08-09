@@ -111,7 +111,8 @@ struct ExecApprovalsSQLiteStoreTests {
             PRAGMA user_version = 6;
             """)
 
-            let replacement = Self.document(token: "replacement", agentCount: 2)
+            var replacement = Self.document(token: "replacement", agentCount: 2)
+            replacement.agents?["agent-0"]?.security = .deny
             do {
                 try ExecApprovalsSQLiteStore.write(
                     replacement,
