@@ -810,7 +810,6 @@ import Sparkle
 
 @MainActor
 final class SparkleUpdaterController: NSObject, UpdaterProviding {
-    private static let gatewayUpdateChannelRetryDelayNanoseconds: UInt64 = 5_000_000_000
     private lazy var controller = SPUStandardUpdaterController(
         startingUpdater: false,
         updaterDelegate: self,
@@ -819,14 +818,12 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     private var started = false
     private var gatewayUpdateChannel: String?
     private var resolvingGatewayUpdateChannel = false
-    private let gatewayUpdateChannelResolver: @MainActor () async -> String?
-    private let gatewayUpdateChannelRetryDelayNanoseconds: UInt64
+    private let gatewayUpdateChannelResolver: @MainActor @Sendable () async throws -> String?
     private let onStart: (() -> Void)?
 
     init(
         savedAutoUpdate: Bool,
-        gatewayUpdateChannelResolver: (@escaping @MainActor () async -> String?)? = nil,
-        gatewayUpdateChannelRetryDelayNanoseconds: UInt64 = Self.gatewayUpdateChannelRetryDelayNanoseconds,
+        gatewayUpdateChannelResolver: (@MainActor @Sendable () async throws -> String?)? = nil,
         onStart: (() -> Void)? = nil)
     {
         self.gatewayUpdateChannelResolver = gatewayUpdateChannelResolver ?? {
@@ -840,7 +837,6 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
             else { return nil }
             return OpenClawConfigFile.normalizedGatewayUpdateChannel(response.effectiveChannel)
         }
-        self.gatewayUpdateChannelRetryDelayNanoseconds = gatewayUpdateChannelRetryDelayNanoseconds
         self.onStart = onStart
         super.init()
         let updater = self.controller.updater
@@ -864,17 +860,10 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.resolvingGatewayUpdateChannel = false }
-            while !self.started {
-                if let channel = await self.gatewayUpdateChannelResolver() {
-                    self.gatewayUpdateChannel = channel
-                    self.start()
-                    return
-                }
-                // Do not start unfiltered after a Gateway timeout: default Sparkle
-                // channels include stable releases. Retry until the Gateway supplies
-                // the verified channel so direct extended-stable installs stay pinned.
-                try? await Task.sleep(nanoseconds: self.gatewayUpdateChannelRetryDelayNanoseconds)
-            }
+            self.gatewayUpdateChannel = try? await self.gatewayUpdateChannelResolver()
+            // Older or unreachable Gateways cannot report effectiveChannel. Preserve
+            // their existing stable Sparkle behavior instead of disabling updates.
+            self.start()
         }
     }
 
