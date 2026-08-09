@@ -4520,6 +4520,11 @@ openclaw-chat-video-player {
   font-size: 9px;
 }
 
+.chat-controls__target-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
 .chat-controls__model-options {
   display: block;
   min-width: 0;
@@ -4580,6 +4585,12 @@ openclaw-chat-video-player {
 
 .chat-controls__model-menu[data-chat-model-filtering] .chat-controls__model-option-provider {
   display: inline-flex;
+}
+
+.chat-controls__model-option-provider.chat-controls__target-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
 }
 
 .chat-controls__model-option-action {
