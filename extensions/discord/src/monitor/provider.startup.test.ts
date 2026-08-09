@@ -95,6 +95,9 @@ vi.mock("./listeners.js", () => ({
   DiscordThreadDeleteListener: function DiscordThreadDeleteListener() {
     return { type: "thread-delete" };
   },
+  DiscordThreadReadyListener: function DiscordThreadReadyListener() {
+    return { type: "thread-ready" };
+  },
   DiscordThreadUpdateListener: function DiscordThreadUpdateListener() {
     return { type: "thread-update" };
   },
@@ -404,6 +407,7 @@ describe("registerDiscordMonitorListeners", () => {
       "interaction",
       "message",
       "thread-update",
+      "thread-ready",
       "thread-delete",
     ]);
   });
@@ -448,6 +452,7 @@ describe("registerDiscordMonitorListeners", () => {
       "interaction",
       "message",
       "thread-update",
+      "thread-ready",
       "thread-delete",
       "presence",
       "presence-guild-create",

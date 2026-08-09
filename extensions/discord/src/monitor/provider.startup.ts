@@ -36,6 +36,7 @@ import {
   DiscordReactionListener,
   DiscordReactionRemoveListener,
   DiscordThreadDeleteListener,
+  DiscordThreadReadyListener,
   DiscordThreadUpdateListener,
   registerDiscordListener,
 } from "./listeners.js";
@@ -284,9 +285,11 @@ export function registerDiscordMonitorListeners(params: {
       new DiscordReactionRemoveListener(reactionListenerOptions),
     );
   }
+  const threadUpdateListener = new DiscordThreadUpdateListener(params.cfg, params.logger);
+  registerDiscordListener(params.client.listeners, threadUpdateListener);
   registerDiscordListener(
     params.client.listeners,
-    new DiscordThreadUpdateListener(params.cfg, params.logger),
+    new DiscordThreadReadyListener(threadUpdateListener),
   );
   registerDiscordListener(
     params.client.listeners,
