@@ -160,7 +160,7 @@ const defaultControlUiFeatureMethods = [
   "session.members.remove",
   "session.visibility.set",
   "sessions.abort",
-  "sessions.archiveMany",
+  "sessions.patchMany",
   "sessions.branches.switch",
   "sessions.compact",
   "sessions.compaction.branch",
@@ -177,6 +177,9 @@ const defaultControlUiFeatureMethods = [
   "sessions.reclaim",
   "sessions.reset",
   "sessions.rewind",
+  "update.hold",
+  "update.run",
+  "update.status",
 ] as const;
 
 export type MockGatewayRequest = {
@@ -1064,8 +1067,12 @@ function installControlUiMockGateway(
       "model",
       "thinkingLevel",
       "fastMode",
+      "label",
       "category",
+      "icon",
+      "boardFace",
       "pinned",
+      "unread",
       "toolOverrides",
     ] as const) {
       if (hasOwn(params, key)) {
@@ -1078,8 +1085,8 @@ function installControlUiMockGateway(
     sessionPatches.set(params.key, patch);
   }
 
-  function recordSessionsArchiveMany(params: unknown, response: unknown): void {
-    if (!scenario.sessionArchiveFiltering || !isRecord(params) || !Array.isArray(params.targets)) {
+  function recordSessionsPatchMany(params: unknown, response: unknown): void {
+    if (!isRecord(params) || !Array.isArray(params.targets) || !isRecord(params.patch)) {
       return;
     }
     const outcomes =
@@ -1089,7 +1096,7 @@ function installControlUiMockGateway(
       if (!isRecord(target) || !isRecord(outcome) || outcome.ok !== true) {
         continue;
       }
-      recordSessionPatch({ key: target.key, archived: params.archived });
+      recordSessionPatch({ ...target, ...params.patch });
     }
   }
 
@@ -1366,8 +1373,8 @@ function installControlUiMockGateway(
       if (method === "sessions.create" || method === "sessions.catalog.continue") {
         recordMaterializedSession(params, configuredValue);
       }
-      if (method === "sessions.archiveMany") {
-        recordSessionsArchiveMany(params, configuredValue);
+      if (method === "sessions.patchMany") {
+        recordSessionsPatchMany(params, configuredValue);
       }
       return method === "sessions.list"
         ? applySessionPatches(configuredValue, params)
@@ -1544,7 +1551,7 @@ function installControlUiMockGateway(
           },
           params,
         );
-      case "sessions.archiveMany": {
+      case "sessions.patchMany": {
         const targets = isRecord(params) && Array.isArray(params.targets) ? params.targets : [];
         const result = {
           outcomes: targets.map((target) => {
@@ -1555,7 +1562,7 @@ function installControlUiMockGateway(
             return { ok: true, key };
           }),
         };
-        recordSessionsArchiveMany(params, result);
+        recordSessionsPatchMany(params, result);
         return result;
       }
       case "sessions.groups.list":

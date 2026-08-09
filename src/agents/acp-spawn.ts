@@ -32,7 +32,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { recordSessionCreated, recordSubagentSpawned } from "../sessions/session-state-events.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { countUntrackedActiveAcpRunsForOwner } from "./acp-spawn-admission.js";
 import {
   resolveAcpSpawnBootstrapDeliveryPlan,

@@ -98,16 +98,13 @@ function extractQueuedUserMessageText(message: unknown): string | undefined {
   return text || undefined;
 }
 
-function isQueuedUserMessageEnd(event: unknown, text: string, queueIdentity?: string): boolean {
+function isQueuedUserMessageEnd(event: unknown, queueIdentity: string): boolean {
   if (!event || typeof event !== "object") {
     return false;
   }
   const record = event as { message?: unknown; type?: unknown };
   return (
-    record.type === "message_end" &&
-    (queueIdentity
-      ? getSteeringMessageIdentity(record.message) === queueIdentity
-      : extractQueuedUserMessageText(record.message) === text)
+    record.type === "message_end" && getSteeringMessageIdentity(record.message) === queueIdentity
   );
 }
 
@@ -143,13 +140,13 @@ function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
 
 /**
  * Removes one pending steered user message from both the runtime queue and UI
- * steering list. This targets the exact text so unrelated queued messages keep
- * their payloads and ordering.
+ * steering list. The private identity targets the exact runtime message, while
+ * its expanded text selects the corresponding UI entry.
  */
 async function cancelQueuedSteeringMessage(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
-  queueIdentity?: string,
+  queueIdentity: string,
 ): Promise<boolean> {
   const queuedMessages = getAgentSteeringQueueMessages(activeSession.agent);
   if (!queuedMessages) {
@@ -157,24 +154,23 @@ async function cancelQueuedSteeringMessage(
   }
   // The session runtime exposes only all-queue clears publicly; mutate the exact pending message
   // so unrelated queued messages keep their full payloads.
-  const queueIndex = queuedMessages.findIndex((message) =>
-    queueIdentity
-      ? getSteeringMessageIdentity(message) === queueIdentity
-      : extractQueuedUserMessageText(message) === text,
+  const queueIndex = queuedMessages.findIndex(
+    (message) => getSteeringMessageIdentity(message) === queueIdentity,
   );
   if (queueIndex === -1) {
     return false;
   }
+  const queuedText = extractQueuedUserMessageText(queuedMessages[queueIndex]) ?? text;
   const matchingOrdinal = queuedMessages
     .slice(0, queueIndex)
-    .filter((message) => extractQueuedUserMessageText(message) === text).length;
+    .filter((message) => extractQueuedUserMessageText(message) === queuedText).length;
   queuedMessages.splice(queueIndex, 1);
   const uiSteeringMessages = activeSession.getSteeringMessages?.();
   if (Array.isArray(uiSteeringMessages)) {
     const uiIndex = uiSteeringMessages.findIndex(
       (candidate, index) =>
-        candidate === text &&
-        uiSteeringMessages.slice(0, index).filter((value) => value === text).length ===
+        candidate === queuedText &&
+        uiSteeringMessages.slice(0, index).filter((value) => value === queuedText).length ===
           matchingOrdinal,
     );
     if (uiIndex !== -1) {
@@ -197,7 +193,7 @@ async function steerAndWaitForTranscriptCommit(
   images?: ImageContent[],
   media?: MediaFact[],
   imageOrder?: PromptImageOrderEntry[],
-  queueIdentity?: string,
+  queueIdentity: string = crypto.randomUUID(),
   abortSignal?: AbortSignal,
   onQueueAccepted?: (accepted: boolean) => void,
 ): Promise<void> {
@@ -290,7 +286,7 @@ async function steerAndWaitForTranscriptCommit(
         }
         return;
       }
-      if (isQueuedUserMessageEnd(event, text, queueIdentity)) {
+      if (isQueuedUserMessageEnd(event, queueIdentity)) {
         finish();
         return;
       }

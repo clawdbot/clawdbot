@@ -10,6 +10,7 @@ import {
   Text,
   TUI,
 } from "@earendil-works/pi-tui";
+import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
@@ -204,26 +205,37 @@ export function resolveInitialTuiAgentId(params: {
   return normalizeAgentId(params.fallbackAgentId);
 }
 
-export function resolveGatewayDisconnectState(reason?: string): {
+export function resolveGatewayDisconnectState(
+  input: {
+    details?: unknown;
+    reason?: string | null;
+  } = {},
+): {
   connectionStatus: string;
   activityStatus: string;
-  pairingHint?: string;
+  remediation?: string;
 } {
-  const reasonLabel = reason?.trim() ? reason.trim() : "closed";
-  // Covers both "pairing required" and a pending "scope upgrade" for a paired device.
-  if (/pairing required|scope upgrade/i.test(reasonLabel)) {
+  const failure = classifyGatewayConnectFailure(input);
+  const reasonLabel =
+    failure.userMessage === "gateway unreachable" ? "closed" : failure.userMessage;
+  if (failure.kind === "pairing-required") {
     return {
       connectionStatus: `gateway disconnected: ${reasonLabel}`,
       activityStatus: "device approval needed: preview latest request",
-      pairingHint:
-        "Device approval needed. Run `openclaw devices approve --latest` to preview the pending request, " +
-        "then rerun the printed `openclaw devices approve <requestId>` command " +
-        "(reuse `--token` or other auth flags if needed), then reconnect.",
+      remediation: failure.remediation,
+    };
+  }
+  if (failure.kind === "rate-limited") {
+    return {
+      connectionStatus: `gateway disconnected: ${reasonLabel}`,
+      activityStatus: "gateway authentication temporarily rate-limited",
+      remediation: failure.remediation,
     };
   }
   return {
     connectionStatus: `gateway disconnected: ${reasonLabel}`,
-    activityStatus: "idle",
+    activityStatus: failure.remediation ? "gateway authentication needs attention" : "idle",
+    remediation: failure.remediation,
   };
 }
 
@@ -593,7 +605,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const sessionIds = new Map<string, string>();
   let connectionGeneration = 0;
   let wasDisconnected = false;
-  let pairingHintShown = false;
+  let remediationShown = false;
   const localRunIds = createTuiRunIdTracker();
   const localBtwRunIds = createTuiRunIdTracker();
 
@@ -1567,7 +1579,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     const ownsConnection = () =>
       connectedGeneration === connectionGeneration && state.isConnected && !exitRequested;
     state.isConnected = true;
-    pairingHintShown = false;
+    remediationShown = false;
     const reconnected = wasDisconnected;
     wasDisconnected = false;
     if (reconnected) {
@@ -1679,7 +1691,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     });
   };
 
-  const handleBackendDisconnected = (reason: string) => {
+  const handleBackendDisconnected = (reason: string, details?: unknown) => {
     if (exitRequested) {
       return;
     }
@@ -1699,20 +1711,21 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       ? {
           connectionStatus: `local runtime stopped${reason ? `: ${reason}` : ""}`,
           activityStatus: "idle",
-          pairingHint: undefined,
+          remediation: undefined,
         }
-      : resolveGatewayDisconnectState(reason);
+      : resolveGatewayDisconnectState({ reason, details });
     setConnectionStatus(disconnectState.connectionStatus, 5000);
     setActivityStatus(disconnectState.activityStatus);
-    if (disconnectState.pairingHint && !pairingHintShown) {
-      pairingHintShown = true;
-      chatLog.addSystem(disconnectState.pairingHint);
+    if (disconnectState.remediation && !remediationShown) {
+      remediationShown = true;
+      chatLog.addSystem(disconnectState.remediation);
     }
     updateFooter();
     tui.requestRender();
   };
   client.onConnectError = (error) => {
-    handleBackendDisconnected(formatTuiErrorMessage(error));
+    const details = "details" in error ? (error as { details?: unknown }).details : undefined;
+    handleBackendDisconnected(formatTuiErrorMessage(error), details);
   };
   client.onDisconnected = handleBackendDisconnected;
 

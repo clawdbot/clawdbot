@@ -175,7 +175,6 @@ export function resolveBundledWebProviderResolutionConfig(params: {
     applyAutoEnable: true,
     compatMode: {
       enablement: "always",
-      vitest: params.config !== undefined,
     },
     resolveCompatPluginIds: (compatParams) =>
       resolveBundledWebProviderCompatPluginIds({

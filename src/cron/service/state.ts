@@ -24,6 +24,7 @@ import type {
   CronRunStatus,
   CronRunTelemetry,
   CronStoreFile,
+  CronToolsAllowProvenance,
 } from "../types.js";
 
 /** Event payload emitted for cron lifecycle changes and completed runs. */
@@ -385,12 +386,19 @@ export type CronAddOptions = {
   systemOwned?: boolean;
   /** Authenticated caller provenance stamped by the service, never public input. */
   scheduledToolPolicy?: CronScheduledToolPolicy;
+  /** Private proof from an authenticated agent-runtime caller. */
+  toolsAllowProvenance?: CronToolsAllowProvenance;
+  /** Synchronous Gateway-owned guard consumed immediately before mutation. */
+  commitGuard?: () => void;
 };
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
 /** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
 export type CronUpdateOptions = {
   scheduledToolPolicy?: CronScheduledToolPolicy;
+  toolsAllowProvenance?: CronToolsAllowProvenance;
+  /** Synchronous Gateway-owned guard consumed immediately before mutation. */
+  commitGuard?: () => void;
 };
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
 export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

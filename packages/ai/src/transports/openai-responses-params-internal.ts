@@ -19,6 +19,7 @@ import {
 import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveOpenAIStrictToolSetting } from "./host-policy.js";
+import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS,
   OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT,
@@ -230,6 +231,7 @@ export function buildOpenAIResponsesParams(
   context: Context,
   options: OpenAIResponsesOptions | undefined,
   metadata?: Record<string, string>,
+  replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ) {
   const isCodexResponses = isOpenAICodexResponsesModel(model);
   const isNativeCodexResponses = usesNativeOpenAICodexResponsesBackend(model);
@@ -254,6 +256,7 @@ export function buildOpenAIResponsesParams(
       replayResponsesItemIds,
       authProfileId: options?.authProfileId,
       sessionId: options?.sessionId,
+      replayMode,
     },
   );
   if (isCodexResponses) {

@@ -117,6 +117,7 @@ describe("settings config section ownership", () => {
     ["memory", ["memory"]],
     ["talk", ["talk"]],
     ["infrastructure", ["gateway", "browser", "nodeHost", "discovery", "acp"]],
+    ["updates", ["update"]],
     ["ai-agents", ["agents", "skills", "tools", "session"]],
   ];
 

@@ -23,6 +23,8 @@ export type TelegramMenuCommand = {
   description: string;
   descriptionLocalizations?: Record<string, string>;
   isAlias?: boolean;
+  isConfigured?: boolean;
+  isSkill?: boolean;
 };
 
 type TelegramCommandMenuScope =
@@ -240,6 +242,14 @@ export function buildCappedTelegramMenuCommands(params: {
   return result;
 }
 
+export function orderForPressure(commands: TelegramMenuCommand[]): TelegramMenuCommand[] {
+  return [
+    ...commands.filter((command) => command.isConfigured),
+    ...commands.filter((command) => !command.isConfigured && !command.isAlias),
+    ...commands.filter((command) => !command.isConfigured && command.isAlias),
+  ];
+}
+
 function buildUncachedCappedTelegramMenuCommands(params: {
   allCommands: TelegramMenuCommand[];
   maxCommands: number;
@@ -257,27 +267,33 @@ function buildUncachedCappedTelegramMenuCommands(params: {
   const { maxCommands, maxTotalChars } = params;
   const totalCommands = allCommands.length;
   const overflowCount = Math.max(0, totalCommands - maxCommands);
-  const canonicalCommands = allCommands.filter((command) => !command.isAlias);
-  const aliasCommands = allCommands.filter((command) => command.isAlias);
-  const aliasBudget = Math.max(0, maxCommands - canonicalCommands.length);
-  const budgetedCommands =
-    overflowCount === 0
-      ? allCommands
-      : [...canonicalCommands, ...aliasCommands.slice(0, aliasBudget)];
-  const {
-    commands: fittedCommands,
-    descriptionTrimmed,
-    textBudgetDropCount,
-  } = fitTelegramCommandsWithinTextBudget(budgetedCommands.slice(0, maxCommands), maxTotalChars);
-  const commandsToRegister = fittedCommands.map(({ isAlias: _isAlias, ...command }) => command);
+  const cappedCommands = allCommands.slice(0, maxCommands);
+  const totalText = cappedCommands.reduce(
+    (total, { command, description }) =>
+      total + countTelegramCommandText(command) + countTelegramCommandText(description),
+    0,
+  );
+  const hasMenuPressure =
+    overflowCount > 0 ||
+    totalText > maxTotalChars ||
+    cappedCommands.some(
+      (command) =>
+        countTelegramCommandText(command.description) > TELEGRAM_MAX_COMMAND_DESCRIPTION_LENGTH,
+    );
+  const fitted = hasMenuPressure
+    ? fitTelegramCommandsWithinTextBudget(
+        orderForPressure(allCommands).slice(0, maxCommands),
+        maxTotalChars,
+      )
+    : { commands: cappedCommands, descriptionTrimmed: false, textBudgetDropCount: 0 };
   return {
-    commandsToRegister,
+    commandsToRegister: fitted.commands,
     totalCommands,
     maxCommands,
     overflowCount,
     maxTotalChars,
-    descriptionTrimmed,
-    textBudgetDropCount,
+    descriptionTrimmed: fitted.descriptionTrimmed,
+    textBudgetDropCount: fitted.textBudgetDropCount,
   };
 }
 
@@ -293,6 +309,8 @@ function buildTelegramMenuResultCacheKey(params: {
     updateTelegramCommandDigestField(digest, command.command);
     updateTelegramCommandDigestField(digest, command.description);
     updateTelegramCommandDigestField(digest, command.isAlias ? "1" : "0");
+    updateTelegramCommandDigestField(digest, command.isConfigured ? "1" : "0");
+    updateTelegramCommandDigestField(digest, command.isSkill ? "1" : "0");
     updateTelegramCommandLocalizationDigest(digest, command.descriptionLocalizations);
   }
   return digest.digest("hex").slice(0, 16);
@@ -334,8 +352,12 @@ function rememberCappedTelegramMenuResult(
 }
 
 function hashCommandList(commands: TelegramMenuCommand[]): string {
-  const sorted = [...commands].toSorted((a, b) => a.command.localeCompare(b.command));
-  return createHash("sha256").update(JSON.stringify(sorted)).digest("hex").slice(0, 16);
+  const requestedCommands = commands.map((command) => ({
+    command: command.command,
+    description: command.description,
+    descriptionLocalizations: command.descriptionLocalizations,
+  }));
+  return createHash("sha256").update(JSON.stringify(requestedCommands)).digest("hex").slice(0, 16);
 }
 
 // Keep the sync cache process-local so restarts always re-register commands.
@@ -412,15 +434,14 @@ function buildLocalizedCommandVariants(commands: TelegramMenuCommand[]): {
   }
   const variants = [...locales].toSorted().map((languageCode) => {
     const localizedCommands = commands.map((cmd) => ({
-      command: cmd.command,
+      ...cmd,
       description: readLocalizedDescription(cmd, languageCode) ?? cmd.description,
     }));
     return {
       languageCode,
-      commands: fitTelegramCommandsWithinTextBudget(
-        localizedCommands,
-        TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET,
-      ).commands,
+      commands: buildCappedTelegramMenuCommands({
+        allCommands: localizedCommands,
+      }).commandsToRegister,
     };
   });
   return {
@@ -561,7 +582,7 @@ export function syncTelegramMenuCommands(params: {
         runtime.log?.(
           `Telegram rejected ${retryCommands.length} commands (BOT_COMMANDS_TOO_MUCH); retrying with ${reducedCount}.`,
         );
-        retryCommands = retryCommands.slice(0, reducedCount);
+        retryCommands = orderForPressure(retryCommands).slice(0, reducedCount);
       }
     }
 

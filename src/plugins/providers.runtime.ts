@@ -20,10 +20,8 @@ import {
   resolveDiscoverableProviderOwnerPluginIds,
   resolveDiscoveredProviderPluginIds,
   resolveEnabledProviderPluginIds,
-  resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForModelRefs,
   resolveOwningPluginIdsForProviderRef,
-  withBundledProviderVitestCompat,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import {
@@ -256,25 +254,12 @@ function resolveRuntimeProviderPluginLoadState(
     applyAutoEnable: params.applyAutoEnable ?? true,
     discovery: snapshot.discovery,
     manifestRegistry: snapshot.manifestRegistry,
-    compatMode: {
-      vitest: params.bundledProviderVitestCompat,
-    },
-    resolveCompatPluginIds: (compatParams) =>
-      resolveBundledProviderCompatPluginIds({
-        ...compatParams,
-        manifestRegistry: snapshot.manifestRegistry,
-      }),
+    compatMode: {},
+    resolveCompatPluginIds: () => [],
   });
-  const config = params.bundledProviderVitestCompat
-    ? withBundledProviderVitestCompat({
-        config: activation.config,
-        pluginIds: activation.compatPluginIds,
-        env: base.env,
-      })
-    : activation.config;
   const providerPluginIds = mergeExplicitOwnerPluginIds(
     resolveEnabledProviderPluginIds({
-      config,
+      config: activation.config,
       workspaceDir: base.workspaceDir,
       env: base.env,
       onlyPluginIds: runtimeRequestedPluginIds,
@@ -285,7 +270,7 @@ function resolveRuntimeProviderPluginLoadState(
   );
   const loadOptions = buildPluginRuntimeLoadOptionsFromValues(
     {
-      config,
+      config: activation.config,
       activationSourceConfig: activation.activationSourceConfig,
       autoEnabledReasons: activation.autoEnabledReasons,
       workspaceDir: base.workspaceDir,
@@ -324,6 +309,7 @@ export function resolvePluginProviders(params: {
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: PluginLoadOptions["env"];
+  /** @deprecated Ignored; tests must provide explicit plugin config. Remove in the next major release. */
   bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
   providerRefs?: readonly string[];

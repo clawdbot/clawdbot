@@ -53,8 +53,8 @@ vi.mock("../../../src/infra/device-pairing.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/infra/node-pairing.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/infra/node-pairing.js")>();
+vi.mock("../../../src/infra/device-pairing-node.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/infra/device-pairing-node.js")>();
   return {
     ...actual,
     listNodePairing: vi.fn(async () => ({ pending: [], paired: [] })),

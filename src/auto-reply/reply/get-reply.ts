@@ -121,6 +121,9 @@ const mediaUnderstandingApplyRuntimeLoader = createLazyImportLoader(
 const linkUnderstandingApplyRuntimeLoader = createLazyImportLoader(
   () => import("../../link-understanding/apply.runtime.js"),
 );
+const preparedModelCatalogRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/prepared-model-catalog.js"),
+);
 
 const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-timing");
 const commandsCoreRuntimeLoader = createLazyImportLoader(
@@ -145,6 +148,10 @@ function loadLinkUnderstandingApplyRuntime() {
 
 function loadCommandsCoreRuntime() {
   return commandsCoreRuntimeLoader.load();
+}
+
+export async function prewarmReplyModelCatalogRuntime(): Promise<void> {
+  await preparedModelCatalogRuntimeLoader.load();
 }
 
 function hasLinkCandidate(ctx: MsgContext): boolean {
@@ -270,7 +277,7 @@ export async function getReplyFromConfig(
     // Gateway turns consume one committed model-runtime generation. Later config/secret
     // publications must not mix a new global config with an older prepared catalog owner.
     const owner = await (
-      await import("../../agents/prepared-model-catalog.js")
+      await preparedModelCatalogRuntimeLoader.load()
     ).loadResolvedPublishedModelCatalogOwner({ agentId });
     // The published generation may refresh config, directories, and catalog together, but the
     // admitted session must never cross agent ownership while doing so.

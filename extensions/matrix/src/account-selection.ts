@@ -11,7 +11,7 @@ import {
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveMatrixAccountStringValues,

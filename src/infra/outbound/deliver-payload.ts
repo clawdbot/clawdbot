@@ -58,7 +58,7 @@ export function deliveryKindForPayload(
 }
 
 export function emitMessageDeliveryStarted(params: {
-  channel: Exclude<OutboundChannel, "none">;
+  channel: OutboundChannel;
   deliveryKind: DiagnosticMessageDeliveryKind;
   sessionKey?: string;
 }): void {
@@ -71,7 +71,7 @@ export function emitMessageDeliveryStarted(params: {
 }
 
 export function emitMessageDeliveryCompleted(params: {
-  channel: Exclude<OutboundChannel, "none">;
+  channel: OutboundChannel;
   deliveryKind: DiagnosticMessageDeliveryKind;
   durationMs: number;
   resultCount: number;
@@ -88,7 +88,7 @@ export function emitMessageDeliveryCompleted(params: {
 }
 
 export function emitMessageDeliveryError(params: {
-  channel: Exclude<OutboundChannel, "none">;
+  channel: OutboundChannel;
   deliveryKind: DiagnosticMessageDeliveryKind;
   durationMs: number;
   error: unknown;

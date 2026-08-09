@@ -6,10 +6,7 @@ import {
   registryContainsRuntimePluginIds,
 } from "./active-runtime-registry.js";
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
-import {
-  withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat,
-} from "./bundled-compat.js";
+import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import {
   hasManifestContractValue,
@@ -138,14 +135,9 @@ function createCapabilityProviderLoadOptions(params: {
   resolution: CapabilityPluginResolution;
 }): PluginLoadOptions {
   const pluginIds = params.resolution.bundledCompatPluginIds;
-  const enablementCompat = withBundledPluginEnablementCompat({
+  const config = withBundledPluginEnablementCompat({
     config: params.cfg,
     pluginIds,
-  });
-  const config = withBundledPluginVitestCompat({
-    config: enablementCompat,
-    pluginIds,
-    env: process.env,
   });
   return {
     ...(config === undefined ? {} : { config }),

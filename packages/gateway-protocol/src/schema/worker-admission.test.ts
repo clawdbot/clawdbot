@@ -11,6 +11,7 @@ import {
   WorkerProtocolCloseReasonSchema,
   WorkerTranscriptCommitRequestFrameSchema,
   WorkerTranscriptCommitResponseFrameSchema,
+  WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
@@ -272,6 +273,70 @@ describe("worker protocol schemas", () => {
     ).toBe(true);
     expect(commitError("worker request rejected", "credential-replaced")).toBe(true);
     expect(commitError("transcript commit rejected", "stale-base-leaf")).toBe(true);
+  });
+
+  it("accepts opaque provider replay state on assistant transcript messages", () => {
+    const assistantMessage = transcriptMessages[1];
+    if (!assistantMessage || assistantMessage.role !== "assistant") {
+      throw new Error("expected assistant transcript fixture");
+    }
+    const providerReplay = {
+      v: 1 as const,
+      type: "openai-responses-compaction",
+      id: "cmp_worker",
+      data: "opaque-worker-compaction",
+      replayIndex: 1,
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    };
+    const candidate = transcriptCommit({
+      messages: [{ ...assistantMessage, providerReplay }],
+    });
+
+    expect(validateWorkerTranscriptCommitParams(candidate)).toBe(true);
+    expect(
+      validateWorkerTranscriptCommitParams({
+        ...candidate,
+        messages: [
+          {
+            ...assistantMessage,
+            providerReplay: { ...providerReplay, privateScratch: "drop" },
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      validateWorkerTranscriptCommitParams({
+        ...candidate,
+        messages: [
+          {
+            ...assistantMessage,
+            providerReplay: {
+              ...providerReplay,
+              data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES),
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      validateWorkerTranscriptCommitParams({
+        ...candidate,
+        messages: [
+          {
+            ...assistantMessage,
+            providerReplay: {
+              ...providerReplay,
+              data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1),
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("validates the additive live-event protocol", () => {

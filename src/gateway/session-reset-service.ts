@@ -442,6 +442,7 @@ async function ensureSessionRuntimeCleanup(params: {
   clearFinishedSessionsForScopes(processScopeKeys);
   clearSessionResetRuntimeState([...queueKeys], {
     activeReplySessionId: params.sessionId,
+    agentId: normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg)),
   });
   await stopSubagentsForRequester({
     cfg: params.cfg,

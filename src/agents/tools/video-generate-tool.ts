@@ -16,7 +16,7 @@ import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveUserPath } from "../../utils.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
+import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { parseVideoGenerationModelRef } from "../../video-generation/model-ref.js";
 import {
   generateVideo,

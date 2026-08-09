@@ -9,11 +9,12 @@ import {
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
-import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
+import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
   buildIMessageApprovalConversationKeyForInbound,
   enumerateApprovalTargetKeys,
@@ -52,7 +53,9 @@ type IMessageApprovalPollTarget = {
 
 type IMessageApprovalPollTombstone = { approvalId: string };
 
-const loadApprovalResolver = createLazyRuntimeModule(() => import("./approval-resolver.js"));
+const loadApprovalResolver = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
+);
 
 const reportPersistentError = createPluginStateErrorReporter(
   getOptionalIMessageRuntime,
@@ -531,13 +534,14 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     return true;
   }
 
-  const { isApprovalNotFoundError, resolveIMessageApproval } = await loadApprovalResolver();
+  const { resolveApprovalOverGateway } = await loadApprovalResolver();
   try {
-    const result = await resolveIMessageApproval({
+    const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: target.approvalId,
       approvalKind: target.approvalKind,
       decision,
+      channel: "imessage",
       senderId: event.actorHandle,
       gatewayUrl: params.gatewayUrl,
       ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),

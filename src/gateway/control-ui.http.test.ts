@@ -47,6 +47,12 @@ type PlaybackModeForSourceResolver = (
     (typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]
   >
 ) => ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]>;
+type FileHandleRead = (
+  target: Uint8Array,
+  offset: number,
+  length: number,
+  position: number | null,
+) => Promise<{ bytesRead: number; buffer: Uint8Array }>;
 
 // Keeps bootstrap payload tests deterministic: the real resolver reports the
 // git branch of this checkout, which varies across CI and dev machines.
@@ -87,6 +93,7 @@ const REAL_PNG = Buffer.from(
 const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("base64")}`;
 const testTempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
   probeMediaFileDescriptorMock.mockReset();
   probeMediaFileDescriptorMock.mockResolvedValue({});
@@ -379,6 +386,23 @@ describe("handleControlUiHttpRequest", () => {
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
+  }
+
+  async function forceFirstFileHandleShortRead(filePath: string, maxBytes: number) {
+    const probe = await fs.open(filePath, "r");
+    const fileHandlePrototype = Object.getPrototypeOf(probe) as { read: FileHandleRead };
+    const originalRead = fileHandlePrototype.read;
+    await probe.close();
+    let constrained = false;
+    return vi
+      .spyOn(fileHandlePrototype, "read")
+      .mockImplementation(async function (this: unknown, target, offset, length, position) {
+        if (!constrained && position === 0 && length > maxBytes) {
+          constrained = true;
+          return await originalRead.call(this, target, offset, maxBytes, position);
+        }
+        return await originalRead.call(this, target, offset, length, position);
+      });
   }
 
   async function withBasePathRootFixture<T>(params: {
@@ -1038,6 +1062,50 @@ describe("handleControlUiHttpRequest", () => {
         expect(payload.available).toBe(true);
         expect(payload.mediaTicket).toMatch(/^v1\./);
         expect(Date.parse(payload.mediaTicketExpiresAt ?? "")).not.toBeNaN();
+      },
+    });
+  });
+
+  it("fully reads the assistant media metadata MIME prefix after a short read", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-meta-short-read-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.bin");
+        await fs.writeFile(filePath, REAL_PNG);
+        const readSpy = await forceFirstFileHandleShortRead(filePath, 1);
+
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(responseJson(end)).toMatchObject({ available: true, mimeType: "image/png" });
+        expect(readSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+      },
+    });
+  });
+
+  it("fully reads the served assistant media MIME prefix after a short read", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-serve-short-read-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.bin");
+        await fs.writeFile(filePath, REAL_PNG);
+        const readSpy = await forceFirstFileHandleShortRead(filePath, 1);
+
+        const { res, handled, setHeader } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith("Content-Type", "image/png");
+        expect(readSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
       },
     });
   });

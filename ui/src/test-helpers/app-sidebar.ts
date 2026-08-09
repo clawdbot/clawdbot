@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type {
   SessionCatalogPullRequestSummary,
-  SessionsArchiveManyParams,
-  SessionsArchiveManyResult,
   SessionsCatalogListResult,
+  SessionsPatchManyParams,
+  SessionsPatchManyResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
@@ -72,6 +72,7 @@ export type SidebarLifecycleState = HTMLElement & {
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
   updateRunning: boolean;
+  canUpdate: boolean;
   onUpdate: () => void;
   refreshRequired: boolean;
   onRefresh: () => void;
@@ -245,11 +246,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     Promise.resolve(),
   );
   const refreshReplacement = vi.fn(() => Promise.resolve());
-  const archiveMany = vi.fn(
+  const patchMany = vi.fn(
     async (
-      targets: SessionsArchiveManyParams["targets"],
-      _archived: boolean,
-    ): Promise<SessionsArchiveManyResult> => ({
+      targets: SessionsPatchManyParams["targets"],
+      _patch: SessionsPatchManyParams["patch"],
+    ): Promise<SessionsPatchManyResult> => ({
       outcomes: targets.map((target) => ({
         ok: true,
         key: target.key,
@@ -309,7 +310,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsDelete,
     create,
     patch,
-    archiveMany,
+    patchMany,
     delete: deleteSession,
     deleteMany,
     list,
@@ -364,9 +365,9 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
           if (method === "sessions.subscribe") {
             return { subscribed: true } as T;
           }
-          if (method === "sessions.archiveMany") {
-            const { targets, archived } = params as SessionsArchiveManyParams;
-            return (await archiveMany(targets, archived)) as T;
+          if (method === "sessions.patchMany") {
+            const { targets, patch: sessionPatch } = params as SessionsPatchManyParams;
+            return (await patchMany(targets, sessionPatch)) as T;
           }
           if (method !== "sessions.list") {
             return client.request<T>(method, params);
@@ -411,7 +412,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsDelete,
     create,
     patch,
-    archiveMany,
+    patchMany,
     deleteSession,
     deleteMany,
     list,

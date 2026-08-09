@@ -294,10 +294,11 @@ vi.mock("../../infra/gateway-lock.js", () => ({
   GatewayLockError: class GatewayLockError extends Error {},
 }));
 
-vi.mock("../../infra/ports.js", () => ({
-  formatPortDiagnostics: () => [],
+vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortUsage: async () => ({ status: "free" }),
 }));
+
+vi.mock("../../infra/ports-format.js", () => ({ formatPortDiagnostics: () => [] }));
 
 vi.mock("../../infra/supervisor-markers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/supervisor-markers.js")>();

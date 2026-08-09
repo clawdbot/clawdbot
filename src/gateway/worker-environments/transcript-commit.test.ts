@@ -59,6 +59,19 @@ const ZERO_USAGE = {
     total: 0,
   },
 };
+const PROVIDER_REPLAY = {
+  v: 1 as const,
+  type: "openai-responses-compaction",
+  id: "cmp_worker_commit",
+  data: "opaque-worker-commit",
+  replayIndex: 1,
+  provider: "openai",
+  api: "openai-responses",
+  model: "gpt-5.5",
+  baseUrlHash: "ozhevd1smnk8s",
+  sessionHash: "171dzdv17gum5g",
+  authProfileHash: "oe8bkr3r8947",
+};
 
 function createTurnMessages(userText = "Inspect the workspace"): WorkerTranscriptMessage[] {
   return [
@@ -81,6 +94,7 @@ function createTurnMessages(userText = "Inspect the workspace"): WorkerTranscrip
       api: "openai-responses",
       provider: "openai",
       model: "gpt-5.5",
+      providerReplay: structuredClone(PROVIDER_REPLAY),
       diagnostics: [
         {
           type: "provider-warning",
@@ -233,6 +247,7 @@ describe("worker transcript commit application", () => {
               details: { empty: "", enabled: false },
             },
           ],
+          providerReplay: PROVIDER_REPLAY,
         }),
       }),
       expect.objectContaining({
@@ -288,6 +303,7 @@ describe("worker transcript commit application", () => {
         }),
       ),
     );
+    expect(updates[1]?.message).not.toHaveProperty("providerReplay");
   });
 
   it("durably materializes a user-only commit", async () => {

@@ -26,7 +26,7 @@ import type {
 } from "../../music-generation/types.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { resolveUserPath } from "../../utils.js";
-import type { DeliveryContext } from "../../utils/delivery-context.js";
+import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {

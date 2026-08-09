@@ -1020,7 +1020,6 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   const runtimeResolved = resolveProviderRuntimePlugin({
     ...params,
     applyAutoEnable: false,
-    bundledProviderVitestCompat: false,
   })?.resolveSyntheticAuth?.(params.context);
   if (runtimeResolved) {
     return runtimeResolved;
@@ -1033,7 +1032,6 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
       ...params,
       provider: providerRef,
       applyAutoEnable: false,
-      bundledProviderVitestCompat: false,
     })?.resolveSyntheticAuth?.(params.context);
     if (runtimeProviderResolved) {
       return runtimeProviderResolved;

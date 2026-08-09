@@ -4191,7 +4191,7 @@ describe("createTelegramBot", () => {
       { type: "emoji", emoji: EYES_EMOJI },
     ]);
   });
-  it("clears native commands when disabled", () => {
+  it("syncs one empty native command menu when disabled", () => {
     resetHarnessSpies();
     loadConfig.mockReturnValue({
       commands: { native: false },
@@ -4199,10 +4199,8 @@ describe("createTelegramBot", () => {
 
     createTelegramBot({ token: "tok" });
 
+    expect(setMyCommandsSpy).toHaveBeenCalledTimes(1);
     expect(setMyCommandsSpy).toHaveBeenCalledWith([]);
-    expect(setMyCommandsSpy).toHaveBeenCalledWith([], {
-      scope: { type: "all_group_chats" },
-    });
   });
   it("handles requireMention when mentions do and do not resolve", async () => {
     const cases = [

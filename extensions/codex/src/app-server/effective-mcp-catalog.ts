@@ -143,6 +143,20 @@ async function listCodexMcpServerStatuses(
   throw new Error("Codex mcpServerStatus/list exceeded the bounded page limit");
 }
 
+/** Loads the requested MCP inventory from the exact client/thread already selected for a run. */
+async function loadCodexEffectiveMcpCatalogFromThread(params: {
+  client: Pick<CodexAppServerClient, "request">;
+  threadId: string;
+  mcpServerNames: readonly string[];
+  toolOverrides?: AgentHarnessMcpCatalogParams["toolOverrides"];
+}): Promise<McpToolCatalog> {
+  const allowedServerNames = new Set(params.mcpServerNames);
+  const statuses = (await listCodexMcpServerStatuses(params.client, params.threadId)).filter(
+    (status) => allowedServerNames.has(status.name),
+  );
+  return buildCodexEffectiveMcpCatalog(statuses, params.toolOverrides);
+}
+
 /** Loads MCP inventory only from the already-bound Codex process and thread. */
 export async function loadCodexEffectiveMcpCatalog(
   params: AgentHarnessMcpCatalogParams,
@@ -164,13 +178,12 @@ export async function loadCodexEffectiveMcpCatalog(
     return undefined;
   }
   try {
-    const allowedServerNames = new Set(params.mcpServerNames);
-    return buildCodexEffectiveMcpCatalog(
-      (await listCodexMcpServerStatuses(retained.client, binding.threadId)).filter((status) =>
-        allowedServerNames.has(status.name),
-      ),
-      params.toolOverrides,
-    );
+    return loadCodexEffectiveMcpCatalogFromThread({
+      client: retained.client,
+      threadId: binding.threadId,
+      mcpServerNames: params.mcpServerNames,
+      toolOverrides: params.toolOverrides,
+    });
   } finally {
     retained.release();
   }

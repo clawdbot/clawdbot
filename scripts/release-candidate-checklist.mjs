@@ -752,10 +752,14 @@ function candidateContributionRecordPullRequests(
     Number(match.groups.number),
   );
   const rows = new Set(rowNumbers);
-  const provenance = parseContributionRecordProvenance(record);
+  if (rows.size !== rowNumbers.length) {
+    const duplicate = rowNumbers.find((number, index) => rowNumbers.indexOf(number) !== index);
+    throw new Error(`${label} contains duplicate contribution record PR #${duplicate}`);
+  }
   if (!requireExactProvenance) {
     return rows;
   }
+  const provenance = parseContributionRecordProvenance(record);
   if (!provenance || !/^[0-9a-f]{40}$/u.test(provenance.target)) {
     throw new Error(`${label} is missing exact complete contribution record provenance`);
   }

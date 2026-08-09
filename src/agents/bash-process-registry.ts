@@ -7,7 +7,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import { readEnvInt } from "./bash-tools.shared.js";
 import { createSessionSlug as createSessionSlugId } from "./session-slug.js";
 
@@ -42,6 +42,9 @@ type SessionStdin = {
   writableFinished?: boolean;
 };
 
+/** Removes one queued notify-on-exit event, if it is still pending. */
+type NotifyOnExitRemoval = () => boolean;
+
 /** Mutable session state for a running bash exec process. */
 export interface ProcessSession {
   id: string;
@@ -65,6 +68,9 @@ export interface ProcessSession {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
+  /** Set when process poll observed the terminal result before notification. */
+  terminalPollObserved?: boolean;
+  notifyOnExitRemoval?: NotifyOnExitRemoval;
   child?: ChildProcessWithoutNullStreams;
   stdin?: SessionStdin;
   pid?: number;
@@ -77,11 +83,15 @@ export interface ProcessSession {
   pendingStderr: string[];
   pendingStdoutChars: number;
   pendingStderrChars: number;
+  /** Output was dropped from the pending poll buffers since their last drain. */
+  pendingOutputDropped: boolean;
   aggregated: string;
   tail: string;
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
+  /** Preserve the lifecycle owner's verdict for polls that captured the running session. */
+  terminalStatus?: Exclude<ProcessStatus, "running">;
   noOutputTimedOut?: boolean;
   exited: boolean;
   /** Process exit observed; backend cleanup still owns the terminal transition. */
@@ -109,6 +119,8 @@ interface FinishedSession {
   tail: string;
   truncated: boolean;
   totalOutputChars: number;
+  terminalPollObserved?: boolean;
+  notifyOnExitRemoval?: NotifyOnExitRemoval;
 }
 
 const runningSessions = new Map<string, ProcessSession>();
@@ -196,6 +208,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
   let pendingChars = bufferChars + chunk.length;
   if (pendingChars > pendingCap) {
     session.truncated = true;
+    session.pendingOutputDropped = true;
     pendingChars = capPendingBuffer(buffer, pendingChars, pendingCap);
   }
   if (stream === "stdout") {
@@ -215,11 +228,13 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
 export function drainSession(session: ProcessSession) {
   const stdout = session.pendingStdout.join("");
   const stderr = session.pendingStderr.join("");
+  const outputDropped = session.pendingOutputDropped;
   session.pendingStdout = [];
   session.pendingStderr = [];
   session.pendingStdoutChars = 0;
   session.pendingStderrChars = 0;
-  return { stdout, stderr };
+  session.pendingOutputDropped = false;
+  return { stdout, stderr, outputDropped };
 }
 
 /** Moves a session to finished state and records exit metadata. */
@@ -227,13 +242,14 @@ export function markExited(
   session: ProcessSession,
   exitCode: number | null,
   exitSignal: NodeJS.Signals | number | null,
-  status: ProcessStatus,
+  status: Exclude<ProcessStatus, "running">,
   exitReason?: TerminationReason,
   noOutputTimedOut?: boolean,
 ) {
   // Visibility can be cleared before process termination. Keep suspension
   // blocked until the process owner reports the actual terminal transition.
   activeBackgroundExecSessionIds.delete(session.id);
+  session.terminalStatus = status;
   session.exited = true;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
@@ -249,6 +265,43 @@ export function markBackgrounded(session: ProcessSession) {
   if (!session.exited) {
     activeBackgroundExecSessionIds.add(session.id);
   }
+}
+
+/** Records that a terminal process poll consumed the process result. */
+export function markTerminalPollObserved(session: ProcessSession): void {
+  session.terminalPollObserved = true;
+  const finished = finishedSessions.get(session.id);
+  if (finished) {
+    finished.terminalPollObserved = true;
+  }
+}
+
+/** Retains the precise event removal handle across the finished-session move. */
+export function recordNotifyOnExitRemoval(
+  session: ProcessSession,
+  remove: NotifyOnExitRemoval,
+): void {
+  if (session.terminalPollObserved) {
+    remove();
+    return;
+  }
+  session.notifyOnExitRemoval = remove;
+  const finished = finishedSessions.get(session.id);
+  if (finished) {
+    finished.notifyOnExitRemoval = remove;
+  }
+}
+
+/** Acknowledges one completion event without touching unrelated queue entries. */
+export function acknowledgeNotifyOnExit(record: {
+  notifyOnExitRemoval?: NotifyOnExitRemoval;
+}): void {
+  const remove = record.notifyOnExitRemoval;
+  if (!remove) {
+    return;
+  }
+  remove();
+  record.notifyOnExitRemoval = undefined;
 }
 
 /** Returns the number of live background exec sessions without exposing process details. */
@@ -314,6 +367,8 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     tail: session.tail,
     truncated: session.truncated,
     totalOutputChars: session.totalOutputChars,
+    ...(session.terminalPollObserved ? { terminalPollObserved: true } : {}),
+    ...(session.notifyOnExitRemoval ? { notifyOnExitRemoval: session.notifyOnExitRemoval } : {}),
   });
   finishedSessionOutputChars += session.aggregated.length;
   while (

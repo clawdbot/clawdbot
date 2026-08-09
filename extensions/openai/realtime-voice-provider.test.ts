@@ -3421,6 +3421,74 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
   });
 
+  it.each([
+    ["undefined", (): undefined => undefined],
+    ["function", () => () => undefined],
+    ["symbol", () => Symbol("invalid-tool-result")],
+    ["bigint", () => ({ value: 1n })],
+    [
+      "circular",
+      () => {
+        const result: { self?: unknown } = {};
+        result.self = result;
+        return result;
+      },
+    ],
+    ["omitted custom serialization", () => ({ toJSON: () => undefined })],
+  ] as const)(
+    "rejects %s tool results without consuming a retryable call",
+    async (_label, create) => {
+      const bridge = createNativeBridge({ onToolCall: vi.fn() });
+      const socket = await connectReadyBridge(bridge);
+      emitCompletedToolCalls(socket);
+      const previousEventCount = socket.sent.length;
+
+      expect(() => bridge.submitToolResult("call_1", create())).toThrow();
+      expect(socket.sent).toHaveLength(previousEventCount);
+      expect(hasSentEventType(socket, "response.create")).toBe(false);
+
+      await bridge.submitToolResult("call_1", { recovered: true });
+
+      expect(parseSent(socket).find((event) => event.type === "conversation.item.create")).toEqual({
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: JSON.stringify({ recovered: true }),
+        },
+      });
+    },
+  );
+
+  it("preserves valid JSON tool results and invokes custom serialization once", async () => {
+    const bridge = createNativeBridge({ onToolCall: vi.fn() });
+    const socket = await connectReadyBridge(bridge);
+    const values: unknown[] = [null, false, 0, "", "text", [1], { ok: true }];
+    const customSerialization = vi.fn((key: string) => ({ key }));
+    values.push({ toJSON: customSerialization });
+    const callIds = values.map((_, index) => `call_${index}`);
+    emitCompletedToolCalls(socket, callIds);
+
+    for (const [index, result] of values.entries()) {
+      await bridge.submitToolResult(callIds[index]!, result, { suppressResponse: true });
+    }
+
+    const outputs = parseSent(socket)
+      .filter((event) => event.type === "conversation.item.create")
+      .map((event) => (event.item as { output: string }).output);
+    expect(outputs).toEqual([
+      "null",
+      "false",
+      "0",
+      '""',
+      '"text"',
+      "[1]",
+      '{"ok":true}',
+      '{"key":""}',
+    ]);
+    expect(customSerialization).toHaveBeenCalledExactlyOnceWith("");
+  });
+
   it("does not request a realtime response for continuing tool results", async () => {
     const bridge = createNativeBridge({ onToolCall: vi.fn() });
     const socket = await connectReadyBridge(bridge);

@@ -152,7 +152,7 @@ suite.define(() => {
       await composer.fill(message);
       await pastePng(composer);
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
-      const startButton = page.getByRole("button", { name: "Start thread" });
+      const startButton = page.getByRole("button", { name: "Start session" });
       await gateway.deferNext("environments.list");
       const profileRequests = (await gateway.getRequests("environments.list")).length;
       await replaceGatewayClient(page);
@@ -210,7 +210,7 @@ suite.define(() => {
         ),
       ).toBeLessThanOrEqual(1);
       await expect.poll(() => startButton.isDisabled()).toBe(false);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.dispatch")).length)
         .toBe(2);
@@ -288,7 +288,7 @@ suite.define(() => {
       const cloudPlacementBadge = sessionRow.locator('[data-placement-state="active"]');
       await cloudPlacementBadge.waitFor();
       await sessionRow.hover();
-      await sessionRow.getByRole("button", { name: "Open thread menu" }).click();
+      await sessionRow.getByRole("button", { name: "Open session menu" }).click();
       const stopWorker = page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Stop cloud worker…" });
@@ -365,7 +365,7 @@ suite.define(() => {
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await pollLocatorText(trigger).toContain("Cloud · aws");
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(true);
       await trigger.click();
       await expect
@@ -480,7 +480,7 @@ suite.define(() => {
       await gateway.deferNext("sessions.send");
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const firstSend = await gateway.waitForRequest("sessions.send");
       expect(firstSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
@@ -507,9 +507,9 @@ suite.define(() => {
         .poll(() => page.getByRole("button", { name: "Remove attachment" }).isDisabled())
         .toBe(true);
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const resumedSend = await gateway.waitForRequest("sessions.send");
       expect(resumedSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
@@ -623,7 +623,7 @@ suite.define(() => {
         .toBe("restore after reconnect");
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);
       await page.evaluate(() => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -649,7 +649,7 @@ suite.define(() => {
         )?.requestUpdate();
       });
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(true);
     } finally {
       await context.close();
@@ -703,7 +703,7 @@ suite.define(() => {
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.locator(".new-session-page__message").fill(message);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const firstCreate = await gateway.waitForRequest("sessions.create");
       const firstKey = (firstCreate.params as { key?: string }).key;
       if (!firstKey) {
@@ -716,7 +716,7 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".new-session-page__message").inputValue())
         .toBe(message);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const retryCreate = await gateway.waitForRequest("sessions.create");
       expect(retryCreate.params).toMatchObject({ key: firstKey, message: "", worktree: true });
       await gateway.resolveDeferred("sessions.create", { key: firstKey });
@@ -786,7 +786,7 @@ suite.define(() => {
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.locator(".new-session-page__message").fill(message);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       const sessionKey = (create.params as { key: string }).key;
       const staged = await readRecovery();
@@ -907,7 +907,7 @@ suite.define(() => {
         };
       });
       await page.locator(".new-session-page__message").fill(message);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const firstSend = await gateway.waitForRequest("sessions.send");
       await gateway.rejectDeferred("sessions.send", {
         code: "UNAVAILABLE",
@@ -926,7 +926,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(profileRequests);
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
       });

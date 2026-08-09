@@ -20,6 +20,7 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
 import {
   buildThreadResumeParams,
   startOrResumeThread as startOrResumeThreadImpl,
@@ -395,6 +396,174 @@ describe("Codex app-server thread lifecycle bindings", () => {
       action: "resume",
       binding: expect.objectContaining({ threadId: "thread-warm" }),
     });
+  });
+
+  it("keeps a warm native session across sticky environment selection changes", async () => {
+    const sessionFile = path.join(tempDir, "environment-session.jsonl");
+    const workspaceDir = path.join(tempDir, "environment-workspace");
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-environments");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-environments",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+      addCloseHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const common = {
+      client,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+    const firstSelection = [{ environmentId: "environment-a", cwd: workspaceDir }];
+    const secondSelection = [{ environmentId: "environment-b", cwd: workspaceDir }];
+
+    const started = await startOrResumeThread({
+      ...common,
+      environmentSelection: firstSelection,
+    });
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        started.threadId,
+        undefined,
+        started.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toBe(true);
+    const switched = await startOrResumeThread({
+      ...common,
+      environmentSelection: secondSelection,
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-environments",
+      environmentSelectionFingerprint: fingerprintEnvironmentSelection(secondSelection),
+    });
+    await expect(
+      retainCodexAppServerLiveThread(
+        client,
+        switched.threadId,
+        switched.liveThreadOwnership?.release,
+        switched.liveThreadConfigFingerprint,
+      ),
+    ).resolves.toBe(true);
+    const restored = await startOrResumeThread({
+      ...common,
+      environmentSelection: firstSelection,
+    });
+
+    expect(switched.threadId).toBe(started.threadId);
+    expect(restored.threadId).toBe(started.threadId);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      environmentSelectionFingerprint: fingerprintEnvironmentSelection(firstSelection),
+    });
+  });
+
+  it("rebinds a resumed thread to its replacement physical client before warm reuse", async () => {
+    const sessionFile = path.join(tempDir, "replacement-client-session.jsonl");
+    const workspaceDir = path.join(tempDir, "replacement-client-workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-reused",
+      clientId: "client-before-restart",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-reused");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-after-restart",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+      addCloseHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const common = {
+      client,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+
+    const resumed = await startOrResumeThread(common);
+
+    expect(resumed.clientId).toBe("client-after-restart");
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-reused",
+      clientId: "client-after-restart",
+    });
+    await retainCodexAppServerLiveThread(
+      client,
+      resumed.threadId,
+      undefined,
+      resumed.liveThreadConfigFingerprint,
+    );
+    await expect(startOrResumeThread(common)).resolves.toMatchObject({
+      threadId: "thread-reused",
+      clientId: "client-after-restart",
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+  });
+
+  it("releases an unverified manual-resume owner before applying canonical harness overrides", async () => {
+    const sessionFile = path.join(tempDir, "manual-resume-session.jsonl");
+    const workspaceDir = path.join(tempDir, "manual-resume-workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-manual-resume",
+      clientId: "client-manual-resume",
+      cwd: workspaceDir,
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/unsubscribe") {
+        return {};
+      }
+      if (method === "thread/resume") {
+        return threadStartResult("thread-manual-resume");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-manual-resume",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+      addCloseHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    await retainCodexAppServerLiveThread(client, "thread-manual-resume");
+
+    const resumed = await startOrResumeThread({
+      client,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    });
+
+    expect(resumed).toMatchObject({
+      threadId: "thread-manual-resume",
+      clientId: "client-manual-resume",
+      lifecycle: { action: "resumed" },
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/unsubscribe",
+      "thread/resume",
+    ]);
   });
 
   it("reuses an isolated retained thread without dropping native skill isolation", async () => {

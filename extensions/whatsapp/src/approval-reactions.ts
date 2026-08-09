@@ -15,6 +15,7 @@ import {
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -55,7 +56,9 @@ type ResolvedWhatsAppApprovalReactionTarget = WhatsAppApprovalReactionResolution
   remoteJid: string;
 };
 
-const resolverRuntimeLoader = createLazyRuntimeModule(() => import("./approval-resolver.js"));
+const resolverRuntimeLoader = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
+);
 
 const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
   getOptionalWhatsAppRuntime,
@@ -508,13 +511,14 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
     return true;
   }
 
-  const { isApprovalNotFoundError, resolveWhatsAppApproval } = await loadApprovalResolver();
+  const { resolveApprovalOverGateway } = await loadApprovalResolver();
   try {
-    const result = await resolveWhatsAppApproval({
+    const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: target.approvalId,
       approvalKind: target.approvalKind,
       decision: target.decision,
+      channel: "whatsapp",
       senderId: actorId,
       gatewayUrl: params.gatewayUrl,
     });

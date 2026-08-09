@@ -51,10 +51,10 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-util
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { iMessageApprovalControlBindings } from "../approval-control-binding-window.js";
+import type { IMessageApprovalGatewayRuntime } from "../approval-gateway-types.js";
 import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
-import type { IMessageApprovalGatewayRuntime } from "../approval-resolver.js";
 import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { resolveIMessageHomeDir } from "../cli-path.js";

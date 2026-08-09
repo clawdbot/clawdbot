@@ -1,8 +1,9 @@
 import {
-  SESSIONS_ARCHIVE_MANY_MAX_TARGETS,
-  type SessionsArchiveManyParams,
-  type SessionsArchiveManyResult,
-} from "../../../packages/gateway-protocol/src/schema/sessions-archive-many.js";
+  SESSIONS_PATCH_MANY_MAX_TARGETS,
+  type SessionsPatchManyParams,
+  type SessionsPatchManyResult,
+  type SessionsPatchMutation,
+} from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
@@ -14,11 +15,11 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 
-function isLegacyArchiveManyMethodRejection(error: unknown): boolean {
+function isLegacyPatchManyMethodRejection(error: unknown): boolean {
   return (
     error instanceof GatewayRequestError &&
     error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("unknown method: sessions.archiveMany")
+    error.message.includes("unknown method: sessions.patchMany")
   );
 }
 
@@ -63,10 +64,10 @@ export async function refreshSessionsAfterBatch(
   return host.sessionData.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
 }
 
-export async function archiveSessionRows(
+export async function patchSessionRows(
   host: SessionOrganizerControllerHost,
   rows: readonly SidebarRecentSession[],
-  archived: boolean,
+  patch: SessionsPatchMutation,
   scope: SidebarSessionMutationScope,
   options: {
     deferListRefresh?: boolean;
@@ -75,37 +76,38 @@ export async function archiveSessionRows(
 ): Promise<SidebarRecentSession[] | null> {
   const dispatched: Array<{
     rows: readonly SidebarRecentSession[];
-    result: SessionsArchiveManyResult;
+    result: SessionsPatchManyResult;
   }> = [];
   let terminalError: unknown = null;
-  for (let offset = 0; offset < rows.length; offset += SESSIONS_ARCHIVE_MANY_MAX_TARGETS) {
+  for (let offset = 0; offset < rows.length; offset += SESSIONS_PATCH_MANY_MAX_TARGETS) {
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return null;
     }
-    const chunkRows = rows.slice(offset, offset + SESSIONS_ARCHIVE_MANY_MAX_TARGETS);
-    const params: SessionsArchiveManyParams = {
+    const chunkRows = rows.slice(offset, offset + SESSIONS_PATCH_MANY_MAX_TARGETS);
+    const params: SessionsPatchManyParams = {
       targets: chunkRows.map((row) => ({
         key: row.key,
         agentId: sessionRowAgentId(row, scope),
       })),
-      archived,
+      patch,
     };
     const access = readSessionMethodAccess(scope.gateway.snapshot, {
-      method: "sessions.archiveMany",
+      method: "sessions.patchMany",
       params,
-      requiredScope: "operator.write",
     });
     if (!access.allowed) {
-      if (access.cause === "method-unavailable" && options.fallback) {
+      if (dispatched.length === 0 && access.cause === "method-unavailable" && options.fallback) {
         return options.fallback();
       }
       terminalError = access.reason;
-      host.sessionData.publishSessionMutationError(scope, access.reason);
+      if (dispatched.length === 0) {
+        host.sessionData.publishSessionMutationError(scope, access.reason);
+      }
       break;
     }
     try {
-      const result = await scope.client.request<SessionsArchiveManyResult>(
-        "sessions.archiveMany",
+      const result = await scope.client.request<SessionsPatchManyResult>(
+        "sessions.patchMany",
         params,
       );
       if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -115,15 +117,13 @@ export async function archiveSessionRows(
     } catch (error) {
       // Metadata-less legacy Gateways allow the optimistic request, then identify
       // this one unsupported method through the canonical Gateway error contract.
-      if (
-        dispatched.length === 0 &&
-        options.fallback &&
-        isLegacyArchiveManyMethodRejection(error)
-      ) {
+      if (dispatched.length === 0 && options.fallback && isLegacyPatchManyMethodRejection(error)) {
         return options.fallback();
       }
       terminalError = error;
-      host.sessionData.publishSessionMutationError(scope, error);
+      if (dispatched.length === 0) {
+        host.sessionData.publishSessionMutationError(scope, error);
+      }
       break;
     }
   }
@@ -147,17 +147,17 @@ export async function archiveSessionRows(
         return [];
       }
       const row = chunkRows[index];
-      if (row?.pinned && archived) {
+      if (row?.pinned && patch.archived === true) {
         host.pruneSidebarSessionEntry(row.key);
       }
       return row ? [row] : [];
     }),
   );
+  const terminalErrorMessage = terminalError === null ? "" : formatUiError(terminalError);
+  if (terminalErrorMessage) {
+    errors.push(terminalErrorMessage);
+  }
   if (errors.length > 0) {
-    const terminalErrorMessage = terminalError === null ? "" : formatUiError(terminalError);
-    if (terminalErrorMessage) {
-      errors.push(terminalErrorMessage);
-    }
     host.sessionData.publishSessionMutationError(scope, errors.join("; "));
   }
   return successful;

@@ -33,7 +33,7 @@ suite.define(() => {
     const { context, gateway, page } = await openDraft(["operator.read"]);
     try {
       const sidebarCreate = page.locator(".sidebar-brand__new-thread");
-      const submit = page.getByRole("button", { name: "Start thread" });
+      const submit = page.getByRole("button", { name: "Start session" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
 
       await expect.poll(() => sidebarCreate.isDisabled()).toBe(true);
@@ -52,7 +52,7 @@ suite.define(() => {
   it("allows write-scoped normal creation while keeping incognito admin-only", async () => {
     const { context, gateway, page } = await openDraft(["operator.read", "operator.write"]);
     try {
-      const submit = page.getByRole("button", { name: "Start thread" });
+      const submit = page.getByRole("button", { name: "Start session" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
 
       await expect.poll(() => page.locator(".sidebar-brand__new-thread").isEnabled()).toBe(true);
@@ -78,7 +78,7 @@ suite.define(() => {
       const incognito = page.getByRole("switch", { name: "Incognito" });
       await expect.poll(() => incognito.isEnabled()).toBe(true);
       await incognito.click();
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { incognito: true, message: "scope proof" },
@@ -95,7 +95,7 @@ suite.define(() => {
     );
     try {
       await expect.poll(() => page.locator(".sidebar-brand__new-thread").isDisabled()).toBe(true);
-      const submit = page.getByRole("button", { name: "Start thread" });
+      const submit = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => submit.isDisabled()).toBe(true);
       await submit.click({ force: true });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
@@ -124,7 +124,7 @@ suite.define(() => {
         )
         .toBe("reconnecting");
 
-      const submit = page.getByRole("button", { name: "Start thread" });
+      const submit = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => submit.isDisabled()).toBe(true);
       await submit.click({ force: true });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);

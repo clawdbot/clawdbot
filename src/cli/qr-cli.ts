@@ -33,7 +33,7 @@ const LIMITED_TRANSPORT_WARNING =
   "This Gateway URL uses plaintext ws://, so the setup code was limited for safety. Use wss:// or Tailscale Serve, then generate a new code for full access.";
 
 function renderQrAscii(data: string): Promise<string> {
-  return renderQrTerminal(data);
+  return renderQrTerminal(data, { small: true });
 }
 function readDevicePairPublicUrlFromConfig(cfg: OpenClawConfig): string | undefined {
   const value = cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];

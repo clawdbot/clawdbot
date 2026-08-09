@@ -1291,6 +1291,7 @@ describe("initSessionState RawBody", () => {
     await expect(
       drainFormattedSystemEvents({
         cfg,
+        agentId: "main",
         sessionKey,
         isMainSession: false,
         isNewSession: true,
@@ -2141,6 +2142,7 @@ describe("initSessionState reset policy", () => {
     await expect(
       drainFormattedSystemEvents({
         cfg,
+        agentId: "main",
         sessionKey,
         isMainSession: false,
         isNewSession: true,
@@ -4326,6 +4328,7 @@ describe("drainFormattedSystemEvents", () => {
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
@@ -4346,6 +4349,7 @@ describe("drainFormattedSystemEvents", () => {
 
     const result = await drainFormattedSystemEvents({
       cfg: { channels: {} } as OpenClawConfig,
+      agentId: "main",
       sessionKey: "agent:main:main",
       isMainSession: true,
       isNewSession: true,
@@ -4371,6 +4375,7 @@ describe("drainFormattedSystemEvents", () => {
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
@@ -4395,6 +4400,7 @@ describe("drainFormattedSystemEvents", () => {
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,

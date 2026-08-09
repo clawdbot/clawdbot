@@ -316,7 +316,10 @@ const voiceCallMocks = vi.hoisted(() => ({
   })),
   endMeetVoiceCallGatewayCall: vi.fn(async () => {}),
   getMeetVoiceCallGatewayCall: vi.fn(
-    async (): Promise<{ found: boolean; call?: { callId: string } }> => ({
+    async (): Promise<{
+      found: boolean;
+      call?: { callId: string; state?: string; endedAt?: number; endReason?: string };
+    }> => ({
       found: true,
       call: { callId: "call-1" },
     }),
@@ -2288,6 +2291,88 @@ describe("google-meet plugin", () => {
     expect(first.details.session.notes).toContain("Voice Call is no longer active.");
     expect(second.details.session.id).not.toBe(first.details.session.id);
     expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      name: "the authoritative end timestamp",
+      call: { callId: "call-1", state: "completed", endedAt: 1_780_000_000_000 },
+    },
+    {
+      name: "the authoritative end reason",
+      call: { callId: "call-1", state: "completed", endReason: "completed" },
+    },
+  ])("redials a persisted completed Twilio call identified by $name", async ({ call }) => {
+    voiceCallMocks.getMeetVoiceCallGatewayCall.mockResolvedValueOnce({ found: true, call });
+    const { tools } = setup({ defaultTransport: "twilio" });
+    const tool = getMeetTool({ tools });
+    const request = {
+      action: "join" as const,
+      url: MEET_URL,
+      dialInNumber: "+15551234567",
+      pin: "123456",
+    };
+
+    const first = await tool.execute("first", request);
+    const second = await tool.execute("second", request);
+
+    expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledTimes(2);
+    expect(first.details.session.state).toBe("ended");
+    expect(first.details.session.notes).toContain("Voice Call is no longer active.");
+    expect(second.details.session.id).not.toBe(first.details.session.id);
+  });
+
+  it.each([
+    {
+      name: "an active delegated call",
+      result: { found: true, call: { callId: "call-1", state: "active" } },
+    },
+    {
+      name: "a terminal-looking state without an authoritative terminal fact",
+      result: { found: true, call: { callId: "call-1", state: "completed" } },
+    },
+    {
+      name: "an unknown call record",
+      result: { found: true },
+    },
+  ])("reuses the active Meet session for $name", async ({ result }) => {
+    voiceCallMocks.getMeetVoiceCallGatewayCall.mockResolvedValueOnce(result);
+    const { tools } = setup({ defaultTransport: "twilio" });
+    const tool = getMeetTool({ tools });
+    const request = {
+      action: "join" as const,
+      url: MEET_URL,
+      dialInNumber: "+15551234567",
+      pin: "123456",
+    };
+
+    const first = await tool.execute("first", request);
+    const second = await tool.execute("second", request);
+
+    expect(second.details.session.id).toBe(first.details.session.id);
+    expect(first.details.session.state).toBe("active");
+    expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledOnce();
+  });
+
+  it("reuses the active Meet session when delegated call status temporarily rejects", async () => {
+    voiceCallMocks.getMeetVoiceCallGatewayCall.mockRejectedValueOnce(
+      new Error("temporary voice gateway failure"),
+    );
+    const { tools } = setup({ defaultTransport: "twilio" });
+    const tool = getMeetTool({ tools });
+    const request = {
+      action: "join" as const,
+      url: MEET_URL,
+      dialInNumber: "+15551234567",
+      pin: "123456",
+    };
+
+    const first = await tool.execute("first", request);
+    const second = await tool.execute("second", request);
+
+    expect(second.details.session.id).toBe(first.details.session.id);
+    expect(first.details.session.state).toBe("active");
+    expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledOnce();
   });
 
   it("serializes concurrent identical Twilio joins", async () => {

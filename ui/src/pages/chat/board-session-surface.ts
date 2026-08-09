@@ -18,12 +18,14 @@ export type BoardChatDockSize = {
 };
 
 export type WorkboardCardChipProps = {
+  active: boolean;
   basePath: string;
   client: GatewayBrowserClient;
   sessionKey: string;
 };
 
 type BoardSessionSurfaceProps = {
+  active: boolean;
   snapshot: BoardViewSnapshot;
   observer?: BoardObserverContext;
   activeTabId: string;
@@ -155,6 +157,7 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
       ${props.workboardCardChip
         ? html`
             <openclaw-workboard-card-chip
+              .active=${props.workboardCardChip.active}
               .basePath=${props.workboardCardChip.basePath}
               .client=${props.workboardCardChip.client}
               .sessionKey=${props.workboardCardChip.sessionKey}
@@ -162,6 +165,7 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
           `
         : nothing}
       <openclaw-board-view
+        .active=${props.active}
         .snapshot=${props.snapshot}
         .activeTabId=${props.activeTabId}
         .widgetFrameUrl=${props.widgetFrameUrl}
@@ -182,9 +186,15 @@ function renderChatDock(props: BoardSessionSurfaceProps) {
 
 export function renderBoardSessionSurface(props: BoardSessionSurfaceProps) {
   return html`
-    <div class="board-session-surface board-session-surface--dock-${props.dock}">
+    <div
+      class="board-session-surface board-session-surface--dock-${props.dock}"
+      ?hidden=${!props.active}
+      ?inert=${!props.active}
+    >
       ${renderBoardView(props)}
-      ${props.dock === "bottom" ? html`${props.divider}${renderChatDock(props)}` : nothing}
+      ${props.active && props.dock === "bottom"
+        ? html`${props.divider}${renderChatDock(props)}`
+        : nothing}
     </div>
   `;
 }

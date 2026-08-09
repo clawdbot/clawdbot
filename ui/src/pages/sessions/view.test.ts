@@ -227,8 +227,8 @@ describe("sessions view", () => {
       ...container.querySelectorAll<HTMLInputElement>('tbody input[type="checkbox"]'),
     ];
     expect(checkboxes.map((checkbox) => checkbox.getAttribute("aria-label"))).toEqual([
-      "Select thread: agent:main:first",
-      "Select thread: agent:main:second",
+      "Select session: agent:main:first",
+      "Select session: agent:main:second",
     ]);
 
     checkboxes[0]?.dispatchEvent(new Event("change", { bubbles: true }));
@@ -447,7 +447,7 @@ describe("sessions view", () => {
     const counts = Array.from(container.querySelectorAll(".session-group-row__count")).map((el) =>
       el.textContent?.trim(),
     );
-    expect(counts).toEqual(["2 threads", "1 thread"]);
+    expect(counts).toEqual(["2 sessions", "1 session"]);
     expect(container.querySelector(".data-table-pagination")).toBeNull();
   });
 
@@ -518,7 +518,7 @@ describe("sessions view", () => {
 
     // Rows render in group order: Research (agent:main:main) first, then Ungrouped (discord).
     const select = container.querySelectorAll<HTMLSelectElement>(
-      'select[aria-label="Move thread to a group"]',
+      'select[aria-label="Move session to a group"]',
     )[1];
     if (!select) {
       throw new Error("Expected group select");
@@ -570,7 +570,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const select = container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Move thread to a group"]',
+      'select[aria-label="Move session to a group"]',
     );
     expect(select?.disabled).toBe(true);
     expect(select?.title).toBe(reason);
@@ -610,7 +610,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const button = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Open thread menu"]',
+      'button[aria-label="Open session menu"]',
     );
     if (!button) {
       throw new Error("Expected session menu button");
@@ -684,10 +684,10 @@ describe("sessions view", () => {
 
     expect(activeField?.querySelector(".session-filter-label")?.textContent).toBe("Updated within");
     expect(tooltips).toEqual([
-      "Loads threads updated in the last 120 minutes.",
-      "Max threads to load.",
-      "Include global threads.",
-      "Include unknown threads.",
+      "Loads sessions updated in the last 120 minutes.",
+      "Max sessions to load.",
+      "Include global sessions.",
+      "Include unknown sessions.",
     ]);
   });
 
@@ -714,7 +714,7 @@ describe("sessions view", () => {
 
     const toggleGroup = container.querySelector(".session-filter-toggle-group");
     expect(toggleGroup?.getAttribute("role")).toBe("group");
-    expect(toggleGroup?.getAttribute("aria-label")).toBe("Thread source filters");
+    expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
     expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(2);
     expect(
       Array.from(toggleGroup?.querySelectorAll(".session-filter-check") ?? []).map((toggle) => [
@@ -1303,7 +1303,7 @@ describe("sessions view", () => {
 
     const details = container.querySelector(".session-details-panel");
     expect(details?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim()).toBe(
-      "Thread details",
+      "Session details",
     );
     expect(details?.querySelector(".session-details-panel__title")?.textContent?.trim()).toBe(
       "agent:main:main",
@@ -1546,7 +1546,7 @@ describe("sessions view", () => {
     const emptyState = container.querySelector(".data-table-empty-state");
     expect(emptyState?.getAttribute("role")).toBe("status");
     expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
-      "No threads match your filters.",
+      "No sessions match your filters.",
     );
     const showAll = emptyState?.querySelector<HTMLButtonElement>("button");
     if (!(showAll instanceof HTMLButtonElement)) {
@@ -1597,7 +1597,7 @@ describe("sessions view", () => {
 
     const emptyState = container.querySelector(".data-table-empty-state");
     expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
-      testCase.filtered ? "No threads match your filters." : "No archived sessions.",
+      testCase.filtered ? "No sessions match your filters." : "No archived sessions.",
     );
     expect(emptyState?.querySelector("button") !== null).toBe(testCase.filtered);
   });
@@ -1636,7 +1636,7 @@ describe("sessions view", () => {
       tile.querySelector(".sessions-overview__value")?.textContent?.trim(),
     ];
     expect(tiles.map(readTile)).toEqual([
-      ["Threads", "2"],
+      ["Sessions", "2"],
       ["Live", "1"],
       ["Unread", "1"],
       ["Tokens", "1.5k"],

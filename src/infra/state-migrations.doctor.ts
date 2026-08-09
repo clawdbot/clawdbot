@@ -8,10 +8,8 @@ import {
   listRegistryWorktreesForMigration,
   rewriteRegistryWorktreePathsForMigration,
 } from "../agents/worktrees/registry.js";
-import { listBundledChannelLegacyStateMigrationDetectors } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
-import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -106,7 +104,6 @@ import {
 import {
   migrateLegacyInstalledPluginIndex,
   migrateLegacyPluginStateSidecar,
-  runLegacyMigrationPlans,
 } from "./state-migrations.plugin-state.js";
 import {
   detectLegacyRescuePending,
@@ -144,7 +141,6 @@ import {
 import {
   PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES,
   TASK_STATE_SQLITE_SIDECAR_SUFFIXES,
-  buildLegacyMigrationPreview,
   hasPendingSqliteSidecarArchive,
   listLegacyDeliveryQueueDeliveredMarkers,
   listLegacyDeliveryQueueFiles,
@@ -204,36 +200,6 @@ export function resetAutoMigrateLegacyStateForTest(): void {
   autoMigrateChecked.clear();
   resetAutoMigrateLegacyTaskStateSidecarsForTest();
   resetLegacySessionSurfacesForTest();
-}
-
-async function collectChannelLegacyStateMigrationPlans(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-  oauthDir: string;
-}): Promise<ChannelLegacyStateMigrationPlan[]> {
-  const plans: ChannelLegacyStateMigrationPlan[] = [];
-  // Legacy state detection belongs on a narrow setup-entry surface so doctor
-  // does not cold-load unrelated runtime channel code.
-  const detectors = listBundledChannelLegacyStateMigrationDetectors({ config: params.cfg });
-  for (const detectLegacyStateMigrationsLocal of detectors) {
-    const detected = await detectLegacyStateMigrationsLocal({
-      cfg: params.cfg,
-      env: params.env,
-      stateDir: params.stateDir,
-      oauthDir: params.oauthDir,
-    });
-    if (detected?.length) {
-      for (const detectedPlan of detected) {
-        const plan =
-          detectedPlan.kind === "plugin-state-import" && !detectedPlan.stateDir
-            ? { ...detectedPlan, stateDir: params.stateDir }
-            : detectedPlan;
-        plans.push(plan);
-      }
-    }
-  }
-  return plans;
 }
 
 async function collectPluginDoctorStateMigrationPlans(params: {
@@ -619,12 +585,6 @@ export async function detectLegacyStateMigrations(params: {
     ),
     configuredAccountIds,
   });
-  const channelPlans = await collectChannelLegacyStateMigrationPlans({
-    cfg: params.cfg,
-    env,
-    stateDir,
-    oauthDir,
-  });
   const pluginPlanWarnings: string[] = [];
   const pluginPlans =
     stateSchemaMigrations.length > 0
@@ -753,9 +713,6 @@ export async function detectLegacyStateMigrations(params: {
       preview.push(message);
     }
   }
-  if (channelPlans.length > 0) {
-    preview.push(...channelPlans.map(buildLegacyMigrationPreview));
-  }
   if (pluginPlans.length > 0) {
     preview.push(...pluginPlans.flatMap((plan) => plan.preview));
   }
@@ -782,10 +739,6 @@ export async function detectLegacyStateMigrations(params: {
       legacyDir: legacyAgentDir,
       targetDir: targetAgentDir,
       hasLegacy: hasLegacyAgentDir,
-    },
-    channelPlans: {
-      hasLegacy: channelPlans.length > 0,
-      plans: channelPlans,
     },
     pluginPlans: {
       hasLegacy: pluginPlans.length > 0,
@@ -1181,11 +1134,6 @@ function buildLegacyStateMigrationSteps(
         env: { ...env, OPENCLAW_STATE_DIR: stateDir },
       }),
     ),
-    finalStep(() =>
-      runLegacyMigrationPlans(
-        detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
-      ),
-    ),
     finalStep(
       () =>
         isDoctor && detected.stateSchema.hasLegacy
@@ -1216,11 +1164,6 @@ function buildLegacyStateMigrationSteps(
         kind: "acp-session-metadata",
       },
       finalStep(() => migrateLegacyAgentDir(detected, now)),
-      finalStep(() =>
-        runLegacyMigrationPlans(
-          detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
-        ),
-      ),
     );
   }
 
@@ -1470,7 +1413,6 @@ export async function autoMigrateLegacyState(params: {
     !hasCustomAgentDir &&
     !detected.sessions.hasLegacy &&
     !detected.agentDir.hasLegacy &&
-    !detected.channelPlans.hasLegacy &&
     !detected.pluginPlans?.hasLegacy &&
     !detected.pluginStateSidecar.hasLegacy &&
     !detected.pluginInstallIndex.hasLegacy &&

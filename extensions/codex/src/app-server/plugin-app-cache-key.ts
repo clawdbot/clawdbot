@@ -10,7 +10,10 @@ import {
   buildCodexAppInventoryCacheKey,
   type CodexAppInventoryCacheKeyInput,
 } from "./app-inventory-cache.js";
-import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
+import {
+  resolveCodexAppServerHomeDir,
+  resolveCodexAppServerLocalHomeDir,
+} from "./auth-start-options.js";
 import type { CodexAppServerRuntimeIdentity } from "./client.js";
 import {
   resolveCodexAppServerUserHomeDir,
@@ -103,7 +106,7 @@ function resolveCodexAppServerConnectionHome(
   if (start.homeScope === "user") {
     return resolveCodexAppServerUserHomeDir(process.env);
   }
-  return agentDir ? resolveCodexAppServerHomeDir(agentDir) : null;
+  return agentDir ? resolveCodexAppServerLocalHomeDir(start, agentDir) : null;
 }
 
 /** Serializes app-server endpoint identity, including credential fingerprints. */

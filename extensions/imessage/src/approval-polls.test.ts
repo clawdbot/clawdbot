@@ -14,8 +14,10 @@ const resolverMocks = vi.hoisted(() => ({
   isApprovalNotFoundError: vi.fn(() => false),
 }));
 
-vi.mock("./approval-resolver.js", () => ({
-  resolveIMessageApproval: resolverMocks.resolveIMessageApproval,
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: resolverMocks.resolveIMessageApproval,
+}));
+vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
   isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
 }));
 

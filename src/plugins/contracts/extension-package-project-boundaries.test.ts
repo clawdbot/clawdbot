@@ -57,7 +57,9 @@ const MEMORY_HOST_SDK_EXPORTS = [
   "./status",
 ] as const;
 const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
+  "packages/memory-host-sdk/src/host/config-utils.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime.ts",

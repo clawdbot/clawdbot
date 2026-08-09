@@ -37,7 +37,7 @@ vi.mock("../agents/sandbox/docker.js", () => ({
   validateSandboxContainerEngineTarget,
 }));
 
-vi.mock("../agents/sandbox/registry.js", () => ({
+vi.mock("./doctor-sandbox-legacy-registry.js", () => ({
   inspectLegacySandboxRegistryFiles,
   migrateLegacySandboxRegistryFiles,
 }));

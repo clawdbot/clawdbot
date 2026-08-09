@@ -151,9 +151,9 @@ async function startDeterministicProvider() {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
     stop: async () => {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }
@@ -161,7 +161,6 @@ async function startDeterministicProvider() {
 async function connectOperator(gateway: GatewayHandle): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
     const finish = (error?: Error) => {
       if (settled) {
         return;
@@ -192,7 +191,7 @@ async function connectOperator(gateway: GatewayHandle): Promise<GatewayClient> {
       onConnectError: (error) => finish(error),
       onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
     });
-    timeout = setTimeout(
+    const timeout = setTimeout(
       () => finish(new Error(`Gateway client connection timed out:\n${gateway.logs()}`)),
       REQUEST_TIMEOUT_MS,
     );

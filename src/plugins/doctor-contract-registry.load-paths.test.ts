@@ -154,6 +154,16 @@ function writeDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: string): vo
         name: "Load Path Session Owner",
         version: "0.0.0-test",
         configSchema: {},
+        sessionRouteStateOwners: [
+          {
+            id: "load-path-session-owner",
+            label: "Load Path Session Owner",
+            providerIds: ["load-path-provider"],
+            runtimeIds: ["load-path-runtime"],
+            cliSessionKeys: ["load-path-cli"],
+            authProfilePrefixes: ["load-path:"],
+          },
+        ],
       },
       null,
       2,
@@ -161,20 +171,24 @@ function writeDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: string): vo
     "utf8",
   );
   fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n", "utf8");
+}
+
+function writeLegacyDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: string): void {
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify({ id: pluginId, configSchema: {} }),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n", "utf8");
   fs.writeFileSync(
     path.join(pluginRoot, "doctor-contract-api.cjs"),
-    `
-module.exports = {
-  sessionRouteStateOwners: [
-    {
-      id: "load-path-session-owner",
-      label: "Load Path Session Owner",
-      providerIds: ["load-path-provider"],
-      runtimeIds: ["load-path-runtime"],
-      cliSessionKeys: ["load-path-cli"],
-      authProfilePrefixes: ["load-path:"],
-    },
-  ],
+    `module.exports = {
+  sessionRouteStateOwners: [{
+    id: "legacy-load-path-owner",
+    label: "Legacy Load Path Owner",
+    providerIds: ["legacy-provider"],
+  }],
 };
 `,
     "utf8",
@@ -303,6 +317,30 @@ describe("doctor contract registry load-path plugins", () => {
         runtimeIds: ["load-path-runtime"],
         cliSessionKeys: ["load-path-cli"],
         authProfilePrefixes: ["load-path:"],
+      },
+    ]);
+  });
+
+  it("keeps the deprecated module owner route for external load-path plugins", () => {
+    const stateDir = makeTempDir();
+    const pluginRoot = makeTempDir();
+    const pluginId = "legacy-load-path-owner";
+    writeLegacyDoctorSessionOwnerPlugin(pluginRoot, pluginId);
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
+
+    expect(
+      listPluginDoctorSessionRouteStateOwners({
+        config,
+        env: makeHermeticDoctorEnv(stateDir),
+      }),
+    ).toEqual([
+      {
+        id: "legacy-load-path-owner",
+        label: "Legacy Load Path Owner",
+        providerIds: ["legacy-provider"],
+        runtimeIds: [],
+        cliSessionKeys: [],
+        authProfilePrefixes: [],
       },
     ]);
   });

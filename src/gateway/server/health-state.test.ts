@@ -5,10 +5,20 @@ import type { HealthSummary } from "../health/types.js";
 /**
  * Health-state cache tests covering coalescing, sensitive probes, and broadcasts.
  */
-const collectGatewayHealthSnapshotMock = vi.hoisted(() => vi.fn());
+const { collectGatewayHealthSnapshotMock, getUpdateAvailableMock, getUpdateScheduleMock } =
+  vi.hoisted(() => ({
+    collectGatewayHealthSnapshotMock: vi.fn(),
+    getUpdateAvailableMock: vi.fn(),
+    getUpdateScheduleMock: vi.fn(),
+  }));
 
 vi.mock("../health/collector.js", () => ({
   collectGatewayHealthSnapshot: collectGatewayHealthSnapshotMock,
+}));
+
+vi.mock("../../infra/update-startup.js", () => ({
+  getUpdateAvailable: getUpdateAvailableMock,
+  getUpdateSchedule: getUpdateScheduleMock,
 }));
 
 function healthSnapshotCallArg(index = 0) {
@@ -56,8 +66,81 @@ async function loadHealthState() {
   vi.resetModules();
   collectGatewayHealthSnapshotMock.mockReset();
   collectGatewayHealthSnapshotMock.mockResolvedValue(createHealthSummary());
+  getUpdateAvailableMock.mockReset();
+  getUpdateAvailableMock.mockReturnValue(null);
+  getUpdateScheduleMock.mockReset();
+  getUpdateScheduleMock.mockReturnValue(null);
   return await import("./health-state.js");
 }
+
+describe("buildGatewaySnapshot update metadata", () => {
+  it.each([
+    { role: "operator", scopes: ["operator.pairing"], allowed: false },
+    { role: "node", scopes: ["operator.read", "operator.admin"], allowed: false },
+    { role: "operator", scopes: ["operator.read"], allowed: true },
+    { role: "operator", scopes: ["operator.write"], allowed: true },
+    { role: "operator", scopes: ["operator.admin"], allowed: true },
+  ])("resolves $role $scopes read access as $allowed", async ({ role, scopes, allowed }) => {
+    const { canReadDetailedUpdateMetadata } = await import("../events.js");
+
+    expect(canReadDetailedUpdateMetadata(role, scopes)).toBe(allowed);
+  });
+
+  it("omits the schedule and projects legacy availability without update detail access", async () => {
+    const healthState = await loadHealthState();
+    getUpdateAvailableMock.mockReturnValue({
+      currentVersion: "2026.8.7",
+      latestVersion: "2026.8.8",
+      channel: "dev",
+      currentSha: "1111111111111111111111111111111111111111",
+      upstreamRef: "origin/main",
+      upstreamSha: "2222222222222222222222222222222222222222",
+      commitsBehind: 1,
+      commits: [{ sha: "2222222", subject: "Detailed commit subject" }],
+    });
+    getUpdateScheduleMock.mockReturnValue({
+      channel: "dev",
+      autoEnabled: true,
+      install: { kind: "git" },
+    });
+
+    const snapshot = healthState.buildGatewaySnapshot({ includeUpdateDetails: false });
+
+    expect(snapshot.updateAvailable).toEqual({
+      currentVersion: "2026.8.7",
+      latestVersion: "2026.8.8",
+      channel: "dev",
+    });
+    expect(snapshot.updateSchedule).toBeUndefined();
+    expect(getUpdateScheduleMock).not.toHaveBeenCalled();
+  });
+
+  it("includes the full update availability and schedule with update detail access", async () => {
+    const healthState = await loadHealthState();
+    const updateAvailable = {
+      currentVersion: "2026.8.7",
+      latestVersion: "2026.8.8",
+      channel: "dev",
+      currentSha: "1111111111111111111111111111111111111111",
+      upstreamRef: "origin/main",
+      upstreamSha: "2222222222222222222222222222222222222222",
+      commitsBehind: 1,
+      commits: [{ sha: "2222222", subject: "Detailed commit subject" }],
+    };
+    const updateSchedule = {
+      channel: "dev",
+      autoEnabled: true,
+      install: { kind: "git" as const },
+    };
+    getUpdateAvailableMock.mockReturnValue(updateAvailable);
+    getUpdateScheduleMock.mockReturnValue(updateSchedule);
+
+    const snapshot = healthState.buildGatewaySnapshot({ includeUpdateDetails: true });
+
+    expect(snapshot.updateAvailable).toBe(updateAvailable);
+    expect(snapshot.updateSchedule).toBe(updateSchedule);
+  });
+});
 
 describe("refreshGatewayHealthSnapshot", () => {
   beforeEach(() => {

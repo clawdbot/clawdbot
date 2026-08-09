@@ -126,7 +126,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("keep this task isolated");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "main",
@@ -177,7 +177,7 @@ suite.define(() => {
       expect(await place.getByRole("button", { name: "Worktree" }).count()).toBe(0);
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").fill("continue directly");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ cwd: TARGET_REPO, message: "continue directly" });
       expect(create.params).not.toHaveProperty("worktree");
@@ -210,7 +210,7 @@ suite.define(() => {
 
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
       await page.locator(".new-session-page__message").fill("do not run directly");
-      const start = page.getByRole("button", { name: "Start thread" });
+      const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await trigger.click();
       const worktree = place.getByRole("button", { name: "Worktree" });
@@ -265,7 +265,7 @@ suite.define(() => {
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
       await page.locator(".new-session-page__message").fill("do not run directly");
-      const start = page.getByRole("button", { name: "Start thread" });
+      const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await trigger.click();
       const cloud = place.getByRole("button", { name: "Cloud · aws" });
@@ -475,7 +475,7 @@ suite.define(() => {
         await expect.poll(() => start.isDisabled()).toBe(true);
         await page
           .getByText(
-            "The Gateway changed while this thread was starting. Check recent threads before starting this task again.",
+            "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
           )
           .waitFor();
         expect(new URL(page.url()).pathname).toBe("/new");
@@ -541,7 +541,7 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await pollLocatorText(folderLabel).toBe("openclaw");
       await page.locator(".new-session-page__message").fill("retarget this draft");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({

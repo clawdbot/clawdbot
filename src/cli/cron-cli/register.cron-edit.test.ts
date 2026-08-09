@@ -23,6 +23,22 @@ function createCronProgram(): Command {
   return program;
 }
 
+async function expectCronEditRejection(args: string[], message: string): Promise<void> {
+  const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+
+  try {
+    await createCronProgram().parseAsync(["edit", "job-1", ...args], { from: "user" });
+
+    expect(errorSpy).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(message));
+    expect(exitSpy).toHaveBeenCalledExactlyOnceWith(1);
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+  } finally {
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
+  }
+}
+
 describe("cron edit command", () => {
   beforeEach(() => {
     callGatewayFromCli.mockReset();
@@ -104,6 +120,61 @@ describe("cron edit command", () => {
       errorSpy.mockRestore();
       exitSpy.mockRestore();
     }
+  });
+
+  it.each([
+    {
+      label: "empty --agent",
+      args: ["--agent", ""],
+      message: "--agent must not be blank",
+    },
+    {
+      label: "whitespace --agent",
+      args: ["--agent", "   "],
+      message: "--agent must not be blank",
+    },
+    {
+      label: "empty --agent with --clear-agent",
+      args: ["--agent", "", "--clear-agent"],
+      message: "--agent must not be blank",
+    },
+    {
+      label: "whitespace --agent with --clear-agent",
+      args: ["--agent", "   ", "--clear-agent"],
+      message: "--agent must not be blank",
+    },
+    {
+      label: "--agent with --clear-agent",
+      args: ["--agent", "main", "--clear-agent"],
+      message: "Use --agent or --clear-agent, not both",
+    },
+    {
+      label: "empty --session-key",
+      args: ["--session-key", ""],
+      message: "--session-key must not be blank",
+    },
+    {
+      label: "whitespace --session-key",
+      args: ["--session-key", "   "],
+      message: "--session-key must not be blank",
+    },
+    {
+      label: "empty --session-key with --clear-session-key",
+      args: ["--session-key", "", "--clear-session-key"],
+      message: "--session-key must not be blank",
+    },
+    {
+      label: "whitespace --session-key with --clear-session-key",
+      args: ["--session-key", "   ", "--clear-session-key"],
+      message: "--session-key must not be blank",
+    },
+    {
+      label: "--session-key with --clear-session-key",
+      args: ["--session-key", "agent:main:main", "--clear-session-key"],
+      message: "Use --session-key or --clear-session-key, not both",
+    },
+  ])("rejects $label", async ({ args, message }) => {
+    await expectCronEditRejection(args, message);
   });
 
   it("keeps --best-effort-deliver-only edits delivery-only (#83908)", async () => {

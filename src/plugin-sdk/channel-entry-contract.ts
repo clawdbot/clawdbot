@@ -71,6 +71,10 @@ type DefineBundledChannelSetupEntryOptions = {
   plugin: BundledEntryModuleRef;
   secrets?: BundledEntryModuleRef;
   runtime?: BundledEntryModuleRef;
+  /**
+   * @deprecated Export stateMigrations from the plugin doctor contract instead.
+   * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.
+   */
   legacyStateMigrations?: BundledEntryModuleRef;
   legacySessionSurface?: BundledEntryModuleRef;
   registerSetupRuntime?: (api: OpenClawPluginApi) => void;
@@ -79,6 +83,10 @@ type DefineBundledChannelSetupEntryOptions = {
 
 /** Feature flags exposed by bundled setup entries for optional migration/session surfaces. */
 export type BundledChannelSetupEntryFeatures = {
+  /**
+   * @deprecated Declare doctorContract.stateMigrations in openclaw.plugin.json instead.
+   * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.
+   */
   legacyStateMigrations?: boolean;
   legacySessionSurfaces?: boolean;
 };
@@ -134,7 +142,9 @@ const resolvedModulePaths = new Map<string, string>();
 const loadedModuleExports = new Map<string, unknown>();
 const disableBundledEntrySourceFallbackEnv = "OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK";
 
-function isTruthyEnvFlag(value: string | undefined): boolean {
+function isBundledEntrySourceFallbackDisabled(value: string | undefined): boolean {
+  // Presence-based disable is a shipped operator contract; canonical opt-in
+  // truthiness intentionally does not apply to this packaging flag.
   return value !== undefined && !/^(?:0|false)$/iu.test(value.trim());
 }
 
@@ -235,7 +245,7 @@ function resolveBundledEntryModuleCandidates(
   if (!importerPath.startsWith(distExtensionsRoot)) {
     return candidates;
   }
-  if (isTruthyEnvFlag(process.env[disableBundledEntrySourceFallbackEnv])) {
+  if (isBundledEntrySourceFallbackDisabled(process.env[disableBundledEntrySourceFallbackEnv])) {
     return candidates;
   }
 
@@ -297,7 +307,9 @@ function formatBundledEntryModuleOpenFailure(params: {
 }
 
 function createBundledEntryModulePathCacheKey(importMetaUrl: string, specifier: string): string {
-  const sourceFallbackDisabled = isTruthyEnvFlag(process.env[disableBundledEntrySourceFallbackEnv]);
+  const sourceFallbackDisabled = isBundledEntrySourceFallbackDisabled(
+    process.env[disableBundledEntrySourceFallbackEnv],
+  );
   return `${sourceFallbackDisabled ? "1" : "0"}\0${importMetaUrl}\0${specifier}`;
 }
 

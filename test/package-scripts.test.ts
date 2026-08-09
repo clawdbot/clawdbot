@@ -197,6 +197,18 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs Doctor SecretRef ACL coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts",
+    );
+  });
+
+  it("runs the Doctor managed-service SecretRef renderer in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/commands/doctor-gateway-auth-token.windows.test.ts",
+    );
+  });
+
   it("runs legacy session importer atomicity coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/state-migrations.legacy-session-store.test.ts",

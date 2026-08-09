@@ -5,7 +5,6 @@ import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-l
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   resolveOutboundTargetWithPlugin,
   type OutboundTargetResolution,
@@ -22,7 +21,7 @@ function resolveLoadedOutboundChannelPlugin(channel: string): ChannelPlugin | un
 
 /** Resolves targets through an already-loaded channel plugin without bootstrap discovery. */
 export function tryResolveLoadedOutboundTarget(params: {
-  channel: GatewayMessageChannel;
+  channel: string;
   to?: string;
   allowFrom?: string[];
   cfg?: OpenClawConfig;

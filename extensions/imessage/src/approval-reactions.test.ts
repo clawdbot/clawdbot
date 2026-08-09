@@ -37,8 +37,10 @@ function registerIMessageApprovalReactionTarget(
   });
 }
 
-vi.mock("./approval-resolver.js", () => ({
-  resolveIMessageApproval: resolverMocks.resolveIMessageApproval,
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: resolverMocks.resolveIMessageApproval,
+}));
+vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
   isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
 }));
 
@@ -771,6 +773,7 @@ describe("iMessage approval reactions", () => {
       expect.objectContaining({
         approvalId: "exec-self",
         decision: "allow-once",
+        channel: "imessage",
         senderId: "+15551230000",
         gatewayRuntime,
       }),
@@ -853,6 +856,7 @@ describe("iMessage approval reactions", () => {
       approvalId: "exec-service-prefix",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "imessage",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -896,6 +900,7 @@ describe("iMessage approval reactions", () => {
       approvalId: "exec-prefixed",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "imessage",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -953,6 +958,7 @@ describe("iMessage approval reactions", () => {
       approvalId: "exec-dm",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "imessage",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -1020,6 +1026,7 @@ describe("iMessage approval reactions", () => {
       approvalId: "plugin:abc",
       approvalKind: "plugin",
       decision: "allow-once",
+      channel: "imessage",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -1059,6 +1066,7 @@ describe("iMessage approval reactions", () => {
       approvalId: "exec-group",
       approvalKind: "exec",
       decision: "deny",
+      channel: "imessage",
       senderId: "+15551239999",
       gatewayUrl: undefined,
     });

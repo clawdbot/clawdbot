@@ -113,6 +113,7 @@ export class ExtensionRelayBridge {
   private nextExtensionCandidateOrdinal = 1;
   private latestPromotedCandidateOrdinal = 0;
   private pingTimer: NodeJS.Timeout | null = null;
+  private missedPongs = 0;
   private readonly onStateChange?: () => void;
   private readonly onPageShare?: (payload: PageSharePayload) => Promise<void>;
 
@@ -283,6 +284,8 @@ export class ExtensionRelayBridge {
         break;
       }
       case "pong":
+        this.missedPongs = 0;
+        break;
       case "hello":
         break;
     }
@@ -357,13 +360,27 @@ export class ExtensionRelayBridge {
 
   private startPing(): void {
     this.stopPing();
+    const owner = this.extension;
     this.pingTimer = setInterval(() => {
+      if (!owner || this.extension !== owner) {
+        return;
+      }
+      // An OPEN socket can outlive a dead worker; only its pong proves commands still arrive.
+      if (++this.missedPongs > 2) {
+        owner.socket.close(4000, "extension heartbeat timeout");
+        if (this.extension === owner) {
+          this.handleExtensionGone();
+          this.onStateChange?.();
+        }
+        return;
+      }
       this.sendToExtension({ type: "ping" });
     }, EXTENSION_PING_INTERVAL_MS);
     this.pingTimer.unref?.();
   }
 
   private stopPing(): void {
+    this.missedPongs = 0;
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;

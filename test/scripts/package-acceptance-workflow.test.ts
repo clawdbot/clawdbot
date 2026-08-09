@@ -2537,8 +2537,10 @@ describe("package artifact reuse", () => {
     expect(publishedUpgradeSurvivor).toContain('local shim_dir="$npm_config_prefix/bin"');
     expect(publishedUpgradeSurvivor).toContain("seed_update_restart_probe_device_auth");
     expect(publishedUpgradeSurvivor).toContain("upgrade survivor restart probe");
-    expect(publishedUpgradeSurvivor).toContain("write_update_restart_service_secretref_env");
+    expect(publishedUpgradeSurvivor).toContain("write_update_restart_service_env");
     expect(publishedUpgradeSurvivor).toContain("GATEWAY_AUTH_TOKEN_REF=%s");
+    expect(publishedUpgradeSurvivor).toContain("OPENCLAW_CLAWHUB_URL=%s");
+    expect(publishedUpgradeSurvivor).toContain("assert-no-requests");
     expect(publishedUpgradeSurvivor).toContain(
       "env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw",
     );
@@ -5894,7 +5896,10 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     writeFileSync(
       ghPath,
       `#!/bin/sh
-case "$2" in
+if [ "$#" -ne 4 ] || [ "$1" != "api" ] || [ "$2" != "--method" ] || [ "$3" != "GET" ]; then
+  exit 1
+fi
+case "$4" in
   */actions/artifacts/123)
     printf '%s\n' '{"id":123,"name":"docker-e2e-package-456-1","expired":false,"digest":"sha256:${"b".repeat(64)}","workflow_run":{"id":456}}'
     ;;

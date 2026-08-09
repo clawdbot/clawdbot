@@ -382,6 +382,45 @@ describe("printDaemonStatus", () => {
     expect(errors.match(/Last gateway error:/g)).toHaveLength(1);
   });
 
+  it("does not claim an indeterminate port is not listening", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "Scheduled Task",
+          loaded: true,
+          loadedText: "registered",
+          notLoadedText: "not registered",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        port: {
+          port: 18789,
+          status: "unknown",
+          listeners: [],
+          hints: [],
+        },
+        rpc: {
+          ok: false,
+          kind: "connect",
+          capability: "unknown",
+          error: "gateway closed (1000): ",
+          url: "ws://127.0.0.1:18789",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).not.toContain("Gateway port 18789 is not listening");
+  });
+
   it("prints GUI-session wording before generic missing-supervision wording", () => {
     printDaemonStatus(
       {

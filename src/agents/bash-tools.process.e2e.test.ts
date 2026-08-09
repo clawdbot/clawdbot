@@ -1,11 +1,15 @@
 import { afterEach, expect, test } from "vitest";
-import { getSession } from "./bash-process-registry.js";
+import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
+import { findTaskByRunId } from "../tasks/task-registry-query.js";
+import { getFinishedSession, getSession, markBackgrounded } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
+  resetSystemEventsForTest();
 });
 
 function shellQuote(value: string): string {
@@ -21,6 +25,206 @@ function currentNodeEvalCommand(source: string): string {
 function textContent(result: { content: Array<{ type: string; text?: string }> }): string {
   return result.content.find((part) => part.type === "text")?.text ?? "";
 }
+
+const SYNTHETIC_FINALIZER_CREDENTIAL = ["sk", "synthetic", "fixture", "never", "real"].join("-");
+
+test.skipIf(process.platform === "win32").each([
+  {
+    name: "post-exit finalizer failure",
+    child: 'setTimeout(() => { process.stdout.write("REAL_CHILD_OUTPUT"); process.exit(0); }, 80)',
+    timeoutSec: 5,
+    finalizerError: `REAL_FINALIZER_DIAGNOSTIC Authorization: Bearer ${SYNTHETIC_FINALIZER_CREDENTIAL}`,
+    expectedStatus: "failed",
+    expectedExitCode: undefined,
+    expectedExitLabel: "unknown exit code",
+  },
+  {
+    name: "normal nonzero child exit",
+    child: 'setTimeout(() => { process.stdout.write("REAL_CHILD_OUTPUT"); process.exit(7); }, 80)',
+    timeoutSec: 5,
+    finalizerError: undefined,
+    expectedStatus: "completed",
+    expectedExitCode: 7,
+    expectedExitLabel: "code 7",
+  },
+  {
+    name: "timeout after a clean child exit",
+    child:
+      'process.on("SIGTERM", () => process.exit(0)); process.stdout.write("REAL_CHILD_OUTPUT"); setInterval(() => {}, 1000)',
+    timeoutSec: 1,
+    finalizerError: undefined,
+    expectedStatus: "failed",
+    expectedExitCode: 0,
+    expectedExitLabel: "code 0",
+  },
+] as const)(
+  "keeps $name truthful across a real background child, notification, and waiting poll",
+  async ({
+    name,
+    child,
+    timeoutSec,
+    finalizerError,
+    expectedStatus,
+    expectedExitCode,
+    expectedExitLabel,
+  }) => {
+    const scopeKey = `agent:main:process-terminal-${name.replaceAll(" ", "-")}`;
+    const run = await runExecProcess({
+      command: `real-process-terminal-${name}`,
+      workdir: process.cwd(),
+      env: {},
+      sandbox: {
+        containerName: "process-terminal-proof",
+        workspaceDir: process.cwd(),
+        containerWorkdir: process.cwd(),
+        async buildExecSpec() {
+          return {
+            argv: [process.execPath, "-e", child],
+            env: {},
+            stdinMode: "pipe-closed",
+          };
+        },
+        async finalizeExec() {
+          if (finalizerError) {
+            throw new Error(finalizerError);
+          }
+        },
+      },
+      usePty: false,
+      warnings: [],
+      maxOutput: 10_000,
+      pendingMaxOutput: 10_000,
+      notifyOnExit: true,
+      notifyOnExitEmptySuccess: true,
+      sessionKey: scopeKey,
+      scopeKey,
+      timeoutSec,
+    });
+    markBackgrounded(run.session);
+
+    const processTool = createProcessTool({ scopeKey });
+    const pendingPoll = processTool.execute(`process-terminal-poll-${name}`, {
+      action: "poll",
+      sessionId: run.session.id,
+      timeout: 2_000,
+    });
+
+    const outcome = await run.promise;
+    const notification = peekSystemEventEntries(scopeKey)[0]?.text;
+    const poll = await pendingPoll;
+    const details = poll.details as { status?: string; exitCode?: number };
+
+    expect(outcome.status).toBe(expectedStatus);
+    expect(details.status).toBe(expectedStatus);
+    expect(details.exitCode).toBe(expectedExitCode);
+    expect(getFinishedSession(run.session.id)?.status).toBe(expectedStatus);
+    expect(textContent(poll)).toContain(`Process exited with ${expectedExitLabel}.`);
+    expect(notification).toContain(expectedExitLabel);
+    if (finalizerError) {
+      expect(textContent(poll)).toContain("REAL_FINALIZER_DIAGNOSTIC");
+      expect(notification).toContain("REAL_FINALIZER_DIAGNOSTIC");
+      expect(textContent(poll)).not.toContain(SYNTHETIC_FINALIZER_CREDENTIAL);
+      expect(notification).not.toContain(SYNTHETIC_FINALIZER_CREDENTIAL);
+      expect(getFinishedSession(run.session.id)?.aggregated).not.toContain(
+        SYNTHETIC_FINALIZER_CREDENTIAL,
+      );
+      expect(notification).not.toContain("code 0");
+    }
+  },
+);
+
+test.skipIf(process.platform === "win32").each([
+  { name: "quiet successful exit", exitCode: 0, output: "", expectsNotification: false },
+  { name: "quiet nonzero exit", exitCode: 7, output: "", expectsNotification: true },
+  { name: "nonzero exit with output", exitCode: 7, output: "VISIBLE", expectsNotification: true },
+])(
+  "preserves default completion wake behavior for a real $name",
+  async ({ name, exitCode, output, expectsNotification }) => {
+    const scopeKey = `agent:main:process-default-wake-${name.replaceAll(" ", "-")}`;
+    const execTool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: true,
+      backgroundMs: 0,
+      timeoutSec: 10,
+      notifyOnExit: true,
+      notifyOnExitEmptySuccess: false,
+      sessionKey: scopeKey,
+      scopeKey,
+    });
+    const script = `process.stdout.write(${JSON.stringify(output)}); process.exit(${exitCode});`;
+    const started = await execTool.execute(`process-default-wake-${name}`, {
+      command: currentNodeEvalCommand(script),
+      background: true,
+    });
+    const sessionId = (started.details as { sessionId?: string }).sessionId;
+    expect(sessionId).toEqual(expect.any(String));
+    if (!sessionId) {
+      throw new Error("exec did not return a background session id");
+    }
+
+    await expect
+      .poll(() => getFinishedSession(sessionId), { timeout: 5_000, interval: 25 })
+      .toBeDefined();
+    expect(findTaskByRunId(`exec:${sessionId}`)?.status).toBe(
+      exitCode === 0 ? "succeeded" : "failed",
+    );
+    const events = peekSystemEventEntries(scopeKey);
+    expect(events).toHaveLength(expectsNotification ? 1 : 0);
+    if (expectsNotification) {
+      expect(events[0]?.text).toContain(`code ${exitCode}`);
+      if (output) {
+        expect(events[0]?.text).toContain(output);
+      }
+    }
+  },
+);
+
+test.skipIf(process.platform === "win32")(
+  "consumes a real notify-on-exit event when process poll returns the terminal result",
+  async () => {
+    const scopeKey = "agent:main:process-notify-poll";
+    const execTool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: true,
+      backgroundMs: 0,
+      timeoutSec: 10,
+      notifyOnExit: true,
+      notifyOnExitEmptySuccess: true,
+      sessionKey: scopeKey,
+      scopeKey,
+    });
+    const processTool = createProcessTool({ scopeKey });
+    const marker = "REAL_NOTIFY_ON_EXIT";
+    const started = await execTool.execute("process-notify-start", {
+      command: currentNodeEvalCommand(`process.stdout.write(${JSON.stringify(marker)});`),
+      background: true,
+    });
+    expect(started.details).toMatchObject({ status: "running" });
+    const sessionId = (started.details as { sessionId?: string }).sessionId;
+    expect(sessionId).toEqual(expect.any(String));
+    if (!sessionId) {
+      throw new Error("exec did not return a background session id");
+    }
+
+    await expect
+      .poll(() => peekSystemEventEntries(scopeKey).some((event) => event.text.includes(marker)), {
+        timeout: 5_000,
+        interval: 25,
+      })
+      .toBe(true);
+
+    const poll = await processTool.execute("process-notify-poll", {
+      action: "poll",
+      sessionId,
+    });
+    expect(poll.details).toMatchObject({ status: "completed", sessionId });
+    expect(peekSystemEventEntries(scopeKey)).toHaveLength(0);
+  },
+);
 
 test.skipIf(process.platform === "win32")(
   "controls one real interactive background child through exec and process tools",

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isMissingPathError } from "../../infra/errors.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -252,7 +253,7 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
         continue;
       }
     } catch (err) {
-      if (!isNotFoundError(err)) {
+      if (!isMissingPathError(err)) {
         log.warn(`failed to inspect plugin skill symlink "${linkPath}": ${String(err)}`);
         continue;
       }
@@ -300,7 +301,7 @@ function removeGeneratedPluginSkillEntry(linkPath: string): void {
       return;
     }
   } catch (err) {
-    if (isNotFoundError(err)) {
+    if (isMissingPathError(err)) {
       return;
     }
   }
@@ -309,12 +310,4 @@ function removeGeneratedPluginSkillEntry(linkPath: string): void {
   } catch {
     // best-effort cleanup
   }
-}
-
-function isNotFoundError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const code = (err as Record<string, unknown>).code;
-  return code === "ENOENT" || code === "ENOTDIR";
 }

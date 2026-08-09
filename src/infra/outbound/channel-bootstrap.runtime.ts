@@ -10,23 +10,17 @@ import { loadPluginRegistryHandle } from "../../plugins/loader.js";
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
-import type { DeliverableMessageChannel } from "../../utils/message-channel.js";
 import { pruneMapToMaxSize } from "../map-size.js";
 
 const MAX_BOOTSTRAP_CONFIG_GENERATIONS = 64;
 let bootstrapRegistryGeneration: string | undefined;
-const bootstrapRegistriesByConfig = new Map<
-  string,
-  Map<DeliverableMessageChannel, PluginRegistry | null>
->();
+const bootstrapRegistriesByConfig = new Map<string, Map<string, PluginRegistry | null>>();
 
 function resolveBootstrapRegistryGeneration(): string {
   return String(getActivePluginRegistryVersion());
 }
 
-function resolveBootstrapRegistries(
-  cfg: OpenClawConfig,
-): Map<DeliverableMessageChannel, PluginRegistry | null> {
+function resolveBootstrapRegistries(cfg: OpenClawConfig): Map<string, PluginRegistry | null> {
   const registryGeneration = resolveBootstrapRegistryGeneration();
   if (registryGeneration !== bootstrapRegistryGeneration) {
     bootstrapRegistryGeneration = registryGeneration;
@@ -42,7 +36,7 @@ function resolveBootstrapRegistries(
   // Agent-scoped configs may interleave within one registry generation. Keep a
   // bounded LRU so one caller cannot evict another on every delivery attempt.
   pruneMapToMaxSize(bootstrapRegistriesByConfig, MAX_BOOTSTRAP_CONFIG_GENERATIONS - 1);
-  const registries = new Map<DeliverableMessageChannel, PluginRegistry | null>();
+  const registries = new Map<string, PluginRegistry | null>();
   bootstrapRegistriesByConfig.set(configKey, registries);
   return registries;
 }
@@ -59,14 +53,14 @@ function channelEntryCanSend(entry: PluginChannelRegistration | undefined): bool
 
 function findChannelEntry(
   registry: ReturnType<typeof getActivePluginRegistry>,
-  channel: DeliverableMessageChannel,
+  channel: string,
 ): PluginChannelRegistration | undefined {
   return registry?.channels?.find((entry) => entry?.plugin?.id === channel);
 }
 
 function resolveSendCapableRegistry(
   registry: PluginRegistry | null | undefined,
-  channel: DeliverableMessageChannel,
+  channel: string,
 ): PluginRegistry | undefined {
   return registry && channelEntryCanSend(findChannelEntry(registry, channel))
     ? registry
@@ -75,7 +69,7 @@ function resolveSendCapableRegistry(
 
 /** Loads runtime plugins on demand when a selected outbound channel has only a setup shell. */
 export function bootstrapOutboundChannelPlugin(params: {
-  channel: DeliverableMessageChannel;
+  channel: string;
   cfg?: OpenClawConfig;
 }): PluginRegistry | undefined {
   const cfg = params.cfg;

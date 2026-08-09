@@ -406,9 +406,6 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         ${params.triggerStatusLabel || !triggerMeta
           ? nothing
           : html`<span class="chat-controls__trigger-meta">${triggerMeta}</span>`}
-        <span class="chat-controls__inline-select-icon" aria-hidden="true">
-          ${icons.chevronDown}
-        </span>
       </summary>
       <div
         class="chat-controls__inline-select-menu chat-controls__model-menu"

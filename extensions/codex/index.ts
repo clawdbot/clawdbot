@@ -133,9 +133,13 @@ export default definePluginEntry({
         api,
         bindingStore,
         control: sessionCatalogControl,
+        getPluginConfig: resolveCurrentPluginConfig,
         getRuntimeConfig: resolveCurrentConfig,
       });
-      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
+      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl, {
+        getPluginConfig: resolveCurrentPluginConfig,
+        getRuntimeConfig: resolveCurrentConfig,
+      })) {
         api.registerNodeHostCommand(command);
       }
     }

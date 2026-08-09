@@ -501,9 +501,9 @@ export async function createOpenClawTestInstance(
   const releaseGatewayChild = async (
     target: OpenClawTestProcess,
     deadline: number,
-    options: GatewayProcessStopOptions = {},
+    stopOptions: GatewayProcessStopOptions = {},
   ): Promise<boolean> => {
-    const closed = await stopGatewayProcess(target, deadline, stopTimeoutMs, options);
+    const closed = await stopGatewayProcess(target, deadline, stopTimeoutMs, stopOptions);
     if (closed && child === target) {
       child = undefined;
     }

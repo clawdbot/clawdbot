@@ -221,6 +221,59 @@ describe("authorizeSlackSystemEventSender", () => {
     expect(conversationsMembers).toHaveBeenCalledTimes(1);
   });
 
+  it("authorizes an owner found on a later channel member page", async () => {
+    type MembersResponse = {
+      members: string[];
+      response_metadata: { next_cursor?: string };
+    };
+    const conversationsMembers = vi
+      .fn<() => Promise<MembersResponse>>()
+      .mockResolvedValueOnce({
+        members: ["UOTHER"],
+        response_metadata: { next_cursor: "cursor-next" },
+      })
+      .mockResolvedValueOnce({ members: ["UOWNER"], response_metadata: {} });
+    const { authorize } = makeChannelMemberAuth(conversationsMembers);
+
+    await expect(authorize()).resolves.toBe(true);
+    expect(conversationsMembers.mock.calls).toEqual([
+      [{ token: "xoxb-test", channel: "C1", limit: 999 }],
+      [{ token: "xoxb-test", channel: "C1", limit: 999, cursor: "cursor-next" }],
+    ]);
+  });
+
+  it.each([
+    ["a repeated cursor", ["cursor-a", "cursor-a"]],
+    ["a cursor cycle", ["cursor-a", "cursor-b", "cursor-a"]],
+  ] as const)(
+    "denies channel bot authorization on %s and retries cleanly",
+    async (_name, cursors) => {
+      type MembersResponse = {
+        members: string[];
+        response_metadata: { next_cursor?: string };
+      };
+      const remainingCursors = [...cursors];
+      const conversationsMembers = vi.fn(async (): Promise<MembersResponse> => {
+        const nextCursor = remainingCursors.shift();
+        if (!nextCursor) {
+          throw new Error("channel member pagination escaped the cursor guard");
+        }
+        return { members: ["UOWNER"], response_metadata: { next_cursor: nextCursor } };
+      });
+      const { authorize } = makeChannelMemberAuth(conversationsMembers);
+
+      await expect(authorize()).resolves.toBe(false);
+      expect(conversationsMembers).toHaveBeenCalledTimes(cursors.length);
+
+      conversationsMembers.mockResolvedValueOnce({
+        members: ["UOWNER"],
+        response_metadata: {},
+      });
+      await expect(authorize()).resolves.toBe(true);
+      expect(conversationsMembers).toHaveBeenCalledTimes(cursors.length + 1);
+    },
+  );
+
   it.each([
     {
       name: "keeps non-interactive channel senders open when only global allowFrom is configured",

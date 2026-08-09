@@ -1713,7 +1713,7 @@ openclaw-chat-session-rail {
 
 .chat-session-rail {
   position: absolute;
-  top: 0;
+  top: 12px;
   right: 12px;
   z-index: 30;
   border: 1px solid var(--border);

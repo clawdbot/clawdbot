@@ -89,13 +89,11 @@ export async function cleanupCodexAttempt(
     terminalState.turnSucceeded &&
     !isIncognitoSessionKey(params.sessionKey) &&
     params.cleanupBundleMcpOnRunEnd !== true &&
-    !connection.activeContextEngine &&
     resourceState.thread.liveThreadConfigFingerprint !== undefined &&
     resourceState.thread.clientId === resolveCodexAppServerClientInstanceId(resourceState.client) &&
     resourceState.thread.preserveNativeModel !== true &&
     resourceState.thread.connectionScope !== "supervision" &&
-    !resourceState.thread.ringZeroConfigFingerprint &&
-    !resourceState.thread.contextEngine
+    !resourceState.thread.ringZeroConfigFingerprint
       ? (await bindingStore.read(bindingIdentity))?.threadId === resourceState.thread.threadId &&
         (await bindingStore.withLease(bindingIdentity, async () => {
           // Reset/end uses this same generation lease. Never publish an old
@@ -108,18 +106,19 @@ export async function cleanupCodexAttempt(
           return await retainCodexAppServerLiveThread(
             resourceState.client,
             resourceState.thread.threadId,
-            async (threadId) => {
-              const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
-                threadId,
-                timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-              });
-              if (!released) {
-                await closeCodexStartupClientBestEffort(resourceState.client);
-                throw new CodexAppServerUnsafeSubscriptionError(
-                  `Codex retained thread subscription could not be released: ${threadId}`,
-                );
-              }
-            },
+            resourceState.thread.liveThreadOwnership?.release ??
+              (async (threadId) => {
+                const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
+                  threadId,
+                  timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+                });
+                if (!released) {
+                  await closeCodexStartupClientBestEffort(resourceState.client);
+                  throw new CodexAppServerUnsafeSubscriptionError(
+                    `Codex retained thread subscription could not be released: ${threadId}`,
+                  );
+                }
+              }),
             resourceState.thread.liveThreadConfigFingerprint,
             connection.mutable.pluginAppServer.serviceTier,
           );
@@ -172,6 +171,7 @@ export async function cleanupCodexAttempt(
     log: embeddedAgentLog,
     cleanup: async () => {
       await prompt.context.attemptTools.scopedMcpTools?.dispose();
+      await prompt.context.attemptTools.scheduledConfiguredMcp?.dispose();
     },
   });
   runAbortController.signal.removeEventListener("abort", abortListener);

@@ -119,6 +119,9 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain(
+      '-e OPENCLAW_LIVE_CODEX_HARNESS_MULTI_SESSION_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_MULTI_SESSION_PROBE:-0}"',
+    );
+    expect(script).toContain(
       '-e OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS="${OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS:-0}"',
     );
     expect(script).toContain(

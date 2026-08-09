@@ -26,7 +26,7 @@ import { resolveCronAgentSessionKey } from "./session-key.js";
 export type DeliveryTargetResolution =
   | {
       ok: true;
-      channel: Exclude<OutboundChannel, "none">;
+      channel: OutboundChannel;
       to: string;
       accountId?: string;
       threadId?: string | number;
@@ -34,7 +34,7 @@ export type DeliveryTargetResolution =
     }
   | {
       ok: false;
-      channel?: Exclude<OutboundChannel, "none">;
+      channel?: OutboundChannel;
       to?: string;
       accountId?: string;
       threadId?: string | number;
@@ -118,7 +118,7 @@ function shouldCarrySessionThread(params: {
 }
 
 function stripSelectedProviderPrefix(params: {
-  channel: Exclude<OutboundChannel, "none">;
+  channel: OutboundChannel;
   to?: string;
 }): string | undefined {
   const trimmed = params.to?.trim();
@@ -196,7 +196,7 @@ export async function resolveDeliveryTarget(
     allowMismatchedLastTo,
   });
 
-  let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
+  let fallbackChannel: OutboundChannel | undefined;
   let channelResolutionError: Error | undefined;
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {

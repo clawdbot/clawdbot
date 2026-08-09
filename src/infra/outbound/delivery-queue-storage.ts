@@ -80,7 +80,7 @@ export type QueuedReplyPayloadSendingHook = {
 };
 
 export type QueuedDeliveryPayload = {
-  channel: Exclude<OutboundChannel, "none">;
+  channel: OutboundChannel;
   to: string;
   accountId?: string;
   /** Original queue durability policy when known. */

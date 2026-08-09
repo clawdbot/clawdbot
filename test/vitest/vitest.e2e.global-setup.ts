@@ -28,6 +28,8 @@ export type SharedE2EArtifactSetupOptions = {
   runCommand?: E2ESetupCommandRunner;
 };
 
+type SetupCommandRunner = (args: string[], env: NodeJS.ProcessEnv) => Promise<number>;
+
 function formatSetupCommandExit(code: number | null, signal: NodeJS.Signals | null): string {
   if (code !== null) {
     return `exit ${code}`;
@@ -122,6 +124,85 @@ export async function buildSharedE2EArtifacts({
   });
 }
 
+export function runE2eSetupCommand(args: string[], env: NodeJS.ProcessEnv): Promise<number> {
+  const child = spawn(process.execPath, args, {
+    cwd: process.cwd(),
+    detached: false,
+    env,
+    stdio: ["inherit", "pipe", "pipe"],
+  });
+  child.stdout.pipe(process.stdout, { end: false });
+  child.stderr.pipe(process.stderr, { end: false });
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timedOut = false;
+    let forceKillTimeout: NodeJS.Timeout | null = null;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      forceKillTimeout = setTimeout(() => {
+        child.kill("SIGKILL");
+      }, E2E_SETUP_COMMAND_KILL_GRACE_MS);
+    }, E2E_SETUP_COMMAND_TIMEOUT_MS);
+
+    const settle = (error: Error | undefined, status?: number) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (forceKillTimeout !== null) {
+        clearTimeout(forceKillTimeout);
+      }
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(status ?? 1);
+    };
+
+    child.once("error", (error) => {
+      settle(new Error(`E2E setup command failed to start: ${error.message}`));
+    });
+    child.once("close", (status, signal) => {
+      if (signal) {
+        const prefix = timedOut
+          ? `E2E setup command timed out after ${E2E_SETUP_COMMAND_TIMEOUT_MS}ms`
+          : "E2E setup command terminated";
+        settle(new Error(`${prefix} by ${signal}: ${args.join(" ")}`));
+        return;
+      }
+      settle(undefined, status ?? 1);
+    });
+  });
+}
+
+export async function runE2eGlobalSetup(
+  runCommand: SetupCommandRunner = runE2eSetupCommand,
+): Promise<void> {
+  const commands = [
+    {
+      args: ["scripts/run-node.mjs", "--version"],
+      env: {
+        ...process.env,
+        OPENCLAW_BUILD_PRIVATE_QA: "1",
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+      },
+    },
+    {
+      args: ["scripts/tsdown-build.mjs", "--config", "tsdown.ai.config.ts"],
+      env: process.env,
+    },
+  ];
+  for (const { args, env } of commands) {
+    const status = await runCommand(args, env);
+    if (status !== 0) {
+      throw new Error(`E2E setup command failed with exit code ${status}: ${args.join(" ")}`);
+    }
+  }
+}
+
 export default async function setup() {
-  await buildSharedE2EArtifacts();
+  await runE2eGlobalSetup();
 }

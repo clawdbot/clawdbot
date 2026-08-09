@@ -4,6 +4,7 @@ import {
   normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "@openclaw/model-catalog-core/provider-id";
+import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -127,10 +128,6 @@ type AuthSourceEvaluation = Pick<
   ModelAuthAvailabilityEvaluation,
   "availability" | "selectedAuthMode" | "evidence" | "selectedProfileId"
 >;
-
-function hasSecret(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 function modeAllowed(provider: string, target: AuthTarget, mode: string | undefined): boolean {
   const requirement = resolveProviderModelRouteAuthRequirement(mode);
