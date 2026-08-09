@@ -98,7 +98,9 @@ describe("RFB view-only client message filter", () => {
     const framebufferUpdateRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
     const clientFence = Buffer.from([248, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
     const enableContinuousUpdates = Buffer.from([150, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
-    const cutText = Buffer.concat([Buffer.from([6, 0, 0, 0, 0, 0, 0, 8]), Buffer.alloc(8)]);
+    const cutText = Buffer.alloc(16);
+    cutText[0] = 6;
+    cutText.writeInt32BE(-8, 4);
     const capturedSequence = Buffer.concat([
       setPixelFormat,
       setEncodings,
