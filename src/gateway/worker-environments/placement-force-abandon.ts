@@ -101,15 +101,20 @@ export async function forceAbandonWorkerEnvironment(params: {
         (placement?.state === "active" || placement?.state === "draining") &&
         placement.environmentId === pending.environmentId &&
         placement.activeOwnerEpoch === pending.ownerEpoch &&
-        placement.generation === pending.placementGeneration
+        placement.generation ===
+          (placement.state === "active"
+            ? pending.placementGeneration
+            : pending.placementGeneration + 1)
       ) {
         const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
         stagedResultCleanups.push({
           placement,
           refs: [finalRef, preparedWorkerWorkspaceResultRef(finalRef)],
         });
+        placements.failWorkspaceResultAndReleaseTurn(pending, recoveryError);
+      } else {
+        placements.abandonWorkspaceResult(pending);
       }
-      placements.abandonWorkspaceResult(pending);
     }
   }
   for (const placement of placements.listForReconcile()) {

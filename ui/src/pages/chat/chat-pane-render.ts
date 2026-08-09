@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
@@ -78,6 +79,17 @@ import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
+function cloudWorkerPlacementRunError(
+  placement: GatewaySessionRow["placement"],
+): { summary: string } | null {
+  const terminalReason =
+    placement && "terminalReason" in placement ? placement.terminalReason : undefined;
+  if (!terminalReason) {
+    return null;
+  }
+  return { summary: t("chat.cloudWorkerFailed", { error: terminalReason }) };
+}
+
 export class ChatPane extends ChatPaneBrowserAnnotationRender {
   override render() {
     const state = this.state;
@@ -104,6 +116,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       digest: observerDigest,
     });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
+    const placementRunError = cloudWorkerPlacementRunError(selectedSession?.placement);
     const visibleWorkspaceConflict =
       workspaceConflict &&
       this.dismissedWorkspaceConflictRefs.get(selectedSession?.key ?? state.sessionKey) !==
@@ -380,7 +393,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       modelSetupRequired: modelSetupRequired && !selectedSessionArchived,
       onModelSetup: () => this.context.navigate("model-setup"),
       error: state.lastError,
-      runError: catalogKey ? null : (state.chatRunError ?? null),
+      runError: catalogKey ? null : (state.chatRunError ?? placementRunError),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
       approvalBusy: approvalSnapshot?.approvalBusy,
       approvalErrors: approvalSnapshot?.approvalErrors,

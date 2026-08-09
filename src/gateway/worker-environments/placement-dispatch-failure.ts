@@ -1,10 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { redactSensitiveText } from "../../logging/redact.js";
 import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
 } from "./placement-store.js";
+import { boundedWorkerError } from "./service-validation.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
 export type WorkerDispatchPlacement = WorkerSessionPlacementRecord;
@@ -48,6 +47,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "acceptWorkspaceResult"
   | "cancelWorkspaceResultAndReleaseTurn"
   | "completeWorkspaceResultAndReleaseTurn"
+  | "failWorkspaceResultAndReleaseTurn"
   | "abandonWorkspaceResult"
   | "listForReconcile"
   | "releaseTurn"
@@ -71,13 +71,7 @@ export type WorkerActivationBarrier = (params: {
 }) => Promise<WorkerActiveDispatchPlacement>;
 
 const RECOVERY_ERROR_LIMIT = 1_024;
-
-function boundedError(error: unknown): string {
-  const redacted = redactSensitiveText(formatErrorMessage(error), { mode: "tools" })
-    .replace(/\s+/gu, " ")
-    .trim();
-  return truncateUtf16Safe(redacted || "unknown dispatch failure", RECOVERY_ERROR_LIMIT);
-}
+const boundedError = boundedWorkerError;
 
 export function isUnavailableEnvironment(
   environment: NonNullable<ReturnType<WorkerEnvironmentService["get"]>>,
@@ -150,12 +144,7 @@ export function createPlacementFailureActions(deps: {
       return;
     }
     const environment = environments.get(placement.environmentId);
-    if (
-      !environment ||
-      environment.state === "destroyed" ||
-      environment.state === "failed" ||
-      environment.state === "orphaned"
-    ) {
+    if (!environment || isUnavailableEnvironment(environment)) {
       return;
     }
     const teardownErrors = await cleanupEnvironment({
@@ -249,6 +238,15 @@ export function createPlacementFailureActions(deps: {
       return;
     }
     const reconciling = startReconcile(draining);
+    if (
+      !environment ||
+      environment.state === "destroyed" ||
+      environment.state === "failed" ||
+      environment.state === "orphaned"
+    ) {
+      finishReconcilingFailure(reconciling, claimedTurnError, []);
+      return;
+    }
     if (environment && !isUnavailableEnvironment(environment)) {
       const teardownErrors = await cleanupEnvironment({
         environmentId: placement.environmentId,

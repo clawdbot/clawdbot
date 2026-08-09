@@ -322,7 +322,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const isTerminalLiveEvent = (request: WorkerLiveEventParams): boolean =>
     request.event.kind === "lifecycle" &&
-    (request.event.payload.phase === "end" ||
+    (request.event.payload.phase === "finishing" ||
+      request.event.payload.phase === "end" ||
       (request.event.payload.phase === "error" &&
         (request.event.payload.aborted === true ||
           request.event.payload.fallbackExhaustedFailure === true)));
@@ -820,7 +821,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (status === "destroyed" || (status === "unknown" && teardownExpected)) {
       const requested =
         record.destroyRequestedAtMs === null
-          ? store.requestDestroy({ environmentId: record.environmentId, state: record.state })
+          ? store.requestDestroy({
+              environmentId: record.environmentId,
+              state: record.state,
+              ...(status === "destroyed" && !teardownExpected
+                ? {
+                    terminalState: "failed",
+                    lastError: "Worker environment disappeared before teardown was requested",
+                  }
+                : {}),
+            })
           : record;
       const draining = beginDrain(requested);
       await tunnels?.stop(record.environmentId);

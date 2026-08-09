@@ -4411,6 +4411,7 @@ export const en: TranslationMap = {
     },
   },
   chat: {
+    cloudWorkerFailed: "Cloud worker failed: {error}",
     sendErrors: {
       activeLeafChanged: "The session switched branches — review and resend.",
       steerRunNoLongerActive:
