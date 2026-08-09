@@ -41,6 +41,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     string,
     { token: symbol; previous: string | null | undefined; revision: number }
   >();
+  const pendingPinPatches = new Map<string, { token: symbol; previous: boolean; next: boolean }>();
   const preparedWorkSessionKeys = new Set<string>();
 
   const setModelOverride = (key: string, value: string | null | undefined) => {
@@ -91,6 +92,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
       host.publish({ ...state, result: { ...state.result, sessions } });
     }
   };
+
+  const rowPinned = (key: string) =>
+    host.readState().result?.sessions.find((row) => row.key === key)?.pinned === true;
 
   const retireModelOverride = (key: string) => {
     const normalizedKey = key.trim();
@@ -191,8 +195,33 @@ export function createSessionMutations(host: SessionMutationsHost) {
       setModelOverride(key, patchParams.model);
       modelPatchRevision = pendingModelPatches.get(normalizedKey)?.revision ?? 0;
     };
-    if (!options.waitFor) {
+    const nextPinned = patchParams.pinned === true;
+    const pinPatchToken = Symbol();
+    let pinPatchStarted = false;
+    // Sidebar rows read `pinned` straight off the snapshot, so a pin/unpin has
+    // no visible outcome until this flip; the Gateway patch and its list
+    // refresh confirm it afterwards.
+    const startPinPatch = () => {
+      if (patchParams.pinned === undefined || pinPatchStarted) {
+        return;
+      }
+      const pendingPinPatch = pendingPinPatches.get(normalizedKey);
+      pinPatchStarted = true;
+      // `previous` chains through an in-flight pin so a rollback lands on the
+      // last Gateway-confirmed value instead of an older operation's guess.
+      pendingPinPatches.set(normalizedKey, {
+        token: pinPatchToken,
+        previous: pendingPinPatch ? pendingPinPatch.previous : rowPinned(normalizedKey),
+        next: nextPinned,
+      });
+      patchRowLocal(normalizedKey, { pinned: nextPinned });
+    };
+    const startOptimisticPatch = () => {
       startModelPatch();
+      startPinPatch();
+    };
+    if (!options.waitFor) {
+      startOptimisticPatch();
     }
     const settleModelOverride = (completed: boolean) => {
       const pendingModelPatch = pendingModelPatches.get(normalizedKey);
@@ -207,31 +236,57 @@ export function createSessionMutations(host: SessionMutationsHost) {
         }
       }
     };
+    const settlePinPatch = (completed: boolean) => {
+      const pendingPinPatch = pendingPinPatches.get(normalizedKey);
+      if (!pinPatchStarted || !pendingPinPatch) {
+        return;
+      }
+      if (pendingPinPatch.token !== pinPatchToken) {
+        // A newer pin intent owns this row. A completed patch republishes
+        // Gateway truth that predates that intent, so restore the newer value
+        // and hand it this confirmed baseline for its own rollback.
+        if (completed) {
+          pendingPinPatch.previous = nextPinned;
+          if (host.connection.isCurrent(scope)) {
+            patchRowLocal(normalizedKey, { pinned: pendingPinPatch.next });
+          }
+        }
+        return;
+      }
+      pendingPinPatches.delete(normalizedKey);
+      if (!completed && host.connection.isCurrent(scope)) {
+        patchRowLocal(normalizedKey, { pinned: pendingPinPatch.previous });
+      }
+    };
+    const settleOptimisticPatch = (completed: boolean) => {
+      settleModelOverride(completed);
+      settlePinPatch(completed);
+    };
     try {
       if (options.waitFor) {
         await options.waitFor;
         if (!host.connection.isCurrent(scope)) {
-          settleModelOverride(false);
+          settleOptimisticPatch(false);
           return null;
         }
       }
-      startModelPatch();
+      startOptimisticPatch();
       const result = await requestSessionPatch(scope.client, key, patchParams, options);
       if (!host.connection.isCurrent(scope)) {
-        settleModelOverride(false);
+        settleOptimisticPatch(false);
         return null;
       }
       if (!options.deferListRefresh) {
         await host.refreshReplacement(options.agentId);
         if (!host.connection.isCurrent(scope)) {
-          settleModelOverride(false);
+          settleOptimisticPatch(false);
           return null;
         }
       }
-      settleModelOverride(true);
+      settleOptimisticPatch(true);
       return result;
     } catch (error) {
-      settleModelOverride(false);
+      settleOptimisticPatch(false);
       if (!host.connection.isCurrent(scope)) {
         return null;
       }
@@ -361,6 +416,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     },
     retireConnection() {
       pendingModelPatches.clear();
+      pendingPinPatches.clear();
       preparedWorkSessionKeys.clear();
       const state = host.readState();
       if (Object.keys(state.modelOverrides).length > 0) {
@@ -369,6 +425,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     },
     dispose() {
       pendingModelPatches.clear();
+      pendingPinPatches.clear();
       preparedWorkSessionKeys.clear();
     },
   };
