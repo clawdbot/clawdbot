@@ -85,11 +85,19 @@ function runPrepublishAssertion(
   baseUrl?: string,
   packageName?: string,
   version?: string,
+  securityMode?: "required" | "absent",
   cwd = process.cwd(),
 ) {
   return spawnSync(
     process.execPath,
-    [SCRIPT_PATH, "assert-prepublish-requests", baseUrl ?? "", packageName ?? "", version ?? ""],
+    [
+      SCRIPT_PATH,
+      "assert-prepublish-requests",
+      baseUrl ?? "",
+      packageName ?? "",
+      version ?? "",
+      ...(securityMode ? [securityMode] : []),
+    ],
     { cwd, encoding: "utf8", env: { ...process.env } },
   );
 }
@@ -322,7 +330,7 @@ describe("ClawHub fixture server", () => {
       `GET ${whatsappPath}/versions/${version}/security`,
       `GET ${whatsappPath}/versions/${version}/artifact/download`,
     ]);
-    expect(runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, isolatedCwd).status).toBe(
+    expect(runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, undefined, isolatedCwd).status).toBe(
       0,
     );
     const unexpectedStartupRequest = runNoRequestsAssertion(baseUrl, isolatedCwd);

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaProviderMode } from "../../extensions/qa-lab/src/run-config.ts";
 import type { QaSuiteRoundTripProbe } from "../../extensions/qa-lab/src/suite-round-trip.ts";
 
@@ -55,6 +56,37 @@ function resolvePackageTelegramOutputDir(env: NodeJS.ProcessEnv, repoRoot: strin
 }
 
 const DEFAULT_RTT_CHECK_ID = "channel-canary";
+const EXTENDED_STABLE_2026_6_35 = "2026.6.35";
+
+function projectExtendedStable2026_6_35QaConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const { entries, ...agents } = cfg.agents ?? {};
+  const { mediaModels, ...defaults } = agents.defaults ?? {};
+
+  return {
+    ...cfg,
+    // The frozen candidate validates the pre-entries config shape. Keep this
+    // projection at the package harness boundary so current runtime stays canonical.
+    memory: { backend: "builtin" },
+    plugins: {
+      ...cfg.plugins,
+      bundledDiscovery: "compat",
+    },
+    agents: {
+      ...agents,
+      defaults: {
+        ...defaults,
+        ...(mediaModels?.image ? { imageGenerationModel: mediaModels.image } : {}),
+      },
+      list: Object.entries(entries ?? {}).map(([id, agent]) => ({ id, ...agent })),
+    },
+  } as OpenClawConfig;
+}
+
+function resolvePackageConfigTransform(env: NodeJS.ProcessEnv = process.env) {
+  return env.OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION === EXTENDED_STABLE_2026_6_35
+    ? projectExtendedStable2026_6_35QaConfig
+    : undefined;
+}
 
 function resolveRttOptions(env: NodeJS.ProcessEnv, selectedScenarioIds: readonly string[] = []) {
   const explicitCheckIds = splitCsv(env.OPENCLAW_NPM_TELEGRAM_RTT_CHECKS);
@@ -147,9 +179,11 @@ async function resolveTrustedOpenClawCommand(
   if (realCommand !== realPrefix && !realCommand.startsWith(`${realPrefix}${path.sep}`)) {
     throw new Error("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must resolve inside NPM_CONFIG_PREFIX.");
   }
+  const configTransform = resolvePackageConfigTransform(env);
   return {
     executablePath: rawCommand,
     usePackagedPlugins: true,
+    ...(configTransform ? { configTransform } : {}),
   } as const;
 }
 
@@ -241,6 +275,8 @@ export const testing = {
   resolveCredentialSource,
   createRoundTripProbe,
   prioritizeRoundTripProbeScenario,
+  projectExtendedStable2026_6_35QaConfig,
+  resolvePackageConfigTransform,
   resolveRttOptions,
   resolveTrustedOpenClawCommand,
   shouldFailPackageTelegramRun,
