@@ -17,6 +17,9 @@ import {
   readSessionTranscriptMessageEventPage,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
+import {
+  readRecentSessionTranscriptMessageEventsWithGuard,
+} from "./session-accessor.sqlite-guarded-message-events.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
@@ -255,7 +258,7 @@ describe("SQLite active transcript event reconciliation", () => {
     };
 
     try {
-      const concurrentRead = readRecentSessionTranscriptMessageEvents(scope, options);
+      const concurrentRead = readRecentSessionTranscriptMessageEventsWithGuard(scope, options);
       expect(concurrentRead.totalMessages).toBe(1);
       expect(concurrentRead.events.map((entry) => (entry.event as { id?: string }).id)).toEqual([
         "seed",
@@ -265,7 +268,7 @@ describe("SQLite active transcript event reconciliation", () => {
         hasTranscriptEvents: true,
       });
 
-      const afterCommit = readRecentSessionTranscriptMessageEvents(scope, {
+      const afterCommit = readRecentSessionTranscriptMessageEventsWithGuard(scope, {
         maxBytes: 1024 * 1024,
         maxLines: 10,
         maxMessages: 10,

@@ -48,6 +48,7 @@ import {
   replaceOversizedChatHistoryMessages,
   reportOmittedChatHistory,
 } from "./chat-history-budget.js";
+import { SessionTranscriptActiveLeafIdentityUnavailableError } from "./chat-history-guard-error.js";
 import {
   capChatHistoryAroundMessage,
   enrichChatHistoryCompactionMarkers,
@@ -312,7 +313,7 @@ async function handleChatHistoryRequest({
     if (!isSessionTranscriptProjectionUnavailableError(error)) {
       throw error;
     }
-    const guardUnavailable = error.reason === "active-leaf-identity";
+    const guardUnavailable = error instanceof SessionTranscriptActiveLeafIdentityUnavailableError;
     respond(
       false,
       undefined,

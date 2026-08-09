@@ -1,5 +1,4 @@
 // Reset boundaries project a logical message window without rewriting raw cursor positions.
-import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -8,8 +7,10 @@ import {
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-active-projection.js";
+import { findLatestSessionTranscriptActiveBoundary } from "./session-accessor.sqlite-active-boundary.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 
 type ResetWindowDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -19,7 +20,11 @@ type ResetWindowDatabase = Pick<
   | "transcript_events"
 >;
 
-type ResetWindowProjection = CurrentTranscriptProjection;
+type ResetWindowProjection = {
+  database: OpenClawAgentDatabase;
+  resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
+  state: SessionTranscriptProjectionState;
+};
 
 type VisibleMessagePositions = {
   kept: number[];
@@ -32,38 +37,12 @@ type ResetWindowMessageEvent = {
   seq: number;
 };
 
-type ActiveBoundaryEventType = "compaction" | "reset";
-
-type ActiveBoundaryRow = {
-  active_position: number;
-  event_json: string;
-  event_type: ActiveBoundaryEventType;
-};
-
 type ResetMessageWindow = {
   generation: string | undefined;
   indexedSeq: number;
   keptMessagePositions: number[];
   postBoundaryMessagePosition: number;
 };
-
-export type SessionTranscriptGuardState = { hasTranscriptEvents: boolean } & (
-  | {
-      kind: "empty";
-      expectedEntryOnGuardPath: false;
-      guardLeafEntryId: null;
-    }
-  | {
-      kind: "identified";
-      expectedEntryOnGuardPath: boolean;
-      guardLeafEntryId: string;
-    }
-  | {
-      kind: "unavailable";
-      expectedEntryOnGuardPath: false;
-      guardLeafEntryId: null;
-    }
-);
 
 type ResetMessageWindowCacheEntry = {
   generation: string | undefined;
@@ -138,48 +117,15 @@ function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntr
   pruneMapToMaxSize(resetMessageWindowCache, MAX_RESET_MESSAGE_WINDOW_CACHE);
 }
 
-function sqliteActiveBoundaryEventType() {
-  return /* kysely-allow-raw: boundary type lives inside canonical transcript JSON. */ sql<string>`json_extract(event.event_json, '$.type')`;
-}
-
-function findLatestActiveBoundary(
-  projection: ResetWindowProjection,
-  eventTypes: readonly ActiveBoundaryEventType[],
-): ActiveBoundaryRow | undefined {
-  const db = getResetWindowKysely(projection.database);
-  // Persisted boundary rows can omit ids, so the identity index is incomplete.
-  // Read the canonical event on the selected path or an upgrade can cross a reset.
-  const row = executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    db
-      .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_events as event", (join) =>
-        join
-          .onRef("event.session_id", "=", "active.session_id")
-          .onRef("event.seq", "=", "active.event_seq"),
-      )
-      .select([
-        "active.active_position",
-        "event.event_json",
-        sqliteActiveBoundaryEventType().as("event_type"),
-      ])
-      .where("active.session_id", "=", projection.resolved.sessionId)
-      .where("active.message_position", "is", null)
-      .where(sqliteActiveBoundaryEventType(), "in", eventTypes)
-      .orderBy("active.active_position", "desc")
-      .limit(1),
-  );
-  return row && (row.event_type === "reset" || row.event_type === "compaction")
-    ? { ...row, event_type: row.event_type }
-    : undefined;
-}
-
 function findLatestResetMessageWindow(
   projection: ResetWindowProjection,
   generation: string | undefined,
 ): ResetMessageWindow | null {
   const db = getResetWindowKysely(projection.database);
-  const latestBoundaryRow = findLatestActiveBoundary(projection, ["reset", "compaction"]);
+  const latestBoundaryRow = findLatestSessionTranscriptActiveBoundary(projection, [
+    "reset",
+    "compaction",
+  ]);
   if (!latestBoundaryRow) {
     return null;
   }
@@ -296,78 +242,6 @@ export function resolveVisibleMessagePositions(
     projection,
     resolveResetMessageWindow(projection),
   );
-}
-
-/** Resolves the public history/send guard from the logical selected active-event leaf. */
-export function resolveSessionTranscriptGuardState(
-  projection: ResetWindowProjection,
-  expectedEntryId?: string,
-): SessionTranscriptGuardState {
-  const db = getResetWindowKysely(projection.database);
-  const guardRow = executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    db
-      .selectFrom("session_transcript_active_events as active")
-      .leftJoin("transcript_event_identities as identity", (join) =>
-        join
-          .onRef("identity.session_id", "=", "active.session_id")
-          .onRef("identity.seq", "=", "active.event_seq"),
-      )
-      .select("identity.event_id")
-      .where("active.session_id", "=", projection.resolved.sessionId)
-      .orderBy("active.active_position", "desc")
-      .limit(1),
-  );
-  if (!guardRow) {
-    return {
-      kind: "empty",
-      expectedEntryOnGuardPath: false,
-      guardLeafEntryId: null,
-      hasTranscriptEvents: projection.hasTranscriptEvents,
-    };
-  }
-  // The selected leaf is the final logical active row. Keep an identity gap
-  // distinct from an empty branch so callers fail closed instead of accepting null.
-  if (guardRow.event_id === null) {
-    return {
-      kind: "unavailable",
-      expectedEntryOnGuardPath: false,
-      guardLeafEntryId: null,
-      hasTranscriptEvents: projection.hasTranscriptEvents,
-    };
-  }
-  const guardLeafEntryId = guardRow.event_id;
-  if (!expectedEntryId) {
-    return {
-      kind: "identified",
-      expectedEntryOnGuardPath: false,
-      guardLeafEntryId,
-      hasTranscriptEvents: projection.hasTranscriptEvents,
-    };
-  }
-  const active = executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
-      .select("active.active_position")
-      .where("identity.session_id", "=", projection.resolved.sessionId)
-      .where("identity.event_id", "=", expectedEntryId)
-      .limit(1),
-  );
-  const latestReset = findLatestActiveBoundary(projection, ["reset"]);
-  return {
-    kind: "identified",
-    expectedEntryOnGuardPath:
-      active !== undefined &&
-      (latestReset === undefined || active.active_position >= latestReset.active_position),
-    guardLeafEntryId,
-    hasTranscriptEvents: projection.hasTranscriptEvents,
-  };
 }
 
 export function readVisibleMessageRange(

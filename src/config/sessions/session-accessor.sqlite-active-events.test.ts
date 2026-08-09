@@ -15,10 +15,14 @@ import {
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
-  readSessionTranscriptMessageEventSnapshot,
   SessionTranscriptProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
-import { readSessionTranscriptGuardState } from "./session-accessor.sqlite-active-path.js";
+import {
+  readRecentSessionTranscriptMessageEventsWithGuard,
+  readSessionTranscriptMessageEventPageWithGuard,
+  readSessionTranscriptMessageEventSnapshotWithGuard,
+} from "./session-accessor.sqlite-guarded-message-events.js";
+import { readSessionTranscriptGuardState } from "./session-transcript-guard.runtime.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -337,11 +341,18 @@ describe("SQLite active transcript event projection", () => {
       tokensBefore: 10,
     });
     expect(
-      readRecentSessionTranscriptMessageEvents(scope, {
+      readRecentSessionTranscriptMessageEventsWithGuard(scope, {
         maxBytes: 1_024,
         maxLines: 1,
         maxMessages: 1,
       }).guardLeafEntryId,
+    ).toBe("newer-compaction");
+    expect(
+      readRecentSessionTranscriptMessageEvents(scope, {
+        maxBytes: 1_024,
+        maxLines: 1,
+        maxMessages: 1,
+      }).activeLeafEntryId,
     ).toBe("newer-compaction");
     expect(
       readSessionTranscriptGuardState(scope, "newer-compaction").expectedEntryOnGuardPath,
@@ -357,7 +368,7 @@ describe("SQLite active transcript event projection", () => {
   });
 
   it("uses the logical active leaf while reset fences stale tokens", async () => {
-    expect(readSessionTranscriptMessageEventSnapshot(scope)).toMatchObject({
+    expect(readSessionTranscriptMessageEventSnapshotWithGuard(scope)).toMatchObject({
       events: [],
       guardKind: "empty",
       guardLeafEntryId: null,
@@ -386,13 +397,13 @@ describe("SQLite active transcript event projection", () => {
     });
 
     for (const page of [
-      readSessionTranscriptMessageEventSnapshot(scope),
-      readRecentSessionTranscriptMessageEvents(scope, {
+      readSessionTranscriptMessageEventSnapshotWithGuard(scope),
+      readRecentSessionTranscriptMessageEventsWithGuard(scope, {
         maxBytes: 1_024,
         maxLines: 10,
         maxMessages: 10,
       }),
-      readSessionTranscriptMessageEventPage(scope, { maxMessages: 10, offset: 0 }),
+      readSessionTranscriptMessageEventPageWithGuard(scope, { maxMessages: 10, offset: 0 }),
     ]) {
       expect(page).toMatchObject({
         guardKind: "identified",
@@ -472,7 +483,7 @@ describe("SQLite active transcript event projection", () => {
       .db.prepare("DELETE FROM transcript_event_identities WHERE session_id = ? AND event_id = ?")
       .run(scope.sessionId, "unidentified-tail");
 
-    expect(readSessionTranscriptMessageEventSnapshot(scope)).toMatchObject({
+    expect(readSessionTranscriptMessageEventSnapshotWithGuard(scope)).toMatchObject({
       guardKind: "unavailable",
       guardLeafEntryId: null,
     });
@@ -512,7 +523,7 @@ describe("SQLite active transcript event projection", () => {
     });
     await waitForSessionTranscriptIndexReconcile({ agentId: scope.agentId, env: scope.env });
 
-    expect(readSessionTranscriptMessageEventSnapshot(scope)).toMatchObject({
+    expect(readSessionTranscriptMessageEventSnapshotWithGuard(scope)).toMatchObject({
       events: [],
       guardKind: "empty",
       guardLeafEntryId: null,

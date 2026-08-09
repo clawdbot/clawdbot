@@ -1,5 +1,4 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.js";
 import {
   dropPreSessionStartAnnouncePairs,
   isHeartbeatHistoryTurnBoundaryMessage,
@@ -21,6 +20,7 @@ import {
   type ReadRecentSessionMessagesResult,
 } from "../session-transcript-readers.js";
 import type { loadSessionEntry } from "../session-utils.js";
+import { SessionTranscriptActiveLeafIdentityUnavailableError } from "./chat-history-guard-error.js";
 
 export function readChatHistoryMessageId(message: unknown): string | undefined {
   const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
@@ -54,7 +54,7 @@ function resolveChatHistoryGuardLeaf(
   sessionId: string,
 ): string | null {
   if (page.guardKind === "unavailable") {
-    throw new SessionTranscriptProjectionUnavailableError(sessionId, "active-leaf-identity");
+    throw new SessionTranscriptActiveLeafIdentityUnavailableError(sessionId);
   }
   return page.guardKind === "identified" && typeof page.guardLeafEntryId === "string"
     ? page.guardLeafEntryId

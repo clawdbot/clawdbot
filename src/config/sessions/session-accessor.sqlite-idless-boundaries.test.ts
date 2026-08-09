@@ -7,7 +7,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import { readSessionTranscriptMessageEventPage } from "./session-accessor.sqlite-active-events.js";
-import { readSessionTranscriptGuardState } from "./session-accessor.sqlite-active-path.js";
+import { readSessionTranscriptGuardState } from "./session-transcript-guard.runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

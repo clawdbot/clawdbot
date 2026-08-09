@@ -4,17 +4,20 @@ import {
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
-  readSessionTranscriptMessageEventPage,
-  readSessionTranscriptMessageEventSnapshot,
   readSessionTranscriptMessageEvents,
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
   waitForSessionTranscriptProjection,
-  type SessionTranscriptGuardState,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
   type TranscriptEvent,
 } from "../config/sessions/session-accessor.js";
+import {
+  readRecentSessionTranscriptMessageEventsWithGuard,
+  readSessionTranscriptMessageEventPageWithGuard,
+  readSessionTranscriptMessageEventSnapshotWithGuard,
+  type SessionTranscriptGuardState,
+} from "../config/sessions/session-transcript-guard.runtime.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { aggregateSqliteUsageSnapshots } from "./session-transcript-derived-readers.js";
 import type {
@@ -153,7 +156,7 @@ function readSqliteMessageRecordsSync(target: ResolvedTranscriptReadTarget): Sql
 }
 
 function readSqliteMessageRecords(target: ResolvedTranscriptReadTarget) {
-  const snapshot = readSessionTranscriptMessageEventSnapshot(toTranscriptReadScope(target));
+  const snapshot = readSessionTranscriptMessageEventSnapshotWithGuard(toTranscriptReadScope(target));
   return {
     hasTranscriptEvents: snapshot.hasTranscriptEvents,
     records: extractMessageRecordsFromEventEntries(snapshot.events),
@@ -190,7 +193,10 @@ async function readRecentSqliteMessageRecords(
   totalMessages: number;
 }> {
   const normalized = normalizeRecentSqliteReadOptions(opts);
-  const page = readRecentSessionTranscriptMessageEvents(toTranscriptReadScope(target), normalized);
+  const page = readRecentSessionTranscriptMessageEventsWithGuard(
+    toTranscriptReadScope(target),
+    normalized,
+  );
   return {
     guardKind: page.guardKind,
     guardLeafEntryId: page.guardLeafEntryId,
@@ -436,7 +442,7 @@ export async function readSessionMessagesPageWithStatsAsync(
   opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
-  const page = readSessionTranscriptMessageEventPage(toTranscriptReadScope(target), opts);
+  const page = readSessionTranscriptMessageEventPageWithGuard(toTranscriptReadScope(target), opts);
   if (!page.hasTranscriptEvents && opts.allowResetArchiveFallback === true) {
     const archived = await archivedTranscriptReader(target).readPage({
       ...opts,
