@@ -7,7 +7,6 @@ import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   loadCombinedSessionStoreForGateway,
-  resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   resolveTranscriptStemToSessionKeys,
 } from "openclaw/plugin-sdk/session-transcript-hit";
 import {

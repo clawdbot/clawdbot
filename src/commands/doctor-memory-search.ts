@@ -603,7 +603,7 @@ async function noteMemorySearchHealthForAgent(
   scope: MemoryDoctorAgentScope,
   opts: MemorySearchHealthOptions,
 ): Promise<void> {
-  const { agentId, agentDir, workspaceDir } = scope;
+  const { agentId, agentDir } = scope;
   const noteFn = opts.noteFn ?? note;
   const recallHealth = noteRememberAcrossConversationsHealth({
     cfg,

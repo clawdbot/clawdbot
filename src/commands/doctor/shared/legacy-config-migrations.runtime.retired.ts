@@ -465,7 +465,10 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       rule(
         ["agents", "entries"],
         "agents.entries.*.memory.search.qmd is retired because the QMD memory backend was removed.",
-        (value) => Boolean(getRecord(value) && Object.values(value).some(hasRetiredAgentMemoryQmd)),
+        (value) => {
+          const entries = getRecord(value);
+          return entries ? Object.values(entries).some(hasRetiredAgentMemoryQmd) : false;
+        },
       ),
       rule(
         ["agents", "list"],

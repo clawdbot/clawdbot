@@ -62,7 +62,6 @@ beforeEach(() => {
   clearMemoryPluginState();
   memoryToolsTesting.resetMemorySearchToolCooldowns();
   resetMemoryToolMockState({
-    backend: "builtin",
     searchImpl: async () => [
       {
         path: "MEMORY.md",

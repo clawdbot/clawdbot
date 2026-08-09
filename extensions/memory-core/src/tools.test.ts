@@ -1,8 +1,6 @@
+import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 // Memory Core tests cover tools plugin behavior.
-import {
-  clearMemoryPluginState,
-  registerMemoryCorpusSupplement,
-} from "openclaw/plugin-sdk/memory-host-core";
+import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-host-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemoryCloseMockCalls,
@@ -701,6 +699,8 @@ describe("memory_search unavailable payloads", () => {
         probeVectorAvailability: vi.fn(async () => true),
       },
       debug: {
+        backend: "builtin",
+        purpose: "default",
         managerMs: 17,
       },
     }));
@@ -770,8 +770,6 @@ describe("memory_search corpus labels", () => {
         list: [{ id: "main", default: true }],
       },
       memory: {
-        backend: "builtin",
-
         search: {
           provider: "ollama",
           model: "nomic-embed-text",
@@ -784,8 +782,6 @@ describe("memory_search corpus labels", () => {
         list: [{ id: "main", default: true }],
       },
       memory: {
-        backend: "builtin",
-
         search: {
           provider: "openai",
           model: "text-embedding-3-small",

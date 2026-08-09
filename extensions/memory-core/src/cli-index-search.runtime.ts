@@ -8,7 +8,6 @@ import {
   formatExtraPaths,
   resolveMemoryPluginConfig,
   withMemoryCommand,
-  type MemoryManager,
 } from "./cli-runtime-common.js";
 import {
   defaultRuntime,

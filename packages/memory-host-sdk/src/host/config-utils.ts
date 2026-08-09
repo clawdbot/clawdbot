@@ -12,7 +12,6 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 export { normalizeAgentId };
-export { splitShellArgs } from "../../../../src/utils/shell-argv.js";
 
 // Shared OpenClaw config helpers used by memory host and agent context code.
 
@@ -147,7 +146,7 @@ function resolveRequiredHomeDir(
 }
 
 /** Resolve standalone memory-host paths without importing core home-directory policy. */
-export function resolveMemoryHostUserPath(
+function resolveMemoryHostUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
