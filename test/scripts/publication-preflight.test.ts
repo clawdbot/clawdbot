@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -165,6 +173,25 @@ describe("publication preflight pure gates", () => {
 });
 
 describe("publication preflight real hook behavior", () => {
+  it("keeps automatic maintained-hook setup transparent until explicit opt-in", () => {
+    const bareRemote = mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-publication-preflight-unopted-remote-"),
+    );
+    tempDirs.push(bareRemote);
+    run(bareRemote, "git", ["init", "-q", "--bare"]);
+
+    const { dir } = makeRepository({ remoteUrl: `file://${bareRemote}` });
+    run(dir, "node", [path.join(dir, "scripts", "prepare-git-hooks.mjs")]);
+
+    expect(run(dir, "git", ["config", "--get", "core.hooksPath"])).toBe("git-hooks");
+    const optInPath = path.resolve(
+      dir,
+      run(dir, "git", ["rev-parse", "--git-path", "publication-preflight.enabled"]),
+    );
+    expect(existsSync(optInPath)).toBe(false);
+    run(dir, "git", ["push", "origin", "HEAD"]);
+  });
+
   it("invokes the configured hook for an allowed push and rejects an unallowlisted commit", () => {
     const bareRemote = mkdtempSync(
       path.join(os.tmpdir(), "openclaw-publication-preflight-remote-"),
@@ -172,9 +199,14 @@ describe("publication preflight real hook behavior", () => {
     tempDirs.push(bareRemote);
     run(bareRemote, "git", ["init", "-q", "--bare"]);
 
-    const { dir, manifest, branch } = makeRepository({ remoteUrl: `file://${bareRemote}` });
+    const { dir, manifest } = makeRepository({ remoteUrl: `file://${bareRemote}` });
     run(dir, "node", [path.join(dir, "scripts", "prepare-git-hooks.mjs"), "--install"]);
     expect(run(dir, "git", ["config", "--get", "core.hooksPath"])).toBe("git-hooks");
+    const optInPath = path.resolve(
+      dir,
+      run(dir, "git", ["rev-parse", "--git-path", "publication-preflight.enabled"]),
+    );
+    expect(existsSync(optInPath)).toBe(true);
 
     run(dir, "node", [
       SCRIPT,
@@ -190,7 +222,7 @@ describe("publication preflight real hook behavior", () => {
     run(dir, "node", [SCRIPT, "check", "--manifest", manifest]);
     run(dir, "node", [SCRIPT, "approve", "--manifest", manifest]);
 
-    run(dir, "git", ["push", "origin", `refs/heads/${branch}:refs/heads/${branch}`]);
+    run(dir, "git", ["push", "origin", "HEAD"]);
 
     writeFileSync(path.join(dir, "unallowlisted.txt"), "this path was not reviewed\n", "utf8");
     run(dir, "git", ["add", "--", "unallowlisted.txt"]);
@@ -199,11 +231,7 @@ describe("publication preflight real hook behavior", () => {
       "safe.txt\nunallowlisted.txt",
     );
     expect(run(dir, "git", ["config", "--get", "core.hooksPath"])).toBe("git-hooks");
-    const failure = runFailure(dir, "git", [
-      "push",
-      "origin",
-      `refs/heads/${branch}:refs/heads/${branch}`,
-    ]);
+    const failure = runFailure(dir, "git", ["push", "origin", "HEAD"]);
     expect(failure).toContain("commit range does not match the explicit manifest allowlist");
   });
 });
@@ -211,6 +239,7 @@ describe("publication preflight real hook behavior", () => {
 describe("publication preflight repository integration", () => {
   it("prepares, checks, approves, and accepts the exact pre-push update", () => {
     const { dir, manifest, branch } = makeRepository();
+    run(dir, "node", [path.join(dir, "scripts", "prepare-git-hooks.mjs"), "--install"]);
     run(dir, "node", [
       SCRIPT,
       "prepare",
@@ -228,7 +257,7 @@ describe("publication preflight repository integration", () => {
     run(dir, "node", [SCRIPT, "check", "--manifest", manifest]);
     run(dir, "node", [SCRIPT, "approve", "--manifest", manifest]);
     const head = run(dir, "git", ["rev-parse", "HEAD"]);
-    const input = `refs/heads/${branch} ${head} refs/heads/${branch} 0000000000000000000000000000000000000000\n`;
+    const input = `HEAD ${head} refs/heads/${branch} 0000000000000000000000000000000000000000\n`;
     run(
       dir,
       "bash",
@@ -238,6 +267,25 @@ describe("publication preflight repository integration", () => {
         "https://github.com/openclaw/openclaw.git",
       ],
       input,
+    );
+
+    const extraRefFailure = runFailure(
+      dir,
+      "node",
+      [
+        SCRIPT,
+        "hook",
+        "--manifest",
+        manifest,
+        "--remote-name",
+        "origin",
+        "--remote-url",
+        "https://github.com/openclaw/openclaw.git",
+      ],
+      `${input}refs/heads/unreviewed ${head} refs/heads/unreviewed 0000000000000000000000000000000000000000\n`,
+    );
+    expect(extraRefFailure).toContain(
+      "pre-push must contain exactly one update for the current feature branch",
     );
   });
 

@@ -554,17 +554,20 @@ function verifyRemote(cwd, manifest, hookArgs = {}) {
 }
 
 function verifyPushRefs(cwd, branch, input) {
-  if (input === undefined || input.trim() === "") {
+  if (input === undefined) {
     return;
+  }
+  if (input.trim() === "") {
+    fail("pre-push input did not contain an update for the current feature branch");
   }
   const headSha = gitText(cwd, ["rev-parse", "HEAD"]);
   const lines = input.trim().split("\n").filter(Boolean);
-  const matching = lines.filter((line) => line.split(/\s+/u)[0] === `refs/heads/${branch}`);
-  if (matching.length !== 1) {
-    fail("pre-push input did not contain exactly one update for the current feature branch");
+  if (lines.length !== 1) {
+    fail("pre-push must contain exactly one update for the current feature branch");
   }
-  const [localRef, localSha] = matching[0].split(/\s+/u);
-  if (localRef !== `refs/heads/${branch}` || localSha !== headSha) {
+  const [localRef, localSha, remoteRef] = lines[0].split(/\s+/u);
+  const localRefMatches = localRef === "HEAD" || localRef === `refs/heads/${branch}`;
+  if (!localRefMatches || localSha !== headSha || remoteRef !== `refs/heads/${branch}`) {
     fail("pre-push update is not the exact reviewed HEAD");
   }
 }
@@ -789,7 +792,7 @@ export function main(
             requireApproval: args.command === "hook",
             remoteName: args.remoteName,
             remoteUrl: args.remoteUrl,
-            pushInput: stdin,
+            pushInput: args.command === "hook" ? stdin : undefined,
           });
   if (!args.quiet) {
     console.error(`[publication-preflight] ${message}`);

@@ -20,13 +20,12 @@ function createSpawn(results: SpawnResult[]) {
 }
 
 describe("configurePrepareGitHooks", () => {
-  it("configures hooks through git without using a shell", () => {
+  it("automatically configures maintained hooks without enabling publication preflight", () => {
     const spawnSync = createSpawn([{ status: 0, stdout: "true\n" }, { status: 0 }]);
 
     expect(
       configurePrepareGitHooks({
         cwd: "C:\\repo",
-        install: true,
         existsSync: () => true,
         spawnSync,
       }),
@@ -42,6 +41,45 @@ describe("configurePrepareGitHooks", () => {
       encoding: "utf8",
       stdio: ["ignore", "ignore", "pipe"],
     });
+    expect(spawnSync).not.toHaveBeenCalledWith(
+      "git",
+      ["rev-parse", "--git-path", "publication-preflight.enabled"],
+      expect.anything(),
+    );
+  });
+
+  it("enables publication preflight only when explicitly requested", () => {
+    const writeFileSync = vi.fn();
+    const spawnSync = createSpawn([
+      { status: 0, stdout: "true\n" },
+      { status: 0 },
+      { status: 0, stdout: ".git/publication-preflight.enabled\n" },
+    ]);
+
+    expect(
+      configurePrepareGitHooks({
+        cwd: "/repo",
+        install: true,
+        existsSync: () => true,
+        spawnSync,
+        writeFileSync,
+      }),
+    ).toEqual({ configured: true, reason: "configured" });
+
+    expect(spawnSync).toHaveBeenLastCalledWith(
+      "git",
+      ["rev-parse", "--git-path", "publication-preflight.enabled"],
+      {
+        cwd: "/repo",
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    expect(writeFileSync).toHaveBeenCalledWith(
+      "/repo/.git/publication-preflight.enabled",
+      "enabled\n",
+      { encoding: "utf8", mode: 0o600 },
+    );
   });
 
   it("stays quiet when git is unavailable", () => {
@@ -51,7 +89,6 @@ describe("configurePrepareGitHooks", () => {
     expect(
       configurePrepareGitHooks({
         cwd: "C:\\repo",
-        install: true,
         existsSync: () => true,
         spawnSync: createSpawn([{ error: enoent }]),
         warn,
@@ -66,7 +103,6 @@ describe("configurePrepareGitHooks", () => {
     expect(
       configurePrepareGitHooks({
         cwd: "/repo",
-        install: true,
         existsSync: () => true,
         spawnSync: createSpawn([
           { status: 0, stdout: "true\n" },
@@ -84,7 +120,6 @@ describe("configurePrepareGitHooks", () => {
     expect(
       configurePrepareGitHooks({
         cwd: "/package",
-        install: true,
         existsSync: () => false,
         spawnSync,
       }),
@@ -92,16 +127,25 @@ describe("configurePrepareGitHooks", () => {
     expect(spawnSync).not.toHaveBeenCalled();
   });
 
-  it("does not change checkout push behavior unless explicitly opted in", () => {
-    const spawnSync = createSpawn([]);
+  it("reports an explicit preflight opt-in failure without undoing maintained hooks", () => {
+    const warn = vi.fn();
+    const spawnSync = createSpawn([
+      { status: 0, stdout: "true\n" },
+      { status: 0 },
+      { status: 1, stderr: "git path unavailable" },
+    ]);
 
     expect(
       configurePrepareGitHooks({
         cwd: "/repo",
+        install: true,
         existsSync: () => true,
         spawnSync,
+        warn,
       }),
-    ).toEqual({ configured: false, reason: "opt-in-required" });
-    expect(spawnSync).not.toHaveBeenCalled();
+    ).toEqual({ configured: true, reason: "preflight-enable-failed" });
+    expect(warn).toHaveBeenCalledWith(
+      "[prepare] configured git hooks but could not enable publication preflight: git path unavailable",
+    );
   });
 });

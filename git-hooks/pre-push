@@ -5,6 +5,13 @@
 
 set -euo pipefail
 
+# Package preparation installs the repository's maintained hook path so
+# pre-commit remains active. Publication validation stays opt-in per worktree.
+PREFLIGHT_OPT_IN="$(git rev-parse --git-path publication-preflight.enabled 2>/dev/null || true)"
+if [[ -z "$PREFLIGHT_OPT_IN" || ! -f "$PREFLIGHT_OPT_IN" ]]; then
+  exit 0
+fi
+
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -z "$ROOT_DIR" ]]; then
   echo "[publication-preflight] cannot resolve repository root" >&2

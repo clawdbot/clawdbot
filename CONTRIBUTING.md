@@ -57,8 +57,13 @@ node scripts/prepare-git-hooks.mjs --install
 ```
 
 Verify the installation with `git config --get core.hooksPath`; it must print
-`git-hooks`. Before pushing a PR branch, prepare a per-worktree publication manifest
-from the exact staged file allowlist:
+`git-hooks`. Also verify `test -f "$(git rev-parse --git-path
+publication-preflight.enabled)"` succeeds. Package preparation keeps the
+maintained hook path installed even when this optional pre-push gate is not
+enabled. The opt-in marker and publication manifest are worktree-local, so
+enabling one worktree does not change push behavior in another. Before pushing a
+PR branch, prepare a per-worktree publication manifest from the exact staged file
+allowlist:
 
 ```bash
 node scripts/publication-preflight.mjs prepare \
