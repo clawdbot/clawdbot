@@ -106,6 +106,44 @@ describe("gateway method authorization", () => {
     });
   });
 
+  it("rejects read-only projects.list before detailed checkout data reaches the handler", async () => {
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
+      respond(true, { projects: [], observedProjects: [] }),
+    );
+    const respond = vi.fn();
+
+    await handleGatewayRequest({
+      req: { type: "req", id: "req-projects-read", method: "projects.list", params: {} },
+      respond,
+      client: {
+        connId: "conn-projects-read",
+        connect: {
+          role: "operator",
+          scopes: ["operator.read"],
+          client: { id: "test", version: "1", platform: "test", mode: "test" },
+          minProtocol: 1,
+          maxProtocol: 1,
+        },
+      } as Parameters<typeof handleGatewayRequest>[0]["client"],
+      isWebchatConnect: () => false,
+      context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<
+        typeof handleGatewayRequest
+      >[0]["context"],
+      extraHandlers: { "projects.list": handler },
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "FORBIDDEN",
+      message: "missing scope: operator.write",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.write",
+        requiredScopes: ["operator.write"],
+      },
+    });
+  });
+
   it("rejects every node RPC when its connection no longer owns the pairing generation", async () => {
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
     const respond = vi.fn();

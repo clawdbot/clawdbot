@@ -167,6 +167,12 @@ data class WorkerDesktopLaunchResult(
 )
 
 @Serializable
+data class ProjectsListResult(
+  val projects: List<ProjectsListResultProjectsItem>,
+  val observedProjects: List<ProjectsListResultObservedProjectsItem>? = null,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -176,6 +182,30 @@ data class GatewayEventFrameStateVersion(
 data class GatewayNodeInvokeResultParamsError(
   val code: String? = null,
   val message: String? = null,
+)
+
+@Serializable
+data class ProjectsListResultProjectsItem(
+  val id: String,
+  val displayName: String,
+  val repoRoot: String? = null,
+  val originUrl: String? = null,
+  val source: String,
+  val agentId: String? = null,
+)
+
+@Serializable
+data class ProjectsListResultObservedProjectsItem(
+  val name: String,
+  val originUrl: String? = null,
+  val checkouts: List<ProjectsListResultObservedProjectsItemCheckoutsItem>,
+  val lastUsedAt: Double,
+)
+
+@Serializable
+data class ProjectsListResultObservedProjectsItemCheckoutsItem(
+  val runnerId: String,
+  val path: String,
 )
 
 enum class GatewayMethod(

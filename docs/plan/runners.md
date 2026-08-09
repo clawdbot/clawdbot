@@ -21,7 +21,7 @@ advances a milestone.
 | 1c  | Cleanup: node-pairing → device-pairing merge               | not started | —       |
 | 2   | `openclaw resume` + web Continue in terminal               | in progress | #120664 |
 | 3   | `openclaw connect` one-paste onboarding + `/j/` join route | not started | —       |
-| 4   | Picker: liveness, enrichment, Connect-a-machine            | not started | —       |
+| 4   | Picker: grouping, placement, liveness, enrichment          | in progress | #120804 |
 | 5   | Public worker ingress path                                 | not started | —       |
 | 6   | Node worker provider (device runners)                      | not started | —       |
 | 7   | Bundle push consent + runner updates                       | not started | —       |
@@ -271,6 +271,24 @@ it cannot rot into approval fatigue or silent surprise:
   devices page shows the installed runner version; the gateway refuses
   dispatch to stale nodes with a doctor-style hint instead of failing
   silently.
+
+### Projects read model (milestone 4 foundation)
+
+OpenClaw already computes project identity twice without naming it: the
+worktree service derives `originUrl` + a 16-char repo fingerprint
+(`src/agents/worktrees/service.ts:199-205`), and the sessions catalog groups
+Codex/Claude rows by project folder, folding `.claude/worktrees/<name>` into
+its origin repo. This component promotes that to a first-class observed read
+model alongside the registered projects already returned by `projects.list`,
+following the same computed pattern as `environments.list`:
+
+- **`projects.list.observedProjects` read model** (computed on demand with
+  `includeObserved: true`, no new store): group known checkouts by repo fingerprint → `{ name, originUrl, checkouts:
+[{runnerId, path}], lastUsedAt }`. Sources: session rows
+  (`execCwd`/`execNode`) and the managed-worktree registry. The observed
+  paths and sanitized origins are returned only to `operator.write` callers;
+  read-only callers keep the registered project catalog and project-only
+  recents. Device-advertised checkouts remain milestone 6 work.
 
 ### UI (milestone 4)
 
