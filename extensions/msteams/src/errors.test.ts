@@ -101,10 +101,12 @@ describe("msteams errors", () => {
     ).toBe("unknown");
   });
 
-  it("classifies transient errors", () => {
-    const result = classifyMSTeamsSendError({ statusCode: 503 });
-    expect(result.kind).toBe("transient");
-    expect(result.statusCode).toBe(503);
+  it("classifies 408/5xx as ambiguous (non-idempotent create: not retried)", () => {
+    for (const statusCode of [408, 500, 503]) {
+      const result = classifyMSTeamsSendError({ statusCode });
+      expect(result.kind).toBe("ambiguous");
+      expect(result.statusCode).toBe(statusCode);
+    }
   });
 
   it("classifies permanent 4xx errors", () => {

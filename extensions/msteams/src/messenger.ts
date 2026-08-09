@@ -212,7 +212,10 @@ function computeRetryDelayMs(
 }
 
 function shouldRetry(classification: ReturnType<typeof classifyMSTeamsSendError>): boolean {
-  return classification.kind === "throttled" || classification.kind === "transient";
+  // Only 429 throttling is replayed: Bot Framework activity creates are
+  // non-idempotent, so an ambiguous 408/5xx (the connector may already have
+  // accepted and delivered the activity) is never retried.
+  return classification.kind === "throttled";
 }
 
 export function renderReplyPayloadsToMessages(

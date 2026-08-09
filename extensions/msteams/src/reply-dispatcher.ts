@@ -273,9 +273,7 @@ export function createMSTeamsReplyDispatcher(params: {
       `The user may not have received ${failedAll ? "that reply" : "the full reply"}.`,
       `Error: ${errorText}.`,
       classification.statusCode != null ? `Status: ${classification.statusCode}.` : undefined,
-      classification.kind === "transient" || classification.kind === "throttled"
-        ? "Retrying later may succeed."
-        : undefined,
+      classification.kind === "throttled" ? "Retrying later may succeed." : undefined,
     ].filter(Boolean);
     core.system.enqueueSystemEvent(sentences.join(" "), {
       sessionKey: params.sessionKey,

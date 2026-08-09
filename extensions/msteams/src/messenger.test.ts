@@ -752,22 +752,25 @@ describe("msteams messenger", () => {
       expect(capturedConversationId).toBe("19:abc@thread.tacv2");
     });
 
-    it("retries top-level sends on transient (5xx)", async () => {
+    it("does not retry top-level sends on ambiguous 5xx (duplicate-delivery risk)", async () => {
       const attempts: string[] = [];
 
-      const ids = await sendMSTeamsMessages({
-        replyStyle: "top-level",
-        app: createMockApp({
-          createFn: createRecordedSendActivity(attempts, 503),
+      // The connector may already have accepted and delivered the activity
+      // before returning 5xx, so the non-idempotent create must not be replayed.
+      await expect(
+        sendMSTeamsMessages({
+          replyStyle: "top-level",
+          app: createMockApp({
+            createFn: createRecordedSendActivity(attempts, 503),
+          }),
+          appId: "app123",
+          conversationRef: baseRef,
+          messages: [{ text: "hello" }],
+          retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
         }),
-        appId: "app123",
-        conversationRef: baseRef,
-        messages: [{ text: "hello" }],
-        retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
-      });
+      ).rejects.toMatchObject({ statusCode: 503 });
 
-      expect(attempts).toEqual(["hello", "hello"]);
-      expect(ids).toEqual(["id:hello"]);
+      expect(attempts).toEqual(["hello"]);
     });
 
     it("delivers all blocks in a multi-block reply via a single proactive send context (#29379)", async () => {

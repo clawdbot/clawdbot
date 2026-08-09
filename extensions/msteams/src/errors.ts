@@ -177,7 +177,7 @@ function parseNonNegativeRetryAfterSeconds(raw: string): number | undefined {
 type MSTeamsSendErrorKind =
   | "auth"
   | "throttled"
-  | "transient"
+  | "ambiguous"
   | "permanent"
   | "network"
   | "unknown";
@@ -192,10 +192,13 @@ type MSTeamsSendErrorClassification = {
 /**
  * Classify outbound send errors for safe retries and actionable logs.
  *
- * Important: We only mark errors as retryable when we have an explicit HTTP
- * status code that indicates the message was not accepted (e.g. 429, 5xx).
- * For transport-level errors where delivery is ambiguous, we prefer to avoid
- * retries to reduce the chance of duplicate posts.
+ * Important: We only mark errors as retryable when the status code proves the
+ * message was not accepted (429 throttling). Bot Framework activity creates
+ * are not idempotent and carry no idempotency key: the connector can accept
+ * and deliver an activity and still return 408/5xx afterwards, so those
+ * responses are "ambiguous" and must not be replayed — a retry can deliver
+ * the same message twice. Transport-level errors without a status code are
+ * ambiguous for the same reason and likewise stay unretried.
  */
 export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassification {
   const statusCode = extractStatusCode(err);
@@ -224,7 +227,7 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
 
   if (statusCode === 408 || (statusCode != null && statusCode >= 500)) {
     return {
-      kind: "transient",
+      kind: "ambiguous",
       statusCode,
       retryAfterMs: retryAfterMs ?? undefined,
       errorCode,
@@ -285,8 +288,8 @@ export function formatMSTeamsSendErrorHint(
   if (classification.kind === "throttled") {
     return "Teams throttled the bot; backing off may help";
   }
-  if (classification.kind === "transient") {
-    return "transient Teams/Bot Framework error; retry may succeed";
+  if (classification.kind === "ambiguous") {
+    return "Teams/Bot Framework may have accepted the message before failing; not retried to avoid duplicate delivery — verify in Teams before resending";
   }
   if (classification.kind === "network") {
     return "transport-level failure sending reply to Teams Bot Connector (smba.trafficmanager.net) — check egress firewall rules allow outbound HTTPS to smba.trafficmanager.net";
