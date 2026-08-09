@@ -163,7 +163,7 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (origin: unknown) => origin ?? "agent",
 }));
 

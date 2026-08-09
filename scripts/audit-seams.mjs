@@ -663,7 +663,7 @@ function describeSubagentSeamKinds(relativePath, source) {
     "./subagent-announce-dispatch.js",
     "./subagent-announce-queue.js",
     "../infra/outbound/bound-delivery-router.js",
-    "../utils/delivery-context.js",
+    "../utils/delivery-context.shared.js",
     "../gateway/call.js",
   ]);
   const importsCleanup = hasAnyImportSource(source, [

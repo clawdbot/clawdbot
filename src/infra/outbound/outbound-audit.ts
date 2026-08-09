@@ -29,7 +29,7 @@ import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
 type OutboundAuditDeliveryContext = {
-  channel: Exclude<OutboundChannel, "none">;
+  channel: OutboundChannel;
   to: string;
   accountId?: string;
   payloads?: readonly ReplyPayload[];

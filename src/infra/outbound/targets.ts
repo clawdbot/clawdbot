@@ -14,10 +14,6 @@ import {
   mergeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import type {
-  DeliverableMessageChannel,
-  GatewayMessageChannel,
-} from "../../utils/message-channel.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -35,7 +31,7 @@ import {
 } from "./targets-resolve-shared.js";
 
 /** Deliverable channel id accepted by outbound target resolution. */
-export type OutboundChannel = DeliverableMessageChannel;
+export type OutboundChannel = string;
 
 /** Heartbeat target channel id from agent/default heartbeat config. */
 type HeartbeatTarget = OutboundChannel;
@@ -48,14 +44,14 @@ type OutboundTarget = {
   reason?: string;
   accountId?: string;
   threadId?: string | number;
-  lastChannel?: DeliverableMessageChannel;
+  lastChannel?: string;
   lastAccountId?: string;
 };
 
 /** Sender identity context used when a heartbeat needs channel-compatible metadata. */
 type HeartbeatSenderContext = {
   sender: string;
-  provider?: DeliverableMessageChannel;
+  provider?: string;
   allowFrom: string[];
 };
 
@@ -66,7 +62,7 @@ import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targ
 
 /** Resolves a user-supplied outbound destination through the channel plugin. */
 export function resolveOutboundTarget(params: {
-  channel: GatewayMessageChannel;
+  channel: string;
   to?: string;
   allowFrom?: string[];
   allowBootstrap?: boolean;
@@ -309,7 +305,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
 function buildNoHeartbeatDeliveryTarget(params: {
   reason: string;
   accountId?: string;
-  lastChannel?: DeliverableMessageChannel;
+  lastChannel?: string;
   lastAccountId?: string;
 }): OutboundTarget {
   return {
@@ -419,7 +415,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
 }
 
 function inferChatTypeFromTarget(params: {
-  channel: DeliverableMessageChannel;
+  channel: string;
   to: string;
   plugin?: ChannelPlugin;
 }): ChatType | undefined {
@@ -446,7 +442,7 @@ function inferChatTypeFromTarget(params: {
 }
 
 function resolveHeartbeatDeliveryChatType(params: {
-  channel: DeliverableMessageChannel;
+  channel: string;
   to: string;
   sessionChatType?: ChatType;
   plugin?: ChannelPlugin;
@@ -473,7 +469,9 @@ function shouldReuseHeartbeatRouteThreadId(params: {
   const channel = params.resolvedTarget.channel;
   const messaging = params.plugin
     ? params.plugin.messaging
-    : channel && resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging;
+    : channel
+      ? resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging
+      : undefined;
   return (
     messaging?.preserveHeartbeatThreadIdForGroupRoute === true &&
     params.resolvedTarget.threadId == null &&

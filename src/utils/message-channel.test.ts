@@ -7,6 +7,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
+  isDeliverableMessageChannel,
   isEphemeralGatewayClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
@@ -62,6 +63,9 @@ describe("message-channel", () => {
     expect(resolveGatewayMessageChannel(" imsg ")).toBe("imessage");
     expect(resolveGatewayMessageChannel("web")).toBeUndefined();
     expect(resolveGatewayMessageChannel("nope")).toBeUndefined();
+    expect(isDeliverableMessageChannel("discord")).toBe(true);
+    expect(isDeliverableMessageChannel("webchat")).toBe(false);
+    expect(isDeliverableMessageChannel("nope")).toBe(false);
   });
 
   it("classifies ephemeral Gateway client modes", () => {
@@ -90,6 +94,7 @@ describe("message-channel", () => {
       ]),
     );
     expect(resolveGatewayMessageChannel("workspace-chat")).toBe("demo-alias-channel");
+    expect(isDeliverableMessageChannel("demo-alias-channel")).toBe(true);
   });
 
   it("recognises internal non-delivery channel sources", () => {
