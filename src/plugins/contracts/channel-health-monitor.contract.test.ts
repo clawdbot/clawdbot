@@ -84,6 +84,34 @@ function propertySchema(
   return undefined;
 }
 
+/**
+ * Whether the intersection refuses `parentKey.childKey`. Mirrors rejectsKey so
+ * every allOf component is evaluated: taking the first component that happens to
+ * declare the parent would discard a later closed sibling that refuses the leaf,
+ * and the assertion would pass while real config loading fails.
+ */
+function rejectsNestedKey(
+  schema: JsonSchemaLike | undefined,
+  parentKey: string,
+  childKey: string,
+): boolean {
+  if (!schema) {
+    return false;
+  }
+  const alternatives = schema.anyOf ?? schema.oneOf;
+  if (Array.isArray(alternatives) && alternatives.length > 0) {
+    return alternatives.every((branch) => rejectsNestedKey(asSchema(branch), parentKey, childKey));
+  }
+  if (Array.isArray(schema.allOf) && schema.allOf.length > 0) {
+    return schema.allOf.some((branch) => rejectsNestedKey(asSchema(branch), parentKey, childKey));
+  }
+  const parent = asSchema(schema.properties?.[parentKey]);
+  if (!parent) {
+    return false;
+  }
+  return rejectsKey(parent, childKey);
+}
+
 function schemaFor(channelId: string): JsonSchemaLike | undefined {
   return asSchema(
     GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find((entry) => entry.channelId === channelId)
@@ -92,6 +120,29 @@ function schemaFor(channelId: string): JsonSchemaLike | undefined {
 }
 
 describe("channel healthMonitor contract", () => {
+  it("treats a closed allOf sibling as refusing the healthMonitor leaf", () => {
+    // The shape that used to slip through: one component declares the leaf while a
+    // closed sibling omits it, so config loading refuses `healthMonitor.enabled`
+    // even though a first-match lookup finds an accepting schema.
+    const composed: JsonSchemaLike = {
+      allOf: [
+        {
+          properties: {
+            healthMonitor: { properties: { enabled: {} }, additionalProperties: false },
+          },
+          additionalProperties: false,
+        },
+        {
+          properties: { healthMonitor: { properties: {}, additionalProperties: false } },
+          additionalProperties: false,
+        },
+      ],
+    };
+
+    expect(propertySchema(composed, "healthMonitor")).toBeDefined();
+    expect(rejectsNestedKey(composed, "healthMonitor", "enabled")).toBe(true);
+  });
+
   it.each(HEALTH_MONITOR_CHANNELS)("%s accepts channels.<id>.healthMonitor", (channelId) => {
     expect(rejectsKey(schemaFor(channelId), "healthMonitor")).toBe(false);
   });
@@ -109,7 +160,7 @@ describe("channel healthMonitor contract", () => {
     (channelId) => {
       const healthMonitor = propertySchema(schemaFor(channelId), "healthMonitor");
       expect(healthMonitor, `${channelId} exposes no healthMonitor schema`).toBeDefined();
-      expect(rejectsKey(healthMonitor, "enabled")).toBe(false);
+      expect(rejectsNestedKey(schemaFor(channelId), "healthMonitor", "enabled")).toBe(false);
     },
   );
 
@@ -125,7 +176,7 @@ describe("channel healthMonitor contract", () => {
       }
       const healthMonitor = propertySchema(accountEntry, "healthMonitor");
       expect(healthMonitor, `${channelId} account entry exposes no healthMonitor`).toBeDefined();
-      expect(rejectsKey(healthMonitor, "enabled")).toBe(false);
+      expect(rejectsNestedKey(accountEntry, "healthMonitor", "enabled")).toBe(false);
     },
   );
 });
