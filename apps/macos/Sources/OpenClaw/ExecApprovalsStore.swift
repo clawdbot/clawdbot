@@ -98,6 +98,9 @@ final class ExecApprovalsMigrationRequiredCache: @unchecked Sendable {
 }
 
 enum ExecApprovalsStore {
+    // Test stores are task-scoped so parallel suites cannot redirect unrelated
+    // shared-state consumers through the process environment.
+    @TaskLocal private static var scopedStateDirectoryURL: URL?
     private static let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals")
     private static let migrationRequiredCache = ExecApprovalsMigrationRequiredCache { event in
         switch event {
@@ -115,6 +118,29 @@ enum ExecApprovalsStore {
     private static let defaultAsk: ExecAsk = .off
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
+
+    #if compiler(>=6.4)
+    nonisolated(nonsending) static func withStateDirectory<T>(
+        _ url: URL,
+        operation: () async throws -> T) async rethrows -> T
+    {
+        try await self.$scopedStateDirectoryURL.withValue(url) {
+            try await operation()
+        }
+    }
+    #else
+    static func withStateDirectory<T>(
+        _ url: URL,
+        operation: () async throws -> T,
+        isolation: isolated (any Actor)? = #isolation) async rethrows -> T
+    {
+        try await self.$scopedStateDirectoryURL.withValue(
+            url,
+            operation: operation,
+            isolation: isolation)
+    }
+    #endif
+
     static func databaseURL() -> URL {
         ExecApprovalsSQLiteStore.databaseURL(stateDirectoryURL: self.stateDirURL())
     }
@@ -133,6 +159,9 @@ enum ExecApprovalsStore {
     }
 
     private static func stateDirURL() -> URL {
+        if let scopedStateDirectoryURL {
+            return scopedStateDirectoryURL
+        }
         guard let configured = OpenClawEnv.path("OPENCLAW_STATE_DIR") else {
             return self.homeURL().appendingPathComponent(".openclaw", isDirectory: true)
         }
@@ -387,8 +416,13 @@ enum ExecApprovalsStore {
     static func resolveAsyncResult(
         agentId: String?) async -> Result<ExecApprovalsResolved, ExecApprovalsReadError>
     {
-        await Task.detached(priority: .userInitiated) {
-            self.resolveResult(agentId: agentId)
+        let stateDirectoryURL = self.stateDirURL()
+        // Detached work does not inherit task-local values; bind the prepared
+        // root again so one read cannot mix database and socket directories.
+        return await Task.detached(priority: .userInitiated) {
+            self.$scopedStateDirectoryURL.withValue(stateDirectoryURL) {
+                self.resolveResult(agentId: agentId)
+            }
         }.value
     }
 

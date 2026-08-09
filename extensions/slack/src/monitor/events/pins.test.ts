@@ -62,7 +62,7 @@ async function runPinCase(input: PinCase = {}): Promise<void> {
     throw new Error(`expected Slack pin ${handlerKey} handler`);
   }
   const event = (input.event ?? makePinEvent()) as Record<string, unknown>;
-  const body = input.body ?? {};
+  const body = input.body ?? { event_id: "Ev-pin-default" };
   await handler({
     body,
     event,
@@ -141,5 +141,14 @@ describe("registerSlackPinEvents", () => {
     await runPinCase({ trackEvent });
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keys each queued event by the envelope occurrence", async () => {
+    await runPinCase({ body: { event_id: "Ev-pin-2" } });
+
+    expect(pinEnqueueMock).toHaveBeenCalledWith("Slack: alice pinned a message in #direct.", {
+      sessionKey: "agent:main:main",
+      contextKey: "slack:pin:added:D1:123.456:Ev-pin-2",
+    });
   });
 });

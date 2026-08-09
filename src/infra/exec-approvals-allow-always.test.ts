@@ -496,35 +496,31 @@ describe("resolveAllowAlwaysPatterns", () => {
       const scriptPath = path.join(dir, "script.ps1");
       fs.writeFileSync(scriptPath, "");
       fs.chmodSync(scriptPath, 0o755);
-      try {
-        const env = makePathEnv(dir);
-        const analysis = analyzeArgvCommand({
-          argv: [...argvPrefix, "pwsh", fileFlag, scriptPath, ...scriptArgs],
-          cwd: dir,
-          env,
-        });
-        expect(analysis.ok).toBe(true);
+      const env = makePathEnv(dir);
+      const analysis = analyzeArgvCommand({
+        argv: [...argvPrefix, "pwsh", fileFlag, scriptPath, ...scriptArgs],
+        cwd: dir,
+        env,
+      });
+      expect(analysis.ok).toBe(true);
 
-        const entries = resolveAllowAlwaysPatternEntries({
-          segments: analysis.segments,
-          cwd: dir,
-          env,
-          platform: "win32",
-        });
-        expect(entries).toEqual([{ pattern: scriptPath, argPattern: expectedArgPattern }]);
+      const entries = resolveAllowAlwaysPatternEntries({
+        segments: analysis.segments,
+        cwd: dir,
+        env,
+        platform: "win32",
+      });
+      expect(entries).toEqual([{ pattern: scriptPath, argPattern: expectedArgPattern }]);
 
-        const result = evaluateExecAllowlist({
-          analysis,
-          allowlist: [...entries],
-          safeBins: new Set(),
-          cwd: dir,
-          env,
-          platform: "win32",
-        });
-        expect(result.allowlistSatisfied).toBe(true);
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
+      const result = evaluateExecAllowlist({
+        analysis,
+        allowlist: [...entries],
+        safeBins: new Set(),
+        cwd: dir,
+        env,
+        platform: "win32",
+      });
+      expect(result.allowlistSatisfied).toBe(true);
     },
   );
 

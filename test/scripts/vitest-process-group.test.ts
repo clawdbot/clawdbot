@@ -7,7 +7,7 @@ import {
   installVitestProcessGroupCleanup,
   resolveVitestProcessGroupSignalTarget,
   shouldUseDetachedVitestProcessGroup,
-} from "../../scripts/vitest-process-group.mjs";
+} from "../../scripts/vitest-process-group.mts";
 
 describe("vitest process group helpers", () => {
   function getListenerSet(listeners: Map<string, Set<() => void>>, event: string) {

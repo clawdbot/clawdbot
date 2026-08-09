@@ -168,8 +168,15 @@ struct RootTabs: View {
 
     private var sidebarSplitContent: some View {
         GeometryReader { proxy in
-            let isDrawerLayout = self.shouldUseSidebarDrawer(containerSize: proxy.size)
-            let sidebarWidth = self.sidebarWidth(containerWidth: proxy.size.width, isDrawerLayout: isDrawerLayout)
+            // Keyboard safe-area changes must not masquerade as window/orientation changes;
+            // switching layouts destroys the focused detail subtree.
+            let layoutContainerSize = Self.sidebarLayoutContainerSize(
+                contentSize: proxy.size,
+                windowSize: self.foregroundKeyWindowSize())
+            let isDrawerLayout = self.shouldUseSidebarDrawer(containerSize: layoutContainerSize)
+            let sidebarWidth = self.sidebarWidth(
+                containerWidth: layoutContainerSize.width,
+                isDrawerLayout: isDrawerLayout)
             Group {
                 if isDrawerLayout {
                     self.sidebarDrawerContent(
@@ -180,10 +187,13 @@ struct RootTabs: View {
                 }
             }
             .onAppear {
-                self.updateSidebarLayout(containerSize: proxy.size, force: false)
+                self.updateSidebarLayout(containerSize: layoutContainerSize, force: false)
             }
             .onChange(of: proxy.size) { _, size in
-                self.updateSidebarLayout(containerSize: size, force: false)
+                let layoutContainerSize = Self.sidebarLayoutContainerSize(
+                    contentSize: size,
+                    windowSize: self.foregroundKeyWindowSize())
+                self.updateSidebarLayout(containerSize: layoutContainerSize, force: false)
             }
             // Single refresh owner: identity/session changes, scene activation,
             // and the periodic attention refresh all land here.
@@ -496,6 +506,15 @@ struct RootTabs: View {
 
     private func sidebarWidth(containerWidth: CGFloat, isDrawerLayout: Bool) -> CGFloat {
         Self.sidebarWidth(containerWidth: containerWidth, isDrawerLayout: isDrawerLayout)
+    }
+
+    private func foregroundKeyWindowSize() -> CGSize? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })?
+            .windows
+            .first(where: \.isKeyWindow)?
+            .bounds.size
     }
 
     private func rootOverlays(_ content: some View) -> some View {

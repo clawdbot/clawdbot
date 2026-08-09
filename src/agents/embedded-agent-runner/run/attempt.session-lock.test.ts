@@ -542,41 +542,6 @@ describe("createEmbeddedAttemptSessionLockController", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("keeps a started write callback locked beyond the disposal timeout", async () => {
-    vi.useFakeTimers();
-    try {
-      let releaseWrite!: () => void;
-      const writeBlocked = new Promise<void>((resolve) => {
-        releaseWrite = resolve;
-      });
-      const release = vi.fn(async () => undefined);
-      const controller = await createEmbeddedAttemptSessionLockController({
-        acquireSessionWriteLock: vi.fn(async () => ({ release })),
-        lockOptions: { sessionFile: "agent:main:main" },
-      });
-      const writeStarted = vi.fn();
-      const write = controller.withSessionWriteLock(async () => {
-        writeStarted();
-        await writeBlocked;
-      });
-      await vi.waitFor(() => expect(writeStarted).toHaveBeenCalledOnce());
-
-      let disposeSettled = false;
-      const disposal = controller.dispose().then(() => {
-        disposeSettled = true;
-      });
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(disposeSettled).toBe(false);
-      expect(release).not.toHaveBeenCalled();
-
-      releaseWrite();
-      await Promise.all([write, disposal]);
-      expect(release).toHaveBeenCalledOnce();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("lets a started write finish nested writes after disposal begins", async () => {
     let resumeOuter!: () => void;
     const outerBlocked = new Promise<void>((resolve) => {

@@ -7,6 +7,7 @@ import {
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
   storeDeviceAuthToken as storeScopedDeviceAuthToken,
@@ -82,17 +83,6 @@ type HandlerMap = {
 };
 
 type MockWebSocketHandler = (ev?: { code?: number; data?: string; reason?: string }) => void;
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
 
 class MockWebSocket {
   static OPEN = 1;

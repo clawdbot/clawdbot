@@ -104,7 +104,13 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "taskSuggestions.list",
+        "taskSuggestions.accept",
+        "taskSuggestions.dismiss",
+      ],
       methodResponses: {
         "sessions.list": chatSessionListResponse(),
         "taskSuggestions.list": {
@@ -144,6 +150,58 @@ suite.define(() => {
     }
   });
 
+  it("hides model-suggested follow-ups when only listing is advertised", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
+      methodResponses: {
+        "taskSuggestions.list": {
+          suggestions: [
+            {
+              id: "task_list_only",
+              title: "Unavailable follow-up",
+              prompt: "This suggestion has no advertised action methods.",
+              tldr: "Listing alone must not expose an unusable chip.",
+              cwd: "/projects/example",
+              sessionKey: "main",
+              agentId: "main",
+              createdAt: Date.now(),
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("taskSuggestions.list");
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (pane) =>
+                (pane as HTMLElement & { taskSuggestions?: unknown[] }).taskSuggestions?.length ??
+                0,
+            ),
+        )
+        .toBe(1);
+
+      await page
+        .locator(".agent-chat__composer-shell")
+        .waitFor({ state: "visible", timeout: 10_000 });
+      expect(await page.getByRole("button", { name: "Start in worktree" }).count()).toBe(0);
+      expect(await page.locator(".task-suggestion").count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps the composer visible when follow-up suggestions overflow", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -152,7 +210,13 @@ suite.define(() => {
     });
     const page = await context.newPage();
     await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "taskSuggestions.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "taskSuggestions.list",
+        "taskSuggestions.accept",
+        "taskSuggestions.dismiss",
+      ],
       methodResponses: {
         "taskSuggestions.list": {
           suggestions: Array.from({ length: 12 }, (_, index) => ({

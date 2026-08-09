@@ -512,15 +512,16 @@ export async function resolveEmbeddedModelSelection(params: {
     primaryConfiguredThinkLevel !== "off" &&
     !hasResolvedThinkingCatalogEntry({ catalog: catalogForThinking, provider, model })
   ) {
-    const { loadPreparedModelCatalogSnapshot } = await import("../model-catalog.runtime.js");
+    // Thinking capability is a per-model fact; never materialize the full live catalog here.
+    const { loadProviderScopedThinkingCatalog } = await import("../model-catalog.runtime.js");
     const runtimeCatalog = normalizeThinkingCatalogProviders(
-      (
-        await loadPreparedModelCatalogSnapshot({
-          config: params.cfg,
-          agentId: params.sessionAgentId,
-          workspaceDir: params.workspaceDir,
-        })
-      ).entries,
+      await loadProviderScopedThinkingCatalog({
+        config: params.cfg,
+        provider,
+        model,
+        ...(params.sessionAgentId ? { agentId: params.sessionAgentId } : {}),
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      }),
     );
     const allowedRuntimeCatalog = createModelVisibilityPolicy({
       cfg: params.cfg,

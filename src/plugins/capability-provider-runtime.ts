@@ -6,10 +6,7 @@ import {
   registryContainsRuntimePluginIds,
 } from "./active-runtime-registry.js";
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
-import {
-  withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat,
-} from "./bundled-compat.js";
+import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import {
   hasManifestContractValue,
@@ -138,14 +135,9 @@ function createCapabilityProviderLoadOptions(params: {
   resolution: CapabilityPluginResolution;
 }): PluginLoadOptions {
   const pluginIds = params.resolution.bundledCompatPluginIds;
-  const enablementCompat = withBundledPluginEnablementCompat({
+  const config = withBundledPluginEnablementCompat({
     config: params.cfg,
     pluginIds,
-  });
-  const config = withBundledPluginVitestCompat({
-    config: enablementCompat,
-    pluginIds,
-    env: process.env,
   });
   return {
     ...(config === undefined ? {} : { config }),
@@ -394,6 +386,7 @@ function resolveRequestedCapabilityPluginIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
   requested?: Set<string>;
+  pluginMetadataSnapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
 }): CapabilityPluginResolution | undefined {
   if (!params.requested || params.requested.size === 0) {
     return undefined;
@@ -405,6 +398,7 @@ function resolveRequestedCapabilityPluginIds(params: {
       key: params.key,
       cfg: params.cfg,
       providerId,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     });
     for (const pluginId of resolution.runtimePluginIds) {
       runtimePluginIds.add(pluginId);
@@ -518,16 +512,22 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
     return activeProvider;
   }
 
+  const pluginMetadataSnapshot = loadCapabilityManifestSnapshot({ cfg: params.cfg });
   let pluginIds = resolveCapabilityPluginIds({
     key: params.key,
     cfg: params.cfg,
     providerId: params.providerId,
+    pluginMetadataSnapshot,
   });
   if (pluginIds.runtimePluginIds.length === 0) {
     // Manifest contracts index canonical provider ids, while runtime providers
     // may expose aliases. Fall back to the capability owners so a configured
     // alias can still resolve when its provider is absent from the active registry.
-    pluginIds = resolveCapabilityPluginIds({ key: params.key, cfg: params.cfg });
+    pluginIds = resolveCapabilityPluginIds({
+      key: params.key,
+      cfg: params.cfg,
+      pluginMetadataSnapshot,
+    });
     if (pluginIds.runtimePluginIds.length === 0) {
       return undefined;
     }
@@ -593,10 +593,12 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     requestedProviders && shouldScopeCapabilityLoadToRequestedProviders(params.key)
       ? requestedProviders
       : undefined;
+  const pluginMetadataSnapshot = loadCapabilityManifestSnapshot({ cfg: params.cfg });
   const requestedPluginIds = resolveRequestedCapabilityPluginIds({
     key: params.key,
     cfg: params.cfg,
     requested: requestedProviderLoadScope,
+    pluginMetadataSnapshot,
   });
   const requestedProviderFilter =
     requestedProviders &&
@@ -608,6 +610,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     resolveCapabilityPluginIds({
       key: params.key,
       cfg: params.cfg,
+      pluginMetadataSnapshot,
     });
   const loadOptions = createCapabilityProviderLoadOptions({
     cfg: params.cfg,

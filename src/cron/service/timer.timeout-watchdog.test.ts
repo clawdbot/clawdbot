@@ -2,11 +2,11 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
-  createDeferred,
   createIsolatedRegressionJob,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { saveCronStore } from "../store.js";
@@ -64,7 +64,7 @@ describe("cron service timer regressions", () => {
       const wallStart = Date.now();
       let abortWallMs: number | undefined;
       let abortReason: unknown;
-      const started = createDeferred<void>();
+      const started = createDeferred();
 
       const state = createCronServiceState({
         cronEnabled: true,
@@ -151,7 +151,7 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const started = createDeferred<void>();
+      const started = createDeferred();
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
       const state = createCronServiceState({
@@ -231,7 +231,7 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const started = createDeferred<void>();
+      const started = createDeferred();
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
       const onIsolatedAgentSetupTimeout = vi.fn();
@@ -300,8 +300,8 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const laneEntered = createDeferred<void>();
-      const releaseLane = createDeferred<void>();
+      const laneEntered = createDeferred();
+      const releaseLane = createDeferred();
       const laneBlocker = enqueueCommandInLane(CommandLane.CronNested, async () => {
         laneEntered.resolve();
         await releaseLane.promise;
@@ -370,7 +370,7 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const started = createDeferred<void>();
+      const started = createDeferred();
       const onIsolatedAgentSetupTimeout = vi.fn();
       const state = createCronServiceState({
         cronEnabled: true,
@@ -420,7 +420,7 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const started = createDeferred<void>();
+      const started = createDeferred();
       let abortObserved = false;
       let abortReason: unknown;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
@@ -517,7 +517,7 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const started = createDeferred<void>();
+      const started = createDeferred();
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
       const state = createCronServiceState({
@@ -625,7 +625,7 @@ describe("cron service timer regressions", () => {
 
         vi.setSystemTime(scheduledAt);
         let now = scheduledAt;
-        const started = createDeferred<void>();
+        const started = createDeferred();
         let abortObserved = false;
         const cleanupTimedOutAgentRun = vi.fn(async () => {});
         const state = createCronServiceState({
@@ -720,7 +720,7 @@ describe("cron service timer regressions", () => {
 
       vi.setSystemTime(scheduledAt);
       let now = scheduledAt;
-      const started = createDeferred<void>();
+      const started = createDeferred();
       let abortObserved = false;
       const cleanupTimedOutAgentRun = vi.fn(async () => {});
       const sendCronFailureAlert = vi.fn(async () => {});

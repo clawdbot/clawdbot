@@ -81,9 +81,9 @@ export function seedActivePlacement(
   });
 }
 
-export function createDispatchEnvironmentFixtures() {
+export function createDispatchEnvironmentFixtures(generation = 1) {
   const environmentId = workerEnvironmentIdForIdempotencyKey(
-    `session-dispatch:${REQUEST.sessionId}:1`,
+    `session-dispatch:${REQUEST.sessionId}:${generation}`,
   );
   const profileSnapshot: WorkerProfile = { settings: { region: "test" } };
   const bootstrapReceipt: WorkerAdmissionHandshake = {
@@ -104,6 +104,7 @@ export function createDispatchEnvironmentFixtures() {
     profileId: "development",
     profileSnapshot,
     provisionOperationId: "provision-1",
+    sharedHost: false,
     bootstrapReceipt,
     teardownTerminalState: null,
     lastError: null,

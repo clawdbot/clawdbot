@@ -3,10 +3,8 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
 import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
-import {
-  resolveTargetPrefixedChannel,
-  stripTargetProviderPrefix,
-} from "../../infra/outbound/channel-target-prefix.js";
+import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 
@@ -53,11 +51,12 @@ function resolveFailureAlertChannel(channel: unknown, to?: string): CronMessageC
 }
 
 function normalizeFailureAlertRecipient(channel: CronMessageChannel, to: string): string {
-  if (resolveTargetPrefixedChannel(to) !== channel) {
+  try {
+    return normalizeTargetForProvider(channel, to) ?? to;
+  } catch {
+    // Invalid loaded targets are distinct routes; they must not block run finalization.
     return to;
   }
-  // Canonicalize loaded-provider aliases only; recipient/topic ids can be case-sensitive.
-  return stripTargetProviderPrefix(to, to.slice(0, to.indexOf(":")));
 }
 
 function normalizeTo(input: unknown): string | undefined {

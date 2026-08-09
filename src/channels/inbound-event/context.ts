@@ -19,6 +19,7 @@ import type {
   SessionTranscriptContext,
 } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
+import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
 import type { InboundImplicitMentionKind } from "../mention-gating.js";
@@ -58,6 +59,8 @@ export type ChannelInboundSupplementalResolutionOptions = {
 };
 type BuildChannelInboundEventAccess = {
   commands?: Pick<ChannelIngressCommandAccess, "authorized">;
+  /** Channel-configured policy resolved at the trusted ingress boundary. */
+  toolPolicy?: GroupToolPolicyConfig;
   mentions?: {
     canDetectMention: boolean;
     wasMentioned: boolean;
@@ -540,6 +543,7 @@ export function buildChannelInboundEventContext(
     ImplicitMentionKinds: params.access?.mentions?.implicitMentionKinds,
     MentionSource: params.access?.mentions?.mentionSource,
     CommandAuthorized: resolveIngressCommandAuthorized(params.access) === true,
+    ConversationToolPolicy: params.access?.toolPolicy,
     CommandTurn: commandTurn,
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,

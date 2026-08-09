@@ -1802,6 +1802,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let idlems: Int?
     public let attachedsessionids: [String]
     public let tunnelstatus: WorkerTunnelStatus
+    public let error: String?
 
     public init(
         providerid: String,
@@ -1810,7 +1811,8 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         agems: Int,
         idlems: Int? = nil,
         attachedsessionids: [String],
-        tunnelstatus: WorkerTunnelStatus)
+        tunnelstatus: WorkerTunnelStatus,
+        error: String? = nil)
     {
         self.providerid = providerid
         self.leaseid = leaseid
@@ -1819,6 +1821,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         self.idlems = idlems
         self.attachedsessionids = attachedsessionids
         self.tunnelstatus = tunnelstatus
+        self.error = error
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1829,6 +1832,7 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
         case idlems = "idleMs"
         case attachedsessionids = "attachedSessionIds"
         case tunnelstatus = "tunnelStatus"
+        case error
     }
 }
 
@@ -2948,6 +2952,7 @@ public struct WorktreeRecord: Codable, Sendable {
     public let createdat: Int
     public let lastactiveat: Int
     public let removedat: Int?
+    public let runendcleanup: AnyCodable?
 
     public init(
         id: String,
@@ -2962,7 +2967,8 @@ public struct WorktreeRecord: Codable, Sendable {
         snapshotref: String? = nil,
         createdat: Int,
         lastactiveat: Int,
-        removedat: Int? = nil)
+        removedat: Int? = nil,
+        runendcleanup: AnyCodable? = nil)
     {
         self.id = id
         self.name = name
@@ -2977,6 +2983,7 @@ public struct WorktreeRecord: Codable, Sendable {
         self.createdat = createdat
         self.lastactiveat = lastactiveat
         self.removedat = removedat
+        self.runendcleanup = runendcleanup
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2993,6 +3000,7 @@ public struct WorktreeRecord: Codable, Sendable {
         case createdat = "createdAt"
         case lastactiveat = "lastActiveAt"
         case removedat = "removedAt"
+        case runendcleanup = "runEndCleanup"
     }
 }
 
@@ -4605,6 +4613,70 @@ public struct SessionsCatalogArchiveResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case ok
+    }
+}
+
+public struct SessionsCatalogStartTerminalParams: Codable, Sendable {
+    public let catalogid: String
+    public let hostid: String?
+    public let agentid: String
+    public let cwd: String
+    public let initialmessage: String?
+
+    public init(
+        catalogid: String,
+        hostid: String? = nil,
+        agentid: String,
+        cwd: String,
+        initialmessage: String? = nil)
+    {
+        self.catalogid = catalogid
+        self.hostid = hostid
+        self.agentid = agentid
+        self.cwd = cwd
+        self.initialmessage = initialmessage
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case catalogid = "catalogId"
+        case hostid = "hostId"
+        case agentid = "agentId"
+        case cwd
+        case initialmessage = "initialMessage"
+    }
+}
+
+public struct SessionsCatalogStartTerminalResult: Codable, Sendable {
+    public let sessionid: String
+    public let agentid: String
+    public let shell: String
+    public let cwd: String
+    public let confined: Bool
+    public let title: String?
+
+    public init(
+        sessionid: String,
+        agentid: String,
+        shell: String,
+        cwd: String,
+        confined: Bool,
+        title: String? = nil)
+    {
+        self.sessionid = sessionid
+        self.agentid = agentid
+        self.shell = shell
+        self.cwd = cwd
+        self.confined = confined
+        self.title = title
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case agentid = "agentId"
+        case shell
+        case cwd
+        case confined
+        case title
     }
 }
 
@@ -18066,21 +18138,25 @@ public struct UpdateStatusParams: Codable, Sendable {}
 public struct UpdateStatusResult: Codable, Sendable {
     public let sentinel: AnyCodable
     public let updateavailable: AnyCodable
+    public let effectivechannel: AnyCodable?
     public let schedule: UpdateScheduleState?
 
     public init(
         sentinel: AnyCodable,
         updateavailable: AnyCodable,
+        effectivechannel: AnyCodable? = nil,
         schedule: UpdateScheduleState? = nil)
     {
         self.sentinel = sentinel
         self.updateavailable = updateavailable
+        self.effectivechannel = effectivechannel
         self.schedule = schedule
     }
 
     private enum CodingKeys: String, CodingKey {
         case sentinel
         case updateavailable = "updateAvailable"
+        case effectivechannel = "effectiveChannel"
         case schedule
     }
 }

@@ -515,7 +515,14 @@ export class TelegramPollingSession {
       }
       if (message.type === "poll-error") {
         this.#rearmPendingDeliveryDrain();
-        liveness.noteGetUpdatesError(new Error(message.message), message.finishedAt);
+        const retryAfterMs =
+          message.errorCode === 429 &&
+          message.retryAfterMs !== undefined &&
+          Number.isFinite(message.retryAfterMs) &&
+          message.retryAfterMs > 0
+            ? Math.min(message.retryAfterMs, MAX_POLL_STALL_THRESHOLD_MS)
+            : undefined;
+        liveness.noteGetUpdatesError(new Error(message.message), message.finishedAt, retryAfterMs);
         liveness.noteGetUpdatesFinished();
         pollState.outcome = "error";
         pollState.error = message.message;

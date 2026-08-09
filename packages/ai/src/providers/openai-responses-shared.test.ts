@@ -1653,6 +1653,26 @@ describe("processResponsesStream", () => {
     expect(output.usage.input).toBe(7);
   });
 
+  it("preserves cancellation when the SDK swallows the abort and ends iteration", async () => {
+    const abort = new AbortController();
+    const output = createAssistantOutput();
+    async function* silentlyAbortedStream() {
+      yield { type: "response.created", response: { id: "resp_aborted" } };
+      abort.abort();
+    }
+
+    await expect(
+      processResponsesStream(
+        silentlyAbortedStream(),
+        output,
+        new AssistantMessageEventStream(),
+        nativeOpenAIModel,
+        { signal: abort.signal },
+      ),
+    ).rejects.toThrow("Request was aborted");
+    expect(output.responseId).toBe("resp_aborted");
+  });
+
   it.each([
     ["omits arguments", undefined],
     ["sends empty arguments", ""],

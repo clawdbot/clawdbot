@@ -1,6 +1,6 @@
 // Model list forward-compat tests cover list command behavior with future catalog shapes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test-utils/deferred.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 
 const OPENAI_CODEX_MODEL = {
   provider: "openai",

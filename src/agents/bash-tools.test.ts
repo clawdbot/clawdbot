@@ -51,7 +51,7 @@ vi.mock("../infra/exec-approval-surface.js", () => ({
     !channel || channel === "internal" || channel === "tui",
 }));
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (context?: {
     channel?: string | null;
     to?: string | number | null;
@@ -461,6 +461,7 @@ async function expectNotifyOnExitWake(tool: ExecToolInstance, expected: Record<s
 async function drainNotifyEvents(sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
   return await drainFormattedSystemEvents({
     cfg: notifyCfg,
+    agentId: "main",
     sessionKey,
     isMainSession: false,
     isNewSession: false,

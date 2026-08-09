@@ -39,7 +39,7 @@ export async function runE2eGlobalSetup(
       },
     },
     {
-      args: ["scripts/tsdown-build.mjs", "--config", "tsdown.ai.config.ts"],
+      args: ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"],
       env: process.env,
     },
   ];

@@ -184,7 +184,7 @@ describe("worker environment store", () => {
       environmentId: "worker-1",
       from: "provisioning",
       to: "bootstrapping",
-      patch: { leaseId: "lease-1", sshEndpoint: SSH_ENDPOINT },
+      patch: { leaseId: "lease-1", sshEndpoint: SSH_ENDPOINT, sharedHost: true },
     });
     nowMs = 1_030;
     store.transition({
@@ -198,6 +198,7 @@ describe("worker environment store", () => {
     store = createWorkerEnvironmentStore({ database, now: () => nowMs });
     expect(store.get("worker-1")).toMatchObject({
       sshEndpoint: SSH_ENDPOINT,
+      sharedHost: true,
       bootstrapReceipt: {
         ...BOOTSTRAP_RECEIPT,
         protocolFeatures: ["model-proxy-v1", "workspace-sync-v1"],

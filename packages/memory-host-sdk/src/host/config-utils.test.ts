@@ -1,16 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveRememberAcrossConversations, splitShellArgs } from "./config-utils.js";
-
-describe("splitShellArgs", () => {
-  it("preserves quoted command arguments through the focused re-export", () => {
-    expect(splitShellArgs('qmd query --collection "Project Notes"')).toEqual([
-      "qmd",
-      "query",
-      "--collection",
-      "Project Notes",
-    ]);
-  });
-});
+import { resolveRememberAcrossConversations } from "./config-utils.js";
 
 describe("resolveRememberAcrossConversations", () => {
   it("honors keyed per-agent memory overrides", () => {

@@ -44,6 +44,18 @@ describe("config observe recovery", () => {
     gateway: { mode: "local" },
     channels: { telegram: { enabled: true, dmPolicy: "pairing", groupPolicy: "allowlist" } },
   };
+  const recoverableCoreConfig = {
+    meta: { lastTouchedVersion: "2026.4.22" },
+    update: { channel: "beta" },
+    gateway: { mode: "local" as const },
+  };
+  const largeRecoverableCoreConfig = {
+    ...recoverableCoreConfig,
+    gateway: {
+      ...recoverableCoreConfig.gateway,
+      trustedProxies: Array.from({ length: 60 }, (_, index) => `192.0.2.${index}`),
+    },
+  };
 
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = path.join(fixtureRoot, `case-${homeCaseId++}`);
@@ -176,6 +188,15 @@ describe("config observe recovery", () => {
   ) {
     const configPath = path.join(home, ".openclaw", "openclaw.json");
     const error = vi.fn();
+    // Keep recovery validation out of host/workspace plugin state. Preserve the
+    // caller's env identity because rollback tests inspect that exact object.
+    const env = options.env ?? ({} as NodeJS.ProcessEnv);
+    env.HOME ??= home;
+    env.USERPROFILE ??= home;
+    env.OPENCLAW_CONFIG_PATH ??= configPath;
+    env.OPENCLAW_STATE_DIR ??= path.join(home, ".openclaw");
+    env.OPENCLAW_DISABLE_BUNDLED_PLUGINS ??= "1";
+    env.VITEST ??= "true";
     return {
       configPath,
       warn,
@@ -183,7 +204,7 @@ describe("config observe recovery", () => {
       io: createConfigIO({
         fs,
         json5: JSON5,
-        env: options.env ?? ({} as NodeJS.ProcessEnv),
+        env,
         homedir: () => home,
         configPath,
         logger: { warn, error },
@@ -456,17 +477,7 @@ describe("config observe recovery", () => {
     await withSuiteHome(async (home) => {
       const { io, configPath, warn } = createTestConfigIO(home);
       const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-      await seedConfigBackup(configPath, {
-        ...recoverableTelegramConfig,
-        channels: {
-          telegram: {
-            enabled: true,
-            dmPolicy: "pairing",
-            groupPolicy: "allowlist",
-            allowFrom: Array.from({ length: 60 }, (_, index) => `telegram-user-${index}`),
-          },
-        },
-      });
+      await seedConfigBackup(configPath, largeRecoverableCoreConfig);
       const clobbered = await writeConfigRaw(configPath, {
         meta: { lastTouchedVersion: "2026.5.28" },
       });
@@ -489,7 +500,7 @@ describe("config observe recovery", () => {
   it("loadConfig auto-restores tiny valid clobbers before using defaults", async () => {
     await withSuiteHome(async (home) => {
       const { io, configPath, warn } = createTestConfigIO(home);
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await seedConfigBackup(configPath, recoverableCoreConfig);
       await writeConfigRaw(configPath, {
         meta: { lastTouchedVersion: "2026.5.28" },
       });
@@ -515,7 +526,7 @@ describe("config observe recovery", () => {
     await withSuiteHome(async (home) => {
       const env = {} as NodeJS.ProcessEnv;
       const { io, configPath } = createTestConfigIO(home, vi.fn(), { env });
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await seedConfigBackup(configPath, recoverableCoreConfig);
       await writeConfigRaw(configPath, {
         meta: { lastTouchedVersion: "2026.5.28" },
         env: { vars: { OPENCLAW_CLOBBER_ONLY: "bad" } },
@@ -532,7 +543,7 @@ describe("config observe recovery", () => {
     await withSuiteHome(async (home) => {
       const env = {} as NodeJS.ProcessEnv;
       const { io, configPath } = createTestConfigIO(home, vi.fn(), { env });
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await seedConfigBackup(configPath, recoverableCoreConfig);
       await writeConfigRaw(configPath, {
         meta: { lastTouchedVersion: "2026.5.28" },
         env: { vars: { OPENCLAW_CLOBBER_ONLY: "bad" } },
@@ -549,7 +560,7 @@ describe("config observe recovery", () => {
     await withSuiteHome(async (home) => {
       const { io, configPath } = createTestConfigIO(home, vi.fn(), { observe: false });
       const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await seedConfigBackup(configPath, recoverableCoreConfig);
       const clobbered = await writeConfigRaw(configPath, {
         meta: { lastTouchedVersion: "2026.5.28" },
       });
@@ -567,17 +578,7 @@ describe("config observe recovery", () => {
     await withSuiteHome(async (home) => {
       const { io, configPath } = createTestConfigIO(home);
       const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-      const includedConfig = {
-        ...recoverableTelegramConfig,
-        channels: {
-          telegram: {
-            enabled: true,
-            dmPolicy: "pairing",
-            groupPolicy: "allowlist",
-            allowFrom: Array.from({ length: 60 }, (_, index) => `telegram-user-${index}`),
-          },
-        },
-      };
+      const includedConfig = largeRecoverableCoreConfig;
       await seedConfigBackup(configPath, includedConfig);
       await fsp.writeFile(
         path.join(path.dirname(configPath), "base.json5"),
@@ -747,7 +748,7 @@ describe("config observe recovery", () => {
   it("does not auto-restore backup candidates rejected by the caller", async () => {
     await withSuiteHome(async (home) => {
       const { io, configPath } = createTestConfigIO(home);
-      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await seedConfigBackup(configPath, recoverableCoreConfig);
       const clobbered = await writeConfigRaw(configPath, {
         meta: { lastTouchedVersion: "2026.5.28" },
       });
@@ -805,11 +806,8 @@ describe("config observe recovery", () => {
       const { io, configPath } = createTestConfigIO(home);
       await seedConfigBackup(configPath, {
         meta: { lastTouchedVersion: "9999.1.1" },
-        channels: {
-          telegram: {
-            enabled: true,
-            allowFrom: Array.from({ length: 60 }, (_, index) => `telegram-user-${index}`),
-          },
+        gateway: {
+          trustedProxies: largeRecoverableCoreConfig.gateway.trustedProxies,
         },
       });
       const clobbered = await writeConfigRaw(configPath, {});

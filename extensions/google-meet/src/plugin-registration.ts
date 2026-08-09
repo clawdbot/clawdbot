@@ -114,7 +114,7 @@ function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
   platform?: NodeJS.Platform;
 }): boolean {
   const platform = params.platform ?? googleMeetToolDeps.platform();
-  if (platform === "darwin") {
+  if (platform === "darwin" || platform === "linux") {
     return false;
   }
   const action = params.raw.action;
@@ -141,7 +141,7 @@ export function assertGoogleMeetAgentToolActionSupported(params: {
     return;
   }
   throw new Error(
-    "Google Meet local Chrome talk-back audio is macOS-only. On this host, use mode: transcribe, transport: twilio, or transport: chrome-node backed by a macOS node.",
+    "Google Meet local Chrome talk-back audio requires macOS with BlackHole 2ch or Linux with PipeWire-Pulse. On this host, use mode: transcribe, transport: twilio, or a supported chrome-node.",
   );
 }
 

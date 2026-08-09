@@ -21874,11 +21874,6 @@
       "translated": "التفاصيل مدرجة على كل خيار أعلاه. يمكنك إصلاح تسجيل الدخول وإعادة المحاولة، أو الاتصال باستخدام مفتاح API أو رمز مميز أدناه."
     },
     {
-      "id": "native.apple.a0431b20c0650139",
-      "source": "Need help? Chat with OpenClaw",
-      "translated": "هل تحتاج إلى مساعدة؟ دردش مع OpenClaw"
-    },
-    {
       "id": "native.apple.6526ced182e1fe50",
       "source": "Your AI is ready",
       "translated": "الذكاء الاصطناعي الخاص بك جاهز"
@@ -22097,16 +22092,6 @@
       "id": "native.apple.953d477f3f3f2efa",
       "source": "That key didn’t work",
       "translated": "لم يعمل هذا المفتاح"
-    },
-    {
-      "id": "native.apple.e874bd0fad63f012",
-      "source": "OpenClaw — setup helper",
-      "translated": "OpenClaw — مساعد الإعداد"
-    },
-    {
-      "id": "native.apple.bea852c8622c8214",
-      "source": "Done",
-      "translated": "تم"
     },
     {
       "id": "native.apple.f91347240d07008f",
@@ -22507,6 +22492,11 @@
       "id": "native.apple.3bcb83316b3d90bb",
       "source": "The Gateway didn’t start",
       "translated": "لم يبدأ Gateway"
+    },
+    {
+      "id": "native.apple.f0b128f895130fef",
+      "source": "OpenClaw installation failed",
+      "translated": "فشل تثبيت OpenClaw"
     },
     {
       "id": "native.apple.f36edc58238aa8ce",

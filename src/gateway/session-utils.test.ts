@@ -42,7 +42,6 @@ import {
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
-  resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
@@ -3426,43 +3425,6 @@ describe("listSessionsFromStore selected model display", () => {
 
     expect(result.sessions[0]?.modelProvider).toBe("anthropic");
     expect(result.sessions[0]?.model).toBe("claude-sonnet-4-6");
-  });
-});
-
-describe("resolveSessionDisplayModelIdentityRef", () => {
-  test("canonicalizes CLI runtime provider to the selected model provider", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "anthropic/claude-opus-4-7",
-      agentRuntime: { id: "claude-cli" },
-    });
-
-    expect(
-      resolveSessionDisplayModelIdentityRef({
-        cfg,
-        agentId: "main",
-        provider: "claude-cli",
-        model: "claude-opus-4-7",
-      }),
-    ).toEqual({ provider: "anthropic", model: "claude-opus-4-7" });
-  });
-
-  test("prefers configured provider inference over default-provider parsing for bare CLI models", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "openai/gpt-5.4",
-      models: {
-        "anthropic/claude-opus-4-7": {},
-      },
-      agentRuntime: { id: "claude-cli" },
-    });
-
-    expect(
-      resolveSessionDisplayModelIdentityRef({
-        cfg,
-        agentId: "main",
-        provider: "claude-cli",
-        model: "claude-opus-4-7",
-      }),
-    ).toEqual({ provider: "anthropic", model: "claude-opus-4-7" });
   });
 });
 

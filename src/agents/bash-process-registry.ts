@@ -7,7 +7,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { readEnvInt } from "./bash-tools.shared.js";
 import { createSessionSlug as createSessionSlugId } from "./session-slug.js";
 
@@ -302,6 +302,11 @@ export function acknowledgeNotifyOnExit(record: {
   }
   remove();
   record.notifyOnExitRemoval = undefined;
+}
+
+/** Reports owner-tracked process liveness even after visibility is removed. */
+export function hasActiveBackgroundExecSession(sessionId: string): boolean {
+  return activeBackgroundExecSessionIds.has(sessionId);
 }
 
 /** Returns the number of live background exec sessions without exposing process details. */

@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase } from "./lib/npm-publish-plan.mjs";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
@@ -17,9 +17,8 @@ import {
   compareReleaseVersions as compareReleaseVersionsBase,
   collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
   parseReleaseVersion as parseReleaseVersionBase,
-  type ParsedReleaseVersion,
 } from "./lib/release-version.mjs";
-import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type PackageJson = {
@@ -41,6 +40,18 @@ type ParsedReleaseTag = {
   baseVersion: string;
   channel: "stable" | "alpha" | "beta";
   correctionNumber?: number;
+};
+
+type ParsedReleaseVersion = {
+  alphaNumber?: number;
+  baseVersion: string;
+  betaNumber?: number;
+  channel: "stable" | "alpha" | "beta";
+  correctionNumber?: number;
+  month: number;
+  patch: number;
+  version: string;
+  year: number;
 };
 
 type NpmPublishPlan = {

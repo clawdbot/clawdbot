@@ -230,7 +230,7 @@ describe("ExtensionRelayBridge", () => {
     });
   });
 
-  it("attaches shared tabs and announces targets on Target.setAutoAttach", async () => {
+  it("attaches accessible tabs and announces targets on Target.setAutoAttach", async () => {
     const bridge = new ExtensionRelayBridge();
     const { handlers } = wireExtension(bridge);
     sendHello(handlers);
@@ -287,7 +287,7 @@ describe("ExtensionRelayBridge", () => {
     expect(response?.result).toMatchObject({ ok: true });
   });
 
-  it("multiplexes Playwright page CDP sessions over the shared tab attachment", async () => {
+  it("multiplexes Playwright page CDP sessions over the accessible tab attachment", async () => {
     const bridge = new ExtensionRelayBridge();
     const { socket: extSocket, handlers } = wireExtension(bridge);
     sendHello(handlers);
@@ -455,7 +455,7 @@ describe("ExtensionRelayBridge", () => {
     },
   );
 
-  it("emits Target.detachedFromTarget when a shared tab leaves the group", async () => {
+  it("emits Target.detachedFromTarget when a tab becomes unavailable", async () => {
     const bridge = new ExtensionRelayBridge();
     const { handlers } = wireExtension(bridge);
     sendHello(handlers);
@@ -467,13 +467,13 @@ describe("ExtensionRelayBridge", () => {
     );
     await flush();
 
-    // Tab 1 removed from the shared set.
+    // Tab 1 removed from the accessible set.
     handlers.onMessage(JSON.stringify({ type: "tabs", tabs: [] }));
     await flush();
 
     const detached = client.frames().find((frame) => frame.method === "Target.detachedFromTarget");
     expect(detached).toBeTruthy();
-    expect(bridge.sharedTabs()).toHaveLength(0);
+    expect(bridge.accessibleTabs()).toHaveLength(0);
   });
 
   it("rejects isolated browser contexts (real profile only)", async () => {
@@ -539,7 +539,7 @@ describe("ExtensionRelayBridge", () => {
     ]);
   });
 
-  it("reaps child sessions when a tab leaves the group (no stale routing)", async () => {
+  it("reaps child sessions when a tab becomes unavailable (no stale routing)", async () => {
     const bridge = new ExtensionRelayBridge();
     const { handlers } = wireExtension(bridge);
     sendHello(handlers);
@@ -563,7 +563,7 @@ describe("ExtensionRelayBridge", () => {
     );
     await flush();
 
-    // Tab 1 leaves the OpenClaw group.
+    // Tab 1 disappears from the extension's accessible set.
     handlers.onMessage(JSON.stringify({ type: "tabs", tabs: [] }));
     await flush();
 
@@ -752,13 +752,13 @@ describe("ExtensionRelayBridge", () => {
       closeReason: "replaced by newer extension connection",
     });
     expect(bridge.identity?.browserVersion).toBe("Chrome/144.0.0.0");
-    expect(bridge.sharedTabs()).toEqual([
+    expect(bridge.accessibleTabs()).toEqual([
       { tabId: 2, url: "https://candidate.example", title: "Candidate", active: true },
     ]);
 
     active.handlers.onClose();
     expect(bridge.extensionConnected).toBe(true);
-    expect(bridge.sharedTabs()).toHaveLength(1);
+    expect(bridge.accessibleTabs()).toHaveLength(1);
   });
 
   it("rejects an older candidate when a newer candidate promotes first", () => {
@@ -843,7 +843,7 @@ describe("ExtensionRelayBridge", () => {
     expect(contexts?.result).toEqual({ browserContextIds: [] });
   });
 
-  it("lists shared tabs as DevTools-style target descriptors", async () => {
+  it("lists accessible tabs as DevTools-style target descriptors", async () => {
     const bridge = new ExtensionRelayBridge();
     const { handlers } = wireExtension(bridge);
     sendHello(handlers);

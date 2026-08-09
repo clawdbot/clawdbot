@@ -19,8 +19,7 @@ import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-s
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import type { GatewayMessageChannel } from "../utils/message-channel.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import {
   type HookContext,
@@ -111,7 +110,7 @@ export function createOpenClawTools(
      * sandbox/policy session key used to construct the tool set.
      */
     runSessionKey?: string;
-    agentChannel?: GatewayMessageChannel;
+    agentChannel?: string;
     runId?: string;
     agentAccountId?: string;
     /** Trusted account used only for Gateway authorization; delivery keeps agentAccountId. */

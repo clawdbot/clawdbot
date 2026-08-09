@@ -4,7 +4,10 @@ import {
   expireStaleReplyOperation,
   type ReplyOperation,
 } from "../../../auto-reply/reply/reply-run-registry.js";
-import { isAgentRunRestartAbortReason } from "../../run-termination.js";
+import {
+  isAgentRunRestartAbortReason,
+  isAgentRunSupersededAbortReason,
+} from "../../run-termination.js";
 import {
   projectToolSearchTargetTranscriptMessages,
   type ToolSearchTargetTranscriptProjection,
@@ -491,7 +494,9 @@ describe("prepareEmbeddedAttemptStream", () => {
     const markExternalAbort = vi.fn();
     const markAborted = vi.fn();
     const abortActiveSession = vi.fn(async () => {});
-    const releaseHeldLockForAbort = vi.fn(async () => {});
+    const releaseHeldLockForAbort = vi.fn(
+      async (_params: { reason?: unknown; terminal: boolean }) => {},
+    );
     const abortState = {
       markAborted,
       markExternalAbort,
@@ -555,9 +560,12 @@ describe("prepareEmbeddedAttemptStream", () => {
       expect(abortActiveSession).toHaveBeenCalledOnce();
       expect(releaseHeldLockForAbort).toHaveBeenCalledOnce();
       expect(releaseHeldLockForAbort).toHaveBeenCalledWith({
-        reason: undefined,
+        reason: expect.any(Error),
         terminal: true,
       });
+      expect(
+        isAgentRunSupersededAbortReason(releaseHeldLockForAbort.mock.calls[0]?.[0].reason),
+      ).toBe(true);
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
       expect(operation.abortSignal.aborted).toBe(true);
     } finally {

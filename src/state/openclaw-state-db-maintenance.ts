@@ -32,9 +32,12 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
   "claw_package_refs.extension_id",
   "claw_package_refs.extension_mapped_json",
   "claw_package_refs.extension_unavailable_json",
+  "worker_environments.shared_host",
+  "worktrees.run_end_cleanup_json",
 ] as const;
 
 const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
+  allowCompatibleAdditiveColumns: true,
   allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
   allowedMissingColumns: CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
   allowedColumnDefinitions: {
@@ -67,6 +70,7 @@ const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
       "target_agent_id TEXT NOT NULL DEFAULT 'main'",
     ],
     "operator_approvals.resolution_ref": ["resolution_ref TEXT"],
+    "worker_environments.shared_host": ["shared_host INTEGER CHECK (shared_host IN (0, 1))"],
   },
 } satisfies SqliteSchemaCompatibility;
 

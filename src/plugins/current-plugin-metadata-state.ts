@@ -4,37 +4,54 @@ import {
   type ManifestModelIdNormalizationRecord,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-let currentPluginMetadataSnapshot: unknown;
-let currentPluginMetadataSnapshotConfigFingerprint: string | undefined;
-let currentPluginMetadataSnapshotCompatiblePolicyHashes: readonly string[] | undefined;
-let currentPluginMetadataSnapshotCompatibleConfigFingerprints: readonly string[] | undefined;
-let currentManifestModelIdNormalizationRecords:
-  | readonly ManifestModelIdNormalizationRecord[]
-  | undefined;
-// Temporary snapshot owners compare this publication token before restoring;
-// lifecycle clears and newer publications must always win.
-let currentPluginMetadataSnapshotRevision = Symbol("plugin-metadata-snapshot");
-let currentPluginMetadataConfigIdentities = new WeakSet<OpenClawConfig>();
+export type CurrentPluginMetadataSnapshotRevision = symbol;
 
-export type CurrentPluginMetadataSnapshotRevision = typeof currentPluginMetadataSnapshotRevision;
+type CurrentPluginMetadataMutableState = {
+  snapshot: unknown;
+  configFingerprint: string | undefined;
+  compatiblePolicyHashes: readonly string[] | undefined;
+  compatibleConfigFingerprints: readonly string[] | undefined;
+  manifestModelIdNormalizationRecords: readonly ManifestModelIdNormalizationRecord[] | undefined;
+  // Temporary snapshot owners compare this publication token before restoring;
+  // lifecycle clears and newer publications must always win.
+  revision: CurrentPluginMetadataSnapshotRevision;
+  configIdentities: WeakSet<OpenClawConfig>;
+};
+
+// Process-scoped facts must survive dual module instances (ESM plus the lazy
+// require bridge in plugin-metadata-snapshot.runtime.ts), so the state lives
+// on a globalThis singleton like the scoped snapshot ALS.
+const state = resolveGlobalSingleton<CurrentPluginMetadataMutableState>(
+  Symbol.for("openclaw.currentPluginMetadataState"),
+  () => ({
+    snapshot: undefined,
+    configFingerprint: undefined,
+    compatiblePolicyHashes: undefined,
+    compatibleConfigFingerprints: undefined,
+    manifestModelIdNormalizationRecords: undefined,
+    revision: Symbol("plugin-metadata-snapshot"),
+    configIdentities: new WeakSet<OpenClawConfig>(),
+  }),
+);
 
 /** Owns config identity reuse for the current immutable metadata snapshot. */
 export const currentPluginMetadataConfigIdentityCache = {
   add(config: OpenClawConfig): void {
-    currentPluginMetadataConfigIdentities.add(config);
+    state.configIdentities.add(config);
   },
   capture(): WeakSet<OpenClawConfig> {
-    return currentPluginMetadataConfigIdentities;
+    return state.configIdentities;
   },
   clear(): void {
-    currentPluginMetadataConfigIdentities = new WeakSet();
+    state.configIdentities = new WeakSet();
   },
   has(config: OpenClawConfig): boolean {
-    return currentPluginMetadataConfigIdentities.has(config);
+    return state.configIdentities.has(config);
   },
   restore(identities: WeakSet<OpenClawConfig>): void {
-    currentPluginMetadataConfigIdentities = identities;
+    state.configIdentities = identities;
   },
 };
 
@@ -46,32 +63,28 @@ export function setCurrentPluginMetadataSnapshotState(
   compatibleConfigFingerprints?: readonly string[],
   manifestModelIdNormalizationRecords?: readonly ManifestModelIdNormalizationRecord[],
 ): CurrentPluginMetadataSnapshotRevision {
-  currentPluginMetadataSnapshot = snapshot;
-  currentPluginMetadataSnapshotConfigFingerprint = snapshot ? configFingerprint : undefined;
-  currentPluginMetadataSnapshotCompatiblePolicyHashes = snapshot
-    ? compatiblePolicyHashes
-    : undefined;
-  currentPluginMetadataSnapshotCompatibleConfigFingerprints = snapshot
-    ? compatibleConfigFingerprints
-    : undefined;
-  currentManifestModelIdNormalizationRecords = snapshot
+  state.snapshot = snapshot;
+  state.configFingerprint = snapshot ? configFingerprint : undefined;
+  state.compatiblePolicyHashes = snapshot ? compatiblePolicyHashes : undefined;
+  state.compatibleConfigFingerprints = snapshot ? compatibleConfigFingerprints : undefined;
+  state.manifestModelIdNormalizationRecords = snapshot
     ? manifestModelIdNormalizationRecords
     : undefined;
-  setCurrentManifestModelIdNormalizationRecords(currentManifestModelIdNormalizationRecords);
-  currentPluginMetadataSnapshotRevision = Symbol("plugin-metadata-snapshot");
-  return currentPluginMetadataSnapshotRevision;
+  setCurrentManifestModelIdNormalizationRecords(state.manifestModelIdNormalizationRecords);
+  state.revision = Symbol("plugin-metadata-snapshot");
+  return state.revision;
 }
 
 /** Clears the process-current plugin metadata snapshot. */
 function clearCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapshotRevision {
-  currentPluginMetadataSnapshot = undefined;
-  currentPluginMetadataSnapshotConfigFingerprint = undefined;
-  currentPluginMetadataSnapshotCompatiblePolicyHashes = undefined;
-  currentPluginMetadataSnapshotCompatibleConfigFingerprints = undefined;
-  currentManifestModelIdNormalizationRecords = undefined;
+  state.snapshot = undefined;
+  state.configFingerprint = undefined;
+  state.compatiblePolicyHashes = undefined;
+  state.compatibleConfigFingerprints = undefined;
+  state.manifestModelIdNormalizationRecords = undefined;
   setCurrentManifestModelIdNormalizationRecords(undefined);
-  currentPluginMetadataSnapshotRevision = Symbol("plugin-metadata-snapshot");
-  return currentPluginMetadataSnapshotRevision;
+  state.revision = Symbol("plugin-metadata-snapshot");
+  return state.revision;
 }
 
 /** Clears the snapshot, its identity cache, and process-wide model normalization. */
@@ -90,11 +103,11 @@ export function getCurrentPluginMetadataSnapshotState(): {
   revision: CurrentPluginMetadataSnapshotRevision;
 } {
   return {
-    snapshot: currentPluginMetadataSnapshot,
-    configFingerprint: currentPluginMetadataSnapshotConfigFingerprint,
-    compatiblePolicyHashes: currentPluginMetadataSnapshotCompatiblePolicyHashes,
-    compatibleConfigFingerprints: currentPluginMetadataSnapshotCompatibleConfigFingerprints,
-    manifestModelIdNormalizationRecords: currentManifestModelIdNormalizationRecords,
-    revision: currentPluginMetadataSnapshotRevision,
+    snapshot: state.snapshot,
+    configFingerprint: state.configFingerprint,
+    compatiblePolicyHashes: state.compatiblePolicyHashes,
+    compatibleConfigFingerprints: state.compatibleConfigFingerprints,
+    manifestModelIdNormalizationRecords: state.manifestModelIdNormalizationRecords,
+    revision: state.revision,
   };
 }

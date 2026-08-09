@@ -16,6 +16,7 @@ import {
   resolveActiveReplyRunSessionId,
   resolveReplyBackendQueueMessageMismatch,
   resolveReplyRunPhaseForSessionId,
+  supersedeReplyRunByRunId,
   type ReplyOperation,
   type ReplyOperationPhase,
   waitForReplyOperationOwnerSettlement,
@@ -413,6 +414,25 @@ export function isEmbeddedAgentRunAbortableForRunId(runId: string): boolean {
   }
   const handle = ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(normalizedRunId);
   return handle ? isEmbeddedRunHandleAbortable(normalizedRunId, handle) : true;
+}
+
+/** Cancels one exact process-local run after recording its superseded terminal owner. */
+export function supersedeEmbeddedAgentRunByRunId(runId: string, beforeCancel: () => void): boolean {
+  const normalizedRunId = runId.trim();
+  if (!normalizedRunId) {
+    return false;
+  }
+  const handle = ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(normalizedRunId);
+  if (handle) {
+    beforeCancel();
+    if (handle.cancel) {
+      handle.cancel("superseded");
+    } else {
+      handle.abort();
+    }
+    return true;
+  }
+  return supersedeReplyRunByRunId(normalizedRunId, beforeCancel);
 }
 
 export function clearEmbeddedAgentRunAbortabilityForRunId(runId: string): void {

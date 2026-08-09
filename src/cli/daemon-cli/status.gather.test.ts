@@ -11,7 +11,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
-import { gatherDaemonStatus } from "./status.gather.js";
+import { gatherDaemonStatus, renderPortDiagnosticsForCli } from "./status.gather.js";
 import { printDaemonStatus } from "./status.print.js";
 
 type PortConnections = Awaited<
@@ -86,6 +86,7 @@ const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnections>>
     connections: [],
   }),
 );
+const formatPortDiagnostics = vi.fn<(usage: PortUsageTestSummary) => string[]>(() => []);
 const readLastGatewayErrorLine = vi.fn<
   (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => Promise<string | null>
 >(async (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => null);
@@ -281,7 +282,7 @@ vi.mock("../../infra/ports-inspect.js", () => ({
 }));
 
 vi.mock("../../infra/ports-format.js", () => ({
-  formatPortDiagnostics: () => [],
+  formatPortDiagnostics: (usage: PortUsageTestSummary) => formatPortDiagnostics(usage),
 }));
 
 vi.mock("../../infra/restart-handoff.js", () => ({
@@ -390,6 +391,7 @@ describe("gatherDaemonStatus", () => {
       );
     });
     inspectPortConnections.mockClear();
+    formatPortDiagnostics.mockReset().mockReturnValue(["port diagnostics"]);
     inspectWindowsGatewayFirewall.mockClear();
     inspectWindowsGatewayFirewall.mockResolvedValue({
       applies: false,
@@ -424,6 +426,26 @@ describe("gatherDaemonStatus", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+  });
+
+  it("reports indeterminate port availability unless the RPC probe succeeded", () => {
+    const status = {
+      service: {
+        label: "Scheduled Task",
+        loaded: true,
+        loadedText: "registered",
+        notLoadedText: "not registered",
+      },
+      port: { port: 18789, status: "unknown" as const, listeners: [], hints: [] },
+      extraServices: [],
+    };
+
+    expect(renderPortDiagnosticsForCli(status, false)).toEqual(["port diagnostics"]);
+    expect(formatPortDiagnostics).toHaveBeenCalledWith(status.port);
+    expect(renderPortDiagnosticsForCli(status, true)).toEqual([]);
+    expect(
+      renderPortDiagnosticsForCli({ ...status, port: { ...status.port, status: "free" } }, false),
+    ).toEqual([]);
   });
 
   it("uses wss probe URL and forwards TLS fingerprint when daemon TLS is enabled", async () => {

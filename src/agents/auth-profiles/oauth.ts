@@ -27,7 +27,6 @@ import {
   SecretSurfaceUnavailableError,
 } from "../../secrets/runtime-degraded-state.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
-import { refreshChutesTokens } from "../chutes-oauth.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import {
   evaluateStoredCredentialEligibility,
@@ -202,12 +201,6 @@ async function refreshOAuthCredential(
   }
   if (pluginResult.status === "configured-unavailable") {
     throw new OAuthProviderConfiguredUnavailableError(credential.provider);
-  }
-
-  if (credential.provider === "chutes") {
-    // Chutes refresh shipped before provider hooks and still covers registry-load
-    // windows where the synchronous hook resolver intentionally returns no owner.
-    return await refreshChutesTokens({ credential });
   }
 
   const oauthProvider = resolveOAuthProvider(credential.provider);

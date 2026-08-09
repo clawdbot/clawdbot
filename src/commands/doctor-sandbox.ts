@@ -14,12 +14,6 @@ import {
   PODMAN_SANDBOX_ENGINE,
   validateSandboxContainerEngineTarget,
 } from "../agents/sandbox/docker.js";
-import {
-  inspectLegacySandboxRegistryFiles,
-  migrateLegacySandboxRegistryFiles,
-  type LegacySandboxRegistryInspection,
-  type LegacySandboxRegistryMigrationResult,
-} from "../agents/sandbox/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
@@ -28,6 +22,12 @@ import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  inspectLegacySandboxRegistryFiles,
+  migrateLegacySandboxRegistryFiles,
+  type LegacySandboxRegistryInspection,
+  type LegacySandboxRegistryMigrationResult,
+} from "./doctor-sandbox-legacy-registry.js";
 
 const SANDBOX_REGISTRY_FILES_CHECK_ID = "core/doctor/sandbox/registry-files";
 
@@ -409,12 +409,7 @@ export async function maybeRepairSandboxImages(
 
 function formatLegacyRegistryInspectionLine(file: LegacySandboxRegistryInspection): string {
   const status = file.valid ? `${file.entries} entr${file.entries === 1 ? "y" : "ies"}` : "invalid";
-  const sourcePath = legacySandboxRegistryInspectionSourcePath(file);
-  return `- ${file.kind} ${file.source}: ${shortenHomePath(sourcePath)} (${status})`;
-}
-
-function legacySandboxRegistryInspectionSourcePath(file: LegacySandboxRegistryInspection): string {
-  return file.source === "sharded" ? file.shardedDir : file.registryPath;
+  return `- ${file.kind} ${file.source}: ${shortenHomePath(file.path)} (${status})`;
 }
 
 function formatLegacyRegistryMigrationLine(result: LegacySandboxRegistryMigrationResult): string {
@@ -425,9 +420,8 @@ function formatLegacyRegistryMigrationLine(result: LegacySandboxRegistryMigratio
     return `- Removed empty legacy ${result.kind} registry files.`;
   }
   if (result.status === "quarantined-invalid") {
-    const sourcePath = result.source === "sharded" ? result.shardedDir : result.registryPath;
-    const file = shortenHomePath(sourcePath);
-    const quarantine = result.quarantinePath ? ` to ${shortenHomePath(result.quarantinePath)}` : "";
+    const file = shortenHomePath(result.path);
+    const quarantine = ` to ${shortenHomePath(result.quarantinePath)}`;
     return `- Quarantined invalid legacy ${result.kind} registry ${file}${quarantine}.`;
   }
   return "";
@@ -447,7 +441,7 @@ export function legacySandboxRegistryInspectionToHealthFinding(
     severity: "warning",
     message: `Legacy sandbox registry file detected.
 ${formatLegacyRegistryInspectionLine(file)}`,
-    path: legacySandboxRegistryInspectionSourcePath(file),
+    path: file.path,
     fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to migrate valid entries to SQLite.`,
   };
 }
@@ -463,7 +457,7 @@ export function legacySandboxRegistryInspectionToRepairEffect(
   return {
     kind: "state",
     action,
-    target: legacySandboxRegistryInspectionSourcePath(file),
+    target: file.path,
     dryRunSafe: false,
   };
 }

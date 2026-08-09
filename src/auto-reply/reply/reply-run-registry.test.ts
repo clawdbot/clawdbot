@@ -28,7 +28,9 @@ import {
   clearReplyRunForResetBySessionId,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
+  registerReplyOperationSuccessorBarrier,
   ReplyRunAlreadyActiveError,
+  ReplyRunSuccessorAdmissionBlockedError,
   replyRunRegistry,
   markReplyOperationGlobalLaneWaitProgress,
   runAfterReplyOperationClear,
@@ -37,6 +39,7 @@ import {
   resolveReplyRunPhaseForSessionId,
   waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,
+  waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
@@ -849,6 +852,92 @@ describe("reply run registry", () => {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
     }
+  });
+
+  it("fences every durable alias until successor handoff settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const requestKey = "agent:main:telegram:alias:request";
+      const canonicalKey = "agent:main:telegram:alias:canonical";
+      const adoptedKey = "agent:main:telegram:alias:adopted";
+      const operation = createTestReplyOperation({
+        sessionKey: requestKey,
+        sessionId: "alias-session",
+      });
+      let releaseFirstBarrier = () => {};
+      const firstBarrier = new Promise<void>((resolve) => {
+        releaseFirstBarrier = resolve;
+      });
+      registerReplyOperationSuccessorBarrier({
+        operation,
+        sessionId: "alias-session",
+        sessionKeys: [requestKey, canonicalKey],
+        start: () => firstBarrier,
+      });
+      let releaseSecondBarrier = () => {};
+      const secondBarrier = new Promise<void>((resolve) => {
+        releaseSecondBarrier = resolve;
+      });
+      registerReplyOperationSuccessorBarrier({
+        operation,
+        sessionId: "alias-session",
+        sessionKeys: [adoptedKey],
+        start: () => secondBarrier,
+      });
+
+      operation.updateSessionId("rotated-alias-session");
+      operation.complete();
+      for (const sessionKey of [requestKey, canonicalKey, adoptedKey]) {
+        expect(() => createTestReplyOperation({ sessionKey })).toThrow(
+          ReplyRunSuccessorAdmissionBlockedError,
+        );
+      }
+      const timedWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(timedWait).resolves.toEqual({ settled: false });
+
+      const requestWait = waitForReplyRunSuccessorAdmission(requestKey, 100);
+      const canonicalWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
+      releaseFirstBarrier();
+      for (const wait of [requestWait, canonicalWait]) {
+        await expect(wait).resolves.toEqual({
+          settled: true,
+          sessionId: "rotated-alias-session",
+        });
+      }
+      expect(() => createTestReplyOperation({ sessionKey: adoptedKey })).toThrow(
+        ReplyRunSuccessorAdmissionBlockedError,
+      );
+      releaseSecondBarrier();
+      await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual({
+        settled: true,
+        sessionId: "rotated-alias-session",
+      });
+      const successor = createTestReplyOperation({ sessionKey: canonicalKey });
+      successor.complete();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops a successor wait when its signal aborts", async () => {
+    const operation = createTestReplyOperation();
+    registerReplyOperationSuccessorBarrier({
+      operation,
+      sessionId: operation.sessionId,
+      sessionKeys: [operation.key],
+      start: () => new Promise<void>(() => {}),
+    });
+    operation.complete();
+    const controller = new AbortController();
+    const wait = waitForReplyRunSuccessorAdmission(operation.key, null, {
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(wait).resolves.toEqual({ settled: false });
   });
 
   it("extends a hung delivery barrier only while bounded owner work remains active", async () => {

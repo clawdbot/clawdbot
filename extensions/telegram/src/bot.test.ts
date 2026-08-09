@@ -1803,7 +1803,7 @@ describe("createTelegramBot", () => {
     expect(execApprovals.approvers).toEqual(["9"]);
     expect(execApprovals.target).toBe("dm");
     expect(approvalCall.approvalId).toBe("138e9b8c");
-    expect(approvalCall.approvalKind).toBe("exec");
+    expect(approvalCall.resolveMethod).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
     expect(approvalCall.senderId).toBe("9");
     expect(replySpy).not.toHaveBeenCalled();
@@ -2025,7 +2025,7 @@ describe("createTelegramBot", () => {
       assertDistinctResult: () => {
         expect(execApprovalCall(0)).toMatchObject({
           approvalId: "stale-legacy-id",
-          approvalKind: "exec",
+          resolveMethod: "exec",
         });
         expect(execApprovalCall(1)).toMatchObject({
           approvalId: "stale-legacy-id",
@@ -2149,12 +2149,12 @@ describe("createTelegramBot", () => {
     expect(execApprovals.approvers).toEqual(["9"]);
     expect(execApprovals.target).toBe("dm");
     expect(approvalCall.approvalId).toBe("opaque-plugin-approval-id");
-    expect(approvalCall.approvalKind).toBe("exec");
+    expect(approvalCall.resolveMethod).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
     expect(approvalCall.senderId).toBe("9");
     expect(execApprovalCall(1)).toMatchObject({
       approvalId: "opaque-plugin-approval-id",
-      approvalKind: "plugin",
+      resolveMethod: "plugin",
       decision: "allow-once",
       senderId: "9",
     });
@@ -2268,7 +2268,7 @@ describe("createTelegramBot", () => {
     expect(execApprovals.enabled).toBe(true);
     expect(execApprovals.mode).toBe("targets");
     expect(approvalCall.approvalId).toBe("plugin:misleading-exec-id");
-    expect(approvalCall.approvalKind).toBe("exec");
+    expect(approvalCall.resolveMethod).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
     expect(approvalCall.senderId).toBe("9");
     expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(1);
@@ -2313,7 +2313,7 @@ describe("createTelegramBot", () => {
     expect(execApprovals.enabled).toBe(true);
     expect(execApprovals.mode).toBe("targets");
     expect(approvalCall.approvalId).toBe("138e9b8c");
-    expect(approvalCall.approvalKind).toBe("exec");
+    expect(approvalCall.resolveMethod).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
     expect(approvalCall.senderId).toBe("9");
     expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(1);
@@ -2343,11 +2343,11 @@ describe("createTelegramBot", () => {
 
     const approvalCall = execApprovalCall();
     expect(approvalCall.approvalId).toBe("138e9b8c");
-    expect(approvalCall.approvalKind).toBe("exec");
+    expect(approvalCall.resolveMethod).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
     expect(approvalCall.senderId).toBe("9");
     expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(2);
-    expect(execApprovalCall(1).approvalKind).toBe("plugin");
+    expect(execApprovalCall(1).resolveMethod).toBe("plugin");
     expect(editMessageTextSpy).toHaveBeenCalledWith(
       1234,
       26,
@@ -2391,7 +2391,7 @@ describe("createTelegramBot", () => {
 
     expect(execApprovalCall()).toMatchObject({
       approvalId: "plugin:138e9b8c",
-      approvalKind: "exec",
+      resolveMethod: "exec",
       decision: "allow-once",
       senderId: "9",
     });

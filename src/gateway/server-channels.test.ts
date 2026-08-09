@@ -2,6 +2,7 @@
  * Server channel lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { ChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import type {
   ChannelAccountLinkState,
@@ -162,14 +163,6 @@ function createTestPlugin(params?: {
     config,
     gateway,
   };
-}
-
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolvePromise = () => {};
-  const promise = new Promise<void>((resolve) => {
-    resolvePromise = resolve;
-  });
-  return { promise, resolve: resolvePromise };
 }
 
 async function flushMicrotasks(times = 8): Promise<void> {

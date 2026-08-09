@@ -901,6 +901,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       allowGatewaySubagentBinding: true,
       messageChannel: params.followupRun.run.messageProvider,
       clientCaps: params.followupRun.run.clientCaps,
+      conversationToolPolicy: params.followupRun.run.conversationToolPolicy,
       groupId: entry.groupId ?? params.followupRun.run.groupId,
       groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
       groupSpace: entry.space ?? params.followupRun.run.groupSpace,

@@ -116,6 +116,7 @@ type ParsedSlackBlockAction = {
   typedAction: Record<string, unknown>;
   typedActionWithText: {
     action_id?: string;
+    action_ts?: string;
     block_id?: string;
     type?: string;
     text?: { text?: string };
@@ -437,6 +438,7 @@ function parseSlackBlockAction(params: {
   }
   const typedActionWithText = typedAction as {
     action_id?: string;
+    action_ts?: string;
     block_id?: string;
     type?: string;
     text?: { text?: string };
@@ -643,8 +645,8 @@ async function handleSlackApprovalInteraction(params: {
       approvalId: params.approval.approvalId,
       approvalKind: params.approval.approvalKind,
       decision: params.approval.decision,
+      channel: "slack",
       senderId: params.parsed.userId,
-      clientDisplayName: `Slack approval (${params.parsed.userId.trim() || "unknown"})`,
     });
     const terminalLabel = resolveSlackApprovalTerminalLabel(result.approval);
     const prefix = result.applied ? "Resolved" : "Already resolved";
@@ -736,9 +738,9 @@ async function handleSlackLegacyApprovalInteraction(params: {
         cfg: params.ctx.cfg,
         approvalId: parsedApproval.approvalId,
         decision: parsedApproval.decision,
+        channel: "slack",
         senderId: params.parsed.userId,
         resolveMethod,
-        clientDisplayName: `Slack approval (${params.parsed.userId.trim() || "unknown"})`,
       });
       try {
         await updateSlackInteractionMessage({
@@ -947,6 +949,8 @@ function enqueueSlackBlockActionEvent(params: {
     params.parsed.channelId,
     params.parsed.messageTs,
     params.parsed.actionId,
+    normalizeOptionalString(params.parsed.typedActionWithText.action_ts) ??
+      params.parsed.typedBody.trigger_id,
   ].filter(Boolean);
   const queued = enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
     sessionKey,

@@ -15,6 +15,7 @@ import {
   disableCurrentOpenClawUpdateLaunchdJob,
   disableOpenClawUpdateLaunchdJob,
   findStaleOpenClawUpdateLaunchdJobs,
+  isLaunchAgentLoaded,
   parkCurrentLaunchAgentForMaintenance,
   parseLaunchctlPrint,
   parseLaunchctlListOpenClawUpdateJobs,
@@ -1445,6 +1446,15 @@ describe("launchd bootstrap repair", () => {
 });
 
 describe("launchd uninstall", () => {
+  it("rejects an unrecognized launchctl inspection failure", async () => {
+    state.printError = "launchctl print permission denied";
+    state.printFailuresRemaining = 1;
+
+    await expect(isLaunchAgentLoaded({ env: createDefaultLaunchdEnv() })).rejects.toThrow(
+      "launchctl print failed: launchctl print permission denied",
+    );
+  });
+
   it("refuses an in-band uninstall before bootout or plist removal", async () => {
     const env = createDefaultLaunchdEnv();
     const plistPath = resolveLaunchAgentPlistPath(env);
@@ -1475,6 +1485,18 @@ describe("launchd uninstall", () => {
 
     await expect(uninstall).rejects.toThrow("LaunchAgent removal failed (EACCES)");
     await expect(uninstall).rejects.not.toThrow(plistPath);
+    expect(state.files.has(plistPath)).toBe(true);
+  });
+
+  it("preserves the plist when launchctl cannot boot out the service", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "RunAtLoad=true");
+    state.bootoutError = "launchctl bootout permission denied";
+
+    await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+      "launchctl bootout failed: launchctl bootout permission denied",
+    );
     expect(state.files.has(plistPath)).toBe(true);
   });
 

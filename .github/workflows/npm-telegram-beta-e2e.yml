@@ -237,7 +237,7 @@ jobs:
           OPENCLAW_BUILD_PRIVATE_QA: "1"
         run: |
           set -euo pipefail
-          node scripts/build-all.mjs qaRuntime
+          node --import tsx scripts/build-all.mts qaRuntime
           test -f dist/plugin-sdk/qa-runtime.js
           test -f dist/extensions/qa-lab/runtime-api.js
 
