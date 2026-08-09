@@ -2,6 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { listBundledChannelLegacyStateMigrationDetectorEntries } from "../channels/plugins/bundled.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -107,8 +108,9 @@ export function collectRelevantDoctorPluginIds(raw: unknown): string[] {
 
   const channels = asNullableRecord(root.channels);
   if (channels) {
-    for (const channelId of Object.keys(channels)) {
-      if (channelId !== "defaults") {
+    for (const rawChannelId of Object.keys(channels)) {
+      const channelId = rawChannelId.trim();
+      if (channelId && !isChannelConfigMetadataKey(channelId)) {
         ids.add(channelId);
       }
     }
@@ -153,8 +155,9 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
       if (!second) {
         return collectRelevantDoctorPluginIds(params.raw);
       }
-      if (second !== "defaults") {
-        ids.add(second);
+      const channelId = second.trim();
+      if (channelId && !isChannelConfigMetadataKey(channelId)) {
+        ids.add(channelId);
       }
       continue;
     }

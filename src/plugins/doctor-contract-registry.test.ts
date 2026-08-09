@@ -627,6 +627,28 @@ describe("doctor-contract-registry module loader", () => {
     ).toEqual(["ollama-cloud"]);
   });
 
+  it("excludes channel metadata and blank ids from full and touched doctor scans", () => {
+    const raw = {
+      channels: {
+        defaults: {},
+        modelByChannel: { discord: "openai/gpt-5.6-luna" },
+        " ": {},
+        discord: {},
+      },
+    };
+
+    expect(collectRelevantDoctorPluginIds(raw)).toEqual(["discord"]);
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({
+        raw,
+        touchedPaths: [["channels", "modelByChannel", "discord"]],
+      }),
+    ).toStrictEqual([]);
+    expect(
+      collectRelevantDoctorPluginIdsForTouchedPaths({ raw, touchedPaths: [["channels"]] }),
+    ).toEqual(["discord"]);
+  });
+
   it("collects provider ids from media model entries", () => {
     const raw = {
       tools: {
