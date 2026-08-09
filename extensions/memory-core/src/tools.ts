@@ -431,6 +431,8 @@ async function executeMemoryReadResult(params: {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  /** Resolved agent workspace for recall tracking. */
+  workspaceDir?: string;
 }) {
   try {
     const result = await params.read();
@@ -447,6 +449,27 @@ async function executeMemoryReadResult(params: {
       if (supplement) {
         return jsonResult(supplement);
       }
+    }
+    // Best-effort recall tracking: explicitly-read memory files contribute
+    // to the dreaming promotion pipeline (#94769). Use the actual returned
+    // range from the result, not the request parameters.
+    if (params.workspaceDir && result.text) {
+      const actualFrom = result.from ?? params.from ?? 1;
+      const actualLines = result.lines;
+      const endLine = actualLines ? actualFrom + actualLines - 1 : actualFrom;
+      void recordShortTermRecalls({
+        workspaceDir: params.workspaceDir,
+        query: params.relPath,
+        results: [{
+          source: "memory" as const,
+          path: params.relPath,
+          startLine: actualFrom,
+          endLine,
+          score: 0.5,
+        }],
+      }).catch(() => {
+        // Recall tracking is best-effort and must never block memory reads.
+      });
     }
     return jsonResult(result);
   } catch (error) {
@@ -914,7 +937,7 @@ export function createMemoryGetTool(options: {
         const from = readPositiveIntegerParam(rawParams, "from");
         const lines = readPositiveIntegerParam(rawParams, "lines");
         const requestedCorpus = readCorpusParam(rawParams, ["memory", "wiki", "all"]);
-        const { readAgentMemoryFile, resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
+        const { readAgentMemoryFile, resolveMemoryBackendConfig, resolveMemoryHostAgentWorkspaceDir } = await loadMemoryToolRuntime();
         if (requestedCorpus === "wiki") {
           const supplement = await getSupplementMemoryReadResult({
             relPath,
@@ -936,6 +959,7 @@ export function createMemoryGetTool(options: {
         }
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
         if (resolved.backend === "builtin") {
+          const workspaceDir = resolveMemoryHostAgentWorkspaceDir(cfg, agentId);
           return await executeMemoryReadResult({
             read: async () =>
               await readAgentMemoryFile({
@@ -952,6 +976,7 @@ export function createMemoryGetTool(options: {
             agentId,
             agentSessionKey: options.agentSessionKey,
             sandboxed: options.sandboxed,
+            workspaceDir,
           });
         }
         const memory = await getMemoryManagerContextWithPurpose({
@@ -964,6 +989,7 @@ export function createMemoryGetTool(options: {
         if ("error" in memory) {
           return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
         }
+        const managerStatus = memory.manager.status();
         return await executeMemoryReadResult({
           read: async () =>
             await memory.manager.readFile({
@@ -978,6 +1004,7 @@ export function createMemoryGetTool(options: {
           agentId,
           agentSessionKey: options.agentSessionKey,
           sandboxed: options.sandboxed,
+          workspaceDir: managerStatus.workspaceDir,
         });
       },
   });

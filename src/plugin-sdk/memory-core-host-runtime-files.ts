@@ -6,6 +6,7 @@ export {
   normalizeExtraMemoryPaths,
   readAgentMemoryFile,
   resolveMemoryBackendConfig,
+  resolveMemoryHostAgentWorkspaceDir,
 } from "../../packages/memory-host-sdk/src/runtime-files.js";
 export type {
   MemoryEntryProvenance,
