@@ -1,5 +1,6 @@
 // Chutes tests cover oauth plugin behavior.
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loginChutes, refreshChutesOAuthCredential } from "./oauth.js";
 
@@ -222,10 +223,7 @@ describe("chutes plugin OAuth", () => {
       const url =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url === "https://api.chutes.ai/idp/userinfo") {
-        return new Response(JSON.stringify({ login: "test", name: "Test" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
+        return jsonResponse({ login: "test", name: "Test" });
       }
       if (url === "https://api.chutes.ai/idp/token") {
         return oversizedTokenJson;
@@ -269,10 +267,11 @@ describe("chutes plugin OAuth", () => {
     const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = fetchInputUrl(input);
       if (url === CHUTES_TOKEN_ENDPOINT) {
-        return new Response(
-          '{"access_token":"at_timeout","refresh_token":"rt_timeout","expires_in":3600}',
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
+        return jsonResponse({
+          access_token: "at_timeout",
+          refresh_token: "rt_timeout",
+          expires_in: 3600,
+        });
       }
       if (url === CHUTES_USERINFO_ENDPOINT) {
         return await rejectWhenAborted(init);
@@ -310,10 +309,11 @@ describe("chutes plugin OAuth", () => {
     const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
       const url = fetchInputUrl(input);
       if (url === CHUTES_TOKEN_ENDPOINT) {
-        return new Response(
-          '{"access_token":"at_123","refresh_token":"rt_123","expires_in":3600}',
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
+        return jsonResponse({
+          access_token: "at_123",
+          refresh_token: "rt_123",
+          expires_in: 3600,
+        });
       }
       if (url === CHUTES_USERINFO_ENDPOINT) {
         return userInfoResponse;
@@ -335,10 +335,11 @@ describe("chutes plugin OAuth", () => {
     const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = fetchInputUrl(input);
       if (url === CHUTES_TOKEN_ENDPOINT) {
-        return new Response(
-          '{"access_token":"at_cancel","refresh_token":"rt_cancel","expires_in":3600}',
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
+        return jsonResponse({
+          access_token: "at_cancel",
+          refresh_token: "rt_cancel",
+          expires_in: 3600,
+        });
       }
       if (url === CHUTES_USERINFO_ENDPOINT) {
         controller.abort(reason);
@@ -377,14 +378,11 @@ describe("chutes plugin OAuth", () => {
         refresh_token: "rt_old",
         client_secret: "secret_env",
       });
-      return new Response(
-        JSON.stringify({
-          access_token: "at_new",
-          refresh_token: "rt_new",
-          expires_in: 1800,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+      return jsonResponse({
+        access_token: "at_new",
+        refresh_token: "rt_new",
+        expires_in: 1800,
+      });
     });
     const credential = createStoredCredential();
     const now = 2_000_000;
@@ -420,10 +418,7 @@ describe("chutes plugin OAuth", () => {
         throw new Error("expected URL-encoded Chutes refresh request");
       }
       expect(body.get("client_id")).toBe("cid_env");
-      return new Response('{"access_token":"at_new","expires_in":1800}', {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return jsonResponse({ access_token: "at_new", expires_in: 1800 });
     });
 
     const refreshed = await refreshChutesOAuthCredential(
@@ -441,13 +436,7 @@ describe("chutes plugin OAuth", () => {
       response: { access_token: "at_new", refresh_token: "", expires_in: 1800 },
     },
   ])("preserves the old refresh token when the replacement is $label", async ({ response }) => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response(JSON.stringify(response), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
+    const fetchFn = vi.fn(async () => jsonResponse(response));
 
     const refreshed = await refreshChutesOAuthCredential(createStoredCredential(), {
       fetchFn,
@@ -485,13 +474,7 @@ describe("chutes plugin OAuth", () => {
       message: "Chutes token refresh returned invalid expires_in",
     },
   ])("rejects $label", async ({ response, message }) => {
-    const fetchFn = vi.fn(
-      async () =>
-        new Response(JSON.stringify(response), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    );
+    const fetchFn = vi.fn(async () => jsonResponse(response));
 
     await expect(
       refreshChutesOAuthCredential(createStoredCredential(), { fetchFn, now: 5_000_000 }),
