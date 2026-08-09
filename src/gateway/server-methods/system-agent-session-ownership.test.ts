@@ -400,7 +400,7 @@ describe("openclaw.chat session responses", () => {
         details: { code: "system_agent_session_invalidated" },
       },
     });
-    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
+    expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).not.toHaveBeenCalled();
   });
 
   it("routes a structured cancel through its bound session", async () => {
