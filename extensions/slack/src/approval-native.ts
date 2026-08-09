@@ -18,6 +18,7 @@ import {
   normalizeSlackOriginTarget,
   resolveSessionSlackOriginTarget,
   resolveSlackFallbackOriginTarget,
+  resolveEnterpriseApprovalTeamId,
   resolveTurnSourceSlackOriginTarget,
   shouldHandleSlackNativeApprovalRequest,
   shouldHandleSlackPluginViaForwardingSession,
@@ -32,6 +33,7 @@ import {
   isSlackExecApprovalClientEnabled,
   resolveSlackExecApprovalTarget,
 } from "./exec-approvals.js";
+import { formatSlackTarget } from "./target-parsing.js";
 
 type ApprovalRequest = SlackNativeApprovalRequest;
 type ApprovalKind = SlackApprovalKind;
@@ -105,7 +107,10 @@ function resolveSlackApproverDmTargets(params: {
     params.approvalKind === "plugin"
       ? getSlackApprovalApprovers(params)
       : getSlackExecApprovalApprovers(params);
-  return approvers.map((approver) => ({ to: `user:${approver}` }));
+  const teamId = resolveEnterpriseApprovalTeamId(params.request);
+  return approvers.map((approver) => ({
+    to: teamId ? formatSlackTarget({ kind: "user", id: approver, teamId }) : `user:${approver}`,
+  }));
 }
 
 const shouldSuppressSlackForwardingFallback =
