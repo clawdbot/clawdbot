@@ -33,6 +33,33 @@ function requestHasParam(request: { params?: unknown }, key: string, value: unkn
   );
 }
 
+const TERMINAL_START_FEATURE_METHODS = [
+  "chat.metadata",
+  "chat.startup",
+  "sessions.catalog.list",
+  "sessions.catalog.startTerminal",
+  "sessions.create",
+  "sessions.dispatch",
+  "terminal.open",
+  "worktrees.create",
+] as const;
+
+function cliAgentCatalog(startTerminal: boolean) {
+  return {
+    id: "claude",
+    label: "Claude Code",
+    capabilities: {
+      continueSession: true,
+      archive: false,
+      createSession: {
+        model: "anthropic/claude-opus-4-8",
+        ...(startTerminal ? { startTerminal: true } : {}),
+      },
+    },
+    hosts: [],
+  };
+}
+
 suite.define(() => {
   it("routes a Labs-enabled CLI agent picker row through catalog-target mode", async () => {
     if (captureCliAgentsProof) {
@@ -122,6 +149,265 @@ suite.define(() => {
           path: path.join(cliAgentsProofDir, "catalog-target.png"),
         });
       }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it.each([
+    {
+      label: "CLI agents gate is off",
+      cliAgentsEnabled: false,
+      terminalEnabled: true,
+      startTerminal: true,
+    },
+    {
+      label: "terminal gate is off",
+      cliAgentsEnabled: true,
+      terminalEnabled: false,
+      startTerminal: true,
+    },
+    {
+      label: "catalog capability is absent",
+      cliAgentsEnabled: true,
+      terminalEnabled: true,
+      startTerminal: false,
+    },
+  ])("keeps the plain Start control when $label", async (testCase) => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      cliAgentsEnabled: testCase.cliAgentsEnabled,
+      terminalEnabled: testCase.terminalEnabled,
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      featureMethods: [...TERMINAL_START_FEATURE_METHODS],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [cliAgentCatalog(testCase.startTerminal)],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?catalog=claude`);
+      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+
+      expect(await page.locator(".new-session-page__start-split").count()).toBe(0);
+      await page.locator(".new-session-page__message").fill("keep the normal path");
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
+        .toBe(true);
+      expect(await page.locator(".chat-send-btn").count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("creates a worktree, starts the catalog session, and opens its terminal", async () => {
+    if (captureCliAgentsProof) {
+      await mkdir(cliAgentsProofDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureCliAgentsProof
+        ? { recordVideo: { dir: cliAgentsProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      const proofWindow = window as typeof window & { terminalToggleProof?: unknown[] };
+      proofWindow.terminalToggleProof = [];
+      window.addEventListener("openclaw:terminal-toggle", (event) => {
+        proofWindow.terminalToggleProof?.push((event as CustomEvent).detail);
+      });
+    });
+    const worktreePath = "/home/peter/.openclaw/worktrees/terminal-e2e";
+    const gateway = await installMockGateway(page, {
+      cliAgentsEnabled: true,
+      terminalEnabled: true,
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      featureMethods: [...TERMINAL_START_FEATURE_METHODS],
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+            {
+              id: "research",
+              identity: { name: "Research" },
+              name: "Research",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "sessions.catalog.list": { catalogs: [cliAgentCatalog(true)] },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "worktrees.create": {
+          id: "terminal-e2e",
+          name: "terminal-task",
+          repoFingerprint: "0123456789abcdef",
+          repoRoot: WORKSPACE,
+          path: worktreePath,
+          branch: "openclaw/terminal-task",
+          baseRef: "main",
+          ownerKind: "manual",
+          createdAt: 1,
+          lastActiveAt: 1,
+        },
+        "sessions.catalog.startTerminal": {
+          sessionId: "terminal-cli-1",
+          agentId: "research",
+          shell: "/bin/zsh",
+          cwd: worktreePath,
+          confined: false,
+          title: "Claude Code",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=research&catalog=claude`);
+      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+      await expect.poll(() => page.locator(".new-session-page__start-split").count()).toBe(1);
+
+      await page.locator("#new-session-place-trigger").click();
+      const placePopover = page.locator("wa-popover.new-session-page__place-popover");
+      await placePopover.getByRole("button", { name: "Worktree" }).click();
+      await placePopover.getByLabel("Base branch").fill("main");
+      await placePopover.getByLabel("Worktree name").fill("terminal-task");
+      await page.locator("#new-session-place-trigger").click();
+      await page.locator(".new-session-page__message").fill("  inspect the checkout  ");
+
+      if (captureCliAgentsProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cliAgentsProofDir, "terminal-split.png"),
+        });
+      }
+
+      await page.getByRole("button", { name: "Start in terminal" }).click();
+      await page.getByRole("menuitem", { name: "Start in terminal" }).click();
+
+      const worktreeRequest = await gateway.waitForRequest("worktrees.create");
+      expect(worktreeRequest.params).toEqual({
+        repoRoot: WORKSPACE,
+        name: "terminal-task",
+        baseRef: "main",
+      });
+      const terminalRequest = await gateway.waitForRequest("sessions.catalog.startTerminal");
+      expect(terminalRequest.params).toEqual({
+        catalogId: "claude",
+        agentId: "research",
+        cwd: worktreePath,
+        initialMessage: "inspect the checkout",
+      });
+      const requests = await gateway.getRequests();
+      const methods = requests.map((request) => request.method);
+      expect(methods.indexOf("worktrees.create")).toBeLessThan(
+        methods.indexOf("sessions.catalog.startTerminal"),
+      );
+      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const proofWindow = window as typeof window & { terminalToggleProof?: unknown[] };
+            return proofWindow.terminalToggleProof;
+          }),
+        )
+        .toContainEqual({ open: true, terminalSessionId: "terminal-cli-1" });
+
+      await expect
+        .poll(() => page.getByRole("button", { name: "Start in terminal" }).isEnabled())
+        .toBe(true);
+      await page.getByRole("button", { name: "Start in terminal" }).click();
+      await page.getByRole("menuitem", { name: "Start in terminal" }).click();
+      await expect
+        .poll(async () => {
+          const currentRequests = await gateway.getRequests();
+          return currentRequests.filter(
+            (request) => request.method === "sessions.catalog.startTerminal",
+          ).length;
+        })
+        .toBe(2);
+      const repeatedRequests = await gateway.getRequests();
+      const emptyMessageRequest = repeatedRequests.findLast(
+        (request) => request.method === "sessions.catalog.startTerminal",
+      );
+      expect(emptyMessageRequest?.params).toEqual({
+        catalogId: "claude",
+        agentId: "research",
+        cwd: worktreePath,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows the terminal-start server error without rewriting it", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const serverMessage = "cwd is no longer available; choose another folder and retry";
+    await installMockGateway(page, {
+      cliAgentsEnabled: true,
+      terminalEnabled: true,
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      featureMethods: [...TERMINAL_START_FEATURE_METHODS],
+      methodResponses: {
+        "sessions.catalog.list": { catalogs: [cliAgentCatalog(true)] },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "sessions.catalog.startTerminal": {
+          __mockError: { code: "INVALID_REQUEST", message: serverMessage },
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?catalog=claude`);
+      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+      await page.locator(".new-session-page__message").fill("keep this draft");
+      await page.getByRole("button", { name: "Start in terminal" }).click();
+      await page.getByRole("menuitem", { name: "Start in terminal" }).click();
+
+      await expect
+        .poll(() => page.locator(".new-session-page__alert-message").textContent())
+        .toBe(serverMessage);
+      expect(await page.locator(".new-session-page__message").inputValue()).toBe("keep this draft");
     } finally {
       await context.close();
     }

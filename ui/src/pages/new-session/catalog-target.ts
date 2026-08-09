@@ -50,7 +50,7 @@ export async function resolveCreateTarget(
   client: GatewayBrowserClient,
   catalogId: string,
   agentId?: string,
-): Promise<Pick<NewSessionRouteData, "model" | "catalogLabel"> | undefined> {
+): Promise<Pick<NewSessionRouteData, "model" | "catalogLabel" | "startTerminal"> | undefined> {
   try {
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       ...(agentId ? { agentId } : {}),
@@ -59,7 +59,13 @@ export async function resolveCreateTarget(
     });
     const catalog = result.catalogs.find((candidate) => candidate.id === catalogId);
     const model = catalog?.capabilities.createSession?.model.trim();
-    return catalog && model ? { model, catalogLabel: catalog.label } : undefined;
+    return catalog && model
+      ? {
+          model,
+          catalogLabel: catalog.label,
+          startTerminal: catalog.capabilities.createSession?.startTerminal === true,
+        }
+      : undefined;
   } catch {
     return undefined;
   }

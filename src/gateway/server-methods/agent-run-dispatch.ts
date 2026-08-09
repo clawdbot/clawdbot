@@ -17,6 +17,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import type { AgentTurnContext } from "../agent-turn/types.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
@@ -25,7 +26,7 @@ import {
   type GatewayAgentTaskTrackingMode,
 } from "./agent-task-tracking.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 function resolveResolvedAgentTimeoutStopReason(
   meta: unknown,
@@ -95,7 +96,7 @@ export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry):
 }
 
 export function deleteGatewayDedupeEntries(params: {
-  dedupe: GatewayRequestContext["dedupe"];
+  dedupe: AgentTurnContext["dedupe"];
   keys: readonly string[];
 }) {
   for (const key of params.keys) {
@@ -116,7 +117,7 @@ export function dispatchAgentRunFromGateway(params: {
   abortController: AbortController;
   cleanupAbortController: () => void;
   respond: GatewayRequestHandlerOptions["respond"];
-  context: GatewayRequestHandlerOptions["context"];
+  context: AgentTurnContext;
   taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
   restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   onSettled?: (outcome: {
