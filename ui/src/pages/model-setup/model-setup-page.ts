@@ -38,7 +38,7 @@ import {
 } from "./state.ts";
 import { renderModelSetup, resolveSetupBrandIcon } from "./view.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
-import type { ModelSetupWizardStartMethod } from "./wizard-runner.ts";
+import type { ModelSetupWizardCompletion, ModelSetupWizardStartMethod } from "./wizard-runner.ts";
 
 const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
 
@@ -102,10 +102,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   private pendingPrepareOption: ModelSetupPrepareOption | null = null;
   private wizardMutationGeneration = 0;
   private wizardMutationActive = false;
-  private pendingWizardCompletion: {
-    startMethod: ModelSetupWizardStartMethod;
-    preparedModelRef?: string;
-  } | null = null;
   private readonly iconMisses = new Set<string>();
   private readonly iconRequests = new Map<
     string,
@@ -125,12 +121,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       if (next.phase === "step" && next.step.id !== previousStep) {
         this.wizardValue = initialWizardValue(next.step);
       }
-    },
-    onDone: (startMethod, preparedModelRef) => {
-      this.pendingWizardCompletion = {
-        startMethod,
-        ...(preparedModelRef ? { preparedModelRef } : {}),
-      };
     },
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
@@ -247,7 +237,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.wizardMutationGeneration += 1;
     this.wizardMutationActive = false;
-    this.pendingWizardCompletion = null;
     void this.detectTask.run([null, null]);
     void this.activationTask.run([null, null]);
     void this.verifyTask.run([null]);
@@ -306,7 +295,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     this.observedConnection = connection;
     this.wizardMutationGeneration += 1;
     this.wizardMutationActive = false;
-    this.pendingWizardCompletion = null;
     void this.detectTask.run([null, null]);
     this.activationState = { phase: "idle" };
     void this.activationTask.run([null, null]);
@@ -623,19 +611,19 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   private closeWizard(): void {
     this.wizardMutationGeneration += 1;
     this.wizardMutationActive = false;
-    this.pendingWizardCompletion = null;
     this.pendingPrepareOption = null;
     this.wizard.close();
   }
 
-  private async runWizardMutation(task: () => Promise<void>): Promise<void> {
+  private async runWizardMutation(
+    task: () => Promise<ModelSetupWizardCompletion | null>,
+  ): Promise<void> {
     const client = this.context.gateway.snapshot.client;
     if (this.wizardMutationActive || !this.canUseSetup(client)) {
       return;
     }
     const generation = ++this.wizardMutationGeneration;
     this.wizardMutationActive = true;
-    this.pendingWizardCompletion = null;
     this.requestUpdate();
     try {
       const mutation = await this.context.runtimeConfig.runExternalMutation(
@@ -643,7 +631,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
           if (mutationClient !== client) {
             throw new Error("Connection changed before model setup continued.");
           }
-          await task();
+          return await task();
         },
       );
       if (generation !== this.wizardMutationGeneration) {
@@ -660,8 +648,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         return;
       }
       this.setupRefreshWarning = mutation.refresh.ok ? null : mutation.refresh.error;
-      const completion = this.pendingWizardCompletion;
-      this.pendingWizardCompletion = null;
+      const completion = mutation.value;
       if (completion) {
         // The coordinated wizard action has settled; follow-up activation owns
         // its own mutation lane and must not be blocked by the prior busy flag.
@@ -685,7 +672,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   private cancelWizard(): void {
     this.wizardMutationGeneration += 1;
     this.wizardMutationActive = false;
-    this.pendingWizardCompletion = null;
     this.pendingPrepareOption = null;
     // A Gateway-owned step can commit while cancellation is being handled.
     // Hide this generation now, but let its mutation lane settle and refresh.

@@ -116,6 +116,7 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     canVerify: true,
     canPrepare: true,
     gatewayTooOld: false,
+    refreshWarning: null,
     actionsDisabled: false,
     manualProviderId: "openai",
     manualApiKey: "",
