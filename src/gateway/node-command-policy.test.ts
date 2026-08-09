@@ -244,6 +244,27 @@ describe("gateway/node-command-policy", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["darwin", "", "macos", "Mac"],
+    ["win32", "   ", "windows", "Windows"],
+  ])(
+    "normalizes blank protocol-v3 node-host device family for %s",
+    (platform, deviceFamily, expectedPlatform, expectedFamily) => {
+      expect(
+        normalizeNodeHostCompatibilityMetadata({
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          version: "2026.5.7",
+          platform,
+          deviceFamily,
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        }),
+      ).toMatchObject({
+        platform: expectedPlatform,
+        deviceFamily: expectedFamily,
+      });
+    },
+  );
+
   it("does not normalize non-node-host or conflicting legacy metadata", () => {
     const conflicting = {
       id: GATEWAY_CLIENT_IDS.NODE_HOST,

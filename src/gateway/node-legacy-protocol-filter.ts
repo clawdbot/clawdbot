@@ -54,7 +54,7 @@ export function normalizeNodeHostCompatibilityMetadata(
   return {
     ...client,
     platform: metadata.platform,
-    deviceFamily: client.deviceFamily ?? metadata.deviceFamily,
+    deviceFamily: deviceFamily || metadata.deviceFamily,
   };
 }
 
