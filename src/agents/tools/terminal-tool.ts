@@ -199,6 +199,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
           ...(cwd ? { cwdOverride: cwd } : {}),
         });
         const taskId = await resolveOwnerTaskId(agentSessionKey);
+        const owner = { kind: "agent", agentSessionKey, ...(taskId ? { taskId } : {}) } as const;
         const deadline = createTerminalOpenDeadline();
         const cancelOpen = () => {
           if (!deadline.controller.signal.aborted) {
@@ -215,7 +216,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         try {
           outcome = await waitForTerminalOpenDeadline(() => {
             openingTerminal = manager.open({
-              owner: { kind: "agent", agentSessionKey, ...(taskId ? { taskId } : {}) },
+              owner,
               agentId: spawnPlan.agentId,
               cwd: spawnPlan.cwd,
               shell: spawnPlan.shell,
