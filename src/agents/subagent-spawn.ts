@@ -330,7 +330,7 @@ export async function spawnSubagentDirect(
       maxSpawnDepth,
     });
     if (params.outputSchema) {
-      childSystemPrompt = `${childSystemPrompt}\n\nCall structured_output with {"result": <your final result>} until one payload is accepted, with at most one retry after a rejected attempt. The result value must match the requested JSON Schema. Do not call structured_output again after acceptance.`;
+      childSystemPrompt = `${childSystemPrompt}\n\nBefore ending, call the available structured-output result tool with {"result": <your final result>} until one payload is accepted, with at most one retry after a rejected attempt. The result value must match the requested JSON Schema. Do not call the result tool again after acceptance.`;
     }
 
     let retainOnSessionKeep = false;

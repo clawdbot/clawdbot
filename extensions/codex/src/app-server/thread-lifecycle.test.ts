@@ -721,6 +721,43 @@ describe("Codex app-server native code mode config", () => {
     expect(withWrongNamespace).not.toContain("native `wait_agent`");
   });
 
+  it("names the exact structured-output tool exposed to Codex collectors", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    const namespaced = buildDeveloperInstructions(params, {
+      dynamicTools: [
+        {
+          type: "namespace",
+          name: "openclaw_direct",
+          description: "",
+          tools: [
+            {
+              type: "function",
+              name: "structured_output",
+              description: "Record the collector result",
+              inputSchema: { type: "object" },
+            },
+          ],
+        },
+      ],
+    });
+    const root = buildDeveloperInstructions(params, {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "structured_output",
+          description: "Record the collector result",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
+    const absent = buildDeveloperInstructions(params, { dynamicTools: [] });
+
+    expect(namespaced).toContain("`openclaw_direct.structured_output`");
+    expect(namespaced).toContain("A normal final assistant message does not satisfy");
+    expect(root).toContain("`structured_output`");
+    expect(absent).not.toContain("collector contract");
+  });
+
   it.each([
     { namespace: "openclaw_direct", exposesNativeYield: true },
     { namespace: "openclaw", exposesNativeYield: false },
