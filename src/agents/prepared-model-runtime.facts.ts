@@ -135,8 +135,8 @@ function prepareAgentFacts(
   const env = input.env ?? process.env;
   const templateAuthStorage = discoverAuthStorage(input.agentDir, {
     config: input.config,
-    // Snapshot construction never initializes, migrates, or externally syncs auth. ModelRegistry
-    // discovery only parses the credential generation captured here.
+    // Prepared owners consume only the already-published runtime auth generation. External CLI
+    // hydration belongs to startup/control-plane and turn-time producers, never rebuilds.
     readOnly: true,
     ambientCredentials,
     ...(input.skipCredentials ? { skipCredentials: true } : {}),

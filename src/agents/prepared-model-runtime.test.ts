@@ -563,6 +563,43 @@ describe("prepared model runtime snapshots", () => {
     expect(secondStores.modelRegistry).not.toBe(firstStores.modelRegistry);
   });
 
+  it.each([
+    {
+      label: "usable",
+      credential: { type: "oauth", access: "a", refresh: "r", expires: 1 },
+      expected: "oauth",
+    },
+    {
+      label: "unusable",
+      credential: { type: "oauth", access: "", refresh: "", expires: 0 },
+      expected: undefined,
+    },
+  ] as const)(
+    "consumes $label startup CLI hydration without rediscovery",
+    async ({ credential, expected }) => {
+      const config = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: { "openai/gpt-5.4": {} },
+          },
+        },
+      };
+      mocks.authStorage.getAll.mockReturnValue({ openai: credential });
+
+      const snapshot = await publishPreparedModelRuntimeSnapshot({
+        config,
+        agentDir: "/tmp/prepared-model-runtime-cli-startup",
+      });
+
+      const discoveryOptions = mocks.discoverAuthStorage.mock.calls[0]?.[1] as {
+        externalCli?: unknown;
+      };
+      expect(discoveryOptions.externalCli).toBeUndefined();
+      expect(snapshot.authModes.openai).toBe(expected);
+    },
+  );
+
   it("ignores request config identity until lifecycle publication", async () => {
     const agentDir = "/tmp/prepared-model-runtime-request-config";
     const initialConfig = {};

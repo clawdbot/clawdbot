@@ -264,6 +264,7 @@ export async function runPreparedEmbeddedLoop(
     getLastProfileId: () => preparedRuntime.snapshot().lastProfileId,
     getSessionId: () => sessionPromptState.sessionId,
     harnessOwnsTransport: () => preparedRuntime.snapshot().pluginHarnessOwnsTransport,
+    getRuntimeAuthOwnerId: () => preparedRuntime.snapshot().agentHarness.id,
     getApiKeyInfo,
   });
   const ownsContextEngineLogicalTurnLease = params.contextEngineLogicalTurnLease === undefined;
@@ -602,6 +603,11 @@ export async function runPreparedEmbeddedLoop(
         return terminalTimeoutResult;
       }
 
+      const terminalAuthPlan = preparedRuntime.snapshot().activePreparedAuthPlan;
+      const requestTransportOverrides =
+        terminalAuthPlan.modelRoute?.requestTransportOverrides ??
+        terminalAuthPlan.deferredRouteSupport?.requestTransportOverrides ??
+        "none";
       const terminalResolution = await resolveEmbeddedRunTerminal({
         runParams: params,
         retryState: terminalRetryState,
@@ -638,6 +644,8 @@ export async function runPreparedEmbeddedLoop(
         modelId,
         modelTransportId: effectiveModel.id ?? modelId,
         modelTransportApi: effectiveModel.api ?? model.api,
+        ...(effectiveModel.baseUrl ? { modelTransportBaseUrl: effectiveModel.baseUrl } : {}),
+        requestTransportOverrides,
         authProfileId: lastProfileId,
         profileFailureStore,
         attemptAuthProfileStore,

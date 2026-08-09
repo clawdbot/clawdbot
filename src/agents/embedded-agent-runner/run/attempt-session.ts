@@ -21,8 +21,8 @@ import { log } from "../logger.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
+import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import type { AttemptContextEngine } from "./attempt.context-engine-helpers.js";
-import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
 import { installCodeModeRepairHook } from "./code-mode-repair.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { notifyToolActivity } from "./tool-activity-heartbeat.js";
@@ -54,7 +54,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   onSystemPromptChanged: (systemPrompt: string) => void;
   runAbortSignal: AbortSignal;
   sessionAgentId: string;
-  sessionLockController: EmbeddedAttemptSessionLockController;
+  transcriptLifecycle: EmbeddedAttemptTranscriptLifecycle;
   sessionManager: AttemptSessionManager;
 }) {
   const { attempt } = input;
@@ -165,8 +165,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
           return hydratedTool;
         }
       : undefined,
-    withSessionWriteLock: (operation) =>
-      input.sessionLockController.withSessionWriteLock(operation),
+    withSessionWriteSettlement: (operation) =>
+      input.transcriptLifecycle.withTranscriptWrite(operation),
   };
   const createdSession = await createAgentSessionForEmbeddedRunner(sessionOptions, {
     // Without a resolved model budget, the outer loop cannot own bounded recovery.

@@ -89,6 +89,63 @@ describe("RFB view-only client message filter", () => {
     });
   });
 
+  it("forwards the fragmented noVNC 1.7 display and flow-control sequence", () => {
+    const filter = enterMessagePhase();
+    const setPixelFormat = Buffer.alloc(20);
+    const setEncodings = Buffer.alloc(100);
+    setEncodings[0] = 2;
+    setEncodings.writeUInt16BE(24, 2);
+    const framebufferUpdateRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
+    const clientFence = Buffer.from([248, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+    const enableContinuousUpdates = Buffer.from([150, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
+    const cutText = Buffer.concat([Buffer.from([6, 0, 0, 0, 0, 0, 0, 8]), Buffer.alloc(8)]);
+    const capturedSequence = Buffer.concat([
+      setPixelFormat,
+      setEncodings,
+      framebufferUpdateRequest,
+      clientFence,
+      enableContinuousUpdates,
+      cutText,
+      enableContinuousUpdates,
+    ]);
+    const forwarded: Buffer[] = [];
+
+    for (const byte of capturedSequence) {
+      const result = filter.filter(Buffer.of(byte));
+      if ("error" in result) {
+        throw new Error(result.error);
+      }
+      forwarded.push(result.forward);
+    }
+
+    expect(Buffer.concat(forwarded)).toEqual(
+      Buffer.concat([
+        setPixelFormat,
+        setEncodings,
+        framebufferUpdateRequest,
+        clientFence,
+        enableContinuousUpdates,
+        enableContinuousUpdates,
+      ]),
+    );
+  });
+
+  it("uses the ClientFence payload length to preserve message boundaries", () => {
+    const filter = enterMessagePhase();
+    const clientFence = Buffer.concat([
+      Buffer.from([248, 0, 0, 0, 0, 0, 0, 0, 3]),
+      Buffer.from("abc"),
+    ]);
+    const framebufferUpdateRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
+
+    expect(filter.filter(clientFence.subarray(0, 10))).toEqual({ forward: Buffer.alloc(0) });
+    expect(
+      filter.filter(Buffer.concat([clientFence.subarray(10), framebufferUpdateRequest])),
+    ).toEqual({
+      forward: Buffer.concat([clientFence, framebufferUpdateRequest]),
+    });
+  });
+
   it("reassembles a message split across three chunks", () => {
     const filter = enterMessagePhase();
     const completePrefix = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);

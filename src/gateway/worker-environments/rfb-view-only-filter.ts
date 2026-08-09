@@ -45,6 +45,11 @@ export function createRfbClientMessageFilter() {
         return 6;
       case 6:
         return pending.length < 8 ? 8 : 8 + pending.readUInt32BE(4);
+      case 150:
+        return 10;
+      case 248:
+        // ClientFence's payload length byte follows its 8-byte fixed header.
+        return pending.length < 9 ? 9 : 9 + pending.readUInt8(8);
       default:
         return `unsupported RFB client message type ${pending[0]}`;
     }
@@ -75,7 +80,13 @@ export function createRfbClientMessageFilter() {
       pending[0] = 1;
       forwarded.push(pending);
       phase = "messages";
-    } else if (pending[0] === 0 || pending[0] === 2 || pending[0] === 3) {
+    } else if (
+      pending[0] === 0 ||
+      pending[0] === 2 ||
+      pending[0] === 3 ||
+      pending[0] === 150 ||
+      pending[0] === 248
+    ) {
       forwarded.push(pending);
     }
     pending = Buffer.alloc(0);

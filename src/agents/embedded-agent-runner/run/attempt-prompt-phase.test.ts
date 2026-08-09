@@ -164,7 +164,6 @@ function createFixture() {
     appendCustomEntry: vi.fn(),
     getEntries: vi.fn(() => []),
   };
-  const sessionLockController = {};
   const input = {
     attempt: {
       model: { id: "model-1", provider: "test" },
@@ -175,8 +174,7 @@ function createFixture() {
     },
     activeSession,
     sessionManager,
-    sessionLockController,
-    withOwnedSessionWriteLock: async <T>(operation: () => Promise<T> | T) => await operation(),
+    withOwnedTranscriptWrite: async <T>(operation: () => Promise<T> | T) => await operation(),
     getCompactionReserveTokens: () => 77,
     assembly: {
       hookRunner: null,

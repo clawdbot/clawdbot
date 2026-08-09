@@ -54,7 +54,10 @@ import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-k
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
-import { assertOwnedSessionTranscriptWrite } from "./transcript-write-context.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWriterFence,
+} from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
 export { clearPluginOwnedSessionState };
@@ -85,11 +88,12 @@ export {
 };
 
 export const ensureSessionEntrySync: typeof ensureSessionEntrySyncRaw = (scope, entry) => {
-  assertOwnedSessionTranscriptWrite({
-    sessionKey: scope.sessionKey,
-    sessionTarget: scope,
-  });
-  return ensureSessionEntrySyncRaw(scope, entry);
+  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
+  const ensured = ensureSessionEntrySyncRaw(fencedScope, entry);
+  if (fencedScope.expectedWriterRunId !== undefined && !ensured) {
+    throw new SessionTranscriptWriterClaimReboundError(scope.sessionKey);
+  }
+  return ensured;
 };
 
 /** Keeps legacy store-key alias resolution behind the entry owner boundary. */

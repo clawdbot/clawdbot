@@ -88,7 +88,10 @@ import {
   trimSqliteTranscriptForManualCompact,
 } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWrites,
+} from "./transcript-write-context.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 const cleanupArchivedSessionTranscriptsMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -4117,7 +4120,7 @@ describe("session accessor seam", () => {
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
   });
 
-  it("routes SQLite transcript turn appends through an active owned target lock", async () => {
+  it("routes SQLite transcript turn appends through an active owned write context", async () => {
     const scope = {
       agentId: "main",
       sessionFile: transcriptPath,
@@ -4125,20 +4128,16 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:owned-publish",
       storePath,
     };
-    const publishOptions: Array<boolean | undefined> = [];
-    const publishedEntryBatches: unknown[][] = [];
+    let ownedWriteCount = 0;
 
     await withOwnedSessionTranscriptWrites(
       {
         sessionFile: scope.sessionKey,
         sessionKey: scope.sessionKey,
         sessionTarget: scope,
-        assertOwned: () => undefined,
-        withSessionWriteLock: async (run, options) => {
-          publishOptions.push(options?.publishOwnedWrite);
-          const result = await run();
-          publishedEntryBatches.push([...(options?.resolvePublishedEntries?.(result) ?? [])]);
-          return result;
+        withTranscriptWrite: async (run) => {
+          ownedWriteCount += 1;
+          return await run();
         },
       },
       async () =>
@@ -4159,39 +4158,44 @@ describe("session accessor seam", () => {
         }),
     );
 
-    expect(publishOptions).toEqual([undefined]);
-    expect(publishedEntryBatches).toEqual([[]]);
+    expect(ownedWriteCount).toBe(1);
     await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(2);
   });
 
-  it("fences matching sync transcript and entry writes before SQLite mutation", async () => {
+  it("fences matching sync transcript mutations with the admitted writer claim", async () => {
     const scope = {
       agentId: "main",
       sessionId: "session-owned-fence",
       sessionKey: "agent:main:owned-fence",
       storePath,
     };
-    const stale = new Error("lease lost");
+    replaceSqliteSessionEntrySync(scope, {
+      activeWriterRunId: "current-run",
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    } as InternalSessionEntry);
 
     await withOwnedSessionTranscriptWrites(
       {
         sessionFile: scope.sessionKey,
         sessionKey: scope.sessionKey,
-        sessionTarget: scope,
-        assertOwned: () => {
-          throw stale;
+        sessionTarget: {
+          ...scope,
+          expectedWriterRunId: "superseded-run",
         },
-        withSessionWriteLock: async (run) => await run(),
+        withTranscriptWrite: async (run) => await run(),
       },
       async () => {
-        expect(() =>
-          ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 }),
-        ).toThrow(stale);
-        expect(() => replaceTranscriptEventsSync(scope, [])).toThrow(stale);
+        expect(ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 2 })).toBe(
+          true,
+        );
+        expect(() => replaceTranscriptEventsSync(scope, [])).toThrow(
+          SessionTranscriptWriterClaimReboundError,
+        );
       },
     );
 
-    expect(loadSessionEntry(scope)).toBeUndefined();
+    expect(loadSessionEntry(scope)?.updatedAt).toBe(1);
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
   });
 

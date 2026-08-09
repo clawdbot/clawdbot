@@ -89,8 +89,7 @@ function createFixture() {
     sessionLock: {
       compactionTimeoutMs: 1_000,
       ownedTranscriptWriteContext: {},
-      sessionLockController: {},
-      withOwnedSessionWriteLock: vi.fn(),
+      withOwnedTranscriptWrite: vi.fn(),
     },
     setup: {
       effectiveFsWorkspaceOnly: false,

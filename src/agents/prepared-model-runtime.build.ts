@@ -3,7 +3,9 @@ import pLimit from "p-limit";
 import { withTimeout } from "../node-host/with-timeout.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
+import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { setPreparedModelRuntimeAuthMaterializations } from "./prepared-model-runtime-auth.js";
 import {
   PreparedModelRuntimePublicationSupersededError,
   toPreparedModelRuntimeError,
@@ -177,7 +179,7 @@ function createSnapshot(
     const authStorage = AuthStorage.inMemory(credentials);
     return { authStorage, modelRegistry: templateModelRegistry.fork(authStorage) };
   };
-  return Object.freeze({
+  const snapshot: PreparedModelRuntimeSnapshot = Object.freeze({
     ...(input.agentId ? { agentId: input.agentId } : {}),
     agentDir: input.agentDir,
     activeProjectKeys: [],
@@ -197,6 +199,11 @@ function createSnapshot(
     inlineProviderModels,
     createStores,
   });
+  setPreparedModelRuntimeAuthMaterializations(
+    snapshot,
+    Object.freeze([...getPreparedRuntimeAuthMaterializations(input.agentDir)]),
+  );
+  return snapshot;
 }
 
 async function buildSnapshotBatch(
