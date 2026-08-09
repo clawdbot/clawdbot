@@ -3082,7 +3082,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         pending: { sourceThreadId },
       });
       let attestationCount = 0;
-      const request = vi.fn(async (method: string) => {
+      const request = vi.fn(async (method: string, _requestParams?: unknown) => {
         if (method === "config/read") {
           return {
             config: { mcp_servers: { inherited: { command: "inherited-mcp" } } },

@@ -156,7 +156,7 @@ export async function materializePendingSupervisionBranch(
         attestCodexRestrictedToolSurfaceMcpServersDisabled(
           params.client,
           probeThreadId,
-          probeParams.config,
+          probeParams.config ?? undefined,
           params.signal,
         ),
       );
