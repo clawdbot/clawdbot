@@ -3,7 +3,7 @@ import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 // One salt per page load keeps each run stable while varying the surprise between visits.
 const SURPRISE_SALT = Math.trunc(Math.random() * 0xffffffff);
 const SURPRISE_CHANCE_PER_THOUSAND = 50;
-export const SURPRISE_CLASSES = [
+const SURPRISE_CLASSES = [
   "chat-reading-indicator--southpaw",
   "chat-reading-indicator--flurry",
   "chat-reading-indicator--spin",

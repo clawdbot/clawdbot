@@ -13627,7 +13627,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 387,
+      "line": 432,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "${days}d",
       "surface": "android",
@@ -13635,7 +13635,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 391,
+      "line": 436,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "${hours}h",
       "surface": "android",
@@ -13643,7 +13643,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 395,
+      "line": 440,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "${minutes}m",
       "surface": "android",
@@ -13651,7 +13651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 399,
+      "line": 444,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "${seconds}s",
       "surface": "android",
@@ -13659,7 +13659,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 440,
+      "line": 485,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Shelling",
       "surface": "android",
@@ -13667,7 +13667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 441,
+      "line": 486,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Scuttling",
       "surface": "android",
@@ -13675,7 +13675,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 442,
+      "line": 487,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Clawing",
       "surface": "android",
@@ -13683,7 +13683,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 443,
+      "line": 488,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Pinching",
       "surface": "android",
@@ -13691,7 +13691,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 444,
+      "line": 489,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Molting",
       "surface": "android",
@@ -13699,7 +13699,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 445,
+      "line": 490,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Bubbling",
       "surface": "android",
@@ -13707,7 +13707,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 446,
+      "line": 491,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Tiding",
       "surface": "android",
@@ -13715,7 +13715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 447,
+      "line": 492,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Reefing",
       "surface": "android",
@@ -13723,7 +13723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 448,
+      "line": 493,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Cracking",
       "surface": "android",
@@ -13731,7 +13731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 449,
+      "line": 494,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Sifting",
       "surface": "android",
@@ -13739,7 +13739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 450,
+      "line": 495,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Brining",
       "surface": "android",
@@ -13747,7 +13747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 451,
+      "line": 496,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Nautiling",
       "surface": "android",
@@ -13755,7 +13755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 452,
+      "line": 497,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Krilling",
       "surface": "android",
@@ -13763,7 +13763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 453,
+      "line": 498,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Barnacling",
       "surface": "android",
@@ -13771,7 +13771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 454,
+      "line": 499,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Lobstering",
       "surface": "android",
@@ -13779,7 +13779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 455,
+      "line": 500,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Tidepooling",
       "surface": "android",
@@ -13787,7 +13787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 456,
+      "line": 501,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Pearling",
       "surface": "android",
@@ -13795,7 +13795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 457,
+      "line": 502,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Snapping",
       "surface": "android",
@@ -13803,7 +13803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 458,
+      "line": 503,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "Surfacing",
       "surface": "android",
@@ -42371,7 +42371,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 46,
+      "line": 54,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Shelling",
       "surface": "apple",
@@ -42379,7 +42379,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 47,
+      "line": 55,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Scuttling",
       "surface": "apple",
@@ -42387,7 +42387,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 48,
+      "line": 56,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Clawing",
       "surface": "apple",
@@ -42395,7 +42395,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 49,
+      "line": 57,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Pinching",
       "surface": "apple",
@@ -42403,7 +42403,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 50,
+      "line": 58,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Molting",
       "surface": "apple",
@@ -42411,7 +42411,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 51,
+      "line": 59,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Bubbling",
       "surface": "apple",
@@ -42419,7 +42419,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 52,
+      "line": 60,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Tiding",
       "surface": "apple",
@@ -42427,7 +42427,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 53,
+      "line": 61,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Reefing",
       "surface": "apple",
@@ -42435,7 +42435,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 54,
+      "line": 62,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Cracking",
       "surface": "apple",
@@ -42443,7 +42443,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 55,
+      "line": 63,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Sifting",
       "surface": "apple",
@@ -42451,7 +42451,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 56,
+      "line": 64,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Brining",
       "surface": "apple",
@@ -42459,7 +42459,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 57,
+      "line": 65,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Nautiling",
       "surface": "apple",
@@ -42467,7 +42467,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 58,
+      "line": 66,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Krilling",
       "surface": "apple",
@@ -42475,7 +42475,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 59,
+      "line": 67,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Barnacling",
       "surface": "apple",
@@ -42483,7 +42483,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 60,
+      "line": 68,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Lobstering",
       "surface": "apple",
@@ -42491,7 +42491,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 61,
+      "line": 69,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Tidepooling",
       "surface": "apple",
@@ -42499,7 +42499,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 62,
+      "line": 70,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Pearling",
       "surface": "apple",
@@ -42507,7 +42507,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 63,
+      "line": 71,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Snapping",
       "surface": "apple",
@@ -42515,7 +42515,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 64,
+      "line": 72,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Surfacing",
       "surface": "apple",
@@ -42523,7 +42523,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 118,
+      "line": 126,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "1 second",
       "surface": "apple",
@@ -42531,7 +42531,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 153,
+      "line": 161,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Done in %@",
       "surface": "apple",
@@ -42539,7 +42539,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 163,
+      "line": 171,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "1 token",
       "surface": "apple",
@@ -42547,7 +42547,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 166,
+      "line": 174,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "%@ tokens",
       "surface": "apple",
