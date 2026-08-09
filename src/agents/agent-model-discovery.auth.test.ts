@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
-import { resolveAgentCredentialMapFromStore } from "./agent-auth-credentials.js";
+import {
+  resolveAgentCredentialMapFromStore,
+  resolveUsableAgentCredentialModes,
+} from "./agent-auth-credentials.js";
 import { addEnvBackedAgentCredentials } from "./agent-auth-discovery-core.js";
 import { discoverAuthStorage } from "./agent-model-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -104,6 +107,11 @@ describe("discoverAuthStorage", () => {
     expect(codexCredential?.type).toBe("oauth");
     expect(codexCredential?.access).toBe("oauth-access");
     expect(codexCredential?.refresh).toBe("oauth-refresh");
+    expect(resolveUsableAgentCredentialModes(credentials)).toEqual({
+      anthropic: "api_key",
+      openai: "oauth",
+      openrouter: "api_key",
+    });
   });
 
   it("drops runtime auth profiles with out-of-range expiry values", () => {
@@ -272,6 +280,7 @@ describe("discoverAuthStorage", () => {
     expect(discoveryCredentials.openrouter?.type).toBe("api_key");
     expect(discoveryCredentials.anthropic?.type).toBe("api_key");
     expect(discoveryCredentials.expired).toBeUndefined();
+    expect(resolveUsableAgentCredentialModes(discoveryCredentials)).toEqual({});
   });
 
   it("marks keyRef-only auth profiles configured for read-only model discovery", async () => {

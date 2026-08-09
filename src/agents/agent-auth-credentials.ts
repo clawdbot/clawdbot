@@ -21,6 +21,7 @@ type AgentOAuthCredential = {
 /** Credential value shape consumed by agent runtimes after auth-profile normalization. */
 type AgentCredential = AgentApiKeyCredential | AgentOAuthCredential;
 export type AgentCredentialMap = Record<string, AgentCredential>;
+export type PreparedAgentCredentialModes = Readonly<Record<string, "api_key" | "oauth">>;
 
 type ResolveAgentCredentialMapOptions = {
   includeSecretRefPlaceholders?: boolean;
@@ -28,6 +29,34 @@ type ResolveAgentCredentialMapOptions = {
 };
 
 const AGENT_SECRET_REF_CONFIGURED_MARKER = "openclaw-secret-ref-configured";
+
+/** Records only credential modes whose secret material is usable by a prepared runtime owner. */
+export function resolveUsableAgentCredentialModes(
+  credentials: Readonly<AgentCredentialMap>,
+): PreparedAgentCredentialModes {
+  const modes: Record<string, "api_key" | "oauth"> = {};
+  for (const [rawProvider, credential] of Object.entries(credentials)) {
+    const provider = normalizeProviderId(rawProvider);
+    if (!provider) {
+      continue;
+    }
+    if (
+      credential.type === "api_key" &&
+      credential.key &&
+      credential.key !== AGENT_SECRET_REF_CONFIGURED_MARKER
+    ) {
+      modes[provider] = "api_key";
+    } else if (
+      credential.type === "oauth" &&
+      credential.access &&
+      credential.refresh &&
+      credential.expires > 0
+    ) {
+      modes[provider] = "oauth";
+    }
+  }
+  return Object.freeze(modes);
+}
 
 function hasConfiguredSecretRef(value: unknown): boolean {
   return coerceSecretRef(value) !== null;
