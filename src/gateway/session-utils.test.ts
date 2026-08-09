@@ -2178,6 +2178,43 @@ describe("gateway session utils", () => {
     }
   });
 
+  test("loadSessionEntry invalidates request discovery after a runtime config reload", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-config-reload-", async ({ tempRoot }) => {
+        const firstStorePath = path.join(tempRoot, "first", "sessions.json");
+        const secondStorePath = path.join(tempRoot, "second", "sessions.json");
+        const firstConfig = {
+          session: { mainKey: "main", store: firstStorePath },
+          agents: { list: [{ id: "main", default: true }] },
+        } as OpenClawConfig;
+        const secondConfig = {
+          ...firstConfig,
+          session: { mainKey: "main", store: secondStorePath },
+        } as OpenClawConfig;
+        const targetDiscoveryCache = new Map();
+
+        setRuntimeConfigSnapshot(firstConfig, firstConfig);
+        const routingLoad = loadSessionEntry("agent:main:main", {
+          agentId: "main",
+          clone: false,
+          targetDiscoveryCache,
+        });
+        setRuntimeConfigSnapshot(secondConfig, secondConfig);
+        const preparationLoad = loadSessionEntry("agent:main:main", {
+          agentId: "main",
+          clone: false,
+          targetDiscoveryCache,
+        });
+
+        expect(routingLoad.storePath).toBe(path.resolve(firstStorePath));
+        expect(preparationLoad.storePath).toBe(path.resolve(secondStorePath));
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
   test("loadSessionEntry can borrow the cached store for read-only hot paths", async () => {
     resetConfigRuntimeState();
     try {

@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds } from "../agents/agent-scope.js";
+import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import {
   isConfiguredSessionStoreAgentId,
   resolveAgentMainSessionKey,
@@ -104,7 +105,8 @@ function resolveGatewaySessionStoreCandidates(
   agentId: string,
   cache?: GatewaySessionStoreDiscoveryCache,
 ): { existing: SessionStoreTarget[]; fallback: SessionStoreTarget } {
-  const cached = cache?.get(agentId);
+  const cacheKey = `${resolveRuntimeConfigCacheKey(cfg)}\u0000${agentId}`;
+  const cached = cache?.get(cacheKey);
   if (cached) {
     return cached;
   }
@@ -117,7 +119,7 @@ function resolveGatewaySessionStoreCandidates(
     existing: resolveExistingAgentSessionStoreTargetsSync(cfg, agentId),
     fallback,
   };
-  cache?.set(agentId, discovery);
+  cache?.set(cacheKey, discovery);
   return discovery;
 }
 
@@ -134,8 +136,8 @@ function resolveGatewaySessionStoreCandidates(
 export type GatewaySessionStoreCache = Map<string, Record<string, SessionEntry>>;
 
 /**
- * Sharing resolves every returned row, but store targets are stable within one request.
- * Keep discovery agent-scoped here or each row repeats registry probes and agent-root scans.
+ * Sharing resolves every returned row, but store targets are stable only within one config revision.
+ * Keep discovery config- and agent-scoped or reloads reuse obsolete store targets.
  */
 export type GatewaySessionStoreDiscoveryCache = Map<
   string,

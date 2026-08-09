@@ -18,7 +18,6 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-lookup.js";
 import {
   validateExpectedExistingSessionTarget,
   type ExpectedExistingSessionConstraint,
@@ -26,6 +25,7 @@ import {
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "../server-methods/attachment-normalize.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-lookup.js";
 import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
