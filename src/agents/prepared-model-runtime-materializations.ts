@@ -1,5 +1,6 @@
 import {
   getPreparedRuntimeAuthMaterializations,
+  registerRuntimeAuthMaterializationMutationListener,
   type RuntimeAuthMaterialization,
 } from "./auth-profiles/runtime-materializations.js";
 import { setPreparedModelRuntimeAuthMaterializations } from "./prepared-model-runtime-auth.js";
@@ -12,6 +13,20 @@ type MaterializationMutationEvent = {
   agentDir?: string;
   affectsInheritedStores: boolean;
 };
+
+export function registerPreparedRuntimeAuthMaterializationPublisher(
+  owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
+  notify: (event: { phase: "invalidated" | "published" }) => void,
+): () => void {
+  return registerRuntimeAuthMaterializationMutationListener((event) => {
+    publishPreparedRuntimeAuthMaterializations({
+      event,
+      owners,
+      onInvalidated: () => notify({ phase: "invalidated" }),
+      onPublished: () => notify({ phase: "published" }),
+    });
+  });
+}
 
 export function publishPreparedRuntimeAuthMaterializations(params: {
   event: MaterializationMutationEvent;
