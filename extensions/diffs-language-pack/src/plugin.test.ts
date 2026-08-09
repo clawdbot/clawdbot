@@ -1,10 +1,17 @@
 // Diffs Language Pack plugin module implements plugin tests.
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerDiffsLanguagePackPlugin } from "./plugin.js";
+
+const execFileAsync = promisify(execFile);
 
 const VIEWER_RUNTIME_PATH = "/plugins/diffs-language-pack/assets/viewer-runtime.js";
 const UNKNOWN_ASSET_PATH = "/plugins/diffs-language-pack/assets/does-not-exist.js";
@@ -16,6 +23,34 @@ type ServedResponse = {
   contentLength: string | null;
   bodyBytes: number;
 };
+
+async function ensureViewerRuntimeForTests(): Promise<void> {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const runtimePath = path.join(
+    repoRoot,
+    "extensions",
+    "diffs-language-pack",
+    "assets",
+    "viewer-runtime.js",
+  );
+  try {
+    await fs.stat(runtimePath);
+    return;
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+      throw error;
+    }
+  }
+  // viewer-runtime.js is ignored generated output; build the fixture before
+  // serving assets in a clean checkout.
+  await execFileAsync(process.execPath, ["scripts/build-diffs-viewer-runtime.mjs", "full"], {
+    cwd: repoRoot,
+  });
+}
+
+beforeAll(async () => {
+  await ensureViewerRuntimeForTests();
+}, 120_000);
 
 function captureHandler(): HttpRouteHandler {
   let registeredHttpRouteHandler: HttpRouteHandler | undefined;
@@ -39,12 +74,13 @@ function captureHandler(): HttpRouteHandler {
 async function withLanguagePackServer(run: (base: string) => Promise<void>): Promise<void> {
   const handler = captureHandler();
   const server: Server = createServer((req, res) => {
-    void handler(req, res).then((handled) => {
+    void (async () => {
+      const handled = await handler(req, res);
       if (!handled) {
         res.statusCode = 404;
         res.end();
       }
-    });
+    })();
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
