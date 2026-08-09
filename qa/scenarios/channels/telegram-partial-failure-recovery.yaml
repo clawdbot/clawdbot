@@ -19,6 +19,14 @@ scenario:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   gatewayConfigPatch:
+    agents:
+      defaults:
+        model:
+          fallbacks: []
+      entries:
+        qa:
+          model:
+            fallbacks: []
     channels:
       telegram:
         streaming:
