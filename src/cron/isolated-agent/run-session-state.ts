@@ -6,6 +6,7 @@ import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-p
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
+import { SESSION_ENTRY_BLOB_FIELDS } from "../../config/sessions/session-entry-blobs.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
@@ -99,6 +100,12 @@ export function projectCronOwnershipFields(entry: SessionEntry): Partial<Session
   delete projected.label;
   delete projected.pinnedAt;
   delete projected.updatedAt;
+  // The externalized blob fields are hydrated on per-key reads but absent on the
+  // bulk list read that seeds the resolve-time entry, so a hydration-only
+  // difference must not trip the ownership claim — they carry no ownership signal.
+  for (const field of SESSION_ENTRY_BLOB_FIELDS) {
+    delete (projected as Record<string, unknown>)[field];
+  }
   return projected;
 }
 
