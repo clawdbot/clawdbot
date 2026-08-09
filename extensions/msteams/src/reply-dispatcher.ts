@@ -262,8 +262,16 @@ export function createMSTeamsReplyDispatcher(params: {
     total: number;
     error: unknown;
   }) => {
-    const classification = classifyMSTeamsSendError(failure.error);
-    const errorText = formatUnknownError(failure.error);
+    // sendMSTeamsMessages wraps pre-dispatch failures in
+    // PlatformMessageNotDispatchedError; classify the cause so the HTTP status
+    // and send stage survive and the recovery guidance below stays accurate.
+    const dispatchError =
+      failure.error instanceof PlatformMessageNotDispatchedError && failure.error.cause
+        ? failure.error.cause
+        : failure.error;
+    const classification = classifyMSTeamsSendError(dispatchError);
+    const hint = formatMSTeamsSendErrorHint(classification);
+    const errorText = formatUnknownError(dispatchError);
     const failedAll = failure.failed >= failure.total;
     const summary = failedAll
       ? "the previous reply was not delivered"
@@ -273,7 +281,7 @@ export function createMSTeamsReplyDispatcher(params: {
       `The user may not have received ${failedAll ? "that reply" : "the full reply"}.`,
       `Error: ${errorText}.`,
       classification.statusCode != null ? `Status: ${classification.statusCode}.` : undefined,
-      classification.kind === "throttled" ? "Retrying later may succeed." : undefined,
+      classification.kind === "throttled" ? "Retrying later may succeed." : hint,
     ].filter(Boolean);
     core.system.enqueueSystemEvent(sentences.join(" "), {
       sessionKey: params.sessionKey,

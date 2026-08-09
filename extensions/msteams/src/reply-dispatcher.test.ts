@@ -31,11 +31,15 @@ vi.mock("./messenger.js", () => ({
   sendMSTeamsMessages: sendMSTeamsMessagesMock,
 }));
 
-vi.mock("./errors.js", () => ({
-  classifyMSTeamsSendError: vi.fn(() => ({})),
-  formatMSTeamsSendErrorHint: vi.fn(() => undefined),
-  formatUnknownError: vi.fn((err) => String(err)),
-}));
+vi.mock("./errors.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./errors.js")>();
+  return {
+    ...actual,
+    // Keep the legacy String(err) rendering; existing delivery-event
+    // assertions predate formatUnknownError's message-only output.
+    formatUnknownError: (err: unknown) => String(err),
+  };
+});
 
 vi.mock("./revoked-context.js", () => ({
   withRevokedProxyFallback: async ({ run }: { run: () => Promise<unknown> }) => await run(),
@@ -811,6 +815,57 @@ describe("createMSTeamsReplyDispatcher", () => {
       sessionKey: "agent:main:main",
       contextKey: "msteams:delivery-failure:conv",
     });
+  });
+
+  it("appends verify-before-resend guidance for a send-stage ambiguous 5xx", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "one" }, { text: "two" }] as never);
+    sendMSTeamsMessagesMock
+      .mockResolvedValueOnce(["id-1"] as never)
+      .mockRejectedValueOnce(Object.assign(new Error("connector boom"), { statusCode: 503 }));
+
+    const dispatcher = createDispatcher("personal", { streaming: { block: { enabled: false } } });
+    const options = dispatcherOptions();
+
+    const result = await options.deliver({ text: "block content" });
+    const finalization = expect(result?.finalization).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+    });
+    await dispatcher.dispatcherOptions.onSettled?.();
+    await finalization;
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [message] = firstSystemEventCall();
+    expect(message).toContain("Status: 503");
+    expect(message).toContain("verify in Teams before resending");
+  });
+
+  it("reports nothing-delivered guidance for a wrapped prepare-stage 5xx", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "one" }, { text: "two" }] as never);
+    const cause = Object.assign(new Error("graph upload 503"), {
+      statusCode: 503,
+      msteamsSendStage: "prepare",
+    });
+    sendMSTeamsMessagesMock
+      .mockResolvedValueOnce(["id-1"] as never)
+      .mockRejectedValueOnce(new PlatformMessageNotDispatchedError("graph upload 503", { cause }));
+
+    const dispatcher = createDispatcher("personal", { streaming: { block: { enabled: false } } });
+    const options = dispatcherOptions();
+
+    const result = await options.deliver({ text: "block content" });
+    const finalization = expect(result?.finalization).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+    });
+    await dispatcher.dispatcherOptions.onSettled?.();
+    await finalization;
+
+    // The wrapper hides nothing: status and stage are recovered from the
+    // cause, so the agent hears "nothing was delivered", not "maybe sent".
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [message] = firstSystemEventCall();
+    expect(message).toContain("Status: 503");
+    expect(message).toContain("nothing was delivered");
+    expect(message).not.toContain("verify in Teams");
   });
 
   it("does not queue a delivery-failure system event when Teams send succeeds", async () => {
