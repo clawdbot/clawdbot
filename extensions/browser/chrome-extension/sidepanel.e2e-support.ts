@@ -67,6 +67,7 @@ export function rawDataText(data: RawData): string {
 type RelayHarness = {
   readonly connectionCount: number;
   hellos: Array<Record<string, unknown>>;
+  tabRefreshes: Array<Record<string, unknown>>;
   port: number;
   close: () => Promise<void>;
   command: (body: Record<string, unknown>) => Promise<unknown>;
@@ -90,6 +91,7 @@ export async function createRelayHarness(token = "a".repeat(64)): Promise<RelayH
       protocols.has("openclaw-extension-relay.v2") ? "openclaw-extension-relay.v2" : false,
   });
   const hellos: Array<Record<string, unknown>> = [];
+  const tabRefreshes: Array<Record<string, unknown>> = [];
   const pendingCommands = new Map<
     number,
     { reject: (error: Error) => void; resolve: (result: unknown) => void }
@@ -192,6 +194,10 @@ export async function createRelayHarness(token = "a".repeat(64)): Promise<RelayH
         hellos.push(message);
         return;
       }
+      if (message.type === "tabs") {
+        tabRefreshes.push(message);
+        return;
+      }
       const seq = typeof message.seq === "number" ? message.seq : undefined;
       if (seq === undefined || (message.type !== "result" && message.type !== "error")) {
         return;
@@ -217,6 +223,7 @@ export async function createRelayHarness(token = "a".repeat(64)): Promise<RelayH
       return connectionCount;
     },
     hellos,
+    tabRefreshes,
     port: address.port,
     command: async (body) => {
       const client = [...authenticated].find((candidate) => candidate.readyState === 1);
@@ -560,7 +567,10 @@ export async function copyCopilotSidepanelExtension(tempDirs: {
   const target = tempDirs.make("openclaw-copilot-extension-");
   await fs.cp(extensionDir, target, {
     recursive: true,
-    filter: (source) => !source.endsWith(".test.ts"),
+    filter: (source) =>
+      !source.endsWith(".test.ts") &&
+      !source.endsWith(".test-support.ts") &&
+      !source.endsWith(".test-harness.ts"),
   });
   await fs.writeFile(
     path.join(target, "e2e-launcher.html"),

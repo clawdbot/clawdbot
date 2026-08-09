@@ -3134,13 +3134,17 @@ NODE
     expect(writerStep.with.key).toContain("github.run_attempt");
     expect(writerStep.with.key).not.toContain("pull_request");
     expect(writerStep.with["restore-keys"]).toContain("**/tsconfig*.json");
+    expect(writerStep.with.key).toContain("src/state/*.sql");
+    expect(writerStep.with["restore-keys"]).toContain("src/state/*.sql");
     expect(writerStep.with.key).toContain("!**/node_modules/**");
     expect(writerStep.with["restore-keys"]).toContain("!**/node_modules/**");
     expect(readerStep.uses).toBe(CACHE_V5);
     expect(readerStep.if).toContain("inputs.save-vitest-fs-cache != 'true'");
     expect(readerStep.with["restore-keys"]).toBe(writerStep.with["restore-keys"]);
     expect(readerStep.with.key).toContain("!**/node_modules/**");
+    expect(readerStep.with.key).toContain("src/state/*.sql");
     expect(configureStep.env.CACHE_GENERATION).toContain("!**/node_modules/**");
+    expect(configureStep.env.CACHE_GENERATION).toContain("src/state/*.sql");
     expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root");
     expect(configureStep.run).toContain(".openclaw-transform-generation");
     expect(configureStep.run).not.toContain("protected Vitest transform seed");

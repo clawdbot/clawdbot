@@ -6,10 +6,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { waitForChildClose, waitForDead, waitForFile } from "../../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { BUNDLE_HASH, prepareLocalWorkspaceRsyncBoundary } from "./tunnel.test-support.js";
+import { REMOTE_GIT_WORKSPACE_RETRY_RESET_JS } from "./workspace-mutation-remote-script.js";
 import {
-  REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
-  REMOTE_WORKSPACE_RSYNC_RECEIVER_JS,
-} from "./workspace-mutation-remote-script.js";
+  createWorkerWorkspaceRsyncReceiverPathFactory,
+  WORKER_WORKSPACE_RSYNC_DESTINATION,
+  workerWorkspaceRsyncReceiverEntryPath,
+} from "./workspace-sync-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -79,18 +82,32 @@ process.kill = function(pid, signal) {
         OPENCLAW_TEST_RESET_NONCE: resetNonce,
         OPENCLAW_TEST_CONTENDER_MARKER: contenderMarker,
       };
+      const receiverCommand = createWorkerWorkspaceRsyncReceiverPathFactory({
+        receiverEntryPath: workerWorkspaceRsyncReceiverEntryPath(BUNDLE_HASH),
+        remoteWorkspaceDir: workspace,
+        canonicalHome: home,
+        remoteRelative: relative,
+      })("workspace-root");
+      const boundary = await prepareLocalWorkspaceRsyncBoundary(home, [
+        "rsync",
+        `--rsync-path=${receiverCommand}`,
+        "-e",
+        "ssh",
+        "--",
+        "source",
+        `test:${WORKER_WORKSPACE_RSYNC_DESTINATION}`,
+      ]);
+      const [node, receiverEntry, mode, context] = receiverCommand.split(" ");
+      expect(node).toBe("node");
       const receiver = spawnTransaction(
         [
-          "-e",
-          REMOTE_WORKSPACE_RSYNC_RECEIVER_JS,
-          workspace,
-          home,
-          relative,
+          path.join(home, receiverEntry!),
+          mode!,
+          context!,
           receiverNonce,
-          workspace,
           "--server",
           ".",
-          `${workspace}/`,
+          boundary.argv.at(-1)!.slice("test:".length),
         ],
         env,
       );

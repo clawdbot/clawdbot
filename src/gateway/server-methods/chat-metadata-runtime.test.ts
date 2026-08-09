@@ -32,6 +32,10 @@ function createOwner(config: OpenClawConfig, id: string): PreparedModelRuntimeSn
 
 function createHarness(
   initialConfig: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } },
+  runtimeOptions: {
+    beforeRefresh?: () => Promise<void>;
+    refreshOnRead?: boolean;
+  } = {},
 ) {
   let config = initialConfig;
   let owner = createOwner(config, "first");
@@ -70,6 +74,7 @@ function createHarness(
     getConfig: () => config,
     getContext: () => context,
     log: context.logGateway,
+    ...runtimeOptions,
     deps: {
       getPreparedOwner,
       getPreparedAuthStore,
@@ -111,6 +116,19 @@ function createHarness(
 }
 
 describe("gateway chat metadata runtime", () => {
+  test("refreshes lazily on the first read when configured", async () => {
+    const beforeRefresh = vi.fn(async () => {});
+    const harness = createHarness(undefined, { beforeRefresh, refreshOnRead: true });
+
+    expect(harness.buildProjection).not.toHaveBeenCalled();
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "first" })],
+    });
+
+    expect(beforeRefresh).toHaveBeenCalledOnce();
+    expect(harness.buildProjection).toHaveBeenCalledOnce();
+  });
+
   test("single-flights equivalent refreshes and reads", async () => {
     const harness = createHarness();
     const releaseModels = createDeferred();

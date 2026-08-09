@@ -28,7 +28,8 @@ import {
   workerSshProcessError,
   WORKER_TUNNEL_READY_MARKER,
 } from "./tunnel-ssh-runner.js";
-import { createWorkerWorkspaceActions, stableWorkerPathComponent } from "./workspace-sync.js";
+import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
+import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 export type { WorkerTunnelHandle } from "./tunnel-contract.js";
 const REMOTE_SOCKET_NAME = "gateway.sock";
@@ -77,15 +78,19 @@ rmdir -- "$directory" 2>/dev/null || true
 `;
 
 type WorkerTunnelStartRequest = WorkerTunnelRequest & {
+  bundleHash: string;
   gateway: { host: "127.0.0.1" | "::1"; port: number };
   ssh: WorkerSshEndpoint;
+  sharedHost?: boolean;
   resolveIdentity: WorkerSshIdentityResolver;
 };
 
 type TunnelEntry = {
+  bundleHash: string;
   environmentId: string;
   ownerEpoch: number;
   gateway: WorkerTunnelStartRequest["gateway"];
+  sharedHost: boolean;
   remoteDirectory: string;
   remoteSocketPath: string;
   abortController: AbortController;
@@ -224,11 +229,13 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     remoteSocketPath: entry.remoteSocketPath,
     ...createWorkerWorkspaceActions({
       environmentId: entry.environmentId,
+      sharedHost: entry.sharedHost,
       ownerSignal: entry.abortController.signal,
       isConnected: () => isCurrent(entry) && entry.status === "connected",
       getPrepared: () => entry.prepared,
       runner,
       tasks: entry.workspaceTasks,
+      bundleHash: entry.bundleHash,
     }),
     stop: () => stop(entry.environmentId, entry.ownerEpoch),
   });
@@ -413,8 +420,10 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     void readiness.promise.catch(() => undefined);
     const entry: TunnelEntry = {
       environmentId: request.environmentId,
+      bundleHash: request.bundleHash,
       ownerEpoch: request.ownerEpoch,
       gateway: request.gateway,
+      sharedHost: request.sharedHost === true,
       remoteDirectory,
       remoteSocketPath: `${remoteDirectory}/${REMOTE_SOCKET_NAME}`,
       abortController: new AbortController(),

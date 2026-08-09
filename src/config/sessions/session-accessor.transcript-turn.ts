@@ -5,7 +5,7 @@ import { getRuntimeConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
 import { updateSessionEntry } from "./session-accessor.entry-mutation.js";
 import {
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
   resolveSessionEntryFromStore,
   resolveSessionEntrySelection,
 } from "./session-accessor.entry.js";
@@ -84,6 +84,28 @@ export async function persistSessionTranscriptTurn(
     throw new Error("Cannot patch session lifecycle without an expected session id");
   }
   const target = await resolveTranscriptTurnTarget(scope, options.config);
+  // Route through the guarded SQLite path when the session entry was loaded
+  // from a persisted SQLite row (not an in-memory mirror), so a session-id
+  // rotation between resolve and append surfaces a visible session-rebound
+  // rejection. Use the caller's session id (target.sessionId). Mirror-only
+  // entries (from scope.sessionStore/scope.sessionEntry) and transcript-only
+  // scopes (no entry) keep the legacy append — the guarded transaction
+  // requires a persisted row to validate. (#119221)
+  if (
+    target.entryFromPersistedStore &&
+    target.storePath &&
+    target.sessionKey &&
+    target.sessionEntry &&
+    target.sessionId
+  ) {
+    return await persistExpectedSessionTranscriptTurn(
+      { ...scope, storePath: target.storePath },
+      {
+        ...options,
+        expectedSessionId: target.sessionId,
+      },
+    );
+  }
   const appendedMessages = await runWithOwnedSessionTranscriptWriteLock(
     {
       sessionFile: target.sessionKey,
@@ -228,6 +250,7 @@ async function persistExpectedSessionTranscriptTurn(
           config: options.config,
           cwd: options.cwd,
           expectedLifecycleRevision: options.expectedLifecycleRevision,
+          expectedWriterRunId: options.expectedWriterRunId,
           expectedSessionState: options.expectedSessionState,
           expectedSessionId,
           atomicGroup: options.atomicGroup,
@@ -275,6 +298,7 @@ async function resolveTranscriptTurnTarget(
 ): Promise<
   SessionTranscriptTurnWriteContext & {
     sessionEntry: SessionEntry | undefined;
+    entryFromPersistedStore: boolean;
   }
 > {
   const sessionKey = scope.sessionKey?.trim();
@@ -295,22 +319,28 @@ async function resolveTranscriptTurnTarget(
     });
   const resolved = scope.sessionStore
     ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey })
-    : resolveSessionEntrySelection({
-        agentId,
-        ...(scope.env ? { env: scope.env } : {}),
-        sessionKey,
-        storePath,
-      });
-  const sessionEntry =
-    resolved?.existing ??
-    scope.sessionEntry ??
-    loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
+    : resolveSessionEntrySelection(
+        {
+          agentId,
+          ...(scope.env ? { env: scope.env } : {}),
+          sessionKey,
+          storePath,
+        },
+        { readOnly: true },
+      );
+  // Mirrors can represent either durable Gateway state or memory-only internal
+  // sessions. Classify that provenance without materializing SQLite state.
+  const persistedEntry = scope.sessionStore
+    ? loadSessionEntryReadOnly({ ...scope, agentId, sessionKey, storePath })
+    : resolved?.existing;
+  const sessionEntry = resolved?.existing ?? scope.sessionEntry ?? persistedEntry;
   return {
     agentId,
     sessionId: scope.sessionId,
     sessionKey: resolved?.normalizedKey ?? sessionKey,
     storePath,
     sessionEntry,
+    entryFromPersistedStore: persistedEntry != null,
   };
 }
 

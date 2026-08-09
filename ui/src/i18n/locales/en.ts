@@ -702,9 +702,13 @@ export const en: TranslationMap = {
     start: "Start session",
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
+    cloudOwnershipLost:
+      "Another window took over this cloud session. Check recent sessions before starting this task again.",
     createOutcomeUnknown:
       "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
     cliAgentsGroup: "CLI agents",
+    cloudSetupInterrupted:
+      "This cloud session's setup was interrupted. Check recent sessions before starting this task again.",
     catalogUnavailable: "This session target is unavailable.",
   },
   dashboardsPage: {
@@ -888,6 +892,7 @@ export const en: TranslationMap = {
     stopCloudWorker: "Stop cloud worker…",
     stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
     stopCloudWorkerConfirmAction: "Stop worker",
+    cloudWorkerStopResult: 'Cloud worker for "{session}" is {state}.',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "Delete {count}…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

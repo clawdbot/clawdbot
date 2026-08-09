@@ -19,6 +19,8 @@ type SourceReplyTranscriptMirror = NonNullable<
 
 type TranscriptMirror = SourceReplyTranscriptMirror & {
   expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
   storePath?: string;
   preferText?: boolean;
   deliveryMirror?: SessionTranscriptDeliveryMirror;
@@ -38,6 +40,12 @@ export async function mirrorDeliveredReplyToTranscript(params: {
       sessionKey: mirror.sessionKey,
       agentId: mirror.agentId,
       ...(mirror.expectedSessionId ? { expectedSessionId: mirror.expectedSessionId } : {}),
+      ...(mirror.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: mirror.expectedLifecycleRevision }
+        : {}),
+      ...(mirror.expectedWriterRunId !== undefined
+        ? { expectedWriterRunId: mirror.expectedWriterRunId }
+        : {}),
       text: mirror.text,
       mediaUrls: mirror.preferText && mirror.text ? undefined : mirror.mediaUrls,
       idempotencyKey: mirror.idempotencyKey,
@@ -155,6 +163,12 @@ export function captureDeliveredTranscriptMirror(params: {
         {
           ...payloadMirror,
           ...(metadata.expectedSessionId ? { expectedSessionId: metadata.expectedSessionId } : {}),
+          ...(metadata.expectedLifecycleRevision !== undefined
+            ? { expectedLifecycleRevision: metadata.expectedLifecycleRevision }
+            : {}),
+          ...(metadata.expectedWriterRunId !== undefined
+            ? { expectedWriterRunId: metadata.expectedWriterRunId }
+            : {}),
           storePath: metadata.storePath,
         },
         payload,

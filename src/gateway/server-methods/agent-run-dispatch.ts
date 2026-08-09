@@ -83,7 +83,11 @@ const RESOLVED_GATEWAY_STATUS_BY_TERMINAL_CLASSIFICATION = {
 function projectRejectedGatewayStatus(outcome: AgentRunTerminalOutcome): "error" | "timeout" {
   // The shipped wire keeps raw provider/AbortError rejections as errors. Only
   // signal-owned cancellation/timeout metadata promotes a rejection to timeout.
-  return outcome.reason === "cancelled" || outcome.stopReason === "timeout" ? "timeout" : "error";
+  return outcome.reason === "cancelled" ||
+    outcome.reason === "superseded" ||
+    outcome.stopReason === "timeout"
+    ? "timeout"
+    : "error";
 }
 
 export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {

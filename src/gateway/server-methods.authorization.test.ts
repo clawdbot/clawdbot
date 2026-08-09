@@ -18,11 +18,20 @@ import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
 const METHOD = "workboard.cards.dispatch";
 const ensureProfileForEmail = vi.hoisted(() => vi.fn());
+const getUserProfileDisplay = vi.hoisted(() =>
+  vi.fn((profileId: string) => ({
+    id: profileId,
+    displayName: "Ada",
+    avatarRevision: "1",
+    hasAvatar: false,
+  })),
+);
 const resolveUserProfileId = vi.hoisted(() => vi.fn());
 const setDisplayName = vi.hoisted(() => vi.fn());
 
 vi.mock("../state/user-profiles.js", () => ({
   ensureProfileForEmail,
+  getUserProfileDisplay,
   getUserProfileListItem: vi.fn(),
   linkEmail: vi.fn(),
   listProfiles: vi.fn(),
@@ -35,6 +44,7 @@ vi.mock("../state/user-profiles.js", () => ({
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   ensureProfileForEmail.mockReset();
+  getUserProfileDisplay.mockClear();
   resolveUserProfileId.mockReset();
   setDisplayName.mockReset();
 });

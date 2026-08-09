@@ -11,6 +11,7 @@ import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerWorkspaceCommand,
 } from "./tunnel-contract.js";
+import { BUNDLE_HASH, prepareLocalWorkspaceRsyncBoundary } from "./tunnel.test-support.js";
 import {
   AcceptedWorkspacePublicationIndeterminateError,
   isAcceptedWorkspacePublicationIndeterminateError,
@@ -23,12 +24,14 @@ import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
+import { workerWorkspaceRsyncReceiverEntryPath } from "./workspace-sync-helpers.js";
 import {
   REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
   REMOTE_WORKSPACE_MANIFEST_JS,
 } from "./workspace-sync-scripts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const RECEIVER_ENTRY_PATH = workerWorkspaceRsyncReceiverEntryPath(BUNDLE_HASH);
 
 function result(overrides: Partial<SpawnResult> = {}): SpawnResult {
   return {
@@ -64,10 +67,6 @@ function manifestRef(value: WorkerWorkspaceManifest): string {
 
 function settlement(outcome: "begun" | "rolled-back" | "applied" | "committed"): SpawnResult {
   return result({ stdout: `${JSON.stringify({ version: 1, outcome })}\n` });
-}
-
-function shellQuoted(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 describe("accepted workspace publication", () => {
@@ -118,7 +117,7 @@ describe("accepted workspace publication", () => {
       const env = {
         ...process.env,
         HOME: home,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        OPENCLAW_TEST_RECEIVER_PATH: `${bin}:${process.env.PATH ?? ""}`,
         OPENCLAW_TEST_RECEIVER_GATE: gate,
         OPENCLAW_TEST_RECEIVER_MARKER: receiverMarker,
       };
@@ -138,27 +137,15 @@ describe("accepted workspace publication", () => {
         });
       };
       const publisher = createAcceptedWorkspacePublisherFactory({
+        receiverEntryPath: RECEIVER_ENTRY_PATH,
         runWorkspaceCommand,
         runRsync: async (argvForSsh) => {
           const argv = argvForSsh("ssh");
-          const receiverPath = argv.find((entry) => entry.startsWith("--rsync-path="));
-          if (!receiverPath) {
-            throw new Error("accepted staging transfer is missing its receiver wrapper");
-          }
-          const stagingRoot = argv.at(-1)?.slice("test:".length).replace(/\/$/u, "");
-          if (!stagingRoot) {
-            throw new Error("accepted staging transfer is missing its destination");
-          }
-          receiverChild = spawn(
-            "sh",
-            [
-              "-c",
-              `${receiverPath.slice("--rsync-path=".length)} '--server' '.' ${shellQuoted(
-                stagingRoot,
-              )}`,
-            ],
-            { env, stdio: ["ignore", "ignore", "pipe"] },
-          );
+          const boundary = await prepareLocalWorkspaceRsyncBoundary(home, argv);
+          receiverChild = spawn(boundary.argv[0]!, boundary.argv.slice(1), {
+            env,
+            stdio: ["ignore", "ignore", "pipe"],
+          });
           const receiverStderr = receiverChild.stderr;
           if (!receiverStderr) {
             throw new Error("accepted staging receiver has no stderr pipe");
@@ -217,7 +204,12 @@ describe("accepted workspace publication", () => {
         );
 
         await releaseReceiver("release");
-        await expect(receiverExited).resolves.toMatchObject({ code: 0, signal: null, stderr: "" });
+        if (!receiverExited) {
+          throw new Error("accepted staging receiver did not start");
+        }
+        const receiverExit = await receiverExited;
+        expect(receiverExit.signal).toBeNull();
+        expect(receiverExit.code).not.toBe(0);
         await expect(publishing).resolves.toBeUndefined();
         expect(actions).toEqual(["begin", "apply", "commit"]);
         await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
@@ -341,6 +333,7 @@ fs.renameSync = function(source, destination) {
       return result();
     };
     const publisher = createAcceptedWorkspacePublisherFactory({
+      receiverEntryPath: RECEIVER_ENTRY_PATH,
       runWorkspaceCommand,
       runRsync,
       scpTarget: "test",
@@ -519,6 +512,7 @@ Atomics.wait = function(waitArray, index, value, timeout) {
       return commandResult;
     };
     const publisher = createAcceptedWorkspacePublisherFactory({
+      receiverEntryPath: RECEIVER_ENTRY_PATH,
       runWorkspaceCommand,
       runRsync: async () => {
         if (!stagingRoot) {
@@ -582,6 +576,7 @@ Atomics.wait = function(waitArray, index, value, timeout) {
     const accepted = manifest("local\n");
     const actions: string[] = [];
     const factory = createAcceptedWorkspacePublisherFactory({
+      receiverEntryPath: RECEIVER_ENTRY_PATH,
       runWorkspaceCommand: async (command) => {
         if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
           return result();
@@ -648,6 +643,7 @@ Atomics.wait = function(waitArray, index, value, timeout) {
     const accepted = manifest("local\n");
     const actions: string[] = [];
     const publisher = createAcceptedWorkspacePublisherFactory({
+      receiverEntryPath: RECEIVER_ENTRY_PATH,
       runWorkspaceCommand: async (command) => {
         if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
           return result();
@@ -689,6 +685,7 @@ Atomics.wait = function(waitArray, index, value, timeout) {
     const accepted = manifest("local\n");
     const actions: string[] = [];
     const publisher = createAcceptedWorkspacePublisherFactory({
+      receiverEntryPath: RECEIVER_ENTRY_PATH,
       runWorkspaceCommand: async (command) => {
         if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
           return result();
@@ -774,6 +771,7 @@ Atomics.wait = function(waitArray, index, value, timeout) {
       const transactionCalls: Array<{ action: string; nonce: string }> = [];
       let commitCount = 0;
       const publisher = createAcceptedWorkspacePublisherFactory({
+        receiverEntryPath: RECEIVER_ENTRY_PATH,
         runWorkspaceCommand: async (command) => {
           if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
             return result({ stdout: command.argv[5] === "publish" ? "" : `${acceptedRef}\n` });
@@ -836,6 +834,7 @@ Atomics.wait = function(waitArray, index, value, timeout) {
     const acceptedRef = manifestRef(accepted);
     const actions: string[] = [];
     const publisher = createAcceptedWorkspacePublisherFactory({
+      receiverEntryPath: RECEIVER_ENTRY_PATH,
       runWorkspaceCommand: async (command) => {
         if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
           return result({ stdout: command.argv[5] === "publish" ? "" : `${acceptedRef}\n` });

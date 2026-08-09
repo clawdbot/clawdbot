@@ -116,9 +116,6 @@ vi.mock("../channels/plugins/bundled.js", async () => {
             : null,
       },
     ]),
-    listBundledChannelLegacyStateMigrationDetectorEntries: vi.fn(
-      () => mockedLegacyMigrationDetectors.entries,
-    ),
   };
 });
 

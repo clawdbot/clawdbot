@@ -58,7 +58,7 @@ import {
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
 import {
   boundedWorkerError as boundedError,
-  inspectionStatus,
+  requireWorkerLeaseStatus,
   requireWorkerLease,
 } from "./service-validation.js";
 import type { WorkerEnvironmentState } from "./state.js";
@@ -520,6 +520,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     return move(destroying, "failed", {
       leaseId: null,
       sshEndpoint: null,
+      sharedHost: false,
       lastError: destroying.lastError ?? "Worker bootstrap failed after provider teardown",
     });
   };
@@ -631,7 +632,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       throw serviceError("provider_failure", `Worker provider operation failed: ${detail}`);
     }
     // A timeout can happen after allocation; retain the same operation id for safe replay.
-    const patch = { leaseId: lease.leaseId, sshEndpoint: lease.ssh };
+    const patch = {
+      leaseId: lease.leaseId,
+      sshEndpoint: lease.ssh,
+      sharedHost: lease.sharedHost === true,
+    };
     const bootstrapping = move(record, "bootstrapping", patch);
     if (record.destroyRequestedAtMs !== null) {
       return bootstrapping;
@@ -789,17 +794,18 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       }
       return;
     }
-    const status = await callProvider(record.environmentId, () =>
+    const inspection = await callProvider(record.environmentId, () =>
       provider.inspect(lifecycleLease(record, leaseId)),
     )
-      .then(inspectionStatus)
+      .then(requireWorkerLeaseStatus)
       .catch((error: unknown) => {
         saveError(record, error);
         return undefined;
       });
-    if (!status) {
+    if (!inspection) {
       return;
     }
+    const { status } = inspection;
     const teardownExpected = record.destroyRequestedAtMs !== null || record.state === "destroying";
     if (status === "destroyed" || (status === "unknown" && teardownExpected)) {
       const requested =
@@ -820,6 +826,18 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       move(draining, "orphaned", { lastError: ORPHANED_LEASE_ERROR });
       return;
     }
+    const inspectedSharedHost = inspection.sharedHost === true;
+    if (record.sharedHost !== null && record.sharedHost !== inspectedSharedHost) {
+      // Workspace actions capture isolation at tunnel creation. Fence the old actions before
+      // committing a provider-owned change so no reconciliation can use stale host scope.
+      await tunnels?.stop(record.environmentId);
+    }
+    record = store.reconcileSharedHost({
+      environmentId: record.environmentId,
+      state: record.state,
+      leaseId,
+      sharedHost: inspectedSharedHost,
+    });
     if (record.destroyRequestedAtMs !== null) {
       await finishDestroy(record, provider).catch(() => undefined);
       return;
@@ -1082,9 +1100,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         !inState(record, "ready", "idle", "attached") ||
         record.destroyRequestedAtMs !== null ||
         !record.leaseId ||
-        !record.sshEndpoint
+        !record.sshEndpoint ||
+        !record.bootstrapReceipt
       ) {
         throw serviceError("invalid_state", `Cannot start tunnel in state: ${record.state}`);
+      }
+      if (record.sharedHost === null) {
+        throw serviceError(
+          "provider_failure",
+          "Worker lease isolation is not reconciled; retry after provider inspection",
+        );
       }
       const credential = store.getCredential(request.environmentId);
       if (
@@ -1103,8 +1128,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       // lock while SSH connects so drain/destroy can fence an indefinitely reconnecting start.
       startup = tunnels.start({
         ...request,
+        bundleHash: record.bootstrapReceipt.bundleHash,
         gateway,
         ssh: record.sshEndpoint,
+        sharedHost: record.sharedHost,
         resolveIdentity: identityResolverFor(record, provider, record.leaseId),
       });
     });

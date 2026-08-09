@@ -43,6 +43,7 @@ type RecordIdentity = { environmentId: string; providerId: string; profileId: st
 type RecordBase = RecordIdentity & {
   profileSnapshot: WorkerEnvironmentProfileSnapshot;
   provisionOperationId: string;
+  sharedHost: boolean | null;
   bootstrapReceipt: WorkerEnvironmentBootstrapReceipt | null;
   ownerEpoch: number;
   teardownTerminalState: WorkerEnvironmentTeardownTerminalState | null;
@@ -67,6 +68,7 @@ export class WorkerSessionAlreadyAttachedError extends Error {
 export type WorkerEnvironmentTransitionPatch = {
   leaseId?: string | null;
   sshEndpoint?: WorkerEnvironmentSshEndpoint | null;
+  sharedHost?: boolean;
   bootstrapReceipt?: WorkerEnvironmentBootstrapReceipt;
   attachedSessionIds?: readonly string[];
   lastError?: string | null;
@@ -369,6 +371,7 @@ function fromRow(row: Row, fallbackPorts: readonly number[]): WorkerEnvironmentR
     profileId: row.profile_id,
     profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerEnvironmentProfileSnapshot,
     provisionOperationId: row.provision_operation_id,
+    sharedHost: row.shared_host === null ? null : row.shared_host === 1,
     leaseId: row.lease_id,
     sshEndpoint: endpointFrom(row, fallbackPorts),
     bootstrapReceipt: bootstrapReceiptFrom(row),
@@ -719,6 +722,7 @@ export function createWorkerEnvironmentStore(
                 "provision operation id",
               ),
               lease_id: null,
+              shared_host: null,
               ssh_host: null,
               ssh_port: null,
               ssh_user: null,
@@ -747,6 +751,30 @@ export function createWorkerEnvironmentStore(
       findCredentialByHash(read(), normalizeCredentialHash(credentialHash)),
     list: (): WorkerEnvironmentRecord[] => listRows(read(), false),
     listForReconcile: (): WorkerEnvironmentRecord[] => listRows(read(), true),
+    reconcileSharedHost(input: {
+      environmentId: string;
+      state: WorkerEnvironmentState;
+      leaseId: string;
+      sharedHost: boolean;
+    }): WorkerEnvironmentRecord {
+      const environmentId = required(input.environmentId, "id");
+      const leaseId = required(input.leaseId, "lease id");
+      return write((db) => {
+        const current = getRequired(db, environmentId);
+        if (current.state !== input.state || current.leaseId !== leaseId) {
+          throw new Error(`Worker environment ${environmentId} lease changed during inspection`);
+        }
+        if (current.sharedHost === input.sharedHost) {
+          return current;
+        }
+        // Provider inspection owns facts that may predate their durable column. Persist an
+        // explicit value before tunnel startup so upgraded leases cannot keep stale isolation.
+        return update(db, environmentId, current.state, {
+          shared_host: input.sharedHost ? 1 : 0,
+          updated_at_ms: now(),
+        });
+      });
+    },
     requestDestroy(input: {
       environmentId: string;
       state: WorkerEnvironmentState;
@@ -829,6 +857,7 @@ export function createWorkerEnvironmentStore(
             : patch.sshEndpoint === null
               ? null
               : normalizeWorkerSshEndpoint(patch.sshEndpoint);
+        const sharedHost = leaseId === null ? null : (patch.sharedHost ?? current.sharedHost);
         const acceptsBootstrapReceipt = from === "bootstrapping" && to === "ready";
         if (patch.bootstrapReceipt !== undefined && !acceptsBootstrapReceipt) {
           throw new Error("Bootstrap receipt can only be recorded when a worker becomes ready");
@@ -906,6 +935,7 @@ export function createWorkerEnvironmentStore(
             : current.ownerEpoch;
         updateRow(db, environmentId, from, {
           lease_id: leaseId,
+          shared_host: sharedHost === null ? null : sharedHost ? 1 : 0,
           ssh_host: sshEndpoint?.host ?? null,
           ssh_port: sshEndpoint?.port ?? null,
           ssh_user: sshEndpoint?.user ?? null,

@@ -29,6 +29,7 @@ import {
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 import type { WorkerSshProcess, WorkerSshRunner } from "./worker-environments/tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./worker-environments/tunnel.js";
+import { prepareLocalWorkspaceRsyncBoundary } from "./worker-environments/tunnel.test-support.js";
 import { rsyncArgvPort, sshArgvPort } from "./worker-environments/worker-ssh-argv.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 
@@ -189,14 +190,17 @@ class OriginalOrderSshRunner implements WorkerSshRunner {
     }
     if (argv[0] === "rsync") {
       this.events.push(`workspace:transfer:${port}`);
+      if (argv.some((arg) => arg.startsWith("--rsync-path="))) {
+        const boundary = await prepareLocalWorkspaceRsyncBoundary(this.remoteHome, argv);
+        return await runCommandWithTimeout(boundary.argv, {
+          ...options,
+          baseEnv: { ...options.baseEnv, HOME: this.remoteHome },
+        });
+      }
       const localArgv = [...argv];
       const remoteShellIndex = localArgv.indexOf("-e");
       if (remoteShellIndex >= 0) {
         localArgv.splice(remoteShellIndex, 2);
-      }
-      const remoteReceiverIndex = localArgv.findIndex((arg) => arg.startsWith("--rsync-path="));
-      if (remoteReceiverIndex >= 0) {
-        localArgv.splice(remoteReceiverIndex, 1);
       }
       for (let index = 1; index < localArgv.length; index += 1) {
         const candidate = localArgv[index];

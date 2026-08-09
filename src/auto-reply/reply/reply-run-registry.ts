@@ -1600,6 +1600,24 @@ export function resolveActiveReplyRunSessionId(sessionKey: string): string | und
   return replyRunRegistry.resolveSessionId(sessionKey);
 }
 
+/** Cancels the current reply backend only when its native run identity matches exactly. */
+export function supersedeReplyRunByRunId(runId: string, beforeCancel: () => void): boolean {
+  const expectedRunId = normalizeOptionalString(runId);
+  if (!expectedRunId) {
+    return false;
+  }
+  for (const operation of replyRunState.activeRunsByKey.values()) {
+    const backend = getAttachedBackend(operation);
+    if (normalizeOptionalString(backend?.runId) !== expectedRunId) {
+      continue;
+    }
+    beforeCancel();
+    backend?.cancel("superseded");
+    return true;
+  }
+  return false;
+}
+
 export function resolveActiveReplyRunThreadId(sessionKey: string): string | number | undefined {
   return replyRunRegistry.get(sessionKey)?.routeThreadId;
 }

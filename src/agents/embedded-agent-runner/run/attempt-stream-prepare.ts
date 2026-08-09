@@ -21,6 +21,7 @@ import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -393,7 +394,13 @@ export function prepareEmbeddedAttemptStream(input: {
     externalAbortAccepted = true;
     input.markExternalAbort();
     attempt.onAttemptAbort?.();
-    input.abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
+    const abortReason =
+      reason === "restart"
+        ? createAgentRunRestartAbortError()
+        : reason === "superseded"
+          ? createAgentRunSupersededAbortError()
+          : undefined;
+    input.abortRun(false, abortReason);
   };
   const queueMessage: AttemptStreamQueueHandle["queueMessage"] = async (text, options) => {
     if (!acceptingSteerMessages) {

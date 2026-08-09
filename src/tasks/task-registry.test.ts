@@ -750,6 +750,48 @@ describe("task-registry", () => {
     });
   });
 
+  it("keeps a superseded subagent terminal outcome sticky over late success", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:superseded",
+        runId: "run-subagent-superseded",
+        task: "Do not outlive the replacement",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-subagent-superseded",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          aborted: true,
+          status: "superseded",
+          stopReason: "superseded",
+          error: "agent run superseded by a newer session writer",
+          endedAt: 200,
+        },
+      });
+      expectRecordFields(requireTaskByRunId("run-subagent-superseded"), {
+        status: "cancelled",
+        error: "agent run superseded by a newer session writer",
+      });
+
+      finalizeTaskRunByRunId({
+        runId: "run-subagent-superseded",
+        runtime: "subagent",
+        status: "succeeded",
+        endedAt: 201,
+        terminalSummary: "late success",
+      });
+      expectRecordFields(requireTaskByRunId("run-subagent-superseded"), {
+        status: "cancelled",
+        endedAt: 200,
+        terminalSummary: undefined,
+      });
+    });
+  });
+
   it("clears a provisional child session when the terminal outcome has none", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();

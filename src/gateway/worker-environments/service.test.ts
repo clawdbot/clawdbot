@@ -200,6 +200,7 @@ describe("worker environment service", () => {
   function seedBootstrapping(
     environmentId: string,
     install?: WorkerInstallationArtifact["install"],
+    sharedHost = false,
   ) {
     const intent = store.createIntent({
       environmentId,
@@ -217,12 +218,16 @@ describe("worker environment service", () => {
       environmentId,
       from: provisioning.state,
       to: "bootstrapping",
-      patch: { leaseId: `lease:${environmentId}`, sshEndpoint: SSH_ENDPOINT },
+      patch: { leaseId: `lease:${environmentId}`, sshEndpoint: SSH_ENDPOINT, sharedHost },
     });
   }
 
-  function seedReady(environmentId: string, install?: WorkerInstallationArtifact["install"]) {
-    const bootstrapping = seedBootstrapping(environmentId, install);
+  function seedReady(
+    environmentId: string,
+    install?: WorkerInstallationArtifact["install"],
+    sharedHost = false,
+  ) {
+    const bootstrapping = seedBootstrapping(environmentId, install, sharedHost);
     return store.transition({
       environmentId,
       from: bootstrapping.state,
@@ -1589,6 +1594,11 @@ describe("worker environment service", () => {
       },
       "SSH fallback ports cannot exceed 10",
     ],
+    [
+      "invalid shared-host declaration",
+      { leaseId: "lease-invalid", ssh: SSH_ENDPOINT, sharedHost: "yes" },
+      "invalid provision result",
+    ],
   ])("keeps %s from a provider retryable", async (_name, result, error) => {
     const workerService = createService(createProvider({ provision: async () => result as never }));
 
@@ -2024,20 +2034,22 @@ describe("worker environment service", () => {
     expect(store.get("worker-destroyed-unknown")).toMatchObject({ state: "destroyed" });
   });
 
-  it.each([null, { status: "future" }])(
-    "retains retryable state for malformed inspection result %#",
-    async (inspection) => {
-      seedReady("worker-malformed");
-      const provider = createProvider({ inspect: async () => inspection as never });
+  it.each([
+    null,
+    { status: "future" },
+    { status: "active", sharedHost: "yes" },
+    { status: "unknown", sharedHost: true },
+  ])("retains retryable state for malformed inspection result %#", async (inspection) => {
+    seedReady("worker-malformed");
+    const provider = createProvider({ inspect: async () => inspection as never });
 
-      await createService(provider).reconcileOnce();
+    await createService(provider).reconcileOnce();
 
-      expect(store.get("worker-malformed")).toMatchObject({
-        state: "ready",
-        lastError: expect.stringContaining("invalid inspection"),
-      });
-    },
-  );
+    expect(store.get("worker-malformed")).toMatchObject({
+      state: "ready",
+      lastError: expect.stringContaining("invalid inspection"),
+    });
+  });
 
   it("adopts provider-proven teardown through legal terminal transitions", async () => {
     seedReady("worker-destroyed-ready");
@@ -2156,7 +2168,7 @@ describe("worker environment service", () => {
   });
 
   it("projects live tunnel status and fences the tunnel before provider teardown", async () => {
-    seedReady("worker-tunnel");
+    seedReady("worker-tunnel", undefined, true);
     const order: string[] = [];
     let tunnelStatus: "stopped" | "connected" = "stopped";
     const tunnelManager = {
@@ -2195,7 +2207,11 @@ describe("worker environment service", () => {
       ownerEpoch: 1,
     });
     expect(tunnelManager.start).toHaveBeenCalledWith(
-      expect.objectContaining({ gateway: { host: "127.0.0.1", port: 18_789 } }),
+      expect.objectContaining({
+        bundleHash: BUNDLE_HASH,
+        gateway: { host: "127.0.0.1", port: 18_789 },
+        sharedHost: true,
+      }),
     );
     expect(workerService.get("worker-tunnel")).toMatchObject({ tunnelStatus: "connected" });
 
@@ -2205,6 +2221,72 @@ describe("worker environment service", () => {
       state: "destroyed",
       tunnelStatus: "stopped",
     });
+  });
+
+  it("reconciles shared-host isolation for a persisted lease before tunnel startup", async () => {
+    seedReady("worker-legacy-shared");
+    database.db
+      .prepare("UPDATE worker_environments SET shared_host = NULL WHERE environment_id = ?")
+      .run("worker-legacy-shared");
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    const tunnelManager = {
+      status: () => "stopped" as const,
+      start: vi.fn(async (request: Parameters<WorkerTunnelManager["start"]>[0]) => ({
+        environmentId: request.environmentId,
+        ownerEpoch: request.ownerEpoch,
+        remoteSocketPath: "/tmp/worker/gateway.sock",
+        runWorkspaceCommand: vi.fn(),
+        syncWorkspace: vi.fn(),
+        stop: async () => {},
+      })),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    let inspectionFails = true;
+    const provider = createProvider({
+      inspect: async () => {
+        if (inspectionFails) {
+          throw new Error("provider unavailable");
+        }
+        return { status: "active", sharedHost: true };
+      },
+    });
+    const workerService = createService(provider, { tunnelManager });
+
+    expect(store.get("worker-legacy-shared")?.sharedHost).toBeNull();
+    await workerService.reconcileOnce();
+    await expect(
+      workerService.startTunnel({ environmentId: "worker-legacy-shared", ownerEpoch: 1 }),
+    ).rejects.toThrow("isolation is not reconciled");
+    expect(tunnelManager.start).not.toHaveBeenCalled();
+    inspectionFails = false;
+    await workerService.reconcileOnce();
+    expect(store.get("worker-legacy-shared")?.sharedHost).toBe(true);
+    await workerService.startTunnel({ environmentId: "worker-legacy-shared", ownerEpoch: 1 });
+    expect(tunnelManager.start).toHaveBeenCalledWith(expect.objectContaining({ sharedHost: true }));
+  });
+
+  it("fences an existing tunnel before changing its shared-host isolation", async () => {
+    seedReady("worker-isolation-change");
+    const stop = vi.fn(async () => {
+      expect(store.get("worker-isolation-change")?.sharedHost).toBe(false);
+    });
+    const tunnelManager = {
+      status: () => "connected" as const,
+      start: vi.fn(),
+      stop,
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const provider = createProvider({
+      inspect: async () => ({ status: "active", sharedHost: true }),
+    });
+
+    await createService(provider, { tunnelManager }).reconcileOnce();
+
+    expect(stop).toHaveBeenCalledWith("worker-isolation-change");
+    expect(store.get("worker-isolation-change")?.sharedHost).toBe(true);
   });
 
   it("fences a draining tunnel before reporting an unavailable provider", async () => {

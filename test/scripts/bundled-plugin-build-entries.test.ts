@@ -356,13 +356,24 @@ describe("bundled plugin build entries", () => {
       "mistral",
       "novita",
       "opencode",
-      "opencode-go",
       "xiaomi",
     ]) {
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/index.js`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/openclaw.plugin.json`);
       expect(artifacts).not.toContain(`dist/extensions/${pluginId}/package.json`);
     }
+  });
+
+  it("keeps OpenCode Go bundled until its companion artifact is available", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts).toEqual(
+      expect.arrayContaining([
+        "dist/extensions/opencode-go/index.js",
+        "dist/extensions/opencode-go/openclaw.plugin.json",
+        "dist/extensions/opencode-go/package.json",
+      ]),
+    );
   });
 
   it("excludes the externalized Vydra provider from bundled artifacts", () => {

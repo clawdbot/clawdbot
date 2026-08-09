@@ -720,7 +720,9 @@ describe.sequential("extension relay HTTP auth v2", () => {
             tabs: [{ tabId: 1, url: "https://example.test", title: `beat-${index}`, active: true }],
           }),
         );
-        await vi.waitFor(() => expect(handle?.bridge.sharedTabs()[0]?.title).toBe(`beat-${index}`));
+        await vi.waitFor(() =>
+          expect(handle?.bridge.accessibleTabs()[0]?.title).toBe(`beat-${index}`),
+        );
       }
 
       expect(extension.readyState).toBe(WebSocket.OPEN);

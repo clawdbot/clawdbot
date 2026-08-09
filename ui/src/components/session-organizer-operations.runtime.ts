@@ -14,6 +14,7 @@ import type {
   SidebarSessionMutationScope,
   SidebarSessionPatch,
 } from "./app-sidebar-session-types.ts";
+import { requestCloudWorkerStop } from "./cloud-worker-stop.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import {
   patchSessionRows,
@@ -554,9 +555,10 @@ export async function stopCloudWorker(
   session: SidebarRecentSession,
   scope: SidebarSessionMutationScope,
 ) {
+  const stopAction = session.cloudWorkerStopAction;
   if (
-    !session.cloudWorkerActive ||
-    session.hasActiveRun ||
+    !stopAction ||
+    (stopAction.method === "sessions.reclaim" && session.hasActiveRun) ||
     !window.confirm(t("sessionsView.stopCloudWorkerConfirm", { session: session.label }))
   ) {
     return;
@@ -564,21 +566,23 @@ export async function stopCloudWorker(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.reclaim",
-      requiredScope: "operator.admin",
-    })
-  ) {
+  if (!requireSessionMutationAccess(host, scope, stopAction)) {
     return;
   }
   try {
-    await scope.client.request(
-      "sessions.reclaim",
-      { key: session.key, agentId },
-      { timeoutMs: 10 * 60_000 },
-    );
+    const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
+    const result = await requestCloudWorkerStop(scope.client, stopAction, {
+      key: session.key,
+      agentId,
+    });
+    if (result && host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      showToast({
+        message: t("sessionsView.cloudWorkerStopResult", {
+          session: session.label,
+          state: result.worker?.state ?? result.status,
+        }),
+      });
+    }
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }

@@ -82,11 +82,17 @@ export type WorkerSshIdentityRequest = {
 export type WorkerLease = {
   leaseId: string;
   ssh: WorkerSshEndpoint;
+  /** The SSH account also owns processes unrelated to this worker lease. */
+  sharedHost?: boolean;
 };
 
 /** Authoritative inspection result for an already-known worker lease. */
 export type WorkerLeaseStatus =
-  | { status: "active" }
+  | {
+      status: "active";
+      /** Explicit provider fact used to reconcile leases persisted before this metadata existed. */
+      sharedHost?: boolean;
+    }
   | { status: "destroyed" }
   | { status: "unknown" };
 

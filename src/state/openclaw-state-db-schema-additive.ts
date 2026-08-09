@@ -363,6 +363,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0)",
   );
   ensureColumn(db, "worker_environments", "ssh_host_key TEXT");
+  ensureColumn(db, "worker_environments", "shared_host INTEGER CHECK (shared_host IN (0, 1))");
   ensureColumn(db, "worker_workspace_pending_results", "staged_result_ref TEXT");
   ensureColumn(
     db,

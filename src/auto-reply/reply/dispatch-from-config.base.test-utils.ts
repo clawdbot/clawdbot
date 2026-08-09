@@ -408,6 +408,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       sessionKey: "agent:main:slack:channel:C123",
       agentId: "main",
+      expectedWriterRunId: "slack-run-1",
       text: "Slack command reply",
       mediaUrls: undefined,
       idempotencyKey: "channel-final:slack-message-1:0",

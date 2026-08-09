@@ -9,6 +9,7 @@ import {
   applyPluginDoctorCompatibilityMigrations,
   listPluginDoctorLegacyConfigRules,
   listPluginDoctorSessionRouteStateOwners,
+  listPluginDoctorStateMigrationEntries,
 } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 
@@ -144,6 +145,135 @@ module.exports = {
   );
 }
 
+function writeLegacyChannelMigrationPlugin(params: {
+  pluginRoot: string;
+  pluginId: string;
+  namespace: string;
+  sourceFile: string;
+  stateKey: string;
+  label?: string;
+}): void {
+  fs.mkdirSync(params.pluginRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify({ id: params.pluginId, channels: [params.pluginId], configSchema: {} }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "package.json"),
+    JSON.stringify({
+      name: `@openclaw/${params.pluginId}`,
+      version: "2026.7.1",
+      type: "commonjs",
+      openclaw: {
+        extensions: ["./index.cjs"],
+        setupEntry: "./setup-entry.cjs",
+        setupFeatures: { legacyStateMigrations: true },
+      },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "index.cjs"),
+    "throw new Error('legacy discovery loaded the channel runtime');\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "doctor-contract-api.cjs"),
+    "module.exports = { legacyConfigRules: [] };\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "setup-entry.cjs"),
+    `const fs = require('node:fs');
+const path = require('node:path');
+const pluginId = ${JSON.stringify(params.pluginId)};
+const namespace = ${JSON.stringify(params.namespace)};
+const sourceFile = ${JSON.stringify(params.sourceFile)};
+const stateKey = ${JSON.stringify(params.stateKey)};
+const label = ${JSON.stringify(params.label ?? `${params.pluginId} preserved channel state`)};
+module.exports = {
+  kind: 'bundled-channel-setup-entry',
+  features: { legacyStateMigrations: true },
+  loadSetupPlugin() {
+    throw new Error('direct detector activated the setup plugin');
+  },
+  loadLegacyStateMigrationDetector() {
+    return ({ stateDir }) => {
+      const sourcePath = path.join(stateDir, pluginId, sourceFile);
+      if (!fs.existsSync(sourcePath)) return [];
+      return [{
+        kind: 'plugin-state-import',
+        label,
+        sourcePath,
+        targetPath: 'plugin state:' + namespace,
+        pluginId,
+        namespace,
+        maxEntries: 1000,
+        scopeKey: '',
+        cleanupSource: 'rename',
+        readEntries: () => [{ key: stateKey, value: JSON.parse(fs.readFileSync(sourcePath, 'utf8')) }],
+      }];
+    };
+  },
+};\n`,
+    "utf8",
+  );
+}
+
+function writeModernBundledChannelMigrationPlugin(params: {
+  pluginRoot: string;
+  pluginId: string;
+}): void {
+  fs.mkdirSync(params.pluginRoot, { recursive: true });
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.pluginId,
+      channels: [params.pluginId],
+      doctorContract: { stateMigrations: true },
+      configSchema: {},
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "package.json"),
+    JSON.stringify({
+      name: `@openclaw/${params.pluginId}`,
+      version: "2026.7.1",
+      type: "commonjs",
+      openclaw: {
+        extensions: ["./index.cjs"],
+        setupEntry: "./setup-entry.cjs",
+      },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "index.cjs"),
+    "throw new Error('shadowed bundled channel runtime loaded');\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "setup-entry.cjs"),
+    `module.exports = {
+  kind: 'bundled-channel-setup-entry',
+  loadSetupPlugin() { return {}; },
+};\n`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(params.pluginRoot, "doctor-contract-api.cjs"),
+    `module.exports = { stateMigrations: [{
+  id: 'bundled-modern-state',
+  label: 'Bundled modern state',
+  detectLegacyState: () => null,
+  migrateLegacyState: () => ({ changes: [], warnings: [] }),
+}] };\n`,
+    "utf8",
+  );
+}
+
 function writeDoctorSessionOwnerPlugin(pluginRoot: string, pluginId: string): void {
   fs.mkdirSync(pluginRoot, { recursive: true });
   fs.writeFileSync(
@@ -230,6 +360,141 @@ afterEach(() => {
 });
 
 describe("doctor contract registry load-path plugins", () => {
+  it.each([
+    {
+      pluginId: "telegram",
+      namespace: "telegram.update-offsets",
+      sourceFile: "update-offset-default.json",
+      stateKey: "default",
+      state: { version: 3, lastUpdateId: 731, botId: null, tokenFingerprint: null },
+    },
+    {
+      pluginId: "discord",
+      namespace: "thread-bindings",
+      sourceFile: "thread-bindings.json",
+      stateKey: "default:thread-123",
+      state: {
+        accountId: "default",
+        threadId: "thread-123",
+        channelId: "channel-123",
+        targetSessionKey: "agent:main:discord:channel:thread-123",
+      },
+    },
+  ])(
+    "migrates real $pluginId state through a released external setup-entry contract",
+    async ({ pluginId, namespace, sourceFile, stateKey, state }) => {
+      const stateDir = makeTempDir();
+      const pluginRoot = makeTempDir();
+      writeLegacyChannelMigrationPlugin({ pluginRoot, pluginId, namespace, sourceFile, stateKey });
+      const bundledPluginsDir = path.join(stateDir, "bundled");
+      const shadowedBundledRoot = path.join(bundledPluginsDir, pluginId);
+      writeModernBundledChannelMigrationPlugin({
+        pluginRoot: shadowedBundledRoot,
+        pluginId,
+      });
+      const config = createDoctorPluginConfig(pluginRoot, pluginId);
+      const env = {
+        ...makeHermeticDoctorEnv(stateDir),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      };
+      const sourcePath = path.join(stateDir, pluginId, sourceFile);
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(sourcePath, JSON.stringify(state), "utf8");
+
+      const entries = listPluginDoctorStateMigrationEntries({ config, env, pluginIds: [pluginId] });
+      expect(entries.map((entry) => entry.pluginId)).toEqual([pluginId]);
+      const entry = entries[0];
+      if (!entry) {
+        throw new Error(`missing ${pluginId} released migration contract`);
+      }
+      expect(entry.migration.id).toBe(`${pluginId}-legacy-channel-state`);
+      const input = {
+        config,
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "credentials"),
+        context: {
+          openPluginStateKeyedStore: () => {
+            throw new Error("plan-based migration should use its canonical state owner");
+          },
+        },
+      };
+      await expect(entry.migration.detectLegacyState(input)).resolves.toEqual({
+        preview: [`- ${pluginId} preserved channel state: ${sourcePath}`],
+      });
+
+      const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
+        await import("../plugin-state/plugin-state-store.js");
+      try {
+        const result = await entry.migration.migrateLegacyState(input);
+        expect(result.warnings).toEqual([]);
+        expect(result.changes.length).toBeGreaterThan(0);
+        expect(fs.existsSync(sourcePath)).toBe(false);
+        expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+        const store = createPluginStateKeyedStore(pluginId, { namespace, maxEntries: 1000, env });
+        await expect(store.lookup(stateKey)).resolves.toEqual(state);
+      } finally {
+        resetPluginStateStoreForTests();
+      }
+    },
+  );
+
+  it("reloads a selected legacy setup entry after the plugin metadata lifecycle clears", async () => {
+    const stateDir = makeTempDir();
+    const pluginRoot = makeTempDir();
+    const pluginId = "legacy-refresh";
+    const sourceFile = "refresh.json";
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
+    const env = makeHermeticDoctorEnv(stateDir);
+    const sourcePath = path.join(stateDir, pluginId, sourceFile);
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(sourcePath, "{}", "utf8");
+    const writePlugin = (label: string) =>
+      writeLegacyChannelMigrationPlugin({
+        pluginRoot,
+        pluginId,
+        namespace: "legacy-refresh",
+        sourceFile,
+        stateKey: "default",
+        label,
+      });
+    const detectPreview = async () => {
+      const [entry] = listPluginDoctorStateMigrationEntries({
+        config,
+        env,
+        pluginIds: [pluginId],
+      });
+      if (!entry) {
+        throw new Error("missing selected legacy setup-entry migration");
+      }
+      return entry.migration.detectLegacyState({
+        config,
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "credentials"),
+        context: {
+          openPluginStateKeyedStore: () => {
+            throw new Error("legacy detection should not open plugin state");
+          },
+        },
+      });
+    };
+
+    writePlugin("Legacy refresh v1");
+    await expect(detectPreview()).resolves.toEqual({
+      preview: [`- Legacy refresh v1: ${sourcePath}`],
+    });
+
+    writePlugin("Legacy refresh v2");
+    clearPluginDoctorContractRegistryCache();
+
+    await expect(detectPreview()).resolves.toEqual({
+      preview: [`- Legacy refresh v2: ${sourcePath}`],
+    });
+  });
+
   it("discovers doctor warning rules from plugins.load.paths", () => {
     const stateDir = makeTempDir();
     const pluginRoot = makeTempDir();

@@ -573,7 +573,8 @@ enum CLIInstaller {
         paused: Bool = AppStateStore.shared.isPaused,
         start: @MainActor () -> Void = { GatewayProcessManager.shared.setActive(true) },
         waitUntilReady: @MainActor () async -> Bool = {
-            await GatewayProcessManager.shared.waitForGatewayReady(timeout: 12)
+            await GatewayProcessManager.shared.waitForGatewayReady(
+                timeout: GatewayLaunchAgentManager.startupMigrationTolerance)
         }) async -> LocalGatewayActivation
     {
         guard mode == .local, !paused else { return .deferred }
