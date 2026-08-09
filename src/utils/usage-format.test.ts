@@ -206,6 +206,73 @@ describe("usage-format", () => {
     });
   });
 
+  it("prefers explicit configured pricing over a provider-owned static model price", () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "openai",
+        model: "gpt-5.4",
+        config,
+      }),
+    ).toEqual({ input: 1, output: 2, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it("prefers agent-local pricing over configured and provider-owned static model prices", async () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await fs.writeFile(
+      path.join(agentDir, "models.json"),
+      JSON.stringify({
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                cost: { input: 7, output: 11, cacheRead: 0.5, cacheWrite: 0.25 },
+              },
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(
+      resolveModelCostConfig({
+        provider: "openai",
+        model: "gpt-5.4",
+        config,
+      }),
+    ).toEqual({ input: 7, output: 11, cacheRead: 0.5, cacheWrite: 0.25 });
+  });
+
   it("scopes models.json pricing by agent directory before configured and default pricing", async () => {
     const secondAgentDir = path.join(stateDir, "agents", "second", "agent");
     const configuredOnlyAgentDir = path.join(stateDir, "agents", "configured-only", "agent");
@@ -641,6 +708,8 @@ describe("usage-format", () => {
     metadataOnlyModel.cost = { input: 9, output: 8, cacheRead: 7, cacheWrite: 6 };
     const after = resolveModelCostConfigFingerprint(config);
 
+    expect(before).toMatch(/^[0-9a-f]{64}$/u);
+    expect(after).toMatch(/^[0-9a-f]{64}$/u);
     expect(after).not.toBe(before);
     expect(
       resolveModelCostConfig({

@@ -1,8 +1,13 @@
-// Discord tests cover send.sends basic channel messages plugin behavior.
 import { ChannelType, MessageFlags, PermissionFlagsBits, Routes } from "discord-api-types/v10";
+// Discord tests cover send.sends basic channel messages plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Container, TextDisplay } from "./internal/discord.js";
-import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
+import {
+  createDiscordLoopbackRest,
+  discordWebMediaMockFactory,
+  makeDiscordRest,
+} from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", () => discordWebMediaMockFactory());
 
@@ -113,16 +118,7 @@ beforeEach(() => {
   clearDiscordDirectoryCacheForTest();
 });
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
@@ -542,6 +538,24 @@ describe("sendMessageDiscord", () => {
     });
   });
 
+  it("explains how to create a forum thread when the parent requires an applied tag", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildForum,
+      flags: 1 << 4,
+      available_tags: [{ id: "tag1", name: "Question", moderated: false }],
+    });
+
+    await expect(
+      sendMessageDiscord("channel:forum1", "Discussion topic", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).rejects.toThrow(/thread-create with appliedTags/);
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
   it("posts media as a follow-up message in forum channels", async () => {
     const { rest, postMock } = setupForumSend({ id: "media1", channel_id: "thread1" });
     const res = await sendMessageDiscord("channel:forum1", "Topic", {
@@ -554,9 +568,18 @@ describe("sendMessageDiscord", () => {
     expect(res.channelId).toBe("thread1");
     expectRecordFields(res.receipt, "send receipt", {
       threadId: "thread1",
-      platformMessageIds: ["starter1"],
+      platformMessageIds: ["starter1", "media1"],
     });
-    expectSingleReceiptPart(res.receipt, { platformMessageId: "starter1", kind: "media" });
+    expect(
+      res.receipt.parts.map(({ platformMessageId, kind, index }) => ({
+        platformMessageId,
+        kind,
+        index,
+      })),
+    ).toEqual([
+      { platformMessageId: "starter1", kind: "text", index: 0 },
+      { platformMessageId: "media1", kind: "media", index: 1 },
+    ]);
     expectRestRoute(postMock, 0, Routes.threads("forum1"));
     expect(requireRestBody(postMock, 0)).toEqual({
       name: "Topic",
@@ -569,7 +592,7 @@ describe("sendMessageDiscord", () => {
   it("chunks long forum posts into follow-up messages", async () => {
     const { rest, postMock } = setupForumSend({ id: "msg2", channel_id: "thread1" });
     const longText = "a".repeat(2001);
-    await sendMessageDiscord("channel:forum1", longText, {
+    const result = await sendMessageDiscord("channel:forum1", longText, {
       rest,
       token: "t",
       cfg: DISCORD_TEST_CFG,
@@ -580,6 +603,11 @@ describe("sendMessageDiscord", () => {
     const secondBody = requireRestBody(postMock, 1) as { content?: string };
     expect(firstBody?.message?.content).toHaveLength(2000);
     expect(secondBody?.content).toBe("a");
+    expect(result.receipt.platformMessageIds).toEqual(["starter1", "msg2"]);
+    expect(result.receipt.parts.map(({ kind, index }) => ({ kind, index }))).toEqual([
+      { kind: "text", index: 0 },
+      { kind: "text", index: 1 },
+    ]);
   });
 
   it("starts DM when recipient is a user", async () => {
@@ -701,6 +729,26 @@ describe("sendMessageDiscord", () => {
     expect(loadWebMedia).toHaveBeenCalledWith("file:///tmp/photo.jpg", {
       maxBytes: 100 * 1024 * 1024,
     });
+  });
+
+  it("sends the detected JPEG media type across a real loopback multipart request", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      await sendMessageDiscord("channel:789", "photo", {
+        rest: loopback.rest,
+        token: "test-token",
+        cfg: DISCORD_TEST_CFG,
+        mediaUrl: "file:///tmp/photo.jpg",
+      });
+
+      const upload = loopback.requests.find((request) => request.method === "POST");
+      expect(upload?.path).toContain("/channels/789/messages");
+      expect(upload?.contentType).toMatch(/^multipart\/form-data; boundary=/);
+      expect(upload?.body).toContain('name="files[0]"; filename="photo.jpg"');
+      expect(upload?.body).toContain("Content-Type: image/jpeg");
+    } finally {
+      await loopback.close();
+    }
   });
 
   it("preserves text when Discord rejects an upload with error 40005", async () => {
@@ -997,6 +1045,23 @@ describe("removeReactionDiscord", () => {
       Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%9C%85"),
     );
   });
+
+  it("retries transient failures while removing an idempotent reaction", async () => {
+    const { rest, deleteMock } = makeDiscordRest();
+    deleteMock
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      removeReactionDiscord("chan1", "msg1", "✅", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(deleteMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("removeOwnReactionsDiscord", () => {
@@ -1004,12 +1069,15 @@ describe("removeOwnReactionsDiscord", () => {
     vi.clearAllMocks();
   });
 
-  it("removes all own reactions on a message", async () => {
+  it("removes only owned unicode and custom reactions without repeating emoji", async () => {
     const { rest, getMock, deleteMock } = makeDiscordRest();
     getMock.mockResolvedValue({
       reactions: [
-        { emoji: { name: "✅", id: null } },
-        { emoji: { name: "party_blob", id: "123" } },
+        { me: false, emoji: { name: "👀", id: null } },
+        { me: true, emoji: { name: "✅", id: null } },
+        { me: true, emoji: { name: "✅", id: null } },
+        { me: true, emoji: { name: "party_blob", id: "123" } },
+        { me: false, emoji: { name: "other_blob", id: "456" } },
       ],
     });
     const res = await removeOwnReactionsDiscord("chan1", "msg1", {
@@ -1024,14 +1092,51 @@ describe("removeOwnReactionsDiscord", () => {
     expect(deleteMock).toHaveBeenCalledWith(
       Routes.channelMessageOwnReaction("chan1", "msg1", "party_blob%3A123"),
     );
+    expect(deleteMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not send removal requests when all reactions belong to other users", async () => {
+    const { rest, getMock, deleteMock } = makeDiscordRest();
+    getMock.mockResolvedValue({
+      reactions: [
+        { me: false, emoji: { name: "👀", id: null } },
+        { me: false, emoji: { name: "other_blob", id: "456" } },
+      ],
+    });
+
+    await expect(
+      removeOwnReactionsDiscord("chan1", "msg1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
+    ).resolves.toEqual({ ok: true, removed: [] });
+    expect(deleteMock).not.toHaveBeenCalled();
+  });
+
+  it("retries transient failures while listing and clearing owned reactions", async () => {
+    const { rest, getMock, deleteMock } = makeDiscordRest();
+    getMock
+      .mockRejectedValueOnce(Object.assign(new Error("service unavailable"), { status: 503 }))
+      .mockResolvedValueOnce({ reactions: [{ me: true, emoji: { name: "✅", id: null } }] });
+    deleteMock
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      removeOwnReactionsDiscord("chan1", "msg1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).resolves.toEqual({ ok: true, removed: ["✅"] });
+    expect(getMock).toHaveBeenCalledTimes(2);
+    expect(deleteMock).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces a failed deletion instead of reporting false success", async () => {
     const { rest, getMock, deleteMock } = makeDiscordRest();
     getMock.mockResolvedValue({
       reactions: [
-        { emoji: { name: "✅", id: null } },
-        { emoji: { name: "party_blob", id: "123" } },
+        { me: true, emoji: { name: "✅", id: null } },
+        { me: true, emoji: { name: "party_blob", id: "123" } },
       ],
     });
     const apiError = new Error("Discord API 500");
@@ -1078,6 +1183,38 @@ describe("fetchReactionsDiscord", () => {
         users: [{ id: "u2", username: "beta", tag: "beta" }],
       },
     ]);
+  });
+
+  it.each([
+    { operation: "message lookup", firstFailure: true, status: 503 },
+    { operation: "reaction-user lookup", firstFailure: false, status: 502 },
+  ])("retries a transient $operation failure", async ({ firstFailure, status }) => {
+    const { rest, getMock } = makeDiscordRest();
+    const transientError = Object.assign(new Error("Discord temporarily unavailable"), { status });
+    const message = { reactions: [{ count: 1, emoji: { name: "✅", id: null } }] };
+    const users = [{ id: "u1", username: "alpha" }];
+    if (firstFailure) {
+      getMock.mockRejectedValueOnce(transientError).mockResolvedValueOnce(message);
+    } else {
+      getMock.mockResolvedValueOnce(message).mockRejectedValueOnce(transientError);
+    }
+    getMock.mockResolvedValueOnce(users);
+
+    await expect(
+      fetchReactionsDiscord("chan1", "msg1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).resolves.toEqual([
+      {
+        emoji: { id: null, name: "✅", raw: "✅" },
+        count: 1,
+        users: [{ id: "u1", username: "alpha", tag: "alpha" }],
+      },
+    ]);
+    expect(getMock).toHaveBeenCalledTimes(3);
   });
 });
 

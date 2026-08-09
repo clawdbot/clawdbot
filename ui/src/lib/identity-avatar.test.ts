@@ -50,12 +50,6 @@ describe("resolveAvatar", () => {
       expect(first).toBe(resolved.colorSeed % 360);
     }
   });
-
-  it("lets an already-resolved profile avatar win", () => {
-    expect(
-      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
-    ).toEqual({ kind: "profile", url: "/api/users/p1/avatar" });
-  });
 });
 
 describe("resolveAvatar profile URL origin restriction", () => {
@@ -104,10 +98,45 @@ describe("resolveAvatar profile URL origin restriction", () => {
 });
 
 describe("resolveAvatar gateway origin trust", () => {
-  it("keeps relative avatar paths relative when no gateway origin is set", () => {
+  it("applies an explicit base path for a same-origin gateway", () => {
+    vi.stubGlobal("location", { origin: "https://gw.example.com" });
+    setAvatarGatewayOrigin("wss://gw.example.com/ws", null, "/wilfred");
+    expect(
+      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar?v=2" }),
+    ).toEqual({
+      kind: "profile",
+      url: "https://gw.example.com/wilfred/api/users/p1/avatar?v=2",
+    });
+  });
+
+  it("never infers a base path from the WebSocket pathname", () => {
+    vi.stubGlobal("location", { origin: "https://gw.example.com" });
+    setAvatarGatewayOrigin("wss://gw.example.com/ws");
     expect(
       resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
-    ).toEqual({ kind: "profile", url: "/api/users/p1/avatar" });
+    ).toEqual({ kind: "profile", url: "https://gw.example.com/api/users/p1/avatar" });
+  });
+
+  it("does not apply the page base path to a cross-origin gateway", () => {
+    vi.stubGlobal("location", { origin: "https://ui.example.com" });
+    setAvatarGatewayOrigin("wss://gw.example.com/ws", null, "/wilfred");
+    expect(
+      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
+    ).toEqual({ kind: "profile", url: "https://gw.example.com/api/users/p1/avatar" });
+  });
+
+  it("rejects non-exact avatar routes under a same-origin mount", () => {
+    vi.stubGlobal("location", { origin: "https://gw.example.com" });
+    setAvatarGatewayOrigin("wss://gw.example.com/ws", null, "/wilfred");
+    for (const profileAvatarUrl of [
+      "https://gw.example.com/wilfred/api/users/p1/avatar/extra",
+      "https://gw.example.com/wilfred/api/users/p1/avatar/other",
+      "https://gw.example.com/wilfred/api/secrets",
+    ]) {
+      expect(resolveAvatar({ id: "alice@example.com", profileAvatarUrl })).toMatchObject({
+        kind: "initials",
+      });
+    }
   });
 
   it("resolves relative paths against the configured gateway origin", () => {

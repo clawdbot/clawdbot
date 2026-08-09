@@ -61,6 +61,30 @@ class ChatControllerMessageIdentityTest {
   }
 
   @Test
+  fun managedImagesParticipateInMessageIdentity() {
+    fun message(artifactId: String) =
+      ChatMessage(
+        id = artifactId,
+        role = "assistant",
+        content =
+          listOf(
+            ChatMessageContent(
+              type = "image",
+              artifactId = artifactId,
+              url = "/api/chat/media/outgoing/main/$artifactId/full",
+              mimeType = "image/png",
+            ),
+          ),
+        timestampMs = 1,
+      )
+
+    assertNotEquals(
+      messageIdentityKey(message("artifact_managed_image_11111111-1111-4111-8111-111111111111")),
+      messageIdentityKey(message("artifact_managed_image_22222222-2222-4222-8222-222222222222")),
+    )
+  }
+
+  @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun liveHistoryDropsInternalRoleRows() =
     runTest {

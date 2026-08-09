@@ -2,9 +2,9 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { cancelUnreadResponseBody } from "./http-body.js";
 import {
   buildUsageHttpErrorSnapshot,
-  discardUsageResponseBody,
   fetchJson,
   parseUsageResetAt,
   readUsageJson,
@@ -80,7 +80,7 @@ export async function fetchZaiUsage(
   );
 
   if (!res.ok) {
-    await discardUsageResponseBody(res);
+    await cancelUnreadResponseBody(res);
     return buildUsageHttpErrorSnapshot({
       provider: "zai",
       status: res.status,

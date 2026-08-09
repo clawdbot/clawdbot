@@ -231,10 +231,8 @@ function createPluginModuleLoader(params: {
     loadedTargetExports.set(target, loaded);
     return loaded;
   };
-  // When the caller has explicitly opted out of native loading (for example
-  // `bundled-capability-runtime` in Vitest+dist mode, which depends on
-  // jiti's alias rewriting to surface a narrow SDK slice), route every
-  // target through jiti so those alias rewrites still apply.
+  // When the caller has explicitly opted out of native loading, route every
+  // target through jiti so caller-provided alias rewrites still apply.
   if (!params.tryNative) {
     return (target) =>
       loadCachedTarget(target, () => {
@@ -258,7 +256,6 @@ function createPluginModuleLoader(params: {
         allowWindows: true,
         aliasMap: params.aliasMap,
         fallbackOnMissingDependency: true,
-        fallbackOnNativeError: true,
       });
       if (native.ok) {
         pluginModuleLoaderStats.nativeHits += 1;
@@ -277,12 +274,14 @@ export function getCachedPluginModuleLoader(
     createLoader?: PluginModuleLoaderFactory;
   },
 ): PluginModuleLoader {
-  installOpenClawInternalCorePackageNativeResolver({ moduleUrl: params.importerUrl });
   const cacheEntry = resolvePluginModuleLoaderCacheEntry(params);
   const cached = params.cache.get(cacheEntry.scopedCacheKey);
   if (cached) {
     return cached;
   }
+  // Exact-key hits already own the native aliases installed with their loader;
+  // reinstallation would rescan the host package on every cached request.
+  installOpenClawInternalCorePackageNativeResolver({ moduleUrl: params.importerUrl });
   const loader = createPluginModuleLoader({
     loaderFilename: cacheEntry.loaderFilename,
     aliasMap: cacheEntry.aliasMap,

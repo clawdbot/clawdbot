@@ -71,6 +71,7 @@ export type WorkerEnvironmentMetadata = {
   idleMs?: number;
   attachedSessionIds: string[];
   tunnelStatus: WorkerTunnelStatus;
+  error?: string;
 };
 
 export type EnvironmentSummary = {
@@ -87,8 +88,14 @@ export type EnvironmentCreateParams = {
   idempotencyKey: string;
 };
 
+export type WorkerEnvironmentProfileSummary = {
+  id: string;
+  providerId: string;
+};
+
 export type EnvironmentsListResult = {
   environments: EnvironmentSummary[];
+  profiles?: WorkerEnvironmentProfileSummary[];
 };
 
 export type WorkspaceSelection = {

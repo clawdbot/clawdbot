@@ -71,6 +71,7 @@ export type GuardedFetchOptions = {
     | {
         flowId?: string;
         meta?: Record<string, unknown>;
+        sensitiveRequestHeaderNames?: readonly string[];
       };
   maxRedirects?: number;
   /**
@@ -166,6 +167,8 @@ function getRedirectVisitKey(url: string, init: RequestInit | undefined): string
 }
 
 function isTruthyEnvValue(value: string | undefined): boolean {
+  // This flag relaxes an outbound-network security boundary. Keep exact lowercase
+  // tokens so whitespace or case variation cannot accidentally widen access.
   return value === "1" || value === "true" || value === "yes" || value === "on";
 }
 
@@ -345,6 +348,9 @@ async function captureGuardedFetchExchange(params: {
       captureOrigin: "guarded-fetch",
       ...(params.auditContext ? { auditContext: params.auditContext } : {}),
       ...params.capture?.meta,
+      ...(params.capture?.sensitiveRequestHeaderNames
+        ? { sensitiveRequestHeaderNames: params.capture.sensitiveRequestHeaderNames }
+        : {}),
     },
   });
 }
@@ -599,7 +605,18 @@ async function fetchWithSsrFGuardInternal(
             resolvedAddresses: pinned.addresses,
           })
             ? createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs)
-            : createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+            : createHttp1EnvHttpProxyAgent(
+                {
+                  // An explicitly proxied loopback must not inherit Undici's ambient bypass list.
+                  noProxy: "",
+                  // Target certificate trust belongs to the tunneled endpoint,
+                  // never to the separately authenticated managed proxy.
+                  ...(dispatcherPolicy?.mode === "direct" && dispatcherPolicy.connect
+                    ? { requestTls: { ...dispatcherPolicy.connect } }
+                    : {}),
+                },
+                timeoutMs,
+              );
         } else {
           dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
         }

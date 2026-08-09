@@ -1,5 +1,6 @@
-// Matrix tests cover events plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+// Matrix tests cover events plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
@@ -35,12 +36,7 @@ function expectBodiesExclude(bodies: string[], text: string) {
   expect(bodies.join("\n")).not.toContain(text);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -135,6 +131,7 @@ function createHarness(params?: {
   );
   const sendMessage = vi.fn(async (_roomId: string, _payload: { body?: string }) => "$notice");
   const invalidateRoom = vi.fn();
+  const invalidateMemberDisplayName = vi.fn();
   const rememberInvite = vi.fn();
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const formatNativeDependencyHint = vi.fn(() => "install hint");
@@ -143,6 +140,12 @@ function createHarness(params?: {
   const client = {
     on: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
       listeners.set(eventName, listener);
+      return client;
+    }),
+    off: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
+      if (listeners.get(eventName) === listener) {
+        listeners.delete(eventName);
+      }
       return client;
     }),
     sendMessage,
@@ -185,7 +188,7 @@ function createHarness(params?: {
   const dmPolicy = params?.dmPolicy ?? "open";
   const allowFrom = params?.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
 
-  registerMatrixMonitorEvents({
+  const dispose = registerMatrixMonitorEvents({
     cfg: params?.cfg ?? { channels: { matrix: {} } },
     client,
     auth: {
@@ -200,6 +203,7 @@ function createHarness(params?: {
       invalidateRoom,
       rememberInvite,
     },
+    invalidateMemberDisplayName,
     logVerboseMessage,
     warnedEncryptedRooms: new Set<string>(),
     warnedCryptoMissingRooms: new Set<string>(),
@@ -220,9 +224,11 @@ function createHarness(params?: {
   }
 
   return {
+    dispose,
     onRoomMessage,
     sendMessage,
     invalidateRoom,
+    invalidateMemberDisplayName,
     rememberInvite,
     roomEventListener,
     listVerifications,
@@ -244,10 +250,29 @@ function createHarness(params?: {
       | undefined,
     roomInviteListener: listeners.get("room.invite") as RoomEventListener | undefined,
     roomJoinListener: listeners.get("room.join") as RoomEventListener | undefined,
+    listenerCount: () => listeners.size,
+    off: (client as unknown as { off: ReturnType<typeof vi.fn> }).off,
+    on: (client as unknown as { on: ReturnType<typeof vi.fn> }).on,
   };
 }
 
 describe("registerMatrixMonitorEvents verification routing", () => {
+  it("removes every exact monitor listener on disposal", () => {
+    const { dispose, listenerCount, off, on } = createHarness();
+    const registeredListeners = on.mock.calls.map(
+      ([eventName, listener]) => [eventName, listener] as const,
+    );
+
+    expect(listenerCount()).toBe(8);
+    dispose();
+
+    expect(listenerCount()).toBe(0);
+    expect(off).toHaveBeenCalledTimes(8);
+    for (const [eventName, listener] of registeredListeners) {
+      expect(off).toHaveBeenCalledWith(eventName, listener);
+    }
+  });
+
   it("does not repost historical verification completions during startup catch-up", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-14T13:10:00.000Z"));
@@ -318,8 +343,8 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("invalidates direct-room membership cache on room member events", () => {
-    const { invalidateRoom, roomEventListener } = createHarness();
+  it("invalidates direct-room and observed member-display-name caches on room member events", () => {
+    const { invalidateRoom, invalidateMemberDisplayName, roomEventListener } = createHarness();
 
     roomEventListener("!room:example.org", {
       event_id: "$member1",
@@ -333,6 +358,25 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     });
 
     expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
+    expect(invalidateMemberDisplayName).toHaveBeenCalledWith(
+      "!room:example.org",
+      "@mallory:example.org",
+    );
+  });
+
+  it("does not invalidate a member display name without an authoritative state key", () => {
+    const { invalidateRoom, invalidateMemberDisplayName, roomEventListener } = createHarness();
+
+    roomEventListener("!room:example.org", {
+      event_id: "$member-no-state-key",
+      sender: "@alice:example.org",
+      type: EventType.RoomMember,
+      origin_server_ts: Date.now(),
+      content: { membership: "join" },
+    });
+
+    expect(invalidateRoom).toHaveBeenCalledWith("!room:example.org");
+    expect(invalidateMemberDisplayName).not.toHaveBeenCalled();
   });
 
   it("remembers invite provenance on room invites", () => {

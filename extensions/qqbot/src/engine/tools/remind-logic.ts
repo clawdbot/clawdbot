@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Qqbot plugin module implements remind logic behavior.
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -26,8 +27,6 @@ export interface RemindParams {
   name?: string;
   jobId?: string;
 }
-
-const QQBOT_DEFAULT_REMINDER_TIMEZONE = "Asia/Shanghai";
 
 /**
  * Context supplied by the bridge layer so the engine can remain free of
@@ -99,7 +98,7 @@ export const RemindSchema = {
     timezone: {
       type: "string",
       description:
-        "Optional IANA timezone used for cron reminders. Include it when the user provides or confirms a timezone; if omitted, QQBot preserves its existing default timezone.",
+        "Optional IANA timezone used for cron reminders. Include it when the user provides or confirms a timezone; if omitted, Gateway cron uses the host timezone.",
     },
     name: {
       type: "string",
@@ -202,7 +201,7 @@ function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId:
     action: "add" as const,
     job: {
       name,
-      schedule: { kind: "at" as const, atMs },
+      schedule: { kind: "at" as const, at: new Date(atMs).toISOString() },
       sessionTarget: "isolated" as const,
       wakeMode: "now" as const,
       deleteAfterRun: true,
@@ -226,12 +225,16 @@ function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId:
 function buildCronJob(params: RemindParams, to: string, accountId: string) {
   const content = params.content!;
   const name = params.name || generateJobName(content);
-  const tz = params.timezone || QQBOT_DEFAULT_REMINDER_TIMEZONE;
+  const timezone = params.timezone?.trim();
   return {
     action: "add" as const,
     job: {
       name,
-      schedule: { kind: "cron" as const, expr: params.time!.trim(), tz },
+      schedule: {
+        kind: "cron" as const,
+        expr: params.time!.trim(),
+        ...(timezone ? { tz: timezone } : {}),
+      },
       sessionTarget: "isolated" as const,
       wakeMode: "now" as const,
       payload: {
@@ -266,10 +269,6 @@ function formatDelay(ms: number): string {
     return `${hours}h`;
   }
   return `${hours}h${minutes}m`;
-}
-
-function formatSchedulerError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function prepareRemindCronAction(
@@ -309,11 +308,12 @@ function prepareRemindCronAction(
   const resolvedAccountId = ctx.fallbackAccountId || "default";
 
   if (isCronExpression(params.time)) {
+    const timezone = params.timezone?.trim();
     return {
       ok: true,
       action: "add",
       cronAction: buildCronJob(params, resolvedTo, resolvedAccountId),
-      summary: `⏰ Recurring reminder: "${params.content}" (${params.time}, tz=${params.timezone || QQBOT_DEFAULT_REMINDER_TIMEZONE})`,
+      summary: `⏰ Recurring reminder: "${params.content}" (${params.time}, tz=${timezone || "gateway local"})`,
     };
   }
 
@@ -360,7 +360,7 @@ export async function executeScheduledRemind(
     });
   } catch (error) {
     return json({
-      error: `Failed to run Gateway cron action: ${formatSchedulerError(error)}`,
+      error: `Failed to run Gateway cron action: ${formatErrorMessage(error)}`,
       action: plan.action,
     });
   }

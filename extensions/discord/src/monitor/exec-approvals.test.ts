@@ -271,8 +271,9 @@ describe("discord exec approval monitor helpers", () => {
         approvalId: "abc",
         approvalKind,
         decision: "allow-once",
+        channel: "discord",
+        senderId: "default",
         gatewayUrl: "ws://127.0.0.1:18789",
-        clientDisplayName: "Discord approval (default)",
       });
     },
   );

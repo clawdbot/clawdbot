@@ -17,7 +17,7 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
+import { FsSafeError } from "../infra/fs-safe.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -27,7 +27,7 @@ import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-fi
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginHttpRouteRegistry } from "../plugins/runtime.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -35,11 +35,14 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { chunkItems } from "../utils/chunk-items.js";
+import { readOutboundMediaFile } from "./bounded-read-file.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
+import type { OutboundMediaReadFile } from "./load-options.js";
 import {
   assertLocalMediaAllowed,
   getDefaultLocalRoots,
   LocalMediaAccessError,
+  readLocalMediaFile,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
@@ -80,7 +83,7 @@ type WebMediaOptions = {
   inboundRoots?: readonly string[];
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
   sandboxValidated?: boolean;
-  readFile?: (filePath: string) => Promise<Buffer>;
+  readFile?: OutboundMediaReadFile;
   /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
   hostReadCapability?: boolean;
 };
@@ -118,7 +121,7 @@ async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | nu
 }
 
 async function resolveHostedPluginMediaUrl(mediaUrl: string): Promise<string | null> {
-  const registry = getActivePluginRegistry();
+  const registry = getActivePluginHttpRouteRegistry();
   for (const entry of registry?.hostedMediaResolvers ?? []) {
     try {
       const resolved = await entry.resolver(mediaUrl);
@@ -998,10 +1001,7 @@ export async function optimizeImageBufferForWebMedia(params: {
     buffer: optimized.buffer,
     contentType: optimized.mimeType,
     kind: "image",
-    fileName:
-      optimized.format === "jpeg" && isHeicSource(params)
-        ? toJpegFileName(params.fileName)
-        : params.fileName,
+    fileName: optimized.format === "jpeg" ? toJpegFileName(params.fileName) : params.fileName,
   };
 }
 
@@ -1061,10 +1061,7 @@ async function loadWebMediaInternal(
       throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
     }
 
-    const fileName =
-      optimized.format === "jpeg" && meta && isHeicSource(meta)
-        ? toJpegFileName(meta.fileName)
-        : meta?.fileName;
+    const fileName = optimized.format === "jpeg" ? toJpegFileName(meta?.fileName) : meta?.fileName;
 
     return {
       buffer: optimized.buffer,
@@ -1133,16 +1130,17 @@ async function loadWebMediaInternal(
     };
   };
 
+  // Bound source reads before buffering. Optimized images may exceed their
+  // delivery cap because they are compressed before the final size check.
+  const defaultSourceReadCap = maxBytesForKind("document");
+  const sourceReadCap =
+    maxBytes === undefined
+      ? defaultSourceReadCap
+      : optimizeImages
+        ? Math.max(maxBytes, defaultSourceReadCap)
+        : maxBytes;
+
   if (hasHttpUrlPrefix(mediaUrl)) {
-    // Enforce a download cap during fetch to avoid unbounded memory usage.
-    // For optimized images, allow fetching larger payloads before compression.
-    const defaultFetchCap = maxBytesForKind("document");
-    const fetchCap =
-      maxBytes === undefined
-        ? defaultFetchCap
-        : optimizeImages
-          ? Math.max(maxBytes, defaultFetchCap)
-          : maxBytes;
     const dispatcherPolicy: PinnedDispatcherPolicy | undefined = proxyUrl
       ? {
           mode: "explicit-proxy",
@@ -1155,7 +1153,7 @@ async function loadWebMediaInternal(
       fetchImpl,
       requestInit,
       readIdleTimeoutMs,
-      maxBytes: fetchCap,
+      maxBytes: sourceReadCap,
       ssrfPolicy,
       dispatcherPolicy,
       trustExplicitProxyDns,
@@ -1188,7 +1186,7 @@ async function loadWebMediaInternal(
   }
 
   // Guard local reads against allowed directory roots to prevent file exfiltration.
-  if (!(sandboxValidated || localRoots === "any")) {
+  if (readFileOverride && !(sandboxValidated || localRoots === "any")) {
     await assertLocalMediaAllowed(mediaUrl, localRoots, { inboundRoots });
   }
 
@@ -1206,12 +1204,20 @@ async function loadWebMediaInternal(
   // Local path
   let data: Buffer;
   if (readFileOverride) {
-    data = await readFileOverride(mediaUrl);
+    data = await readOutboundMediaFile(readFileOverride, mediaUrl, { maxBytes: sourceReadCap });
   } else {
     try {
-      data = (await readLocalFileSafely({ filePath: mediaUrl })).buffer;
+      data = await readLocalMediaFile(mediaUrl, localRoots, {
+        ...(inboundRoots ? { inboundRoots } : {}),
+        maxBytes: sourceReadCap,
+      });
     } catch (err) {
       if (err instanceof FsSafeError) {
+        if (err.code === "too-large") {
+          throw new Error(`Media exceeds ${formatMb(sourceReadCap, 0)}MB limit`, {
+            cause: err,
+          });
+        }
         if (err.code === "not-found") {
           throw new LocalMediaAccessError("not-found", `Local media file not found: ${mediaUrl}`, {
             cause: err,
@@ -1221,6 +1227,15 @@ async function loadWebMediaInternal(
           throw new LocalMediaAccessError(
             "not-file",
             `Local media path is not a file: ${mediaUrl}`,
+            { cause: err },
+          );
+        }
+        if (err.code === "path-mismatch") {
+          // fs-safe reports pre-open identity drift as path-mismatch; keep the
+          // product-facing classification as an access denial, not a bad path.
+          throw new LocalMediaAccessError(
+            "path-not-allowed",
+            `Local media path is not under an allowed directory: ${mediaUrl}`,
             { cause: err },
           );
         }

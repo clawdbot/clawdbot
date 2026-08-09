@@ -1,8 +1,8 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeAutomation,
   normalizeDiagnosticAction,
 } from "./metadata-contract-normalization.ts";
-import { isRecord } from "./normalization-utils.ts";
 import {
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_DIAGNOSTIC_KINDS,
@@ -389,7 +389,7 @@ export function normalizeMetadata(value: unknown): WorkboardMetadata | undefined
         reason:
           typeof value.stale.reason === "string"
             ? value.stale.reason
-            : "Thread has not reported recent activity.",
+            : "Session has not reported recent activity.",
       }
     : undefined;
   const automation = normalizeAutomation(value.automation);

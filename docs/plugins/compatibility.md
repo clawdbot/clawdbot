@@ -36,6 +36,13 @@ Doctor repair and migration compatibility is tracked separately at
 config shapes, install-ledger layouts, and repair shims that may need to
 stay available after the runtime compatibility path is removed.
 
+Every doctor compatibility record declares `introduced` and `removeAfter`.
+The `pnpm check:doctor-deprecation-registry` guard fails when a record is still
+`deprecated` on or after `removeAfter`; maintainers must either remove it after
+supported-upgrade proof or move it to `removal-pending` with a documented
+blocker. `removal-pending` records do not fail the date guard, but remain in the
+explicit review queue until their upgrade conditions are met.
+
 Release sweeps should check both registries. Do not delete a doctor
 migration just because the matching runtime or config compatibility record
 expired; first verify there is no supported upgrade path that still needs

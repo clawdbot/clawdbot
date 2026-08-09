@@ -2,6 +2,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { UpdateAvailableSchema, UpdateScheduleStateSchema } from "./config.js";
 import { NonEmptyString } from "./primitives.js";
 
 /**
@@ -62,6 +63,7 @@ const HealthSnapshotSchema = closedObject({
   eventLoop: Type.Optional(
     closedObject({
       degraded: Type.Boolean(),
+      degradedSinceMs: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
       reasons: Type.Array(
         Type.Union([
           Type.Literal("event_loop_delay"),
@@ -216,13 +218,8 @@ export const SnapshotSchema = closedObject({
       Type.Literal("trusted-proxy"),
     ]),
   ),
-  updateAvailable: Type.Optional(
-    Type.Object({
-      currentVersion: NonEmptyString,
-      latestVersion: NonEmptyString,
-      channel: NonEmptyString,
-    }),
-  ),
+  updateAvailable: Type.Optional(UpdateAvailableSchema),
+  updateSchedule: Type.Optional(UpdateScheduleStateSchema),
 });
 
 // Wire types derive directly from local schema consts so public d.ts graphs never

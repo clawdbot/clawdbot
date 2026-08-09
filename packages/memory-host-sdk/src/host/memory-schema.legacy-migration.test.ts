@@ -62,7 +62,9 @@ describe("memory index same-file legacy migration", () => {
         INSERT INTO memory_index_meta VALUES ('memory_index_meta_v1', 'canonical');
         INSERT INTO memory_index_sources (path, source, hash, mtime, size)
           VALUES ('doc.md', 'memory', 'new-hash', 200.0, 42);
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks (
+          id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+        ) VALUES (
           'chunk-new-1', 'doc.md', 'memory', 1, 10, 'new-chunk-hash', 'model',
           'current canonical body', '[1,2]', 200
         );
@@ -203,11 +205,15 @@ describe("memory index same-file legacy migration", () => {
       db.exec(`
         INSERT INTO memory_index_sources (path, source, hash, mtime, size)
           VALUES ('canonical.md', 'memory', 'canonical-hash', 200, 20);
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks (
+          id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+        ) VALUES (
           'chunk-canonical', 'canonical.md', 'memory', 1, 2, 'canonical-chunk-hash',
           'fts-only', 'canonical nebula', '[]', 200
         );
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks (
+          id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+        ) VALUES (
           'chunk-canonical-ownerless', 'deleted.md', 'memory', 1, 2, 'orphan-chunk-hash',
           'fts-only', 'orphaned starlight', '[]', 190
         );
@@ -309,7 +315,9 @@ describe("memory index same-file legacy migration", () => {
         -- doc.md is already chunk-owned: its stale legacy chunk must not ride along.
         INSERT INTO memory_index_sources (path, source, hash, mtime, size)
           VALUES ('doc.md', 'memory', 'doc-hash', 200.0, 42);
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks (
+          id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+        ) VALUES (
           'chunk-doc-canonical', 'doc.md', 'memory', 1, 10, 'doc-chunk-hash', 'model',
           'canonical body', '[]', 200
         );
@@ -317,7 +325,9 @@ describe("memory index same-file legacy migration", () => {
         -- identity makes completeness ambiguous, so the source must reindex.
         INSERT INTO memory_index_sources (path, source, hash, mtime, size)
           VALUES ('partial.md', 'memory', 'partial-hash', 175.0, 30);
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks (
+          id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+        ) VALUES (
           'chunk-partial-1', 'partial.md', 'memory', 1, 5, 'partial-1-hash', 'model',
           'canonical first half', '[]', 175
         );
@@ -425,7 +435,9 @@ describe("memory index same-file legacy migration", () => {
       db.exec(`
         INSERT INTO memory_index_sources (path, source, hash, mtime, size)
           VALUES ('canonical.md', 'memory', 'canonical-hash', 200, 20);
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks (
+          id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+        ) VALUES (
           'shared-id', 'canonical.md', 'memory', 1, 2, 'canonical-chunk-hash', 'model',
           'canonical body', '[]', 200
         );

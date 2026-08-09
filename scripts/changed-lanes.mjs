@@ -8,6 +8,15 @@ import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
 const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
+// Source files knip's production scan reads. Any edit to one of these can orphan
+// an export -- including an import-only edit that drops a barrel re-export's last
+// consumer -- so the scan is selected by path, not by inspecting changed lines.
+const DEADCODE_SOURCE_PATH_RE = /^(?:src|extensions|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
+
+/** Returns whether any changed path is production source knip scans. */
+export function hasDeadcodeScannedSource(changedPaths) {
+  return changedPaths.map(normalizeChangedPath).some((p) => DEADCODE_SOURCE_PATH_RE.test(p));
+}
 
 const SCRIPTS_TYPECHECK_PATH_RE =
   /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
@@ -32,6 +41,8 @@ const LIVE_DOCKER_TOOLING_PATHS = new Set([
 const LIVE_DOCKER_PACKAGE_SCRIPT_RE = /^test:docker:live-[\w:-]+$/u;
 const PUBLIC_EXTENSION_CONTRACT_RE =
   /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/sync-plugin-sdk-exports\.mjs$|scripts\/generate-plugin-sdk-api-baseline\.ts$)/u;
+const BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE =
+  /^(?:src\/config\/(?:bundled-channel-config-metadata\.generated|zod-schema\.[^/]+)\.ts|src\/channels\/plugins\/config-schema\.ts|src\/plugin-sdk\/(?:bundled-channel-config-schema|channel-config-schema)\.ts|src\/plugins\/(?:bundled-dir|public-surface-loader|public-surface-runtime|sdk-alias)\.ts|scripts\/(?:generate-bundled-channel-config-metadata\.ts|load-channel-config-surface\.ts|lib\/(?:bundled-plugin-source-utils|format-generated-module|generated-output-utils)\.mjs)|extensions\/[^/]+\/(?:openclaw\.plugin\.json|package\.json|(?:config|security-contract)-api\.[cm]?[jt]sx?|src\/config-(?:schema(?:-[^/]+)?|surface|ui-hints)\.[cm]?[jt]sx?))$/u;
 /**
  * Files whose changes are treated as release metadata only.
  * @internal Shared repository-script contract.
@@ -50,7 +61,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "package.json",
 ]);
 
-/** @typedef {"core" | "coreTests" | "ui" | "extensions" | "extensionTests" | "scripts" | "testRoot" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
+/** @typedef {"core" | "coreTests" | "ui" | "extensions" | "extensionTests" | "scripts" | "testRoot" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "bundledChannelConfigMetadata" | "releaseMetadata" | "all"} ChangedLane */
 
 /**
  * @typedef {{
@@ -79,6 +90,7 @@ export function createEmptyChangedLanes() {
     docs: false,
     tooling: false,
     liveDockerTooling: false,
+    bundledChannelConfigMetadata: false,
     releaseMetadata: false,
     all: false,
   };
@@ -126,6 +138,10 @@ export function detectChangedLanes(changedPaths, options = {}) {
 
   for (const changedPath of paths) {
     const facts = getChangedPathFacts(changedPath);
+    if (BUNDLED_CHANNEL_CONFIG_METADATA_PATH_RE.test(changedPath)) {
+      lanes.bundledChannelConfigMetadata = true;
+      reasons.push(`${changedPath}: bundled channel config metadata input`);
+    }
     if (SCRIPTS_TYPECHECK_PATH_RE.test(changedPath)) {
       lanes.scripts = true;
     }

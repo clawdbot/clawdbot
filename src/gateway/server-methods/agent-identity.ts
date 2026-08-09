@@ -65,3 +65,7 @@ export const agentIdentityGetHandler: GatewayRequestHandlers["agent.identity.get
     undefined,
   );
 };
+
+export const agentIdentityHandlers: GatewayRequestHandlers = {
+  "agent.identity.get": agentIdentityGetHandler,
+};

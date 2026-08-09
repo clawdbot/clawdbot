@@ -7,7 +7,7 @@ import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
   makeTestModel,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createFollowupRun,
   createMockReplyOperation,
   requireRecord,
@@ -18,7 +18,7 @@ import type { FallbackRunnerParams } from "./agent-runner-execution.test-support
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: context failures", () => {
+describe("executeAgentTurn: context failures", () => {
   it("preserves the active session when embedded overflow recovery fails", async () => {
     state.isContextOverflowErrorMock.mockReturnValue(true);
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -33,8 +33,8 @@ describe("runAgentTurnWithFallback: context failures", () => {
     const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
     const activeSessionStore = { "agent:main:main": activeSessionEntry };
     const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "webchat",
@@ -76,8 +76,8 @@ describe("runAgentTurnWithFallback: context failures", () => {
     const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
     const activeSessionStore = { "agent:main:main": activeSessionEntry };
     const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "webchat",
@@ -134,8 +134,8 @@ describe("runAgentTurnWithFallback: context failures", () => {
           meta: {},
         });
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const resultPromise = runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const resultPromise = executeAgentTurn(createMinimalRunAgentTurnParams());
       await vi.advanceTimersByTimeAsync(2_500);
       const result = await resultPromise;
 
@@ -157,8 +157,8 @@ describe("runAgentTurnWithFallback: context failures", () => {
       }),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         sessionCtx: {
           Provider: "telegram",
@@ -203,8 +203,8 @@ describe("runAgentTurnWithFallback: context failures", () => {
       },
     };
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {

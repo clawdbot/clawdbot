@@ -7,7 +7,7 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import * as agentEvents from "../infra/agent-events.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import {
   THINKING_TAG_CASES,
@@ -170,6 +170,8 @@ describe("subscribeEmbeddedAgentSession", () => {
         result: { ok: true },
       });
 
+      // The file transport appends asynchronously; drain it before reading.
+      await flushLogger();
       const logText = await fs.readFile(logFile, "utf8");
       const subsystems: string[] = [];
       for (const line of logText.trim().split(/\n+/)) {
@@ -189,9 +191,11 @@ describe("subscribeEmbeddedAgentSession", () => {
   function findBlockReplyPayload(
     onBlockReply: { mock: { calls: unknown[][] } },
     text: string,
-  ): { mediaUrls?: unknown } | undefined {
+  ): { mediaUrls?: unknown; trustedLocalMedia?: unknown } | undefined {
     return onBlockReply.mock.calls
-      .map((call) => call[0] as { text?: unknown; mediaUrls?: unknown })
+      .map(
+        (call) => call[0] as { text?: unknown; mediaUrls?: unknown; trustedLocalMedia?: unknown },
+      )
       .find((payload) => payload.text === text);
   }
 
@@ -209,7 +213,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
   function expectBlockReplyPayload(
     onBlockReply: { mock: { calls: unknown[][] } },
-    expected: { text: string; mediaUrls?: string[] },
+    expected: { text: string; mediaUrls?: string[]; trustedLocalMedia?: boolean },
   ): void {
     const payload = findBlockReplyPayload(onBlockReply, expected.text);
     if (!payload) {
@@ -218,6 +222,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     if (expected.mediaUrls !== undefined) {
       expect(payload.mediaUrls).toStrictEqual(expected.mediaUrls);
     }
+    expect(payload.trustedLocalMedia).toBe(expected.trustedLocalMedia);
   }
 
   function expectLifecyclePayload(
@@ -698,6 +703,56 @@ describe("subscribeEmbeddedAgentSession", () => {
     expectBlockReplyPayload(onBlockReply, {
       text: "Here it is.",
       mediaUrls: ["/tmp/lobster-boss.mp3"],
+      trustedLocalMedia: true,
+    });
+  });
+
+  it("does not trust a mixed generated and non-generated pending media batch", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          announceType: "music generation task",
+          taskLabel: "theme",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated music.",
+          mediaUrls: ["/tmp/generated.mp3"],
+          replyInstruction: "Reply normally.",
+        },
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:child:main",
+          announceType: "subagent task",
+          taskLabel: "other",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Other media.",
+          mediaUrls: ["/tmp/untrusted.mp3"],
+          replyInstruction: "Reply normally.",
+        },
+      ],
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
+    });
+    emit({ type: "agent_end" });
+    await flushBlockReplyCallbacks();
+
+    expectBlockReplyPayload(onBlockReply, {
+      text: "Done.",
+      mediaUrls: ["/tmp/generated.mp3", "/tmp/untrusted.mp3"],
+      trustedLocalMedia: undefined,
     });
   });
 

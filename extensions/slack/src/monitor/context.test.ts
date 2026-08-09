@@ -25,6 +25,7 @@ function createTestContext(params?: {
     runtime: {} as RuntimeEnv,
     botUserId: "U_BOT",
     botId: "B_BOT",
+    identityHealth: { lifecycle: "ready", lastError: null },
     teamId: "T_EXPECTED",
     apiAppId: params?.apiAppId ?? "A_EXPECTED",
     historyLimit: 0,
@@ -171,10 +172,7 @@ describe("createSlackMonitorContext channel metadata cache", () => {
   it("isolates remembered types by enterprise team scope", async () => {
     const createScope = (teamId: string): SlackEventScope =>
       ({
-        apiAppId: "A_EXPECTED",
-        enterpriseId: "E_EXPECTED",
         teamId,
-        isEnterpriseInstall: true,
         client: {
           conversations: { info: vi.fn().mockRejectedValue(new Error("missing_scope")) },
         },

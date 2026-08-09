@@ -1,5 +1,11 @@
+import {
+  type APIAttachment,
+  type APIStickerItem,
+  MessageReferenceType,
+  StickerFormatType,
+} from "discord-api-types/v10";
 // Discord tests cover message utils plugin behavior.
-import { MessageFlags, MessageReferenceType, StickerFormatType } from "discord-api-types/v10";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "../internal/discord.js";
 
@@ -48,12 +54,41 @@ beforeAll(async () => {
   ({ resolveForwardedMediaList, resolveMediaList } = await import("./message-utils.js"));
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
+beforeEach(() => vi.resetAllMocks());
 
 function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;
+}
+
+type AttachmentFixture = Pick<APIAttachment, "id" | "filename" | "url"> &
+  Partial<Omit<APIAttachment, "id" | "filename" | "url">>;
+
+function attachmentFixture(
+  id: string,
+  filename: string,
+  overrides: Partial<APIAttachment> = {},
+): AttachmentFixture {
+  return {
+    id,
+    filename,
+    url: `https://cdn.discordapp.com/attachments/1/${filename}`,
+    content_type: "image/png",
+    ...overrides,
+  };
+}
+
+function stickerFixture(id: string, name: string): APIStickerItem {
+  return { id, name, format_type: StickerFormatType.PNG };
+}
+
+function mockDownload(path: string, options: { buffer?: string; contentType?: string } = {}): void {
+  const contentType = options.contentType ?? "image/png";
+  readRemoteMediaBuffer.mockResolvedValueOnce({
+    buffer: Buffer.from(options.buffer ?? "image"),
+    contentType,
+  });
+  saveMediaBuffer.mockResolvedValueOnce({ path, contentType });
 }
 
 const DISCORD_CDN_HOSTNAMES = [
@@ -63,12 +98,7 @@ const DISCORD_CDN_HOSTNAMES = [
   "*.discordapp.net",
 ];
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireArray(value: unknown, label: string): Array<unknown> {
   expect(Array.isArray(value), label).toBe(true);
@@ -129,7 +159,7 @@ function expectSinglePngDownload(params: {
   ]);
 }
 
-function expectAttachmentImageFallback(params: { result: unknown; attachment: { url: string } }) {
+function expectAttachmentImageFallback(params: { result: unknown }) {
   expect(saveMediaBuffer).not.toHaveBeenCalled();
   expect(params.result).toEqual([
     {
@@ -138,66 +168,21 @@ function expectAttachmentImageFallback(params: { result: unknown; attachment: { 
   ]);
 }
 
-function asReferencedForwardMessage(params: {
-  content?: string;
-  components?: Array<Record<string, unknown>>;
-  embeds?: Array<{ title?: string; description?: string }>;
-  attachments?: Array<Record<string, unknown>>;
-  messageReferenceType?: MessageReferenceType;
-}) {
+function asReferencedForwardMessage(attachments: AttachmentFixture[]) {
   return asMessage({
-    content: "",
-    messageReference: {
-      type: params.messageReferenceType ?? MessageReferenceType.Forward,
-      message_id: "m0",
-      channel_id: "c1",
-    },
-    referencedMessage: asMessage({
-      id: "m0",
-      channelId: "c1",
-      content: params.content ?? "",
-      components: params.components ?? [],
-      attachments: params.attachments ?? [],
-      embeds: params.embeds ?? [],
-      flags: params.components ? MessageFlags.IsComponentsV2 : 0,
-      stickers: [],
-      author: {
-        id: "u2",
-        username: "Bob",
-        discriminator: "0",
-      },
-    }),
+    messageReference: { type: MessageReferenceType.Forward },
+    referencedMessage: asMessage({ attachments }),
   });
 }
 
 describe("resolveForwardedMediaList", () => {
-  beforeEach(() => {
-    readRemoteMediaBuffer.mockClear();
-    saveMediaBuffer.mockClear();
-  });
-
   it("downloads forwarded attachments", async () => {
-    const attachment = {
-      id: "att-1",
-      url: "https://cdn.discordapp.com/attachments/1/image.png",
-      filename: "image.png",
-      content_type: "image/png",
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("image"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/image.png",
-      contentType: "image/png",
-    });
+    const attachment = attachmentFixture("att-1", "image.png");
+    mockDownload("/tmp/image.png");
+    const snapshot = { message: { attachments: [attachment] } };
 
     const result = await resolveForwardedMediaList(
-      asMessage({
-        rawData: {
-          message_snapshots: [{ message: { attachments: [attachment] } }],
-        },
-      }),
+      asMessage({ rawData: { message_snapshots: [snapshot] } }),
       512,
     );
 
@@ -211,27 +196,12 @@ describe("resolveForwardedMediaList", () => {
 
   it("forwards fetchImpl to forwarded attachment downloads", async () => {
     const proxyFetch = vi.fn() as unknown as typeof fetch;
-    const attachment = {
-      id: "att-proxy",
-      url: "https://cdn.discordapp.com/attachments/1/proxy.png",
-      filename: "proxy.png",
-      content_type: "image/png",
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("image"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/proxy.png",
-      contentType: "image/png",
-    });
+    const attachment = attachmentFixture("att-proxy", "proxy.png");
+    mockDownload("/tmp/proxy.png");
+    const snapshot = { message: { attachments: [attachment] } };
 
     await resolveForwardedMediaList(
-      asMessage({
-        rawData: {
-          message_snapshots: [{ message: { attachments: [attachment] } }],
-        },
-      }),
+      asMessage({ rawData: { message_snapshots: [snapshot] } }),
       512,
       { fetchImpl: proxyFetch },
     );
@@ -240,47 +210,25 @@ describe("resolveForwardedMediaList", () => {
   });
 
   it("keeps forwarded attachment metadata when download fails", async () => {
-    const attachment = {
-      id: "att-fallback",
-      url: "https://cdn.discordapp.com/attachments/1/fallback.png",
-      filename: "fallback.png",
-      content_type: "image/png",
-    };
+    const attachment = attachmentFixture("att-fallback", "fallback.png");
     readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    const snapshot = { message: { attachments: [attachment] } };
 
     const result = await resolveForwardedMediaList(
-      asMessage({
-        rawData: {
-          message_snapshots: [{ message: { attachments: [attachment] } }],
-        },
-      }),
+      asMessage({ rawData: { message_snapshots: [snapshot] } }),
       512,
     );
 
-    expectAttachmentImageFallback({ result, attachment });
+    expectAttachmentImageFallback({ result });
   });
 
   it("downloads forwarded stickers", async () => {
-    const sticker = {
-      id: "sticker-1",
-      name: "wave",
-      format_type: StickerFormatType.PNG,
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("sticker"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/sticker.png",
-      contentType: "image/png",
-    });
+    const sticker = stickerFixture("sticker-1", "wave");
+    mockDownload("/tmp/sticker.png", { buffer: "sticker" });
+    const snapshot = { message: { sticker_items: [sticker] } };
 
     const result = await resolveForwardedMediaList(
-      asMessage({
-        rawData: {
-          message_snapshots: [{ message: { sticker_items: [sticker] } }],
-        },
-      }),
+      asMessage({ rawData: { message_snapshots: [snapshot] } }),
       512,
     );
 
@@ -301,27 +249,10 @@ describe("resolveForwardedMediaList", () => {
   });
 
   it("downloads forwarded referenced attachments when snapshots are absent", async () => {
-    const attachment = {
-      id: "att-ref-1",
-      url: "https://cdn.discordapp.com/attachments/1/ref-image.png",
-      filename: "ref-image.png",
-      content_type: "image/png",
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("image"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/ref-image.png",
-      contentType: "image/png",
-    });
+    const attachment = attachmentFixture("att-ref-1", "ref-image.png");
+    mockDownload("/tmp/ref-image.png");
 
-    const result = await resolveForwardedMediaList(
-      asReferencedForwardMessage({
-        attachments: [attachment],
-      }),
-      512,
-    );
+    const result = await resolveForwardedMediaList(asReferencedForwardMessage([attachment]), 512);
 
     expectSinglePngDownload({
       result,
@@ -332,12 +263,9 @@ describe("resolveForwardedMediaList", () => {
   });
 
   it("skips snapshots without attachments", async () => {
+    const snapshot = { message: { content: "hello" } };
     const result = await resolveForwardedMediaList(
-      asMessage({
-        rawData: {
-          message_snapshots: [{ message: { content: "hello" } }],
-        },
-      }),
+      asMessage({ rawData: { message_snapshots: [snapshot] } }),
       512,
     );
 
@@ -346,27 +274,12 @@ describe("resolveForwardedMediaList", () => {
   });
 
   it("passes readIdleTimeoutMs to forwarded attachment downloads", async () => {
-    const attachment = {
-      id: "att-timeout-forwarded",
-      url: "https://cdn.discordapp.com/attachments/1/forwarded-timeout.png",
-      filename: "forwarded-timeout.png",
-      content_type: "image/png",
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("image"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/forwarded-timeout.png",
-      contentType: "image/png",
-    });
+    const attachment = attachmentFixture("att-timeout-forwarded", "forwarded-timeout.png");
+    mockDownload("/tmp/forwarded-timeout.png");
+    const snapshot = { message: { attachments: [attachment] } };
 
     await resolveForwardedMediaList(
-      asMessage({
-        rawData: {
-          message_snapshots: [{ message: { attachments: [attachment] } }],
-        },
-      }),
+      asMessage({ rawData: { message_snapshots: [snapshot] } }),
       512,
       { readIdleTimeoutMs: 60_000 },
     );
@@ -375,26 +288,12 @@ describe("resolveForwardedMediaList", () => {
   });
 
   it("passes readIdleTimeoutMs to forwarded sticker downloads", async () => {
-    const sticker = {
-      id: "sticker-timeout-forwarded",
-      name: "timeout-forwarded",
-      format_type: StickerFormatType.PNG,
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("sticker"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/forwarded-sticker-timeout.png",
-      contentType: "image/png",
-    });
+    const sticker = stickerFixture("sticker-timeout-forwarded", "timeout-forwarded");
+    mockDownload("/tmp/forwarded-sticker-timeout.png", { buffer: "sticker" });
+    const snapshot = { message: { sticker_items: [sticker] } };
 
     await resolveForwardedMediaList(
-      asMessage({
-        rawData: {
-          message_snapshots: [{ message: { sticker_items: [sticker] } }],
-        },
-      }),
+      asMessage({ rawData: { message_snapshots: [snapshot] } }),
       512,
       { readIdleTimeoutMs: 60_000 },
     );
@@ -404,32 +303,12 @@ describe("resolveForwardedMediaList", () => {
 });
 
 describe("resolveMediaList", () => {
-  beforeEach(() => {
-    readRemoteMediaBuffer.mockClear();
-    saveMediaBuffer.mockClear();
-  });
-
   it("downloads stickers", async () => {
-    const sticker = {
-      id: "sticker-2",
-      name: "hello",
-      format_type: StickerFormatType.PNG,
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("sticker"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/sticker-2.png",
-      contentType: "image/png",
-    });
+    const sticker = stickerFixture("sticker-2", "hello");
+    mockDownload("/tmp/sticker-2.png", { buffer: "sticker" });
+    const message = asMessage({ stickers: [sticker] });
 
-    const result = await resolveMediaList(
-      asMessage({
-        stickers: [sticker],
-      }),
-      512,
-    );
+    const result = await resolveMediaList(message, 512);
 
     expectSinglePngDownload({
       result,
@@ -442,63 +321,31 @@ describe("resolveMediaList", () => {
 
   it("forwards fetchImpl to sticker downloads", async () => {
     const proxyFetch = vi.fn() as unknown as typeof fetch;
-    const sticker = {
-      id: "sticker-proxy",
-      name: "proxy-sticker",
-      format_type: StickerFormatType.PNG,
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("sticker"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/sticker-proxy.png",
-      contentType: "image/png",
-    });
+    const sticker = stickerFixture("sticker-proxy", "proxy-sticker");
+    mockDownload("/tmp/sticker-proxy.png", { buffer: "sticker" });
+    const message = asMessage({ stickers: [sticker] });
 
-    await resolveMediaList(
-      asMessage({
-        stickers: [sticker],
-      }),
-      512,
-      { fetchImpl: proxyFetch },
-    );
+    await resolveMediaList(message, 512, { fetchImpl: proxyFetch });
 
     expect(fetchParams().fetchImpl).toBe(proxyFetch);
   });
 
   it("keeps attachment metadata when download fails", async () => {
-    const attachment = {
-      id: "att-main-fallback",
-      url: "https://cdn.discordapp.com/attachments/1/main-fallback.png",
-      filename: "main-fallback.png",
-      content_type: "image/png",
-    };
+    const attachment = attachmentFixture("att-main-fallback", "main-fallback.png");
     readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    const message = asMessage({ attachments: [attachment] });
 
-    const result = await resolveMediaList(
-      asMessage({
-        attachments: [attachment],
-      }),
-      512,
-    );
+    const result = await resolveMediaList(message, 512);
 
-    expectAttachmentImageFallback({ result, attachment });
+    expectAttachmentImageFallback({ result });
   });
 
   it("keeps type-only facts for attachments without a usable URL", async () => {
-    const result = await resolveMediaList(
-      asMessage({
-        attachments: [
-          {
-            id: "att-missing-url",
-            filename: "voice.ogg",
-            content_type: "audio/ogg",
-          },
-        ],
-      }),
-      512,
-    );
+    const { url: _url, ...attachment } = attachmentFixture("att-missing-url", "voice.ogg", {
+      content_type: "audio/ogg",
+    });
+    const message = asMessage({ attachments: [attachment] });
+    const result = await resolveMediaList(message, 512);
 
     expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
     expect(saveMediaBuffer).not.toHaveBeenCalled();
@@ -506,19 +353,13 @@ describe("resolveMediaList", () => {
   });
 
   it("classifies audio attachments by filename when content type is missing", async () => {
-    const attachment = {
-      id: "att-audio-fallback",
-      url: "https://cdn.discordapp.com/attachments/1/voice.ogg",
-      filename: "voice.ogg",
-    };
+    const attachment = attachmentFixture("att-audio-fallback", "voice.ogg", {
+      content_type: undefined,
+    });
     readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    const message = asMessage({ attachments: [attachment] });
 
-    const result = await resolveMediaList(
-      asMessage({
-        attachments: [attachment],
-      }),
-      512,
-    );
+    const result = await resolveMediaList(message, 512);
 
     expect(result).toEqual([
       {
@@ -529,21 +370,15 @@ describe("resolveMediaList", () => {
   });
 
   it("classifies Discord voice attachments by waveform metadata", async () => {
-    const attachment = {
-      id: "att-voice-metadata",
-      url: "https://cdn.discordapp.com/attachments/1/voice",
-      filename: "voice",
+    const attachment = attachmentFixture("att-voice-metadata", "voice", {
+      content_type: undefined,
       duration_secs: 1.5,
       waveform: "AAAA",
-    };
+    });
     readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    const message = asMessage({ attachments: [attachment] });
 
-    const result = await resolveMediaList(
-      asMessage({
-        attachments: [attachment],
-      }),
-      512,
-    );
+    const result = await resolveMediaList(message, 512);
 
     expect(result).toEqual([
       {
@@ -554,14 +389,11 @@ describe("resolveMediaList", () => {
   });
 
   it("lets native Discord voice metadata override a conflicting definitive MIME", async () => {
-    const attachment = {
-      id: "att-voice-conflicting-mime",
-      url: "https://cdn.discordapp.com/attachments/1/voice",
-      filename: "voice",
+    const attachment = attachmentFixture("att-voice-conflicting-mime", "voice", {
       content_type: "video/ogg",
       duration_secs: 1.5,
       waveform: "AAAA",
-    };
+    });
     readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
 
     const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
@@ -572,20 +404,10 @@ describe("resolveMediaList", () => {
   it.each(["application/octet-stream", "application/ogg"])(
     "prefers the structured audio kind over non-audio MIME %s",
     async (contentType) => {
-      const attachment = {
-        id: "att-audio-conflicting-mime",
-        url: "https://cdn.discordapp.com/attachments/1/voice.ogg",
-        filename: "voice.ogg",
+      const attachment = attachmentFixture("att-audio-conflicting-mime", "voice.ogg", {
         content_type: contentType,
-      };
-      readRemoteMediaBuffer.mockResolvedValueOnce({
-        buffer: Buffer.from("audio"),
-        contentType,
       });
-      saveMediaBuffer.mockResolvedValueOnce({
-        path: "/tmp/voice.ogg",
-        contentType,
-      });
+      mockDownload("/tmp/voice.ogg", { buffer: "audio", contentType });
 
       const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
 
@@ -600,12 +422,9 @@ describe("resolveMediaList", () => {
   );
 
   it("normalizes MIME case before classifying audio", async () => {
-    const attachment = {
-      id: "att-audio-mime-case",
-      url: "https://cdn.discordapp.com/attachments/1/voice.bin",
-      filename: "voice.bin",
+    const attachment = attachmentFixture("att-audio-mime-case", "voice.bin", {
       content_type: "Audio/OGG",
-    };
+    });
     readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
 
     const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
@@ -619,12 +438,9 @@ describe("resolveMediaList", () => {
   });
 
   it("does not let an audio-looking filename override video MIME", async () => {
-    const attachment = {
-      id: "att-video-audio-extension",
-      url: "https://cdn.discordapp.com/attachments/1/clip.ogg",
-      filename: "clip.ogg",
+    const attachment = attachmentFixture("att-video-audio-extension", "clip.ogg", {
       content_type: "video/ogg",
-    };
+    });
     readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
 
     const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
@@ -637,19 +453,10 @@ describe("resolveMediaList", () => {
   });
 
   it("does not let an audio-looking filename override fetched image MIME", async () => {
-    const attachment = {
-      id: "att-image-audio-extension",
-      url: "https://cdn.discordapp.com/attachments/1/image.ogg",
-      filename: "image.ogg",
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("image"),
-      contentType: "image/png",
+    const attachment = attachmentFixture("att-image-audio-extension", "image.ogg", {
+      content_type: undefined,
     });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/image.png",
-      contentType: "image/png",
-    });
+    mockDownload("/tmp/image.png");
 
     const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
 
@@ -662,20 +469,10 @@ describe("resolveMediaList", () => {
   });
 
   it("keeps declared audio when the fetched MIME is generic", async () => {
-    const attachment = {
-      id: "att-declared-audio-fetched-generic",
-      url: "https://cdn.discordapp.com/attachments/1/voice",
-      filename: "voice",
+    const attachment = attachmentFixture("att-declared-audio-fetched-generic", "voice", {
       content_type: "audio/ogg",
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("audio"),
-      contentType: "application/octet-stream",
     });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/voice",
-      contentType: "application/octet-stream",
-    });
+    mockDownload("/tmp/voice", { buffer: "audio", contentType: "application/octet-stream" });
 
     const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
 
@@ -691,12 +488,9 @@ describe("resolveMediaList", () => {
   it.each(["application/pdf", "text/plain"])(
     "does not infer audio from an .ogg filename with definitive MIME %s",
     async (contentType) => {
-      const attachment = {
-        id: `att-definitive-${contentType}`,
-        url: "https://cdn.discordapp.com/attachments/1/document.ogg",
-        filename: "document.ogg",
+      const attachment = attachmentFixture(`att-definitive-${contentType}`, "document.ogg", {
         content_type: contentType,
-      };
+      });
       readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
 
       const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
@@ -710,20 +504,10 @@ describe("resolveMediaList", () => {
   );
 
   it("uses fetched image MIME over declared audio", async () => {
-    const attachment = {
-      id: "att-declared-audio-fetched-image",
-      url: "https://cdn.discordapp.com/attachments/1/voice.ogg",
-      filename: "voice.ogg",
+    const attachment = attachmentFixture("att-declared-audio-fetched-image", "voice.ogg", {
       content_type: "audio/ogg",
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("image"),
-      contentType: "image/png",
     });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/image.png",
-      contentType: "image/png",
-    });
+    mockDownload("/tmp/image.png");
 
     const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
 
@@ -736,13 +520,11 @@ describe("resolveMediaList", () => {
   });
 
   it("classifies extensionless Discord voice attachments from native fields", async () => {
-    const attachment = {
-      id: "att-voice-native-fields",
-      url: "https://cdn.discordapp.com/attachments/1/voice",
-      filename: "voice",
+    const attachment = attachmentFixture("att-voice-native-fields", "voice", {
+      content_type: undefined,
       duration_secs: 1.5,
       waveform: "AAAA",
-    };
+    });
     readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
 
     const result = await resolveMediaList(asMessage({ attachments: [attachment] }), 512);
@@ -756,24 +538,15 @@ describe("resolveMediaList", () => {
   });
 
   it("keeps a type-only fact when saveMediaBuffer fails", async () => {
-    const attachment = {
-      id: "att-save-fail",
-      url: "https://cdn.discordapp.com/attachments/1/photo.png",
-      filename: "photo.png",
-      content_type: "image/png",
-    };
+    const attachment = attachmentFixture("att-save-fail", "photo.png");
     readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("image"),
       contentType: "image/png",
     });
     saveMediaBuffer.mockRejectedValueOnce(new Error("disk full"));
+    const message = asMessage({ attachments: [attachment] });
 
-    const result = await resolveMediaList(
-      asMessage({
-        attachments: [attachment],
-      }),
-      512,
-    );
+    const result = await resolveMediaList(message, 512);
 
     expect(readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
@@ -785,36 +558,16 @@ describe("resolveMediaList", () => {
   });
 
   it("preserves downloaded attachments alongside failed ones", async () => {
-    const goodAttachment = {
-      id: "att-good",
-      url: "https://cdn.discordapp.com/attachments/1/good.png",
-      filename: "good.png",
-      content_type: "image/png",
-    };
-    const badAttachment = {
-      id: "att-bad",
-      url: "https://cdn.discordapp.com/attachments/1/bad.pdf",
-      filename: "bad.pdf",
+    const goodAttachment = attachmentFixture("att-good", "good.png");
+    const badAttachment = attachmentFixture("att-bad", "bad.pdf", {
       content_type: "application/pdf",
-    };
-
-    readRemoteMediaBuffer
-      .mockResolvedValueOnce({
-        buffer: Buffer.from("image"),
-        contentType: "image/png",
-      })
-      .mockRejectedValueOnce(new Error("network timeout"));
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/good.png",
-      contentType: "image/png",
     });
 
-    const result = await resolveMediaList(
-      asMessage({
-        attachments: [goodAttachment, badAttachment],
-      }),
-      512,
-    );
+    mockDownload("/tmp/good.png");
+    readRemoteMediaBuffer.mockRejectedValueOnce(new Error("network timeout"));
+    const message = asMessage({ attachments: [goodAttachment, badAttachment] });
+
+    const result = await resolveMediaList(message, 512);
 
     expect(result).toEqual([
       {
@@ -828,19 +581,11 @@ describe("resolveMediaList", () => {
   });
 
   it("keeps sticker metadata when sticker download fails", async () => {
-    const sticker = {
-      id: "sticker-fallback",
-      name: "fallback",
-      format_type: StickerFormatType.PNG,
-    };
+    const sticker = stickerFixture("sticker-fallback", "fallback");
     readRemoteMediaBuffer.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+    const message = asMessage({ stickers: [sticker] });
 
-    const result = await resolveMediaList(
-      asMessage({
-        stickers: [sticker],
-      }),
-      512,
-    );
+    const result = await resolveMediaList(message, 512);
 
     expect(saveMediaBuffer).not.toHaveBeenCalled();
     expect(result).toEqual([
@@ -852,65 +597,28 @@ describe("resolveMediaList", () => {
   });
 
   it("passes readIdleTimeoutMs to readRemoteMediaBuffer for attachments", async () => {
-    const attachment = {
-      id: "att-timeout",
-      url: "https://cdn.discordapp.com/attachments/1/timeout.png",
-      filename: "timeout.png",
-      content_type: "image/png",
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("image"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/timeout.png",
-      contentType: "image/png",
-    });
+    const attachment = attachmentFixture("att-timeout", "timeout.png");
+    mockDownload("/tmp/timeout.png");
+    const message = asMessage({ attachments: [attachment] });
 
-    await resolveMediaList(
-      asMessage({
-        attachments: [attachment],
-      }),
-      512,
-      { readIdleTimeoutMs: 60_000 },
-    );
+    await resolveMediaList(message, 512, { readIdleTimeoutMs: 60_000 });
 
     expect(fetchParams().readIdleTimeoutMs).toBe(60_000);
   });
 
   it("passes readIdleTimeoutMs to readRemoteMediaBuffer for stickers", async () => {
-    const sticker = {
-      id: "sticker-timeout",
-      name: "timeout",
-      format_type: StickerFormatType.PNG,
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("sticker"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/sticker-timeout.png",
-      contentType: "image/png",
-    });
+    const sticker = stickerFixture("sticker-timeout", "timeout");
+    mockDownload("/tmp/sticker-timeout.png", { buffer: "sticker" });
+    const message = asMessage({ stickers: [sticker] });
 
-    await resolveMediaList(
-      asMessage({
-        stickers: [sticker],
-      }),
-      512,
-      { readIdleTimeoutMs: 60_000 },
-    );
+    await resolveMediaList(message, 512, { readIdleTimeoutMs: 60_000 });
 
     expect(fetchParams().readIdleTimeoutMs).toBe(60_000);
   });
 
   it("times out slow attachment downloads and returns a type-only fact", async () => {
-    const attachment = {
-      id: "att-total-timeout",
-      url: "https://cdn.discordapp.com/attachments/1/slow.png",
-      filename: "slow.png",
-      content_type: "image/png",
-    };
+    const attachment = attachmentFixture("att-total-timeout", "slow.png");
+    const message = asMessage({ attachments: [attachment] });
     vi.useFakeTimers();
     readRemoteMediaBuffer.mockImplementation(
       () =>
@@ -920,13 +628,7 @@ describe("resolveMediaList", () => {
     );
 
     try {
-      const resultPromise = resolveMediaList(
-        asMessage({
-          attachments: [attachment],
-        }),
-        512,
-        { totalTimeoutMs: 100 },
-      );
+      const resultPromise = resolveMediaList(message, 512, { totalTimeoutMs: 100 });
 
       await vi.advanceTimersByTimeAsync(100);
 
@@ -941,12 +643,8 @@ describe("resolveMediaList", () => {
   });
 
   it("passes abortSignal to readRemoteMediaBuffer and keeps a type-only fact when aborted", async () => {
-    const attachment = {
-      id: "att-abort",
-      url: "https://cdn.discordapp.com/attachments/1/abort.png",
-      filename: "abort.png",
-      content_type: "image/png",
-    };
+    const attachment = attachmentFixture("att-abort", "abort.png");
+    const message = asMessage({ attachments: [attachment] });
     const abortController = new AbortController();
     readRemoteMediaBuffer.mockImplementationOnce(
       (params: { requestInit?: { signal?: AbortSignal } }) =>
@@ -961,13 +659,9 @@ describe("resolveMediaList", () => {
         }),
     );
 
-    const resultPromise = resolveMediaList(
-      asMessage({
-        attachments: [attachment],
-      }),
-      512,
-      { abortSignal: abortController.signal },
-    );
+    const resultPromise = resolveMediaList(message, 512, {
+      abortSignal: abortController.signal,
+    });
     abortController.abort();
 
     await expect(resultPromise).resolves.toEqual([

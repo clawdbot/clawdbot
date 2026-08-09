@@ -59,12 +59,12 @@ export async function detectPackageManager(root: string): Promise<DetectedPackag
   const hasPnpmLock = files.includes("pnpm-lock.yaml");
   const hasBunLock = files.includes("bun.lock") || files.includes("bun.lockb");
 
+  // Published packages retain source pnpm metadata, and modern releases omit
+  // shrinkwrap; detect Bun by its install root before checking older npm locks.
+  if (await isBunOwnedPackageRoot(root)) {
+    return "bun";
+  }
   if (hasNpmShrinkwrap) {
-    // Published npm packages carry npm-shrinkwrap even when their source uses pnpm;
-    // installed pnpm/bun-owned roots need layout proof before overriding npm.
-    if (await isBunOwnedPackageRoot(root)) {
-      return "bun";
-    }
     if (pm === "pnpm" && (hasPnpmLock || (await isPnpmOwnedPackageRoot(root)))) {
       return "pnpm";
     }

@@ -12,9 +12,9 @@ import {
 import { visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
 import { optionalBundledClusterSet } from "./lib/optional-bundled-clusters.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { toLine } from "./lib/ts-guard-utils.mjs";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolveRepoRoot(import.meta.url);
 const srcRoot = path.join(repoRoot, "src");
 const extensionsRoot = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR);
 const testRoot = path.join(repoRoot, "test");
@@ -663,7 +663,7 @@ function describeSubagentSeamKinds(relativePath, source) {
     "./subagent-announce-dispatch.js",
     "./subagent-announce-queue.js",
     "../infra/outbound/bound-delivery-router.js",
-    "../utils/delivery-context.js",
+    "../utils/delivery-context.shared.js",
     "../gateway/call.js",
   ]);
   const importsCleanup = hasAnyImportSource(source, [

@@ -16,6 +16,7 @@ import type {
   TailscaleMode,
 } from "../../commands/onboard-types.js";
 import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
@@ -179,6 +180,18 @@ export function pickOnboardAuthOptionValues(
   };
 }
 
+export function validateOnboardAuthOptionValues(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+): boolean {
+  if (opts.customImageInput === true && opts.customTextInput === true) {
+    runtime.error("Use either --custom-image-input or --custom-text-input, not both.");
+    runtime.exit(1);
+    return false;
+  }
+  return true;
+}
+
 export function registerOnboardCommand(program: Command): void {
   const command = program
     .command("onboard")
@@ -329,6 +342,9 @@ export function registerOnboardCommand(program: Command): void {
             ...(opts.acceptRisk ? { acceptRisk: true } : {}),
           },
         );
+        return;
+      }
+      if (!validateOnboardAuthOptionValues(opts as Record<string, unknown>, defaultRuntime)) {
         return;
       }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime);

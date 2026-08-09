@@ -4,6 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
+
+const completeWithPreparedSimpleCompletionModel = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/simple-completion-runtime", () => ({
+  completeWithPreparedSimpleCompletionModel,
+}));
+
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import {
   createCodexTestBindingStore,
@@ -22,6 +29,41 @@ describe("Codex agent harness supports()", () => {
 
   const harness = createCodexAppServerAgentHarness({
     bindingStore: testCodexAppServerBindingStore,
+  });
+
+  it("runs isolated completion through the prepared zero-tool transport", async () => {
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      stopReason: "stop",
+    };
+    completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce(assistant);
+    const params = {
+      model: { provider: "openai", id: "gpt-test", api: "openai-chatgpt-responses" },
+      auth: { apiKey: "secret", source: "profile:test", mode: "oauth" },
+      config: {},
+      systemPrompt: "system",
+      prompt: "user",
+      timeoutMs: 1_000,
+      provider: "openai",
+      modelId: "gpt-test",
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+    } as unknown as Parameters<NonNullable<typeof harness.runIsolatedCompletion>>[0];
+
+    await expect(harness.runIsolatedCompletion?.(params)).resolves.toEqual({ assistant });
+    expect(completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: params.model,
+        auth: params.auth,
+        context: {
+          systemPrompt: "system",
+          messages: [expect.objectContaining({ role: "user", content: "user" })],
+          tools: [],
+        },
+      }),
+    );
   });
 
   it("supports the canonical codex virtual provider", () => {
@@ -241,6 +283,32 @@ describe("Codex agent harness supports()", () => {
 });
 
 describe("Codex agent harness reset()", () => {
+  it("is idempotent before the retained session has a binding", async () => {
+    const bindingStore = createCodexTestBindingStore();
+    const harness = createCodexAppServerAgentHarness({ bindingStore });
+    if (!harness.reset) {
+      throw new Error("expected Codex harness reset hook");
+    }
+
+    const resetParams = {
+      agentId: "worker",
+      sessionId: "session-1",
+      sessionKey: "agent:worker:main",
+      reason: "reset" as const,
+    };
+    await expect(harness.reset(resetParams)).resolves.toBeUndefined();
+    await expect(harness.reset(resetParams)).resolves.toBeUndefined();
+
+    const identity = sessionBindingIdentity(resetParams);
+    await expect(
+      bindingStore.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-1", cwd: "/repo" },
+      }),
+    ).resolves.toBe(true);
+    await expect(bindingStore.read(identity)).resolves.toMatchObject({ threadId: "thread-1" });
+  });
+
   it("clears an in-place session generation without stranding its replacement", async () => {
     const bindingStore = createCodexTestBindingStore();
     const identity = sessionBindingIdentity({

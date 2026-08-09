@@ -146,8 +146,9 @@ export function createTelegramMessageLifecycleRuntime({
     return { process: true, claims: claim.kind === "claimed" ? [claim.handle] : [] };
   };
   const buildSyntheticTextMessage = (params: {
-    base: Message;
+    base: Message.ServiceMessage;
     text: string;
+    entities?: Message["entities"];
     date?: number;
     from?: Message["from"];
   }): Message => ({
@@ -156,7 +157,7 @@ export function createTelegramMessageLifecycleRuntime({
     text: params.text,
     caption: undefined,
     caption_entities: undefined,
-    entities: undefined,
+    entities: params.entities?.length ? params.entities : undefined,
     ...(params.date != null ? { date: params.date } : {}),
   });
   const buildSyntheticContext = (

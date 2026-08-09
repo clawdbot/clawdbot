@@ -31,7 +31,7 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
         checkpoint.label === "after-startup-import" &&
         checkpoint.gatewayLogTail?.includes(
           "session: imported legacy session metadata/transcripts into SQLite",
-        ) === true &&
+        ) &&
         report.oldStateSessionKeys.every((key) =>
           checkpoint.sqlite.trackedEntries.some((entry) => entry.sessionKey === key),
         ) &&
@@ -73,7 +73,7 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
     latestAssistantTextAfterAppend: "sqlite sdk consumer appended by identity",
     sessionKey: report.pluginSdkSessionKey,
   });
-  expect(report.pluginSdkConsumer?.sessionFileMarker.startsWith("sqlite:")).toBe(true);
+  expect(report.pluginSdkConsumer?.sessionIdentity).toBe(report.pluginSdkSessionKey);
   expect(report.pluginSdkConsumer?.listedSessionKeys).toContain(report.pluginSdkSessionKey);
   expect(
     report.checkpoints.some(

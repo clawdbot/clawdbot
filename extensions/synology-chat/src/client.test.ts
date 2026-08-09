@@ -106,6 +106,14 @@ function mockFailureResponse(statusCode = 500) {
   mockResponse(statusCode, "error");
 }
 
+function mockRequestErrorOnce(error: Error) {
+  vi.mocked(https.request).mockImplementationOnce((() => {
+    const req = createMockRequestEmitter();
+    process.nextTick(() => req.emit("error", error));
+    return req;
+  }) as MockRequestHandler);
+}
+
 function installFakeTimerHarness() {
   beforeAll(async () => {
     ({ sendMessage, sendFileUrl, resolveLegacyWebhookNameToChatUserId } =
@@ -159,10 +167,82 @@ describe("sendMessage", () => {
     expect(result).toBe(true);
   });
 
-  it("returns false on server error after retries", async () => {
+  it("returns false on server error without replaying", async () => {
     mockFailureResponse(500);
     const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
     expect(result).toBe(false);
+    expect(vi.mocked(https.request)).toHaveBeenCalledOnce();
+  });
+
+  it("does not replay a mixed aggregate with an ambiguous transport leaf", async () => {
+    const mixedError = Object.assign(
+      new AggregateError([
+        Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
+        Object.assign(new Error("connection reset after write"), { code: "ECONNRESET" }),
+      ]),
+      { code: "ECONNREFUSED" },
+    );
+    mockRequestErrorOnce(mixedError);
+
+    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).toHaveBeenCalledOnce();
+  });
+
+  it("retries when every aggregate transport leaf is pre-connect", async () => {
+    mockSuccessResponse();
+    const aggregateError = Object.assign(
+      new AggregateError([
+        Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
+        Object.assign(new Error("host not found"), { code: "ENOTFOUND" }),
+      ]),
+      { code: "ECONNREFUSED" },
+    );
+    mockRequestErrorOnce(new TypeError("fetch failed", { cause: aggregateError }));
+
+    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+
+    expect(result).toBe(true);
+    expect(vi.mocked(https.request)).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { name: "Synology error envelope", body: { success: false, error: { code: 105 } } },
+    { name: "unrelated malformed response fields", body: { success: false, data: null } },
+  ])("does not replay an HTTP-successful webhook rejection ($name)", async ({ body }) => {
+    mockResponse(200, JSON.stringify(body));
+
+    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { name: "missing success", body: "{}" },
+    { name: "null response", body: "null" },
+    { name: "empty response", body: "" },
+    { name: "malformed JSON", body: '{"success":false' },
+    { name: "plain text", body: "ok" },
+    { name: "JSON string", body: '"ok"' },
+    { name: "JSON number", body: "0" },
+    { name: "JSON boolean", body: "false" },
+    { name: "JSON array", body: "[]" },
+    { name: "null success", body: '{"success":null}' },
+    { name: "string success", body: '{"success":"false"}' },
+    { name: "numeric success", body: '{"success":0}' },
+    {
+      name: "oversized rejection envelope",
+      body: JSON.stringify({ success: false, padding: "x".repeat(1 * 1024 * 1024) }),
+    },
+  ])("preserves HTTP-successful webhook responses with $name", async ({ body }) => {
+    mockResponse(200, body);
+
+    const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+
+    expect(result).toBe(true);
+    expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
   });
 
   it("includes user_ids when userId is numeric", async () => {
@@ -236,6 +316,17 @@ describe("sendFileUrl", () => {
       sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
     );
     expect(result).toBe(false);
+  });
+
+  it("returns false without retrying an HTTP-successful webhook rejection", async () => {
+    mockResponse(200, JSON.stringify({ success: false, error: { code: 105 } }));
+
+    const result = await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+    );
+
+    expect(result).toBe(false);
+    expect(vi.mocked(https.request)).toHaveBeenCalledTimes(1);
   });
 
   it("respects the shared send interval before posting a file URL", async () => {

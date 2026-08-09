@@ -575,6 +575,21 @@ wa-popover.new-session-page__place-popover::part(body) {
     gap: 4px 2px;
   }
 
+  /* The shared chat footer becomes a three-column grid on mobile, but a new
+     session has visibility pills instead of the chat settings slot. Keep
+     those pills intrinsic and let the model picker use the remaining width. */
+  .new-session-page__composer .agent-chat__composer-controls {
+    display: flex;
+    gap: 4px;
+  }
+
+  .new-session-page__composer .chat-composer-model-control {
+    flex: 1 1 auto;
+    width: auto;
+    max-width: 100%;
+    margin-left: auto;
+  }
+
   .new-session-page__select {
     position: static;
   }

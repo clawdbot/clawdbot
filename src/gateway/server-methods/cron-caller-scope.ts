@@ -4,10 +4,16 @@ import {
   createTrustedCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
 } from "../../cron/scheduled-tool-policy.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import type {
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+  CronToolsAllowProvenance,
+} from "../../cron/types.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import type { GatewayClient } from "./types.js";
 
 export type CronCallerScope = {
@@ -16,6 +22,8 @@ export type CronCallerScope = {
   sessionKey?: string;
   accountId: string;
   currentJobId?: string;
+  toolsAllowProvenance?: CronToolsAllowProvenance;
+  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
 };
 
 export function readCronCallerScope(
@@ -36,6 +44,17 @@ export function readCronCallerScope(
     sessionKey: identity.sessionKey?.trim() || undefined,
     accountId: normalizeAccountId(identity.turnSourceAccountId),
     currentJobId,
+    ...(identity.cronToolsAllowCapture === "final-executable-surface"
+      ? {
+          toolsAllowProvenance: {
+            version: 1 as const,
+            source: "final-executable-surface" as const,
+          },
+        }
+      : {}),
+    ...(identity.cronCreatorAuthorityGrant
+      ? { cronCreatorAuthorityGrant: identity.cronCreatorAuthorityGrant }
+      : {}),
   };
 }
 

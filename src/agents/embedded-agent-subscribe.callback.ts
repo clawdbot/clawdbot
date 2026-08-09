@@ -6,13 +6,13 @@ type CallbackLogger = {
 
 /** Contains failures from untracked subscriber presentation and telemetry callbacks. */
 export function runBestEffortCallback(params: {
-  callback: () => void | Promise<void>;
+  callback: () => unknown;
   label: string;
   log: CallbackLogger;
 }): void {
   try {
     const result = params.callback();
-    if (isPromiseLike<void>(result)) {
+    if (isPromiseLike<unknown>(result)) {
       void Promise.resolve(result).catch((error: unknown) => {
         params.log.warn(`${params.label} callback failed: ${String(error)}`);
       });

@@ -56,6 +56,12 @@ export const BROWSER_PANEL_ELEMENT = {
   loadModule: () => import("../components/browser/browser-panel.ts"),
 } satisfies OptionalCustomElement;
 
+export const CUSTODIAN_PANEL_ELEMENT = {
+  tagName: "openclaw-custodian-panel",
+  label: "custodian panel",
+  loadModule: () => import("../components/custodian/custodian-panel.ts"),
+} satisfies OptionalCustomElement;
+
 // Loaded only for approval document URLs: the approval page pulls the protocol
 // validators (typebox runtime) and must stay out of the normal startup graph.
 export const APPROVAL_PAGE_ELEMENT = {

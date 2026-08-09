@@ -1,22 +1,36 @@
 // Covers installed plugin index store persistence and recovery behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  acquireStartupMigrationLease,
+  STARTUP_MIGRATION_LEASE_TTL_MS,
+} from "../infra/startup-migration-checkpoint.js";
 import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import type { PluginCandidate } from "./discovery.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import {
+  readPersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
+} from "./installed-plugin-index-records.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
   refreshPersistedInstalledPluginIndex,
   resolveInstalledPluginIndexStorePath,
+  restorePersistedInstalledPluginIndexIfCurrent,
   writePersistedInstalledPluginIndex,
+  writePersistedInstalledPluginIndexWithLeaseSync,
 } from "./installed-plugin-index-store.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import {
+  resolveInstalledPluginIndexPolicyHash,
+  type InstalledPluginIndex,
+} from "./installed-plugin-index.js";
+import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -52,7 +66,6 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
         startup: {
           sidecar: false,
           memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
           agentHarnesses: [],
         },
         compat: [],
@@ -99,6 +112,13 @@ function requirePersisted(index: InstalledPluginIndex | null): InstalledPluginIn
   return index;
 }
 
+function requirePersistedRevision(revision: number | null): number {
+  if (revision === null) {
+    throw new Error("Expected persisted installed plugin index revision");
+  }
+  return revision;
+}
+
 function expectPluginIds(index: InstalledPluginIndex, expected: string[]) {
   expect(index.plugins.map((plugin) => plugin.pluginId)).toEqual(expected);
 }
@@ -139,8 +159,6 @@ function dropStartupConfigPaths(
     startup: {
       sidecar: plugin.startup.sidecar,
       memory: plugin.startup.memory,
-      deferConfiguredChannelFullLoadUntilAfterListen:
-        plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen,
       agentHarnesses: plugin.startup.agentHarnesses,
     },
   };
@@ -203,6 +221,24 @@ function insertPersistedIndexRow(
   );
 }
 
+function readPersistedIndexRevision(stateDir: string): number | null {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const row = db
+        .prepare(
+          `
+            SELECT updated_at_ms
+              FROM installed_plugin_index
+             WHERE index_key = 'installed-plugin-index'
+          `,
+        )
+        .get() as { updated_at_ms: number | bigint } | undefined;
+      return row ? Number(row.updated_at_ms) : null;
+    },
+    { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+  );
+}
+
 describe("installed plugin index persistence", () => {
   it("resolves the persisted index path to the shared state database", () => {
     const stateDir = makeTempDir();
@@ -228,6 +264,259 @@ describe("installed plugin index persistence", () => {
     expect(persisted.policyHash).toBe(index.policyHash);
     expectPluginIds(persisted, ["demo"]);
     expectPluginFields(persisted, "demo", { packageBuild: { bundledDist: false } });
+  });
+
+  it("atomically captures the predecessor and revision for a leased install-record write", async () => {
+    const stateDir = makeTempDir();
+    const lease = { assertOwnedInTransaction: vi.fn() };
+    await writePersistedInstalledPluginIndex(createIndex({ policyHash: "successor" }), {
+      stateDir,
+    });
+    const predecessor = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+
+    const receipt = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
+      {},
+      {
+        stateDir,
+        candidates: [],
+        lease,
+      },
+    );
+
+    expect(receipt.previous).toEqual(predecessor);
+    expect(receipt.revision).toBe(requirePersistedRevision(readPersistedIndexRevision(stateDir)));
+    expect(lease.assertOwnedInTransaction).toHaveBeenCalledOnce();
+  });
+
+  it("conditionally restores a matching tentative index revision", async () => {
+    const stateDir = makeTempDir();
+    const lease = { assertOwnedInTransaction: vi.fn() };
+    await writePersistedInstalledPluginIndex(createIndex({ policyHash: "previous" }), {
+      stateDir,
+    });
+    const previous = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+    await writePersistedInstalledPluginIndex(createIndex({ policyHash: "tentative" }), {
+      stateDir,
+    });
+    const tentativeRevision = requirePersistedRevision(readPersistedIndexRevision(stateDir));
+
+    await expect(
+      restorePersistedInstalledPluginIndexIfCurrent(previous, tentativeRevision, {
+        stateDir,
+        lease,
+      }),
+    ).resolves.toBe(true);
+
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toEqual(previous);
+    expect(lease.assertOwnedInTransaction).toHaveBeenCalledOnce();
+  });
+
+  it("conditionally restores matching prior index absence", async () => {
+    const stateDir = makeTempDir();
+    const lease = { assertOwnedInTransaction: vi.fn() };
+    await writePersistedInstalledPluginIndex(createIndex({ policyHash: "tentative" }), {
+      stateDir,
+    });
+    const tentativeRevision = requirePersistedRevision(readPersistedIndexRevision(stateDir));
+
+    await expect(
+      restorePersistedInstalledPluginIndexIfCurrent(null, tentativeRevision, {
+        stateDir,
+        lease,
+      }),
+    ).resolves.toBe(true);
+
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
+  });
+
+  it("keeps a successor index when conditional rollback sees a newer revision", async () => {
+    const stateDir = makeTempDir();
+    const lease = { assertOwnedInTransaction: vi.fn() };
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      await writePersistedInstalledPluginIndex(createIndex({ policyHash: "previous" }), {
+        stateDir,
+      });
+      const previous = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+      await writePersistedInstalledPluginIndex(createIndex({ policyHash: "tentative" }), {
+        stateDir,
+      });
+      const tentativeRevision = requirePersistedRevision(readPersistedIndexRevision(stateDir));
+      await writePersistedInstalledPluginIndex(createIndex({ policyHash: "successor" }), {
+        stateDir,
+      });
+      const successorRevision = requirePersistedRevision(readPersistedIndexRevision(stateDir));
+
+      expect(successorRevision).toBeGreaterThan(tentativeRevision);
+      await expect(
+        restorePersistedInstalledPluginIndexIfCurrent(previous, tentativeRevision, {
+          stateDir,
+          lease,
+        }),
+      ).resolves.toBe(false);
+      expect(
+        requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })).policyHash,
+      ).toBe("successor");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("rejects a stale leased write without replacing the successor index", async () => {
+    const stateDir = makeTempDir();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const nowMs = Date.now();
+    const staleLease = acquireStartupMigrationLease({ env, nowMs, owner: "stale" });
+    const successorLease = acquireStartupMigrationLease({
+      env,
+      nowMs: nowMs + STARTUP_MIGRATION_LEASE_TTL_MS + 1,
+      owner: "successor",
+    });
+    const successorIndex = createIndex({ policyHash: "successor" });
+
+    try {
+      writePersistedInstalledPluginIndexWithLeaseSync(successorIndex, {
+        env,
+        lease: successorLease,
+      });
+
+      expect(() =>
+        writePersistedInstalledPluginIndexWithLeaseSync(createIndex({ policyHash: "stale" }), {
+          env,
+          lease: staleLease,
+        }),
+      ).toThrow("startup migration lease was lost");
+      expect(requirePersisted(await readPersistedInstalledPluginIndex({ env })).policyHash).toBe(
+        "successor",
+      );
+    } finally {
+      staleLease.release();
+      successorLease.release();
+    }
+  });
+
+  it("rereads install-record writes under their non-default policy", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const candidate = createCandidate(pluginDir);
+    const config = {
+      plugins: {
+        entries: {
+          demo: { enabled: false },
+        },
+      },
+    };
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    await writePersistedInstalledPluginIndexInstallRecords(
+      { demo: { source: "npm", spec: "demo@1.0.0", installPath: pluginDir } },
+      { stateDir, candidates: [candidate], config, env },
+    );
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      candidates: [candidate],
+      config,
+      env,
+    });
+
+    expect(result.source).toBe("persisted");
+    expect(result.diagnostics).toStrictEqual([]);
+    expect(result.snapshot.policyHash).toBe(resolveInstalledPluginIndexPolicyHash(config));
+    expectPluginFields(result.snapshot, "demo", { enabled: false });
+  });
+
+  it("hashes and persists resolved doctor contract artifacts", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const candidate = createCandidate(pluginDir);
+    const contractPath = path.join(pluginDir, "doctor-contract-api.ts");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    fs.writeFileSync(contractPath, "export const legacyConfigRules = [];\n", "utf8");
+
+    const first = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+    const firstPlugin = first.plugins[0];
+    const firstHash = firstPlugin?.doctorContractHash;
+    const firstFile = firstPlugin?.doctorContractFile;
+    expect(firstHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(firstFile).toEqual({
+      size: fs.statSync(contractPath).size,
+      mtimeMs: fs.statSync(contractPath).mtimeMs,
+      ctimeMs: fs.statSync(contractPath).ctimeMs,
+    });
+    expectPluginFields(
+      requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })),
+      "demo",
+      {
+        doctorContractHash: firstHash,
+        doctorContractFile: firstFile,
+      },
+    );
+
+    fs.writeFileSync(
+      contractPath,
+      "export const legacyConfigRules = [{ path: ['demo'], message: 'changed' }];\n",
+      "utf8",
+    );
+    const second = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [candidate],
+      env,
+    });
+    const secondPlugin = second.plugins[0];
+    const secondHash = secondPlugin?.doctorContractHash;
+    const secondFile = secondPlugin?.doctorContractFile;
+    expect(secondHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(secondHash).not.toBe(firstHash);
+    expect(secondFile).not.toEqual(firstFile);
+    expectPluginFields(
+      requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })),
+      "demo",
+      {
+        doctorContractHash: secondHash,
+        doctorContractFile: secondFile,
+      },
+    );
+  });
+
+  it("strips retired startup fields from persisted indexes", async () => {
+    const stateDir = makeTempDir();
+    const index = createIndex();
+    const plugin = index.plugins[0];
+    if (!plugin) {
+      throw new Error("Expected demo plugin fixture");
+    }
+    insertPersistedIndexRow(stateDir, {
+      pluginsJson: JSON.stringify([
+        {
+          ...plugin,
+          startup: {
+            ...plugin.startup,
+            deferConfiguredChannelFullLoadUntilAfterListen: true,
+          },
+        },
+      ]),
+    });
+
+    const persisted = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+    expect(persisted.plugins[0]?.startup).not.toHaveProperty(
+      "deferConfiguredChannelFullLoadUntilAfterListen",
+    );
   });
 
   it("does not repair shared state schema while reading the index", async () => {
@@ -282,7 +571,6 @@ describe("installed plugin index persistence", () => {
           startup: {
             sidecar: true,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
             configPaths: ["browser"],
           },
@@ -312,7 +600,6 @@ describe("installed plugin index persistence", () => {
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           contributions: {
@@ -429,6 +716,15 @@ describe("installed plugin index persistence", () => {
     insertPersistedIndexRow(stateDir, { version: 999 });
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
+  });
+
+  it("leaves retired JSON index files to the doctor migration owner", async () => {
+    const stateDir = makeTempDir();
+    const filePath = path.join(stateDir, "installs.json");
+    fs.writeFileSync(filePath, JSON.stringify(createIndex()), "utf8");
+
+    await expect(readPersistedInstalledPluginIndex({ filePath })).resolves.toBeNull();
+    await expect(readPersistedInstalledPluginIndexInstallRecords({ filePath })).resolves.toBeNull();
   });
 
   it("rejects pre-migration persisted indexes so update can rebuild them", async () => {

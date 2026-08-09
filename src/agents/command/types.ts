@@ -5,6 +5,7 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -16,11 +17,13 @@ import type {
   UserTurnInput,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
+import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
+import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -106,6 +109,10 @@ export type AgentCommandOpts = {
   approvalReviewerDeviceId?: string;
   /** Internal trusted exec approval follow-up elevated defaults. */
   bashElevated?: ExecElevatedDefaults;
+  /** Trusted span whose final cap is resolved with the selected model. */
+  execApprovalContinuationPromptRange?: ExecApprovalContinuationPromptRange;
+  /** Corresponding span in the undecorated transcript message. */
+  execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */
   senderIsOwner?: boolean;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
@@ -114,8 +121,8 @@ export type AgentCommandOpts = {
   toolsAllow?: string[];
   /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
-  /** Trusted in-process subagent-completion handoff; never accepted from public RPC params. */
-  trustedInternalHandoff?: boolean;
+  /** Consumed in-process subagent-completion capability; never accepted from public RPC params. */
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Internal marker identifying a server-managed default cap. */
   toolsAllowIsDefault?: boolean;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
@@ -135,6 +142,8 @@ export type AgentCommandOpts = {
   runId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
   lifecycleGeneration?: string;
+  /** Called once when the selected runtime actually admits the prompt for execution. */
+  onExecutionStarted?: () => void;
   extraSystemPrompt?: string;
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";
@@ -156,6 +165,7 @@ export type AgentCommandOpts = {
   swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
   /** Host-owned exact media set for a scoped automatic recovery delivery. */
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
@@ -183,6 +193,11 @@ export type AgentCommandOpts = {
   mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
   /** Gateway already consumed this automatic recovery run's durable reservation. */
   mainRestartRecoveryAdmitted?: boolean;
+  /** Private recovery correlation; public ingress callers cannot author identity evidence. */
+  executionIdentityAdmission?: {
+    token: ExecutionIdentityAdmissionToken;
+    retryOnly: boolean;
+  };
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when every candidate in the run's model fallback chain failed. */
@@ -206,10 +221,14 @@ export type AgentCommandOpts = {
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  "senderIsOwner" | "allowModelOverride"
+  "senderIsOwner" | "allowModelOverride" | "executionIdentityAdmission"
 > & {
   /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
   senderIsOwner?: boolean;
   /** Ingress callsites must always pass explicit model-override authorization state. */
   allowModelOverride: boolean;
 };
+
+/** Gateway-only ingress extends the public Plugin SDK surface with private recovery correlation. */
+export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
+  Pick<AgentCommandOpts, "executionIdentityAdmission">;

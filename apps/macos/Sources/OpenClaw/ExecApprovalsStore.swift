@@ -1,17 +1,146 @@
 import CryptoKit
+import Darwin
 import Foundation
 import OpenClawKit
 import OSLog
 import Security
 
+enum ExecApprovalsMigrationLogEvent: Equatable {
+    case required(ExecApprovalsLegacyMigrationRequiredError)
+    case recovered(stateDirectoryPath: String)
+}
+
+final class ExecApprovalsMigrationRequiredCache: @unchecked Sendable {
+    struct FileIdentity: Hashable, Sendable {
+        let device: UInt64
+        let inode: UInt64
+        let modificationSeconds: Int64
+        let modificationNanoseconds: Int64
+    }
+
+    private struct CachedFailure {
+        let error: ExecApprovalsLegacyMigrationRequiredError
+        let identity: FileIdentity
+    }
+
+    private struct Condition {
+        var cachedFailure: CachedFailure?
+        var loggedIdentities: Set<FileIdentity?> = []
+    }
+
+    private let lock = NSLock()
+    private var conditions: [String: Condition] = [:]
+    private let identityReader: (URL) -> FileIdentity?
+    private let onEvent: (ExecApprovalsMigrationLogEvent) -> Void
+
+    init(
+        identityReader: @escaping (URL) -> FileIdentity? = ExecApprovalsMigrationRequiredCache.fileIdentity,
+        onEvent: @escaping (ExecApprovalsMigrationLogEvent) -> Void)
+    {
+        self.identityReader = identityReader
+        self.onEvent = onEvent
+    }
+
+    func cachedError(stateDirectoryURL: URL) -> ExecApprovalsLegacyMigrationRequiredError? {
+        let key = Self.stateDirectoryKey(stateDirectoryURL)
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard var condition = self.conditions[key],
+              let cachedFailure = condition.cachedFailure
+        else { return nil }
+        guard self.identityReader(cachedFailure.error.legacyFileURL) == cachedFailure.identity else {
+            // A changed path may be Doctor's source -> claim rename. Keep the condition
+            // open until a full SQLite resolve succeeds, so that rename cannot log recovery.
+            condition.cachedFailure = nil
+            self.conditions[key] = condition
+            return nil
+        }
+        return cachedFailure.error
+    }
+
+    func record(_ error: ExecApprovalsLegacyMigrationRequiredError) {
+        let identity = self.identityReader(error.legacyFileURL)
+        let key = Self.stateDirectoryKey(error.stateDirectoryURL)
+        self.lock.lock()
+        var condition = self.conditions[key] ?? Condition()
+        let shouldLog = condition.loggedIdentities.insert(identity).inserted
+        condition.cachedFailure = identity.map { CachedFailure(error: error, identity: $0) }
+        self.conditions[key] = condition
+        self.lock.unlock()
+        if shouldLog {
+            self.onEvent(.required(error))
+        }
+    }
+
+    func markResolved(stateDirectoryURL: URL) {
+        let key = Self.stateDirectoryKey(stateDirectoryURL)
+        self.lock.lock()
+        let recovered = self.conditions.removeValue(forKey: key) != nil
+        self.lock.unlock()
+        if recovered {
+            self.onEvent(.recovered(stateDirectoryPath: key))
+        }
+    }
+
+    private static func stateDirectoryKey(_ url: URL) -> String {
+        url.standardizedFileURL.path
+    }
+
+    private static func fileIdentity(_ url: URL) -> FileIdentity? {
+        var status = stat()
+        guard lstat(url.path, &status) == 0 else { return nil }
+        return FileIdentity(
+            device: UInt64(truncatingIfNeeded: status.st_dev),
+            inode: UInt64(truncatingIfNeeded: status.st_ino),
+            modificationSeconds: Int64(status.st_mtimespec.tv_sec),
+            modificationNanoseconds: Int64(status.st_mtimespec.tv_nsec))
+    }
+}
+
 enum ExecApprovalsStore {
+    // Test stores are task-scoped so parallel suites cannot redirect unrelated
+    // shared-state consumers through the process environment.
+    @TaskLocal private static var scopedStateDirectoryURL: URL?
     private static let logger = Logger(subsystem: "ai.openclaw", category: "exec-approvals")
+    private static let migrationRequiredCache = ExecApprovalsMigrationRequiredCache { event in
+        switch event {
+        case let .required(error):
+            Self.logger.error("exec approvals resolve blocked: \(error.localizedDescription, privacy: .public)")
+        case let .recovered(stateDirectoryPath):
+            Self.logger.info(
+                "exec approvals migration requirement cleared for \(stateDirectoryPath, privacy: .public)")
+        }
+    }
+
     private static let defaultAgentId = "main"
     // Keep omitted-file behavior aligned with the TypeScript gateway/CLI contract.
     private static let defaultSecurity: ExecSecurity = .full
     private static let defaultAsk: ExecAsk = .off
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
+
+    #if compiler(>=6.4)
+    nonisolated(nonsending) static func withStateDirectory<T>(
+        _ url: URL,
+        operation: () async throws -> T) async rethrows -> T
+    {
+        try await self.$scopedStateDirectoryURL.withValue(url) {
+            try await operation()
+        }
+    }
+    #else
+    static func withStateDirectory<T>(
+        _ url: URL,
+        operation: () async throws -> T,
+        isolation: isolated (any Actor)? = #isolation) async rethrows -> T
+    {
+        try await self.$scopedStateDirectoryURL.withValue(
+            url,
+            operation: operation,
+            isolation: isolation)
+    }
+    #endif
+
     static func databaseURL() -> URL {
         ExecApprovalsSQLiteStore.databaseURL(stateDirectoryURL: self.stateDirURL())
     }
@@ -30,6 +159,9 @@ enum ExecApprovalsStore {
     }
 
     private static func stateDirURL() -> URL {
+        if let scopedStateDirectoryURL {
+            return scopedStateDirectoryURL
+        }
         guard let configured = OpenClawEnv.path("OPENCLAW_STATE_DIR") else {
             return self.homeURL().appendingPathComponent(".openclaw", isDirectory: true)
         }
@@ -257,16 +389,24 @@ enum ExecApprovalsStore {
     static func resolveResult(
         agentId: String?) -> Result<ExecApprovalsResolved, ExecApprovalsReadError>
     {
+        let stateDirectoryURL = self.stateDirURL()
+        if let error = self.migrationRequiredCache.cachedError(stateDirectoryURL: stateDirectoryURL) {
+            return .failure(.migrationRequired(error))
+        }
         do {
             let file = try ExecApprovalsSQLiteStore.withImmediateTransaction(
-                stateDirectoryURL: self.stateDirURL())
+                stateDirectoryURL: stateDirectoryURL)
             { record in
                 let ensured = self.ensureFile(record)
                 return ExecApprovalsSQLiteMutation(
                     value: ensured.file,
                     documentToWrite: ensured.needsWrite ? ensured.file : nil)
             }
+            self.migrationRequiredCache.markResolved(stateDirectoryURL: stateDirectoryURL)
             return .success(self.resolveFromFile(file, agentId: agentId))
+        } catch let error as ExecApprovalsLegacyMigrationRequiredError {
+            self.migrationRequiredCache.record(error)
+            return .failure(.migrationRequired(error))
         } catch {
             self.logger.warning("exec approvals resolve failed: \(error.localizedDescription, privacy: .public)")
             return .failure(.unavailable)
@@ -276,8 +416,13 @@ enum ExecApprovalsStore {
     static func resolveAsyncResult(
         agentId: String?) async -> Result<ExecApprovalsResolved, ExecApprovalsReadError>
     {
-        await Task.detached(priority: .userInitiated) {
-            self.resolveResult(agentId: agentId)
+        let stateDirectoryURL = self.stateDirURL()
+        // Detached work does not inherit task-local values; bind the prepared
+        // root again so one read cannot mix database and socket directories.
+        return await Task.detached(priority: .userInitiated) {
+            self.$scopedStateDirectoryURL.withValue(stateDirectoryURL) {
+                self.resolveResult(agentId: agentId)
+            }
         }.value
     }
 

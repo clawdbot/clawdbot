@@ -26,6 +26,11 @@ public enum OpenClawChatOutboxMessageState: Equatable, Sendable {
 /// strictly in createdAt order when health recovers. A gateway ACK only moves
 /// a row to awaiting-confirmation; canonical history owns durable completion.
 extension OpenClawChatViewModel {
+    /// True when this view model owns a gateway-scoped durable text outbox.
+    public var supportsOfflineTextOutbox: Bool {
+        self.outbox != nil
+    }
+
     struct OutboxDeliveryTarget: Hashable {
         let presentationSessionKey: String
         let deliverySessionKey: String
@@ -771,7 +776,7 @@ extension OpenClawChatViewModel {
             // The store owner no longer matches the active gateway route.
             // Leave every row queued; the replacement view model owns the
             // new gateway and a later matching reconnect can resume this one.
-            if case let .unavailable(reason) = routeResult, let reason {
+            if case let .unavailable(reason, _) = routeResult, let reason {
                 self.errorText = reason
             }
             self.applyTransportHealth(false)

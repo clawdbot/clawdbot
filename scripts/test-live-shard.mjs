@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
-  forwardSignalToVitestProcessGroup,
+  createVitestProcessCompletion,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mjs";
@@ -29,6 +29,11 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/agents/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
   ["src/agents/tools/image-tool.ollama.live.test.ts", ["OPENCLAW_LIVE_OLLAMA_IMAGE"]],
   ["src/agents/tools/image-tool.providers.live.test.ts", ["OPENCLAW_LIVE_IMAGE_TOOL_TEST"]],
+  [
+    "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
+    ["OPENCLAW_LIVE_GPT_LIVE"],
+  ],
+  ["extensions/openai/realtime-quicksilver.live.test.ts", ["OPENCLAW_LIVE_GPT_LIVE"]],
   ["src/skills/workshop/experience-review.live.test.ts", ["OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"]],
   ["src/system-agent/rescue-channel.live.test.ts", ["OPENCLAW_LIVE_SYSTEM_AGENT_RESCUE_CHANNEL"]],
   ["src/gateway/android-node.capabilities.live.test.ts", ["OPENCLAW_LIVE_ANDROID_NODE"]],
@@ -37,6 +42,7 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/gateway/gateway-cli-backend.live.test.ts", ["OPENCLAW_LIVE_CLI_BACKEND"]],
   ["src/gateway/gateway-codex-bind.live.test.ts", ["OPENCLAW_LIVE_CODEX_BIND"]],
   ["src/gateway/gateway-codex-harness.live.test.ts", ["OPENCLAW_LIVE_CODEX_HARNESS"]],
+  ["src/gateway/gateway-openai-long-context.live.test.ts", ["OPENCLAW_LIVE_OPENAI_LONG_CONTEXT"]],
   ["src/gateway/gateway-trajectory-export.live.test.ts", ["OPENCLAW_LIVE_CODEX_HARNESS"]],
   ["src/infra/push-apns-http2.live.test.ts", ["OPENCLAW_LIVE_APNS_REACHABILITY"]],
   ["test/image-generation.infer-cli.live.test.ts", ["OPENCLAW_LIVE_INFER_CLI_TEST"]],
@@ -213,7 +219,10 @@ function isGatewayBackendLiveTest(file) {
 }
 
 function isGatewayProfilesLiveTest(file) {
-  return file === "src/gateway/gateway-models.profiles.live.test.ts";
+  return (
+    file === "src/gateway/gateway-models.profiles.live.test.ts" ||
+    file === "src/gateway/gateway-openai-long-context.live.test.ts"
+  );
 }
 
 function isExtensionMediaLiveTest(file) {
@@ -714,9 +723,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const reportPath = buildLiveShardReportPath(shard, process.env);
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   removeLiveShardReportFile(reportPath);
+  const spawnParams = buildLiveShardSpawnParams(process.env);
   const child = spawnPnpmRunner({
     pnpmArgs: buildLiveShardPnpmArgs(files, addLiveShardReportArgs(passthroughArgs, reportPath)),
-    ...buildLiveShardSpawnParams(process.env),
+    ...spawnParams,
   });
   let forwardedSignal = null;
   const teardown = installVitestProcessGroupCleanup({
@@ -727,33 +737,30 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       forwardedSignal ??= signal;
     },
   });
-  child.on("exit", (code, signal) => {
-    teardown();
-    if (forwardedSignal) {
-      forwardSignalToVitestProcessGroup({
-        child,
-        kill: process.kill.bind(process),
-        signal: "SIGKILL",
-      });
-      process.kill(process.pid, forwardedSignal);
-      return;
-    }
-    if (signal) {
-      process.kill(process.pid, signal);
-      return;
-    }
-    if ((code ?? 1) === 0) {
-      const validation = validateLiveShardReport(reportPath, files);
-      if (!validation.ok) {
-        process.stderr.write(`[test:live:shard] ${validation.reason}\n`);
+  createVitestProcessCompletion({ child, detached: spawnParams.detached })
+    .finally(teardown)
+    .then(
+      ({ code, signal }) => {
+        if (forwardedSignal) {
+          process.kill(process.pid, forwardedSignal);
+          return;
+        }
+        if (signal) {
+          process.kill(process.pid, signal);
+          return;
+        }
+        if ((code ?? 1) === 0) {
+          const validation = validateLiveShardReport(reportPath, files);
+          if (!validation.ok) {
+            process.stderr.write(`[test:live:shard] ${validation.reason}\n`);
+            process.exit(1);
+          }
+        }
+        process.exit(code ?? 1);
+      },
+      /** @param {unknown} error */ (error) => {
+        console.error(error);
         process.exit(1);
-      }
-    }
-    process.exit(code ?? 1);
-  });
-  child.on("error", (error) => {
-    teardown();
-    console.error(error);
-    process.exit(1);
-  });
+      },
+    );
 }

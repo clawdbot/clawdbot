@@ -1,3 +1,5 @@
+import { deriveCopilotSessionLabel } from "./panel-core.js";
+
 const PANEL_PATH = "sidepanel.html";
 
 function parsePanelBindingUrl(chromeApi, raw) {
@@ -54,7 +56,7 @@ export async function archiveCopilotSession(gateway, entry) {
     // sending it. sessions.create adopts the same key, making cleanup idempotent.
     await gateway.request("sessions.create", {
       key: entry.sessionKey,
-      label: "Browser copilot",
+      label: deriveCopilotSessionLabel(entry.sessionKey),
     });
   }
   try {
@@ -70,11 +72,11 @@ export async function archiveCopilotSession(gateway, entry) {
   await gateway.request("sessions.patch", { key: entry.sessionKey, archived: true });
 }
 
-export function selectCopilotPanelState({ paired, shared, abortPending, gatewayState }) {
+export function selectCopilotPanelState({ paired, accessible, abortPending, gatewayState }) {
   if (!paired) {
     return "needs-pairing";
   }
-  if (!shared) {
+  if (!accessible) {
     return "needs-sharing";
   }
   return abortPending ? "reconciling" : gatewayState;

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
@@ -15,12 +15,12 @@ import {
   getGatewayConfigModule,
   directSessionReq,
   seedLinearSessionTranscript,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
 import { agentsHandlers } from "./agents.js";
 import type { GatewayRequestContext } from "./types.js";
 
-setupGatewaySessionsTestHarness();
+setupGatewaySessionsHandlerTestHarness();
 
 const UNKNOWN_AGENT_ID = "ghost";
 const UNKNOWN_SESSION_KEY = `agent:${UNKNOWN_AGENT_ID}:zzz`;
@@ -42,7 +42,10 @@ function expectAgentStoreAbsent(agentId: string): void {
   );
 }
 
-async function listAgentIdsViaRpc(includeSystem = false): Promise<string[]> {
+async function listAgentIdsViaRpc(
+  includeSystem = false,
+  catalogContext: Partial<GatewayRequestContext> = {},
+): Promise<string[]> {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   let ids: string[] | undefined;
   await agentsHandlers["agents.list"]?.({
@@ -56,6 +59,8 @@ async function listAgentIdsViaRpc(includeSystem = false): Promise<string[]> {
     context: {
       getRuntimeConfig,
       loadGatewayModelCatalog: async () => [],
+      readPreparedGatewayModelCatalog: async () => [],
+      ...catalogContext,
     } as unknown as GatewayRequestContext,
     client: includeSystem
       ? ({ connect: { caps: [GATEWAY_CLIENT_CAPS.AGENT_KIND] } } as never)
@@ -77,6 +82,21 @@ test("agents.list includes system rows only when negotiated", async () => {
 
   expect(await listAgentIdsViaRpc()).toEqual(["main"]);
   expect(await listAgentIdsViaRpc(true)).toEqual(["main", "openclaw"]);
+});
+
+test("agents.list reads published model facts without starting provider discovery", async () => {
+  const loadGatewayModelCatalog = vi.fn(async () => []);
+  const readPreparedGatewayModelCatalog = vi.fn(async () => []);
+
+  await expect(
+    listAgentIdsViaRpc(false, {
+      loadGatewayModelCatalog,
+      readPreparedGatewayModelCatalog,
+    }),
+  ).resolves.toEqual(["main"]);
+
+  expect(readPreparedGatewayModelCatalog).toHaveBeenCalledWith(undefined);
+  expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
 });
 
 beforeEach(async () => {

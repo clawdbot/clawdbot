@@ -14,6 +14,19 @@ import type { ModelRow } from "./list.types.js";
 
 const PROMOTIONS_SECTION_MAX_ENTRIES = 3;
 
+type PromotionsFeedRefresh = {
+  nowMs: number;
+  statePromise: Promise<Awaited<ReturnType<typeof maybeRefreshPromotionsFeed>> | undefined>;
+};
+
+/** Starts the passive feed refresh so callers can overlap it with model row construction. */
+export function startPromotionsFeedRefresh(nowMs = Date.now()): PromotionsFeedRefresh {
+  return {
+    nowMs,
+    statePromise: maybeRefreshPromotionsFeed({ nowMs }).catch(() => undefined),
+  };
+}
+
 /**
  * Tag configured rows that were registered by `promos claim`, flipping to
  * "promo ended" once the window passes so users learn why a model stopped
@@ -64,11 +77,15 @@ function canonicalPromotionModelKey(
  */
 export async function printAvailablePromotionsSection(params: {
   configuredKeys: ReadonlySet<string>;
+  refresh: PromotionsFeedRefresh;
   runtime: RuntimeEnv;
-  nowMs?: number;
 }): Promise<void> {
-  const nowMs = params.nowMs ?? Date.now();
-  const state = await maybeRefreshPromotionsFeed({ nowMs });
+  const { refresh } = params;
+  const nowMs = refresh.nowMs;
+  const state = await refresh.statePromise;
+  if (!state) {
+    return;
+  }
   const live = listLivePromotionEntries(state, nowMs);
   if (live.length === 0) {
     return;

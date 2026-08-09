@@ -2,10 +2,6 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isOpenClawOrgNpmSpec } from "../infra/npm-registry-spec.js";
-import {
-  installedPackageNeedsOpenClawPeerLinkRepair,
-  readInstalledPackagePeerDependencies,
-} from "../infra/package-update-utils.js";
 import { resolveUserPath } from "../utils.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
@@ -14,10 +10,11 @@ import {
   getExternalizedBundledPluginLookupIds,
   type ExternalizedBundledPluginBridge,
 } from "./externalized-bundled-plugins.js";
+import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { resolvePluginInstallDir } from "./install.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
-import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
+import { reconcileRegisteredOpenClawHostLinks } from "./plugin-peer-link.js";
 import { resetPluginSlotsToDefaults } from "./slots.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 import type { PluginUpdateLogger } from "./update-source.js";
@@ -393,59 +390,35 @@ export function disablePluginAfterUpdateFailure(
   };
 }
 
+/** Repairs a legacy npm-owned extensions-root host without reinstalling its package. */
+export async function repairRegisteredOpenClawHostLink(params: {
+  pluginId: string;
+  record: PluginInstallRecord;
+  logger: PluginUpdateLogger;
+}): Promise<boolean> {
+  const result = await reconcileRegisteredOpenClawHostLinks({
+    installRecords: { [params.pluginId]: params.record },
+    extensionsDir: resolveDefaultPluginExtensionsDir(),
+    mode: "repair",
+    logger: params.logger,
+  });
+  return result.repaired > 0;
+}
+
 export async function repairOpenClawPeerLinksForNpmInstalls(params: {
   config: OpenClawConfig;
   logger: PluginUpdateLogger;
 }): Promise<boolean> {
-  let repaired = false;
-  for (const [pluginId, record] of Object.entries(params.config.plugins?.installs ?? {})) {
-    if (record.source !== "npm") {
-      continue;
-    }
-
-    let installPath: string;
-    try {
-      installPath = resolveUserPath(
-        record.installPath?.trim() || resolvePluginInstallDir(pluginId),
-      );
-    } catch (err) {
+  const result = await reconcileRegisteredOpenClawHostLinks({
+    installRecords: params.config.plugins?.installs ?? {},
+    extensionsDir: resolveDefaultPluginExtensionsDir(),
+    mode: "repair",
+    logger: params.logger,
+    onPackageReadError: (error, packageDir) => {
       params.logger.warn?.(
-        `Could not repair openclaw peer link for "${pluginId}" due to invalid install path: ${String(err)}`,
+        `Could not repair openclaw peer link at ${packageDir}: ${String(error)}`,
       );
-      continue;
-    }
-
-    if (!installedPackageNeedsOpenClawPeerLinkRepair(installPath)) {
-      continue;
-    }
-
-    const peerDependencies = readInstalledPackagePeerDependencies(installPath);
-    if (!Object.hasOwn(peerDependencies, "openclaw")) {
-      continue;
-    }
-
-    try {
-      const warnings: string[] = [];
-      const peerLinkRepair = await linkOpenClawPeerDependencies({
-        installedDir: installPath,
-        peerDependencies,
-        logger: {
-          info: (message) => params.logger.info?.(message),
-          warn: (message) => warnings.push(message),
-        },
-      });
-      if (peerLinkRepair.skipped > 0) {
-        params.logger.warn?.(
-          `Could not repair openclaw peer link for "${pluginId}" at ${installPath}: ${warnings.join("; ") || "peer link repair was skipped"}`,
-        );
-        continue;
-      }
-      repaired = !installedPackageNeedsOpenClawPeerLinkRepair(installPath) || repaired;
-    } catch (err) {
-      params.logger.warn?.(
-        `Could not repair openclaw peer link for "${pluginId}" at ${installPath}: ${String(err)}`,
-      );
-    }
-  }
-  return repaired;
+    },
+  });
+  return result.repaired > 0;
 }

@@ -1,5 +1,4 @@
 // Telegram plugin module implements message cache behavior.
-import { createHash } from "node:crypto";
 import type { Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -17,12 +16,20 @@ import {
   getTelegramTextParts,
   normalizeForwardedContext,
 } from "./bot/helpers.js";
+import {
+  isTelegramMessageCacheSourceMessage,
+  type PersistedTelegramMessageCacheValue,
+  resolveTelegramMessageCachePersistentScopeKey,
+  TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
+  TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
+  TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION,
+  type TelegramMessageThreadBinding,
+} from "./message-cache-persistence.js";
 import { parseTelegramMessageThreadId } from "./outbound-params.js";
 import {
   parseTelegramPromptContextProjection,
   type TelegramPromptContextProjection,
   type TelegramPromptContextProjectionMarker,
-  type TelegramPromptContextSource,
 } from "./prompt-context-projection.js";
 import { getOptionalTelegramRuntime } from "./runtime.js";
 
@@ -35,13 +42,6 @@ export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId
   sourceMessage: Message;
   promptContextProjectionMarker?: TelegramPromptContextProjectionMarker;
   threadBinding?: TelegramMessageThreadBinding;
-};
-
-// This marker is a provider fact, never an inference from invocation origin or
-// a legacy threadId. Delegated mutations may rely on it after cache hydration.
-type TelegramMessageThreadBinding = {
-  kind: "provider-observed-v1";
-  threadId: string;
 };
 
 type TelegramConversationContextNode = {
@@ -111,11 +111,6 @@ type TelegramCachedMessageObservation = {
 type TelegramEmbeddedReplyMessage = NonNullable<Message["reply_to_message"]>;
 
 const DEFAULT_MAX_MESSAGES = 5000;
-export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES = 3000;
-export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cache";
-// Versioned writes preserve projection provenance. Shipped unversioned rows
-// hydrate as markerless context only; they never imply transcript projection.
-export const TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION = 1;
 const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`;
 const TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY = Symbol.for("openclaw.telegram.messageCacheBuckets");
 
@@ -131,15 +126,6 @@ function getPersistedMessageCacheBuckets(): Map<string, TelegramMessageCacheBuck
   globalRecord[TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY] = created;
   return created;
 }
-
-export type PersistedTelegramMessageCacheValue = {
-  version: typeof TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION;
-  sourceMessage: Message;
-  botUserId?: number;
-  promptContextProjection?: TelegramPromptContextProjection | TelegramPromptContextSource;
-  threadBinding?: TelegramMessageThreadBinding;
-  threadId?: string;
-};
 
 type TelegramMessageCachePersistentStore = {
   register(key: string, value: PersistedTelegramMessageCacheValue): Promise<void>;
@@ -163,14 +149,6 @@ function telegramMessageCacheKeyPrefix(params: {
 }) {
   const prefix = `${params.accountId}:${params.chatId}:`;
   return params.scopeKey ? `${params.scopeKey}:${prefix}` : prefix;
-}
-
-export function resolveTelegramMessageCachePath(storePath: string): string {
-  return `${storePath}.telegram-messages.json`;
-}
-
-export function resolveTelegramMessageCacheScope(storePath: string): string {
-  return resolveTelegramMessageCachePath(storePath);
 }
 
 function resolveReplyMessage(msg: Message): Message | undefined {
@@ -282,6 +260,13 @@ export function hasProviderObservedTelegramThreadBinding(
   return normalizeTelegramMessageThreadBinding(node?.threadBinding, threadId) !== undefined;
 }
 
+export function resolveProviderObservedTelegramThreadId(
+  node: TelegramCachedMessageNode | null | undefined,
+): number | undefined {
+  const threadId = parseTelegramMessageThreadId(node?.threadId);
+  return hasProviderObservedTelegramThreadBinding(node, threadId) ? threadId : undefined;
+}
+
 function normalizeMessageNodes(
   msg: Message,
   params: {
@@ -337,16 +322,6 @@ function normalizeMessageNodes(
 
 function parseSafeMessageId(value: string | undefined): number | undefined {
   return value === undefined ? undefined : parseStrictPositiveInteger(value);
-}
-
-export function isTelegramMessageCacheSourceMessage(value: unknown): value is Message {
-  return (
-    isRecord(value) &&
-    typeof value.message_id === "number" &&
-    Number.isFinite(value.message_id) &&
-    typeof value.date === "number" &&
-    Number.isFinite(value.date)
-  );
 }
 
 function parsePersistedCacheValue(key: string, value: unknown) {
@@ -461,10 +436,6 @@ function upsertCachedMessageNode(params: {
   params.messages.delete(params.key);
   params.messages.set(params.key, node);
   return node;
-}
-
-export function resolveTelegramMessageCachePersistentScopeKey(scope: string): string {
-  return createHash("sha256").update(scope).digest("hex").slice(0, 24);
 }
 
 function resolveDefaultPersistentStore(): TelegramMessageCachePersistentStore | undefined {

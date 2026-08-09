@@ -12,9 +12,7 @@ import {
 import { buildModelsProviderData, handleModelsCommand } from "./commands-models.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const modelCatalogMocks = vi.hoisted(() => ({
-  loadModelCatalog: vi.fn(),
-}));
+const modelCatalogMocks = vi.hoisted(() => ({ loadModelCatalog: vi.fn() }));
 
 const modelAuthLabelMocks = vi.hoisted(() => ({
   resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
@@ -114,6 +112,7 @@ function setFastModelsCliBackendDeps(): void {
 }
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: modelCatalogMocks.loadModelCatalog,
   loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await modelCatalogMocks.loadModelCatalog(...args);

@@ -40,13 +40,16 @@ export function classifyCompactionReason(reason?: string): string {
     return "below_threshold";
   }
   if (text.includes("already compacted") || text.includes("already_compacted")) {
-    return "already_compacted_recently";
+    return "already_compacted";
   }
   if (text.includes("deferred to background")) {
     return "deferred_background";
   }
   if (text.includes("still exceeds target")) {
     return "live_context_still_exceeds_target";
+  }
+  if (text.includes("session transcript") && text.includes("not persisted")) {
+    return "transcript_persistence_failed";
   }
   if (text.includes("guard")) {
     return "guard_blocked";
@@ -74,6 +77,27 @@ export function classifyCompactionReason(reason?: string): string {
     return "provider_error_5xx";
   }
   return "unknown";
+}
+
+/** Return whether a classified reason represents an intentional compaction no-op. */
+export function isBenignCompactionSkipReason(reason?: string): boolean {
+  const classification = classifyCompactionReason(reason);
+  return classification === "below_threshold" || classification === "already_compacted";
+}
+
+/** Return whether a compaction result is an intentional no-op rather than a failure. */
+export function isBenignCompactionSkipResult(result: {
+  ok: boolean;
+  compacted: boolean;
+  reason?: string;
+}): boolean {
+  if (result.compacted) {
+    return false;
+  }
+  return (
+    isBenignCompactionSkipReason(result.reason) ||
+    (result.ok && classifyCompactionReason(result.reason) === "no_compactable_entries")
+  );
 }
 
 /** Sanitize an unknown reason into a short log/metric-safe detail suffix. */

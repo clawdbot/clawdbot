@@ -1,5 +1,6 @@
 // Orchestrates security audit collection and report formatting.
 import path from "node:path";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -248,8 +249,10 @@ async function materializeAuditGatewayAuthRefs(params: {
     cfg: params.cfg,
     env: params.env,
     mode: params.cfg.gateway?.auth?.mode,
-    hasTokenCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN)),
-    hasPasswordCandidate: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_PASSWORD)),
+    hasTokenOverride: false,
+    hasPasswordOverride: false,
+    hasTokenFallback: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN)),
+    hasPasswordFallback: Boolean(normalizeOptionalString(params.env.OPENCLAW_GATEWAY_PASSWORD)),
   };
   if (!canMaterializeGatewayAuthSecretRefsWithoutExec(materializeParams)) {
     return params.cfg;
@@ -1266,10 +1269,15 @@ async function maybeProbeGateway(params: {
     deep: {
       gateway: {
         attempted: true,
-        url,
+        url: redactSensitiveUrlLikeString(url),
         ok: res.ok,
-        error: res.ok ? null : res.error,
-        close: res.close ? { code: res.close.code, reason: res.close.reason } : null,
+        error: res.ok || res.error === null ? null : redactSensitiveUrlLikeString(res.error),
+        close: res.close
+          ? {
+              code: res.close.code,
+              reason: redactSensitiveUrlLikeString(res.close.reason),
+            }
+          : null,
       },
     },
     authWarning: authResolution.warning,

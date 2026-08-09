@@ -5,6 +5,7 @@ import {
   selectCopilotPanelState,
 } from "./copilot-background-shared.js";
 import { createCopilotController } from "./copilot-background.js";
+import { deriveCopilotSessionLabel } from "./panel-core.js";
 
 function eventHook() {
   return { addListener: vi.fn() };
@@ -46,8 +47,8 @@ describe("browser copilot background", () => {
         storage,
       } as never,
       getConfig,
-      isTabShared: vi.fn(),
-      addTabToOpenClawGroup: vi.fn(),
+      isTabAccessible: vi.fn(),
+      grantTabAccess: vi.fn(),
       attachDebugger: vi.fn(),
       detachDebugger: vi.fn(),
       revokeDebugger: vi.fn(),
@@ -132,8 +133,8 @@ describe("browser copilot background", () => {
         },
       } as never,
       getConfig,
-      isTabShared: vi.fn(),
-      addTabToOpenClawGroup: vi.fn(),
+      isTabAccessible: vi.fn(),
+      grantTabAccess: vi.fn(),
       attachDebugger: vi.fn(),
       detachDebugger: vi.fn(),
       revokeDebugger: vi.fn(async () => undefined),
@@ -191,8 +192,8 @@ describe("browser copilot background", () => {
           storage: { local: storageArea(), session: storageArea() },
         } as never,
         getConfig,
-        isTabShared: vi.fn(),
-        addTabToOpenClawGroup: vi.fn(),
+        isTabAccessible: vi.fn(),
+        grantTabAccess: vi.fn(),
         attachDebugger: vi.fn(),
         detachDebugger: vi.fn(),
         revokeDebugger: vi.fn(async () => undefined),
@@ -258,8 +259,8 @@ describe("browser copilot background", () => {
         storage: { local: storageArea(), session: storageArea() },
       } as never,
       getConfig,
-      isTabShared: vi.fn(),
-      addTabToOpenClawGroup: vi.fn(),
+      isTabAccessible: vi.fn(),
+      grantTabAccess: vi.fn(),
       attachDebugger: vi.fn(),
       detachDebugger: vi.fn(),
       revokeDebugger: vi.fn(async () => undefined),
@@ -311,8 +312,8 @@ describe("browser copilot background", () => {
         storage: { local: storageArea(), session: storageArea() },
       } as never,
       getConfig,
-      isTabShared: vi.fn(),
-      addTabToOpenClawGroup: vi.fn(),
+      isTabAccessible: vi.fn(),
+      grantTabAccess: vi.fn(),
       attachDebugger: vi.fn(),
       detachDebugger: vi.fn(),
       revokeDebugger: vi.fn(async () => undefined),
@@ -354,8 +355,8 @@ describe("browser copilot background", () => {
         relayUrl: "ws://127.0.0.1:18792/browser/extension",
         gatewayUrl: gatewayScope,
       })),
-      isTabShared: vi.fn(async () => true),
-      addTabToOpenClawGroup: vi.fn(),
+      isTabAccessible: vi.fn(async () => true),
+      grantTabAccess: vi.fn(),
       attachDebugger: vi.fn(),
       detachDebugger: vi.fn(),
       revokeDebugger,
@@ -381,7 +382,7 @@ describe("browser copilot background", () => {
     expect(
       selectCopilotPanelState({
         paired: true,
-        shared: true,
+        accessible: true,
         abortPending: false,
         gatewayState: "ready",
       }),
@@ -389,7 +390,7 @@ describe("browser copilot background", () => {
     expect(
       selectCopilotPanelState({
         paired: true,
-        shared: true,
+        accessible: true,
         abortPending: true,
         gatewayState: "ready",
       }),
@@ -418,8 +419,8 @@ describe("browser copilot background", () => {
         relayUrl: "ws://127.0.0.1:18792/browser/extension",
         gatewayUrl: "ws://127.0.0.1:18789",
       })),
-      isTabShared: vi.fn(),
-      addTabToOpenClawGroup: vi.fn(),
+      isTabAccessible: vi.fn(),
+      grantTabAccess: vi.fn(),
       attachDebugger: vi.fn(),
       detachDebugger: vi.fn(),
       revokeDebugger,
@@ -465,8 +466,8 @@ describe("browser copilot background", () => {
         relayUrl: "ws://127.0.0.1:18792/browser/extension",
         gatewayUrl: gatewayScope,
       })),
-      isTabShared: vi.fn(),
-      addTabToOpenClawGroup: vi.fn(),
+      isTabAccessible: vi.fn(),
+      grantTabAccess: vi.fn(),
       attachDebugger: vi.fn(),
       detachDebugger: vi.fn(),
       revokeDebugger,
@@ -524,8 +525,8 @@ describe("browser copilot background", () => {
         relayUrl: "ws://127.0.0.1:18792/browser/extension",
         gatewayUrl: "ws://127.0.0.1:18789",
       })),
-      isTabShared: vi.fn(),
-      addTabToOpenClawGroup: vi.fn(),
+      isTabAccessible: vi.fn(),
+      grantTabAccess: vi.fn(),
       attachDebugger: vi.fn(),
       detachDebugger: vi.fn(),
       revokeDebugger,
@@ -588,8 +589,8 @@ describe("browser copilot background", () => {
         relayUrl: "ws://127.0.0.1:28792/browser/extension",
         gatewayUrl: "ws://127.0.0.1:28789",
       })),
-      isTabShared: vi.fn(),
-      addTabToOpenClawGroup: vi.fn(),
+      isTabAccessible: vi.fn(),
+      grantTabAccess: vi.fn(),
       attachDebugger: vi.fn(),
       detachDebugger: vi.fn(),
       revokeDebugger: vi.fn(async () => undefined),
@@ -671,8 +672,8 @@ describe("browser copilot background", () => {
     const controller = createCopilotController({
       chromeApi: chromeApi as never,
       getConfig: vi.fn(),
-      isTabShared: vi.fn(),
-      addTabToOpenClawGroup: vi.fn(),
+      isTabAccessible: vi.fn(),
+      grantTabAccess: vi.fn(),
       attachDebugger: vi.fn(),
       detachDebugger: vi.fn(),
       revokeDebugger: vi.fn(),
@@ -718,16 +719,15 @@ describe("browser copilot background", () => {
   });
 
   it("replays ambiguous session creation before archiving its key", async () => {
+    const sessionKey =
+      "agent:main:main:thread:browser-copilot-11111111-1111-4111-8111-111111111111";
     const request = vi.fn(async () => ({ ok: true }));
-    await archiveCopilotSession(
-      { request } as never,
-      { sessionKey: "session-pending", ensureCreated: true } as never,
-    );
+    await archiveCopilotSession({ request } as never, { sessionKey, ensureCreated: true } as never);
     expect(request.mock.calls).toEqual([
-      ["sessions.create", { key: "session-pending", label: "Browser copilot" }],
-      ["sessions.messages.unsubscribe", { key: "session-pending" }],
-      ["sessions.abort", { key: "session-pending" }],
-      ["sessions.patch", { key: "session-pending", archived: true }],
+      ["sessions.create", { key: sessionKey, label: deriveCopilotSessionLabel(sessionKey) }],
+      ["sessions.messages.unsubscribe", { key: sessionKey }],
+      ["sessions.abort", { key: sessionKey }],
+      ["sessions.patch", { key: sessionKey, archived: true }],
     ]);
   });
 });

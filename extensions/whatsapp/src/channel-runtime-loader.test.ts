@@ -4,7 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
-import { isWhatsAppAuthConfigured, loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
+import {
+  loadWhatsAppChannelRuntime,
+  readWhatsAppAccountLinkState,
+} from "./channel-runtime-loader.js";
 
 const runtimeLoads = vi.hoisted(() => ({
   order: [] as string[],
@@ -60,8 +63,8 @@ describe("WhatsApp channel runtime loader", () => {
 
     expect(loadWhatsAppChannelRuntime()).toBe(firstRuntimeLoad);
     await expect(
-      Promise.all([isWhatsAppAuthConfigured("/tmp/default"), firstRuntimeLoad]),
-    ).resolves.toEqual([true, expect.any(Object)]);
+      Promise.all([readWhatsAppAccountLinkState("/tmp/default"), firstRuntimeLoad]),
+    ).resolves.toEqual(["linked", expect.any(Object)]);
     expect(runtimeLoads.order).toEqual(["auth-store", "channel-runtime"]);
     expect(runtimeLoads.readWebAuthState).toHaveBeenCalledOnce();
   });

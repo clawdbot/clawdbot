@@ -10,9 +10,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import {
+  getDeliveryQueueEntryStatus,
+  loadDeliveryQueueEntry,
+  type DeliveryQueueCompletionRetention,
+} from "../../infra/delivery-queue-sqlite.js";
 import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { retryAsync } from "../../infra/retry.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -25,6 +30,12 @@ import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
+
+export const DIRECT_CRON_DELIVERY_COMPLETION_RETENTION = {
+  idPrefix: "cron-direct-delivery:v1:",
+  maxAgeMs: 24 * 60 * 60_000,
+  maxEntries: 2_000,
+} as const satisfies DeliveryQueueCompletionRetention;
 
 /** Deletes or retires ephemeral direct-delivery cron sessions for delete-after-run jobs. */
 export async function cleanupDirectCronSession(params: {
@@ -105,11 +116,6 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
 
 const STALE_CRON_DELIVERY_MAX_START_DELAY_MS = 3 * 60 * 60_000;
 
-type CompletedDirectCronDelivery = {
-  ts: number;
-  results: OutboundDeliveryResult[];
-};
-
 const deliveryLoggerRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-logger.runtime.js"),
 );
@@ -117,8 +123,6 @@ const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runt
 const deliverySubagentRegistryRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-subagent-registry.runtime.js"),
 );
-
-const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
 
 async function loadDeliveryLoggerRuntime(): Promise<typeof import("./delivery-logger.runtime.js")> {
   return await deliveryLoggerRuntimeLoader.load();
@@ -150,39 +154,6 @@ export function logCronDeliveryErrorDeferred(message: string): void {
   });
 }
 
-function cloneDeliveryResults(
-  results: readonly OutboundDeliveryResult[],
-): OutboundDeliveryResult[] {
-  return results.map((result) => ({
-    ...result,
-    ...(result.meta ? { meta: { ...result.meta } } : {}),
-  }));
-}
-
-function pruneCompletedDirectCronDeliveries(now: number) {
-  const ttlMs = isFastTestRuntimeEnv() ? 60_000 : 24 * 60 * 60 * 1000;
-  for (const [key, entry] of COMPLETED_DIRECT_CRON_DELIVERIES) {
-    if (now - entry.ts >= ttlMs) {
-      COMPLETED_DIRECT_CRON_DELIVERIES.delete(key);
-    }
-  }
-  const maxEntries = 2000;
-  if (COMPLETED_DIRECT_CRON_DELIVERIES.size <= maxEntries) {
-    return;
-  }
-  const entries = [...COMPLETED_DIRECT_CRON_DELIVERIES.entries()].toSorted(
-    (a, b) => a[1].ts - b[1].ts,
-  );
-  const toDelete = COMPLETED_DIRECT_CRON_DELIVERIES.size - maxEntries;
-  for (let i = 0; i < toDelete; i += 1) {
-    const oldest = entries[i];
-    if (!oldest) {
-      break;
-    }
-    COMPLETED_DIRECT_CRON_DELIVERIES.delete(oldest[0]);
-  }
-}
-
 export function resolveCronDeliveryScheduledAtMs(params: {
   job: CronJob;
   runStartedAt: number;
@@ -200,32 +171,6 @@ export function resolveCronDeliveryStartDelayMs(params: {
 
 export function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
   return resolveCronDeliveryStartDelayMs(params) > STALE_CRON_DELIVERY_MAX_START_DELAY_MS;
-}
-
-export function rememberCompletedDirectCronDelivery(
-  idempotencyKey: string,
-  results: readonly OutboundDeliveryResult[],
-) {
-  // Cache completed sends by idempotency key so retry paths can report the
-  // original delivery result instead of double-announcing a cron run.
-  const now = Date.now();
-  COMPLETED_DIRECT_CRON_DELIVERIES.set(idempotencyKey, {
-    ts: now,
-    results: cloneDeliveryResults(results),
-  });
-  pruneCompletedDirectCronDeliveries(now);
-}
-
-export function getCompletedDirectCronDelivery(
-  idempotencyKey: string,
-): OutboundDeliveryResult[] | undefined {
-  const now = Date.now();
-  pruneCompletedDirectCronDeliveries(now);
-  const cached = COMPLETED_DIRECT_CRON_DELIVERIES.get(idempotencyKey);
-  if (!cached) {
-    return undefined;
-  }
-  return cloneDeliveryResults(cached.results);
 }
 
 export async function maybeApplyTtsToCronPayloads(params: {
@@ -276,25 +221,52 @@ export function buildDirectCronDeliveryIdempotencyKey(params: {
       : (stringifyRouteThreadId(params.delivery.threadId) ?? "");
   const accountId = params.delivery.accountId?.trim() ?? "";
   const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
-  return `cron-direct-delivery:v1:${executionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
+  // Escape route fields independently so colon-bearing identities cannot
+  // collide while ordinary shipped channel and target keys stay unchanged.
+  const routeIdentity = [params.delivery.channel, accountId, normalizedTo, threadId]
+    .map(encodeURIComponent)
+    .join(":");
+  return `${DIRECT_CRON_DELIVERY_COMPLETION_RETENTION.idPrefix}${executionId}:${routeIdentity}`;
 }
 
-/** Clears the direct-delivery idempotency cache for deterministic tests. */
-function resetCompletedDirectCronDeliveriesForTests() {
-  COMPLETED_DIRECT_CRON_DELIVERIES.clear();
+/** Receipts own recipient delivery; projections never stand in for custody. */
+export function isCompletedDirectCronDelivery(id: string): boolean {
+  return getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id) === "completed";
 }
 
-/** Returns the direct-delivery idempotency cache size for tests. */
-function getCompletedDirectCronDeliveriesCountForTests(): number {
-  return COMPLETED_DIRECT_CRON_DELIVERIES.size;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronDeliveryDispatchTestApi")] =
-    {
-      resetCompletedDirectCronDeliveriesForTests,
-      getCompletedDirectCronDeliveriesCountForTests,
-    };
+/** Wait only for an active recipient owner, never for crashed ambiguous sends. */
+export async function waitForCompletedDirectCronDelivery(params: {
+  id: string;
+  signal?: AbortSignal;
+}): Promise<boolean> {
+  // SQLite producer leases fence cross-process sends for at most 30 seconds.
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const status = getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, params.id);
+    if (status === "completed") {
+      return true;
+    }
+    const owner =
+      status === "pending" ? loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, params.id) : null;
+    if (!owner && status === "pending") {
+      // Completion can replace a pending row between the two indexed reads.
+      return isCompletedDirectCronDelivery(params.id);
+    }
+    if (
+      !owner ||
+      (owner.recoveryState === "send_attempt_started"
+        ? typeof owner.platformSendStartedAt !== "number" ||
+          owner.platformSendStartedAt <= Date.now() - 30_000
+        : owner.recoveryState !== "producer_claimed" ||
+          typeof owner.availableAt !== "number" ||
+          owner.availableAt <= Date.now())
+    ) {
+      return false;
+    }
+    if (attempt < 119) {
+      await sleepWithAbort(250, params.signal);
+    }
+  }
+  return false;
 }
 
 function summarizeDirectCronDeliveryError(error: unknown): string {
@@ -327,37 +299,52 @@ function resolveDirectCronRetryDelaysMs(): readonly number[] {
 
 export async function retryTransientDirectCronDelivery<T>(params: {
   jobId: string;
+  label?: string;
   signal?: AbortSignal;
+  deadlineAtMs?: number;
   run: () => Promise<T>;
   shouldRetryError?: (err: unknown) => boolean;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectCronRetryDelaysMs();
-  if (params.signal?.aborted) {
-    throw new Error("cron delivery aborted");
-  }
-  const runWithAbortCheck = async () => {
+  const assertActive = () => {
     if (params.signal?.aborted) {
       throw new Error("cron delivery aborted");
     }
+    if (params.deadlineAtMs !== undefined && Date.now() >= params.deadlineAtMs) {
+      const error = new Error("cron delivery deadline exceeded");
+      error.name = "TimeoutError";
+      throw error;
+    }
+  };
+  assertActive();
+  const runWithAbortCheck = async () => {
+    assertActive();
     return await params.run();
   };
-  return await retryAsync(runWithAbortCheck, {
+  const result = await retryAsync(runWithAbortCheck, {
     attempts: retryDelaysMs.length + 1,
     minDelayMs: 0,
     maxDelayMs: Math.max(...retryDelaysMs),
     delayMs: ({ attempt }) => retryDelaysMs[attempt - 1] ?? 0,
     shouldRetry: (err) =>
       params.signal?.aborted !== true &&
+      (params.deadlineAtMs === undefined || Date.now() < params.deadlineAtMs) &&
       isTransientDirectCronDeliveryError(err) &&
       (params.shouldRetryError?.(err) ?? true),
     onRetry: async ({ attempt, maxAttempts, delayMs, err }) => {
       await logCronDeliveryWarn(
-        `[cron:${params.jobId}] transient direct announce delivery failure, retrying ${attempt + 1}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
+        `[cron:${params.jobId}] transient ${params.label ?? "direct announce"} delivery failure, retrying ${attempt + 1}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
       );
       if (delayMs === 0) {
         await sleepWithAbort(0, params.signal);
       }
     },
-    sleep: async (delayMs) => await sleepWithAbort(delayMs, params.signal),
+    sleep: async (delayMs) => {
+      const remainingMs =
+        params.deadlineAtMs === undefined ? delayMs : Math.max(0, params.deadlineAtMs - Date.now());
+      await sleepWithAbort(Math.min(delayMs, remainingMs), params.signal);
+      assertActive();
+    },
   });
+  return result;
 }

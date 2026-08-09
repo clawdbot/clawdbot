@@ -422,19 +422,6 @@ export async function createChildAdapter(params: {
         (resolve, reject) => {
           resolveWait = resolve;
           rejectWait = reject;
-          if (waitResult) {
-            const settled = waitResult;
-            resolveWait = null;
-            rejectWait = null;
-            resolve(settled);
-            return;
-          }
-          if (waitError !== undefined) {
-            const error = waitError;
-            resolveWait = null;
-            rejectWait = null;
-            reject(toErrorObject(error, "Non-Error rejection"));
-          }
         },
       );
     }
@@ -508,6 +495,7 @@ export async function createChildAdapter(params: {
   return {
     pid: child.pid ?? undefined,
     stdin,
+    oomScoreWrapperSelected: preparedSpawn.wrapped,
     onStdout,
     onStderr,
     wait,

@@ -8,7 +8,6 @@ import {
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
@@ -57,11 +56,7 @@ function toInternalSessionEffectsTarget(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     sessionEntry: params.entry,
-    sessionFile: formatSqliteSessionFileMarker({
-      agentId: params.agentId,
-      sessionId: params.entry.sessionId,
-      storePath: params.storePath,
-    }),
+    sessionFile: params.sessionKey,
   };
 }
 

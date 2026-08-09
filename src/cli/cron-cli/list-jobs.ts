@@ -176,20 +176,20 @@ export async function listCronJobsFromGateway(
         page.nextOffset <= offset ||
         (total !== undefined && page.nextOffset !== offset + page.jobs.length)
       ) {
-        throw new Error("cron.list pagination did not advance while looking up cron job");
+        throw new Error("cron.list pagination did not advance while looking up automation");
       }
       offset = page.nextOffset;
     }
 
     if (!snapshotChanged) {
-      throw new Error("cron.list pagination exceeded maximum pages while looking up cron job");
+      throw new Error("cron.list pagination exceeded maximum pages while looking up automation");
     }
     if (restart === CRON_LIST_MAX_SNAPSHOT_RESTARTS) {
-      throw new Error("cron.list inventory changed repeatedly while reading cron jobs");
+      throw new Error("cron.list inventory changed repeatedly while reading automations");
     }
   }
 
-  throw new Error("cron.list inventory changed repeatedly while reading cron jobs");
+  throw new Error("cron.list inventory changed repeatedly while reading automations");
 }
 
 function isMissingCronGetError(error: unknown, id: string): error is Error {
@@ -198,7 +198,10 @@ function isMissingCronGetError(error: unknown, id: string): error is Error {
     (error instanceof Error &&
       error.name === "GatewayClientRequestError" &&
       (error as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-      error.message.includes(`cron job not found: ${id}`))
+      // Gateways emit the stable "cron job not found" wire wording (kept for older
+      // shipped CLI matchers); also accept the renamed form in case it ever changes.
+      (error.message.includes(`automation not found: ${id}`) ||
+        error.message.includes(`cron job not found: ${id}`)))
   );
 }
 

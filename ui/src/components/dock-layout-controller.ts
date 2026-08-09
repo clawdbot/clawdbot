@@ -6,11 +6,11 @@ import {
   type ReactiveControllerHost,
   type TemplateResult,
 } from "lit";
-import type { DockPanelLayoutStore, DockPanelSide } from "./dock-panel-layout.ts";
+import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
 
 type DockLayoutHost = ReactiveControllerHost & { readonly isConnected: boolean };
 
-type DockLayoutControllerOptions<TDock extends DockPanelSide> = {
+type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   layout: DockPanelLayoutStore<TDock>;
   reservationPrefix: string;
   isAvailable: () => boolean;
@@ -18,12 +18,13 @@ type DockLayoutControllerOptions<TDock extends DockPanelSide> = {
   onResize?: () => void;
 };
 
-export class DockLayoutController<TDock extends DockPanelSide> implements ReactiveController {
+export class DockLayoutController<TDock extends DockPanelPlacement> implements ReactiveController {
   open = false;
   dock: TDock;
   height: number;
   width: number;
 
+  private suppressed = false;
   private resizeCleanup: (() => void) | null = null;
   private readonly onViewportResize = () => {
     const height = Math.min(this.height, this.options.layout.maxHeight());
@@ -80,8 +81,36 @@ export class DockLayoutController<TDock extends DockPanelSide> implements Reacti
     this.setOpen(false, false);
   }
 
+  /**
+   * Full-page route takeovers (settings) own the viewport, so docks hide while
+   * one renders. Hiding never persists — the user's open preference must survive
+   * the visit — and suppression also blocks `restoreOpenState()` so a reconnect
+   * mid-takeover cannot pop the panel back over settings. Returns true when the
+   * caller must resume its surface after the takeover ends.
+   *
+   * Only automatic restores are blocked. An explicit open (Ctrl+`, toolbar,
+   * `ui.command`) still wins and shows the dock over the takeover: swallowing a
+   * requested terminal would be a worse papercut than the one this fixes.
+   */
+  setSuppressed(suppressed: boolean): boolean {
+    if (this.suppressed === suppressed) {
+      return false;
+    }
+    this.suppressed = suppressed;
+    if (suppressed) {
+      this.hideWithoutPersisting();
+      return false;
+    }
+    return this.restoreOpenState();
+  }
+
   restoreOpenState(): boolean {
-    if (this.open || (!this.isFullscreen() && !this.options.layout.load().open)) {
+    if (
+      this.suppressed ||
+      !this.options.isAvailable() ||
+      this.open ||
+      (!this.isFullscreen() && !this.options.layout.load().open)
+    ) {
       return false;
     }
     this.open = true;
@@ -166,7 +195,7 @@ export class DockLayoutController<TDock extends DockPanelSide> implements Reacti
   }
 
   renderResizer(classPrefix: string, label: string): TemplateResult | typeof nothing {
-    if (this.isFullscreen()) {
+    if (this.isFullscreen() || this.dock === "main") {
       return nothing;
     }
     return html`<div

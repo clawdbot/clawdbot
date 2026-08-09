@@ -2,6 +2,7 @@ import Foundation
 import Network
 import OpenClawKit
 import OSLog
+import Subprocess
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -19,8 +20,16 @@ final class RemotePortTunnel: @unchecked Sendable {
         let hostKeyPolicy: CommandResolver.SSHHostKeyPolicy
     }
 
-    let process: Process
     let localPort: UInt16?
+    var isRunning: Bool {
+        self.process.isRunning
+    }
+
+    var processIdentifier: pid_t {
+        self.process.processIdentifier
+    }
+
+    private let process: ManagedProcess
     private let stderrHandle: FileHandle?
     private let guardianReceipt: PortGuardian.Record
 
@@ -50,8 +59,256 @@ final class RemotePortTunnel: @unchecked Sendable {
         }
     }
 
+    private enum ProcessWakeReason: Sendable {
+        case exited
+        case terminate
+    }
+
+    private struct ProcessStartFailure: LocalizedError, Sendable {
+        let message: String
+
+        var errorDescription: String? {
+            self.message
+        }
+    }
+
+    private final class ProcessStartSignal: @unchecked Sendable {
+        private let lock = NSLock()
+        private var result: Result<pid_t, ProcessStartFailure>?
+        private var continuation: CheckedContinuation<pid_t, any Error>?
+
+        func wait() async throws -> pid_t {
+            try await withCheckedThrowingContinuation { continuation in
+                self.lock.lock()
+                if let result = self.result {
+                    self.lock.unlock()
+                    continuation.resume(with: result)
+                    return
+                }
+                self.continuation = continuation
+                self.lock.unlock()
+            }
+        }
+
+        func succeed(_ processIdentifier: pid_t) {
+            self.resolve(.success(processIdentifier))
+        }
+
+        func fail(_ error: ProcessStartFailure) {
+            self.resolve(.failure(error))
+        }
+
+        private func resolve(_ result: Result<pid_t, ProcessStartFailure>) {
+            self.lock.lock()
+            guard self.result == nil else {
+                self.lock.unlock()
+                return
+            }
+            self.result = result
+            let continuation = self.continuation
+            self.continuation = nil
+            self.lock.unlock()
+            continuation?.resume(with: result)
+        }
+    }
+
+    private final class ProcessWakeSignal: @unchecked Sendable {
+        private let lock = NSLock()
+        private var reason: ProcessWakeReason?
+        private var continuation: CheckedContinuation<ProcessWakeReason, Never>?
+        private var source: DispatchSourceProcess?
+
+        func wait(processIdentifier: pid_t) async -> ProcessWakeReason {
+            await withCheckedContinuation { continuation in
+                self.lock.lock()
+                if let reason = self.reason {
+                    self.lock.unlock()
+                    continuation.resume(returning: reason)
+                    return
+                }
+                self.continuation = continuation
+                self.lock.unlock()
+
+                if Self.hasExited(processIdentifier) {
+                    self.resolve(.exited)
+                    return
+                }
+
+                let source = DispatchSource.makeProcessSource(
+                    identifier: processIdentifier,
+                    eventMask: .exit,
+                    queue: .global(qos: .userInitiated))
+                source.setEventHandler { [weak self] in
+                    self?.resolve(.exited)
+                }
+
+                self.lock.lock()
+                if self.reason == nil {
+                    self.source = source
+                }
+                let shouldStart = self.reason == nil
+                self.lock.unlock()
+
+                source.resume()
+                if !shouldStart {
+                    source.cancel()
+                    return
+                }
+                // Cover an exit between the preflight waitid and kqueue registration.
+                if Self.hasExited(processIdentifier) {
+                    self.resolve(.exited)
+                }
+            }
+        }
+
+        func requestTermination() {
+            self.resolve(.terminate)
+        }
+
+        private func resolve(_ reason: ProcessWakeReason) {
+            self.lock.lock()
+            guard self.reason == nil else {
+                self.lock.unlock()
+                return
+            }
+            self.reason = reason
+            let continuation = self.continuation
+            self.continuation = nil
+            let source = self.source
+            self.source = nil
+            self.lock.unlock()
+            source?.cancel()
+            continuation?.resume(returning: reason)
+        }
+
+        private static func hasExited(_ processIdentifier: pid_t) -> Bool {
+            var info = siginfo_t()
+            let result = waitid(
+                P_PID,
+                id_t(processIdentifier),
+                &info,
+                WEXITED | WNOHANG | WNOWAIT)
+            return result == 0 && info.si_pid != 0
+        }
+    }
+
+    private final class ProcessCompletionState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var finished = false
+        private var status: TerminationStatus?
+
+        var isRunning: Bool {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return !self.finished
+        }
+
+        var terminationStatus: TerminationStatus? {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return self.status
+        }
+
+        func finish(status: TerminationStatus?) {
+            self.lock.lock()
+            self.finished = true
+            self.status = status
+            self.lock.unlock()
+        }
+    }
+
+    fileprivate final class ManagedProcess: @unchecked Sendable {
+        let processIdentifier: pid_t
+        private let task: Task<Void, Never>
+        private let wakeSignal: ProcessWakeSignal
+        private let state: ProcessCompletionState
+
+        var isRunning: Bool {
+            self.state.isRunning
+        }
+
+        var terminationStatus: TerminationStatus? {
+            self.state.terminationStatus
+        }
+
+        private init(
+            processIdentifier: pid_t,
+            task: Task<Void, Never>,
+            wakeSignal: ProcessWakeSignal,
+            state: ProcessCompletionState)
+        {
+            self.processIdentifier = processIdentifier
+            self.task = task
+            self.wakeSignal = wakeSignal
+            self.state = state
+        }
+
+        static func start(
+            configuration: Subprocess.Configuration,
+            error: some ErrorOutputProtocol & Sendable) async throws -> ManagedProcess
+        {
+            let startSignal = ProcessStartSignal()
+            let wakeSignal = ProcessWakeSignal()
+            let state = ProcessCompletionState()
+            let task = Task.detached(priority: .userInitiated) {
+                do {
+                    let result = try await Subprocess.run(
+                        configuration,
+                        input: .none,
+                        output: .discarded,
+                        error: error)
+                    { execution in
+                        let processIdentifier = execution.processIdentifier.value
+                        startSignal.succeed(processIdentifier)
+                        let reason = await wakeSignal.wait(processIdentifier: processIdentifier)
+                        switch reason {
+                        case .terminate:
+                            try? execution.send(signal: .terminate, toProcessGroup: true)
+                            try? await Task.sleep(for: .milliseconds(250))
+                            // The leader stays unreaped until this body returns, so its
+                            // process-group identity cannot be reused before escalation.
+                            try? execution.send(signal: .kill, toProcessGroup: true)
+                        case .exited:
+                            // A crashed SSH leader can leave ProxyCommand descendants.
+                            // The zombie leader still pins the group identity here.
+                            try? execution.send(signal: .kill, toProcessGroup: true)
+                        }
+                    }
+                    state.finish(status: result.terminationStatus)
+                } catch {
+                    let message = if let subprocessError = error as? SubprocessError {
+                        subprocessError.description
+                    } else {
+                        error.localizedDescription
+                    }
+                    startSignal.fail(ProcessStartFailure(message: message))
+                    state.finish(status: nil)
+                }
+            }
+            let processIdentifier = try await startSignal.wait()
+            return ManagedProcess(
+                processIdentifier: processIdentifier,
+                task: task,
+                wakeSignal: wakeSignal,
+                state: state)
+        }
+
+        func requestTermination() {
+            self.wakeSignal.requestTermination()
+        }
+
+        func terminate() async {
+            self.requestTermination()
+            await self.task.value
+        }
+
+        deinit {
+            self.requestTermination()
+        }
+    }
+
     private init(
-        process: Process,
+        process: ManagedProcess,
         localPort: UInt16?,
         stderrHandle: FileHandle?,
         guardianReceipt: PortGuardian.Record)
@@ -72,11 +329,11 @@ final class RemotePortTunnel: @unchecked Sendable {
         // deinit cannot wait. Leave the receipt durable until a later sweep proves
         // the child exited; deleting it after TERM alone can orphan a resistant SSH.
         Task { await PortGuardian.shared.relinquishRecord(receipt) }
-        self.process.terminate()
+        self.process.requestTermination()
     }
 
-    func terminate() {
-        Self.terminateAndWait(self.process)
+    func terminate() async {
+        await self.process.terminate()
         Self.cleanupStderr(self.stderrHandle)
         let receipt = self.guardianReceipt
         Task { await PortGuardian.shared.removeRecord(receipt) }
@@ -131,14 +388,9 @@ final class RemotePortTunnel: @unchecked Sendable {
             identity: configuration.identity,
             options: options)
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = args
-        process.environment = CommandResolver.sshEnvironment()
-
         let pipe = Pipe()
-        process.standardError = pipe
         let stderrHandle = pipe.fileHandleForReading
+        let stderrWriter = pipe.fileHandleForWriting
         let stderrCapture = StderrCapture()
 
         // Consume stderr so ssh cannot block if it logs.
@@ -156,10 +408,6 @@ final class RemotePortTunnel: @unchecked Sendable {
             stderrCapture.append(line)
             Self.logger.error("ssh tunnel stderr: \(line, privacy: .public)")
         }
-        process.terminationHandler = { _ in
-            Self.cleanupStderr(stderrHandle)
-        }
-
         let spawnPreparation: PortGuardian.SpawnPreparation
         do {
             // Legacy reconciliation can inspect many live processes. Complete it
@@ -176,10 +424,31 @@ final class RemotePortTunnel: @unchecked Sendable {
                 ])
         }
 
+        var platformOptions = PlatformOptions()
+        platformOptions.qualityOfService = .userInitiated
+        platformOptions.createSession = true
+        platformOptions.teardownSequence = [
+            .send(
+                signal: .terminate,
+                toProcessGroup: true,
+                allowedDurationToNextStep: .milliseconds(250)),
+        ]
+        let processConfiguration = Subprocess.Configuration(
+            .path(.init("/usr/bin/ssh")),
+            arguments: Arguments(args),
+            environment: self.environment(from: CommandResolver.sshEnvironment()),
+            platformOptions: platformOptions)
+        let process: ManagedProcess
         do {
-            try process.run()
+            process = try await ManagedProcess.start(
+                configuration: processConfiguration,
+                error: .fileDescriptor(
+                    .init(rawValue: stderrWriter.fileDescriptor),
+                    closeAfterSpawningProcess: false))
+            try? stderrWriter.close()
         } catch {
             await PortGuardian.shared.cancelTunnelSpawn(spawnPreparation)
+            try? stderrWriter.close()
             Self.cleanupStderr(stderrHandle)
             throw error
         }
@@ -191,11 +460,11 @@ final class RemotePortTunnel: @unchecked Sendable {
             receipt = try await PortGuardian.shared.record(
                 port: Int(localPort),
                 pid: process.processIdentifier,
-                command: process.executableURL?.path ?? "ssh",
+                command: "/usr/bin/ssh",
                 mode: .remote,
                 preparation: spawnPreparation)
         } catch {
-            Self.terminateAndWait(process)
+            await process.terminate()
             // Keep the reservation exclusive until this exact child is reaped.
             // Only then may another operation migrate or open the ledger.
             await PortGuardian.shared.cancelTunnelSpawn(spawnPreparation)
@@ -216,7 +485,7 @@ final class RemotePortTunnel: @unchecked Sendable {
                 stderrHandle: stderrHandle,
                 stderrCapture: stderrCapture)
         } catch {
-            Self.terminateAndWait(process)
+            await process.terminate()
             Self.cleanupStderr(stderrHandle)
             await PortGuardian.shared.removeRecord(receipt)
             throw error
@@ -229,16 +498,8 @@ final class RemotePortTunnel: @unchecked Sendable {
             guardianReceipt: receipt)
     }
 
-    private static func terminateAndWait(_ process: Process) {
-        guard process.isRunning else { return }
-        process.terminate()
-        // waitUntilExit reaps this exact child before its pid can be reused. A
-        // delayed raw kill(pid) could otherwise signal an unrelated process.
-        process.waitUntilExit()
-    }
-
     private static func waitForListener(
-        process: Process,
+        process: ManagedProcess,
         localPort: UInt16,
         stderrHandle: FileHandle,
         stderrCapture: StderrCapture) async throws
@@ -263,6 +524,16 @@ final class RemotePortTunnel: @unchecked Sendable {
         let stderr = stderrCapture.snapshot()
         let msg = stderr.isEmpty ? "ssh tunnel did not open local port \(localPort)" : "ssh tunnel failed: \(stderr)"
         throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
+    }
+
+    private static func environment(from values: [String: String]) -> Environment {
+        var converted: [Environment.Key: String] = [:]
+        converted.reserveCapacity(values.count)
+        for (key, value) in values {
+            guard let environmentKey = Environment.Key(rawValue: key) else { continue }
+            converted[environmentKey] = value
+        }
+        return .custom(converted)
     }
 
     /// Shared with MacChatTranscriptCache: the offline cache identity must key
@@ -496,8 +767,45 @@ final class RemotePortTunnel: @unchecked Sendable {
         self.drainStderr(handle, captured: "")
     }
 
-    static func _testTerminateAndWait(_ process: Process) {
-        self.terminateAndWait(process)
+    final class TestProcess: @unchecked Sendable {
+        private let process: ManagedProcess
+
+        fileprivate init(process: ManagedProcess) {
+            self.process = process
+        }
+
+        var isRunning: Bool {
+            self.process.isRunning
+        }
+
+        var terminationStatus: TerminationStatus? {
+            self.process.terminationStatus
+        }
+
+        func requestTermination() {
+            self.process.requestTermination()
+        }
+
+        func terminate() async {
+            await self.process.terminate()
+        }
+    }
+
+    static func _testStartProcess(
+        executable: String,
+        arguments: [String],
+        environment: [String: String] = [:]) async throws -> TestProcess
+    {
+        var platformOptions = PlatformOptions()
+        platformOptions.createSession = true
+        let configuration = Subprocess.Configuration(
+            .path(.init(executable)),
+            arguments: Arguments(arguments),
+            environment: self.environment(from: environment),
+            platformOptions: platformOptions)
+        return try await TestProcess(process: ManagedProcess.start(
+            configuration: configuration,
+            error: .discarded))
     }
 
     #endif

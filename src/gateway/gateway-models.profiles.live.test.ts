@@ -70,6 +70,7 @@ import {
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
+import { redactSecrets } from "../logging/redact.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
@@ -79,6 +80,8 @@ import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import { restoreLiveEnv, snapshotLiveEnv } from "./live-env-test-helpers.js";
+import type { GatewayServer } from "./server-public.js";
 
 type ProviderThinkingModelCompat = {
   thinkingFormat?: string;
@@ -91,7 +94,6 @@ import {
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
 } from "./live-tool-probe.test-helpers.js";
-import { startGatewayServer } from "./server.impl.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -2653,7 +2655,9 @@ async function runAnthropicRefusalProbe(params: {
     client: params.client,
     sessionKey: params.sessionKey,
     idempotencyKey: `idem-${randomUUID()}-refusal`,
-    message: `Reply with the single word ok. Test token: ${magic}`,
+    // Credential redaction masks values after "token:", including the
+    // nonce needed to correlate this probe with its persisted user turn.
+    message: `Reply with the single word ok. Test trigger: ${magic}`,
     thinkingLevel: params.thinkingLevel,
     context: `${params.label}: refusal-probe`,
     modelKey: params.modelKey,
@@ -3210,7 +3214,10 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   let run = listSubagentRunsForRequester(params.sessionKey).find(
     (entry) => !existingRunIds.has(entry.runId) && entry.task.includes(childToken),
   );
-  while ((!run?.endedAt || run.delivery?.status !== "delivered") && Date.now() < deadline) {
+  while (
+    (!run?.execution.endedAt || run.delivery?.status !== "delivered") &&
+    Date.now() < deadline
+  ) {
     await new Promise((resolve) => {
       setTimeout(resolve, 250);
     });
@@ -3227,7 +3234,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   ).toHaveLength(1);
   run = matchingRuns[0];
   expect(run, `expected sessions_spawn child for ${params.modelKey}`).toBeDefined();
-  expect(run?.outcome?.status).toBe("ok");
+  expect(run?.execution.outcome?.status).toBe("ok");
   expect(run?.completion?.resultText).toContain(childToken);
   expect(run?.delivery?.status).toBe("delivered");
   expect(run?.childSessionKey).toContain(":subagent:");
@@ -3374,13 +3381,28 @@ describe("latestAssistantTextAfterBaseline", () => {
 
   it("correlates Anthropic refusal probes after the runtime scrubs their trigger", () => {
     const nonce = "0123456789abcdef0123456789abcdef";
-    const expected = `Reply with ok. ${ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL}_${nonce}`;
-    const scrubbed = `Reply with ok. ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_${nonce}`;
+    const expected = `Reply with the single word ok. Test trigger: ${ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL}_${nonce}`;
+    const scrubbed = `Reply with the single word ok. Test trigger: ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_${nonce}`;
+    const redacted = redactSecrets(expected);
 
     expect(matchesLiveProbeUserText(scrubbed, expected)).toBe(true);
+    expect(redacted).toContain(nonce);
+    expect(matchesLiveProbeUserText(redacted, expected)).toBe(true);
+    expect(
+      sessionMessagesAfterNextUserTurn(
+        [
+          { role: "user", content: "previous turn" },
+          { role: "assistant", content: "previous reply", stopReason: "stop" },
+          { role: "user", content: redacted },
+          { role: "assistant", content: "ok", stopReason: "stop" },
+        ],
+        2,
+        expected,
+      ),
+    ).toEqual([{ role: "assistant", content: "ok", stopReason: "stop" }]);
     expect(
       matchesLiveProbeUserText(
-        "Reply with ok. ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_ffffffffffffffffffffffffffffffff",
+        "Reply with the single word ok. Test trigger: ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_ffffffffffffffffffffffffffffffff",
         expected,
       ),
     ).toBe(false);
@@ -4549,25 +4571,19 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     );
   }
   const [ultraUpstreamBaseUrl] = [...ultraUpstreamBaseUrls];
-  const previous = {
-    configPath: process.env.OPENCLAW_CONFIG_PATH,
-    token: process.env.OPENCLAW_GATEWAY_TOKEN,
-    skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-    skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-    skipCron: process.env.OPENCLAW_SKIP_CRON,
-    skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-    disableBonjour: process.env.OPENCLAW_DISABLE_BONJOUR,
-    logLevel: process.env.OPENCLAW_LOG_LEVEL,
-    agentDir: process.env.OPENCLAW_AGENT_DIR,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-  };
+  const previousEnv = snapshotLiveEnv([
+    "OPENCLAW_DISABLE_BONJOUR",
+    "OPENCLAW_LOG_LEVEL",
+    "OPENCLAW_AGENT_DIR",
+  ]);
+  const { startGatewayServer } = await import("./server.impl.js");
   let runtimeEnv: ReturnType<typeof enterProductionEnvForLiveRun> | undefined;
   let cleanupTempStateDir: string | undefined;
   let cleanupTempAgentDir: string | undefined;
   let cleanupToolProbePath: string | undefined;
   let cleanupTempDir: string | undefined;
   let ultraWireCapture: OpenAIUltraWireCapture | undefined;
-  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let server: GatewayServer | undefined;
   let client: GatewayClient | undefined;
 
   try {
@@ -5460,16 +5476,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         if (runtimeEnv) {
           restoreProductionEnvForLiveRun(runtimeEnv);
         }
-        restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
-        restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
-        restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
-        restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
-        restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
-        restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
-        restoreOptionalEnv("OPENCLAW_DISABLE_BONJOUR", previous.disableBonjour);
-        restoreOptionalEnv("OPENCLAW_LOG_LEVEL", previous.logLevel);
-        restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
-        restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
+        restoreLiveEnv(previousEnv);
       }
     }
   }
@@ -5726,16 +5733,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     }
     clearRuntimeConfigSnapshot();
     const runtimeEnv = enterProductionEnvForLiveRun();
-    const previous = {
-      configPath: process.env.OPENCLAW_CONFIG_PATH,
-      token: process.env.OPENCLAW_GATEWAY_TOKEN,
-      skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-      skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-      skipCron: process.env.OPENCLAW_SKIP_CRON,
-      skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-      agentDir: process.env.OPENCLAW_AGENT_DIR,
-      stateDir: process.env.OPENCLAW_STATE_DIR,
-    };
+    const previousEnv = snapshotLiveEnv(["OPENCLAW_AGENT_DIR"]);
+    const { startGatewayServer } = await import("./server.impl.js");
 
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
@@ -5745,7 +5744,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const token = `test-${randomUUID()}`;
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
-    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let server: GatewayServer | undefined;
     let client: GatewayClient | undefined;
     let toolProbePath: string | undefined;
     let tempDir: string | undefined;
@@ -5951,14 +5950,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         });
       }
 
-      restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
-      restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
-      restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
-      restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
-      restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
-      restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
-      restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
-      restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
+      restoreLiveEnv(previousEnv);
     }
   }, 180_000);
 });

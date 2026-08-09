@@ -12,7 +12,7 @@
 .about-hero__clawd {
   position: relative;
   width: 168px;
-  height: 147px;
+  aspect-ratio: 120 / 105;
   padding: 0;
   border: 0;
   background: transparent;
@@ -52,15 +52,18 @@
   width: 100%;
   height: 100%;
   animation: lobster-pet-breathe 3.4s ease-in-out infinite;
+  animation-delay: var(--lob-breathe-delay, 0s);
 }
 
 .about-hero__clawd .lob-eye-open {
   animation: lobster-pet-blink-open 5.2s linear infinite;
+  animation-delay: var(--lob-blink-delay, 0s);
 }
 
 .about-hero__clawd .lob-eye-closed {
   opacity: 0;
   animation: lobster-pet-blink-closed 5.2s linear infinite;
+  animation-delay: var(--lob-blink-delay, 0s);
 }
 
 /* Ambient greeting: mostly idle, waves once per loop; a poke replays it now. */
@@ -211,7 +214,6 @@
 @media (max-width: 560px) {
   .about-hero__clawd {
     width: 128px;
-    height: 112px;
   }
 
   .about-hero__name {

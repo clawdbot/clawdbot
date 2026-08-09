@@ -12,9 +12,20 @@ const saveRemoteMediaMock = vi.hoisted(() => vi.fn());
 vi.mock("../pluralkit.js", () => ({
   fetchPluralKitMessageInfo: (...args: unknown[]) => fetchPluralKitMessageInfoMock(...args),
 }));
-vi.mock("./preflight-audio.runtime.js", () => ({
-  transcribeFirstAudio: transcribeFirstAudioMock,
-}));
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>();
+  return {
+    ...actual,
+    createChannelPreflightAudio: (
+      params: Parameters<typeof actual.createChannelPreflightAudio>[0],
+    ) =>
+      actual.createChannelPreflightAudio({
+        ...params,
+        transcribeFirstAudio: transcribeFirstAudioMock,
+      }),
+  };
+});
 vi.mock("./dm-command-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./dm-command-auth.js")>()),
   resolveDiscordDmCommandAccess: resolveDiscordDmCommandAccessMock,
@@ -1024,6 +1035,56 @@ describe("preflightDiscordMessage", () => {
     const preflight = expectPreflightResult(result);
     expect(preflight.sender.isPluralKit).toBe(true);
     expect(preflight.canonicalMessageId).toBe("orig-123");
+  });
+
+  it("skips PluralKit lookup for ordinary non-webhook messages", async () => {
+    const result = await runGuildPreflight({
+      channelId: "c1",
+      guildId: "g1",
+      message: createDiscordMessage({
+        id: "ordinary-human-1",
+        channelId: "c1",
+        content: "<@openclaw-bot> hello",
+        author: {
+          id: "human-1",
+          bot: false,
+          username: "Human",
+        },
+        mentionedUsers: [{ id: "openclaw-bot" }],
+      }),
+      discordConfig: {
+        pluralkit: { enabled: true },
+      } as DiscordConfig,
+    });
+
+    expectPreflightResult(result);
+    expect(fetchPluralKitMessageInfoMock).not.toHaveBeenCalled();
+  });
+
+  it("skips PluralKit lookup for allowed non-webhook bot messages", async () => {
+    const result = await runGuildPreflight({
+      channelId: "c1",
+      guildId: "g1",
+      message: createDiscordMessage({
+        id: "ordinary-bot-1",
+        channelId: "c1",
+        content: "<@openclaw-bot> hello",
+        author: {
+          id: "bot-1",
+          bot: true,
+          username: "Bot",
+        },
+        mentionedUsers: [{ id: "openclaw-bot" }],
+      }),
+      discordConfig: {
+        allowBots: true,
+        pluralkit: { enabled: true },
+      } as DiscordConfig,
+    });
+
+    const preflight = expectPreflightResult(result);
+    expect(preflight.sender.isPluralKit).toBe(false);
+    expect(fetchPluralKitMessageInfoMock).not.toHaveBeenCalled();
   });
 
   it("uses the resolved PluralKit member id when creating DM pairing requests", async () => {

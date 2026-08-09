@@ -76,6 +76,11 @@ export const productionPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
   (entry) => !nonProductionPluginSdkSubpathSet.has(entry),
 );
 
+/** List flat plugin SDK declaration outputs for the selected entrypoints. */
+export function listPluginSdkDeclarationOutputs(entries = productionPluginSdkEntrypoints) {
+  return entries.map((entry) => `dist/plugin-sdk/${entry}.d.ts`);
+}
+
 const productionPluginSdkEntrypointSet = new Set(productionPluginSdkEntrypoints);
 
 /** Private runtime facades required by bundled or separately published official plugins. */
@@ -174,7 +179,7 @@ export function listPackagedPrivatePluginSdkRuntimeArtifacts() {
 /** List private artifacts that must stay out of package output. */
 export function listUnpackagedPrivatePluginSdkDistArtifacts() {
   return [
-    ...privateLocalOnlyPluginSdkEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.d.ts`),
+    ...listPluginSdkDeclarationOutputs(privateLocalOnlyPluginSdkEntrypoints),
     ...nonProductionPrivatePluginSdkEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`),
   ];
 }

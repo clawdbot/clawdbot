@@ -172,10 +172,12 @@ export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayInten
   let intents =
     discordGateway.GatewayIntents.Guilds |
     discordGateway.GatewayIntents.GuildMessages |
-    discordGateway.GatewayIntents.MessageContent |
     discordGateway.GatewayIntents.DirectMessages |
     discordGateway.GatewayIntents.GuildMessageReactions |
     discordGateway.GatewayIntents.DirectMessageReactions;
+  if (intentsConfig?.messageContent !== false) {
+    intents |= discordGateway.GatewayIntents.MessageContent;
+  }
   if (voiceStatesEnabled) {
     intents |= discordGateway.GatewayIntents.GuildVoiceStates;
   }

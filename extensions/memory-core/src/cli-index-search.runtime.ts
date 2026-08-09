@@ -1,19 +1,13 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import {
   buildCliMemorySearchSessionKey,
-  emitMemorySecretResolveDiagnostics,
   formatAuditCounts,
   formatExtraPaths,
-  loadMemoryCommandConfig,
-  resolveAgent,
-  resolveAgentIds,
   resolveMemoryPluginConfig,
-  withMemoryManagerForAgent,
-  type MemoryManager,
+  withMemoryCommand,
 } from "./cli-runtime-common.js";
 import {
   defaultRuntime,
@@ -31,7 +25,6 @@ import type {
   MemoryPromoteExplainOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
-import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
@@ -44,27 +37,6 @@ import {
   resolveShortTermRecallStorePath,
 } from "./short-term-promotion.js";
 const { accent, heading, info, muted, success, warn } = theme;
-function formatMemoryIndexIdentityWarning(
-  status: ReturnType<MemoryManager["status"]>,
-  agentId: string,
-): {
-  reason: string;
-  fix: string;
-} | null {
-  const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
-  const reason =
-    (indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing") &&
-    typeof indexIdentity.reason === "string"
-      ? indexIdentity.reason
-      : undefined;
-  if (!reason) {
-    return null;
-  }
-  return {
-    reason,
-    fix: `Run: openclaw memory status --index --agent ${agentId}`,
-  };
-}
 function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {
   if (source === "memory") {
     return shortenHomeInString(
@@ -79,178 +51,142 @@ function formatSourceLabel(source: string, workspaceDir: string, agentId: string
   }
   return source;
 }
-async function summarizeQmdIndexArtifact(manager: MemoryManager): Promise<string | null> {
-  const status = manager.status?.();
-  if (!status || status.backend !== "qmd") {
-    return null;
-  }
-  const dbPath = status.dbPath?.trim();
-  if (!dbPath) {
-    return null;
-  }
-  let stat: fsSync.Stats;
-  try {
-    stat = await fs.stat(dbPath);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
-      throw new Error(`QMD index file not found: ${shortenHomePath(dbPath)}`, { cause: err });
-    }
-    throw new Error(
-      `QMD index file check failed: ${shortenHomePath(dbPath)} (${code ?? "error"})`,
-      { cause: err },
-    );
-  }
-  if (!stat.isFile() || stat.size <= 0) {
-    throw new Error(`QMD index file is empty: ${shortenHomePath(dbPath)}`);
-  }
-  return `QMD index: ${shortenHomePath(dbPath)} (${stat.size} bytes)`;
-}
 export async function runMemoryIndex(
   opts: MemoryCommandOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
   setVerbose(Boolean(opts.verbose));
-  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory index");
-  emitMemorySecretResolveDiagnostics(diagnostics);
-  const agentIds = resolveAgentIds(cfg, opts.agent);
-  for (const agentId of agentIds) {
-    await withMemoryManagerForAgent({
-      cfg,
-      agentId,
-      purpose: "cli",
-      acquireLocalService: hostOptions?.acquireLocalService,
-      withLease: hostOptions?.withLease,
-      run: async (manager) => {
-        try {
-          const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
-          if (opts.verbose) {
-            const status = manager.status();
-            const label = (text: string) => muted(`${text}:`);
-            const sourceLabels = (status.sources ?? []).map((source) =>
-              formatSourceLabel(source, status.workspaceDir ?? "", agentId),
-            );
-            const extraPaths = status.workspaceDir
-              ? formatExtraPaths(status.workspaceDir, status.extraPaths ?? [])
-              : [];
-            const requestedProvider = status.requestedProvider ?? status.provider;
-            const modelLabel = status.model ?? status.provider;
-            const lines = [
-              `${heading("Memory Index")} ${muted(`(${agentId})`)}`,
-              `${label("Provider")} ${info(status.provider)} ${muted(
-                `(requested: ${requestedProvider})`,
-              )}`,
-              `${label("Model")} ${info(modelLabel)}`,
-              sourceLabels.length ? `${label("Sources")} ${info(sourceLabels.join(", "))}` : null,
-              extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
-            ].filter(Boolean) as string[];
-            if (status.fallback) {
-              lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
-            }
-            defaultRuntime.log(lines.join("\n"));
-            defaultRuntime.log("");
-          }
-          const startedAt = Date.now();
-          let lastLabel = "Indexing memory…";
-          let lastCompleted = 0;
-          let lastTotal = 0;
-          const formatDuration = (elapsedMs: number) => {
-            const seconds = Math.floor(elapsedMs / 1000);
-            return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-          };
-          const buildLabel = () => {
-            const elapsedMs = Math.max(1, Date.now() - startedAt);
-            const elapsed = formatDuration(elapsedMs);
-            if (lastTotal <= 0 || lastCompleted <= 0) {
-              return `${lastLabel} · elapsed ${elapsed}`;
-            }
-            const remainingMs = Math.max(
-              0,
-              ((lastTotal - lastCompleted) * elapsedMs) / lastCompleted,
-            );
-            return `${lastLabel} · elapsed ${elapsed} · eta ${formatDuration(remainingMs)}`;
-          };
-          if (!syncFn) {
-            defaultRuntime.log("Memory backend does not support manual reindex.");
-            return;
-          }
-          await withProgressTotals(
-            {
-              label: "Indexing memory…",
-              total: 0,
-              fallback: opts.verbose ? "line" : undefined,
-            },
-            async (update, progress) => {
-              const interval = setInterval(() => {
-                progress.setLabel(buildLabel());
-              }, 1000);
-              try {
-                await syncFn({
-                  reason: "cli",
-                  force: Boolean(opts.force),
-                  progress: (syncUpdate) => {
-                    if (syncUpdate.label) {
-                      lastLabel = syncUpdate.label;
-                    }
-                    lastCompleted = syncUpdate.completed;
-                    lastTotal = syncUpdate.total;
-                    update({
-                      completed: syncUpdate.completed,
-                      total: syncUpdate.total,
-                      label: buildLabel(),
-                    });
-                    progress.setLabel(buildLabel());
-                  },
-                });
-              } finally {
-                clearInterval(interval);
-              }
-            },
+  await withMemoryCommand({
+    commandName: "memory index",
+    agent: opts.agent,
+    allAgents: true,
+    purpose: "cli",
+    ...hostOptions,
+    run: async ({ manager, agentId }) => {
+      try {
+        const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
+        if (opts.verbose) {
+          const status = manager.status();
+          const label = (text: string) => muted(`${text}:`);
+          const sourceLabels = (status.sources ?? []).map((source) =>
+            formatSourceLabel(source, status.workspaceDir ?? "", agentId),
           );
-          const qmdIndexSummary = await summarizeQmdIndexArtifact(manager);
-          if (qmdIndexSummary) {
-            defaultRuntime.log(qmdIndexSummary);
+          const extraPaths = status.workspaceDir
+            ? formatExtraPaths(status.workspaceDir, status.extraPaths ?? [])
+            : [];
+          const requestedProvider = status.requestedProvider ?? status.provider;
+          const modelLabel = status.model ?? status.provider;
+          const lines = [
+            `${heading("Memory Index")} ${muted(`(${agentId})`)}`,
+            `${label("Provider")} ${info(status.provider)} ${muted(
+              `(requested: ${requestedProvider})`,
+            )}`,
+            `${label("Model")} ${info(modelLabel)}`,
+            sourceLabels.length ? `${label("Sources")} ${info(sourceLabels.join(", "))}` : null,
+            extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
+          ].filter(Boolean) as string[];
+          if (status.fallback) {
+            lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
           }
-          let postIndexStatus = manager.status();
-          let semanticVectorAvailable = postIndexStatus.vector?.semanticAvailable;
-          const vectorStoreAvailable =
-            postIndexStatus.vector?.storeAvailable ?? postIndexStatus.vector?.available;
-          if (
-            postIndexStatus.backend === "builtin" &&
-            (postIndexStatus.vector?.enabled ?? false) &&
-            semanticVectorAvailable === undefined &&
-            vectorStoreAvailable !== false &&
-            typeof manager.probeVectorAvailability === "function"
-          ) {
-            semanticVectorAvailable = await manager.probeVectorAvailability();
-            postIndexStatus = manager.status();
-            semanticVectorAvailable =
-              postIndexStatus.vector?.semanticAvailable ?? semanticVectorAvailable;
-          }
-          const vectorEnabled = postIndexStatus.vector?.enabled ?? false;
-          const vectorAvailable =
-            semanticVectorAvailable ??
-            postIndexStatus.vector?.semanticAvailable ??
-            postIndexStatus.vector?.available ??
-            postIndexStatus.vector?.storeAvailable;
-          const vectorLoadErr = postIndexStatus.vector?.loadError;
-          if (vectorEnabled && vectorAvailable === false) {
-            // Indexing still persisted chunks/FTS state; keep the command successful but
-            // emit a stderr warning so operators and scripts can detect degraded recall.
-            defaultRuntime.error(
-              `Memory index WARNING (${agentId}): chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(vectorLoadErr)}. Vector recall degraded.`,
-            );
-          } else {
-            defaultRuntime.log(`Memory index updated (${agentId}).`);
-          }
-        } catch (err) {
-          const message = formatErrorMessage(err);
-          defaultRuntime.error(`Memory index failed (${agentId}): ${message}`);
-          process.exitCode = 1;
+          defaultRuntime.log(lines.join("\n"));
+          defaultRuntime.log("");
         }
-      },
-    });
-  }
+        const startedAt = Date.now();
+        let lastLabel = "Indexing memory…";
+        let lastCompleted = 0;
+        let lastTotal = 0;
+        const formatDuration = (elapsedMs: number) => {
+          const seconds = Math.floor(elapsedMs / 1000);
+          return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+        };
+        const buildLabel = () => {
+          const elapsedMs = Math.max(1, Date.now() - startedAt);
+          const elapsed = formatDuration(elapsedMs);
+          if (lastTotal <= 0 || lastCompleted <= 0) {
+            return `${lastLabel} · elapsed ${elapsed}`;
+          }
+          const remainingMs = Math.max(
+            0,
+            ((lastTotal - lastCompleted) * elapsedMs) / lastCompleted,
+          );
+          return `${lastLabel} · elapsed ${elapsed} · eta ${formatDuration(remainingMs)}`;
+        };
+        if (!syncFn) {
+          defaultRuntime.log("Memory backend does not support manual reindex.");
+          return;
+        }
+        await withProgressTotals(
+          {
+            label: "Indexing memory…",
+            total: 0,
+            fallback: opts.verbose ? "line" : undefined,
+          },
+          async (update, progress) => {
+            const interval = setInterval(() => {
+              progress.setLabel(buildLabel());
+            }, 1000);
+            try {
+              await syncFn({
+                reason: "cli",
+                force: Boolean(opts.force),
+                progress: (syncUpdate) => {
+                  if (syncUpdate.label) {
+                    lastLabel = syncUpdate.label;
+                  }
+                  lastCompleted = syncUpdate.completed;
+                  lastTotal = syncUpdate.total;
+                  update({
+                    completed: syncUpdate.completed,
+                    total: syncUpdate.total,
+                    label: buildLabel(),
+                  });
+                  progress.setLabel(buildLabel());
+                },
+              });
+            } finally {
+              clearInterval(interval);
+            }
+          },
+        );
+        let postIndexStatus = manager.status();
+        let semanticVectorAvailable = postIndexStatus.vector?.semanticAvailable;
+        const vectorStoreAvailable =
+          postIndexStatus.vector?.storeAvailable ?? postIndexStatus.vector?.available;
+        if (
+          postIndexStatus.backend === "builtin" &&
+          (postIndexStatus.vector?.enabled ?? false) &&
+          semanticVectorAvailable === undefined &&
+          vectorStoreAvailable !== false &&
+          typeof manager.probeVectorAvailability === "function"
+        ) {
+          semanticVectorAvailable = await manager.probeVectorAvailability();
+          postIndexStatus = manager.status();
+          semanticVectorAvailable =
+            postIndexStatus.vector?.semanticAvailable ?? semanticVectorAvailable;
+        }
+        const vectorEnabled = postIndexStatus.vector?.enabled ?? false;
+        const vectorAvailable =
+          semanticVectorAvailable ??
+          postIndexStatus.vector?.semanticAvailable ??
+          postIndexStatus.vector?.available ??
+          postIndexStatus.vector?.storeAvailable;
+        const vectorLoadErr = postIndexStatus.vector?.loadError;
+        if (vectorEnabled && vectorAvailable === false) {
+          // Indexing still persisted chunks/FTS state; keep the command successful but
+          // emit a stderr warning so operators and scripts can detect degraded recall.
+          defaultRuntime.error(
+            `Memory index WARNING (${agentId}): chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(vectorLoadErr)}. Vector recall degraded.`,
+          );
+        } else {
+          defaultRuntime.log(`Memory index updated (${agentId}).`);
+        }
+      } catch (err) {
+        const message = formatErrorMessage(err);
+        defaultRuntime.error(`Memory index failed (${agentId}): ${message}`);
+        process.exitCode = 1;
+      }
+    },
+  });
 }
 export async function runMemorySearch(
   queryArg: string | undefined,
@@ -263,25 +199,22 @@ export async function runMemorySearch(
     process.exitCode = 1;
     return;
   }
-  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory search");
-  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
-  const agentId = resolveAgent(cfg, opts.agent);
-  const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
-  const dreamingEnabled = resolveMemoryDreamingConfig({
-    pluginConfig: memoryPluginConfig,
-    cfg,
-  }).enabled;
-  const dreaming = resolveShortTermPromotionDreamingConfig({
-    pluginConfig: memoryPluginConfig,
-    cfg,
-  });
-  await withMemoryManagerForAgent({
-    cfg,
-    agentId,
+  await withMemoryCommand({
+    commandName: "memory search",
+    agent: opts.agent,
+    diagnosticsToStderr: Boolean(opts.json),
     purpose: "cli",
-    acquireLocalService: hostOptions?.acquireLocalService,
-    withLease: hostOptions?.withLease,
-    run: async (manager) => {
+    ...hostOptions,
+    run: async ({ manager, cfg, agentId }) => {
+      const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
+      const dreamingEnabled = resolveMemoryDreamingConfig({
+        pluginConfig: memoryPluginConfig,
+        cfg,
+      }).enabled;
+      const dreaming = resolveShortTermPromotionDreamingConfig({
+        pluginConfig: memoryPluginConfig,
+        cfg,
+      });
       const sessionKey = buildCliMemorySearchSessionKey(agentId);
       let results: Awaited<ReturnType<typeof manager.search>>;
       try {
@@ -296,32 +229,26 @@ export async function runMemorySearch(
         process.exitCode = 1;
         return;
       }
-      const workspaceDir =
-        typeof (manager as { status?: () => { workspaceDir?: string } }).status === "function"
-          ? manager.status().workspaceDir
-          : undefined;
+      const status = manager.status();
+      const staleness = resolveMemorySearchStaleness(status, agentId);
+      const workspaceDir = status.workspaceDir;
       if (dreamingEnabled) {
-        void recordShortTermRecalls({
+        await recordShortTermRecalls({
           workspaceDir,
           query,
           results,
           timezone: dreaming.timezone,
         }).catch(() => {
-          // Recall tracking is best-effort and must not block normal search results.
+          // Persistence is best-effort, but the short-lived CLI must await it
+          // so process exit cannot discard an in-flight recall write.
         });
       }
       if (opts.json) {
-        defaultRuntime.writeJson({ results });
+        defaultRuntime.writeJson({ results, ...staleness });
         return;
       }
-      const identityWarning =
-        typeof manager.status === "function"
-          ? formatMemoryIndexIdentityWarning(manager.status(), agentId)
-          : null;
-      if (identityWarning) {
-        defaultRuntime.error(
-          `Memory index warning: ${identityWarning.reason}. Vector memory search is paused until the index is rebuilt. ${identityWarning.fix}`,
-        );
+      if (staleness) {
+        defaultRuntime.error(`${staleness.warning} ${staleness.action}`);
       }
       if (results.length === 0) {
         defaultRuntime.log("No matches.");
@@ -362,16 +289,13 @@ export async function runMemoryPromote(
   opts: MemoryPromoteCommandOptions,
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
-  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory promote");
-  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
-  const agentId = resolveAgent(cfg, opts.agent);
-  await withMemoryManagerForAgent({
-    cfg,
-    agentId,
+  await withMemoryCommand({
+    commandName: "memory promote",
+    agent: opts.agent,
+    diagnosticsToStderr: Boolean(opts.json),
     purpose: "status",
-    acquireLocalService: hostOptions?.acquireLocalService,
-    withLease: hostOptions?.withLease,
-    run: async (manager) => {
+    ...hostOptions,
+    run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
       const dreaming = resolveShortTermPromotionDreamingConfig({
@@ -422,18 +346,7 @@ export async function runMemoryPromote(
       }
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       const lockPath = resolveShortTermRecallLockPath(workspaceDir);
-      const customQmd = asRecord(asRecord(status.custom)?.qmd);
-      const audit = await auditShortTermPromotionArtifacts({
-        workspaceDir,
-        qmd:
-          status.backend === "qmd"
-            ? {
-                dbPath: status.dbPath,
-                collections:
-                  typeof customQmd?.collections === "number" ? customQmd.collections : undefined,
-              }
-            : undefined,
-      });
+      const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
       if (opts.json) {
         defaultRuntime.writeJson({
           workspaceDir,
@@ -522,16 +435,13 @@ export async function runMemoryPromoteExplain(
     process.exitCode = 1;
     return;
   }
-  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory promote-explain");
-  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
-  const agentId = resolveAgent(cfg, opts.agent);
-  await withMemoryManagerForAgent({
-    cfg,
-    agentId,
+  await withMemoryCommand({
+    commandName: "memory promote-explain",
+    agent: opts.agent,
+    diagnosticsToStderr: Boolean(opts.json),
     purpose: "status",
-    acquireLocalService: hostOptions?.acquireLocalService,
-    withLease: hostOptions?.withLease,
-    run: async (manager) => {
+    ...hostOptions,
+    run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
       const dreaming = resolveShortTermPromotionDreamingConfig({

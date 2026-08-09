@@ -7,13 +7,12 @@ import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "../shared/de
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resetLegacyDeviceAuthPresenceCache } from "./device-auth-store.js";
-import { formatErrorMessage } from "./errors.js";
-import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_PATH = "identity/device-auth.json";
@@ -169,51 +168,12 @@ export async function migrateLegacyDeviceAuth(params: {
   if (!params.detected.hasLegacy) {
     return { changes: [], warnings: [] };
   }
-  const env = { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir };
-  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
-  try {
-    lock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: 25,
-      role: "sqlite-maintenance",
-      timeoutMs: 250,
-    });
-  } catch (error) {
-    const detail =
-      error instanceof GatewayLockError
-        ? "the Gateway or another SQLite maintenance command owns this state directory"
-        : String(error);
-    return {
-      changes: [],
-      warnings: [
-        `Failed migrating legacy device auth: ${detail}. Stop the Gateway and run \`openclaw doctor --fix\` again.`,
-      ],
-    };
-  }
-  if (!lock) {
-    return {
-      changes: [],
-      warnings: ["Failed migrating legacy device auth: exclusive state ownership unavailable."],
-    };
-  }
-  let result: MigrationMessages = { changes: [], warnings: [] };
-  let releaseError: unknown;
-  try {
-    result = await importLegacyStore({ ...params, env });
-  } catch (error) {
-    result.warnings.push(`Failed migrating legacy device auth: ${String(error)}`);
-  } finally {
-    try {
-      await lock.release();
-    } catch (error) {
-      releaseError = error;
-    }
-  }
-  if (releaseError) {
-    result.warnings.push(
-      `Device-auth migration lock release failed: ${formatErrorMessage(releaseError)}`,
-    );
-  }
-  return result;
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy device auth",
+    releaseLabel: "Device-auth",
+    errorLabel: "Failed migrating legacy device auth",
+    run: async (env) => await importLegacyStore({ ...params, env }),
+  });
 }

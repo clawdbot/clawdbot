@@ -259,7 +259,7 @@ export async function loadStatusScanModuleForTest(
   }));
   vi.doMock("./status.update.js", () => createStatusUpdateModuleMock(mocks));
   vi.doMock("./status.agent-local.js", () => createStatusAgentLocalModuleMock(mocks));
-  vi.doMock("./status.summary.js", () => createStatusSummaryModuleMock(mocks));
+  vi.doMock("../status/summary.js", () => createStatusSummaryModuleMock(mocks));
   vi.doMock("../infra/os-summary.js", () => createStatusOsSummaryModuleMock());
   vi.doMock("./status.scan.deps.runtime.js", () => createStatusScanDepsRuntimeModuleMock(mocks));
   vi.doMock("../gateway/call.js", () => createStatusGatewayCallModuleMock(mocks));

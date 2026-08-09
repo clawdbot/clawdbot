@@ -5,8 +5,21 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { execGhRead } from "./lib/plain-gh.mjs";
 
 const WORKFLOW = "full-release-validation.yml";
+const TRUSTED_WORKFLOW_PATH = `.github/workflows/${WORKFLOW}`;
+const RELEASE_EVIDENCE_VERIFIER_PATHS = [
+  "scripts/release-ci-summary.mjs",
+  ".agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs",
+];
+const GH_READ_TIMEOUT_MS = 60_000;
+const GH_READ_OPTIONS = {
+  encoding: "utf8",
+  killSignal: "SIGKILL",
+  stdio: ["ignore", "pipe", "inherit"],
+  timeout: GH_READ_TIMEOUT_MS,
+};
 const RELEASE_BRANCH_PATTERN =
   /^(?:release\/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable\/[0-9]{4}\.[0-9]+\.33)$/u;
 const RELEASE_TAG_PATTERN = /^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)\.[0-9]+)?$/u;
@@ -15,19 +28,23 @@ const DEFAULT_INPUTS = {
   mode: "both",
   rerun_group: "all",
   reuse_evidence: "true",
+  fail_fast: "false",
 };
 
 function usage() {
   console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
-Creates a temporary remote branch pinned to trusted main release tooling,
-dispatches Full Release Validation with the target commit as its ref input,
+Creates temporary remote branches pinned to trusted main release tooling and
+the exact target commit, dispatches Full Release Validation with the target
+branch as its ref input,
 watches the parent run, verifies all child workflow head SHAs match the trusted
-workflow lineage through the release evidence manifest, then deletes the
-temporary branch by default. Exact-target and changelog-only Release SHA
+workflow lineage through the release evidence manifest, then deletes both
+temporary branches by default. --keep-branch retains both branches. Exact-target and changelog-only Release SHA
 evidence reuse stay enabled; pass -f reuse_evidence=false to force a fresh
-run. The release profile defaults to beta for alpha/beta package versions and
-stable otherwise; pass -f release_profile=full for the broad advisory sweep.`);
+run. Child workflows collect independent failures by default; pass
+-f fail_fast=true to cancel each child after its first failed job. The release
+profile defaults to beta for alpha/beta package versions and stable otherwise;
+pass -f release_profile=full for the broad advisory sweep.`);
 }
 
 function run(command, args, options = {}) {
@@ -144,6 +161,9 @@ export function parseArgs(argv) {
   if (!["true", "false"].includes(args.inputs.reuse_evidence)) {
     throw new Error("reuse_evidence must be true or false");
   }
+  if (!["true", "false"].includes(args.inputs.fail_fast)) {
+    throw new Error("fail_fast must be true or false");
+  }
   if (
     Object.hasOwn(args.inputs, "allow_unreleased_changelog") &&
     !["true", "false"].includes(args.inputs.allow_unreleased_changelog)
@@ -200,6 +220,35 @@ function resolveSha(requestedSha) {
   return run("git", ["rev-parse", "--verify", `${rev}^{commit}`], { dryRun: false });
 }
 
+function fetchTargetRef(targetRef) {
+  if (!targetRef) {
+    return;
+  }
+  const sourceRef = RELEASE_BRANCH_PATTERN.test(targetRef)
+    ? `refs/heads/${targetRef}`
+    : `refs/tags/${targetRef}`;
+  run("git", ["fetch", "--no-tags", "origin", sourceRef], {
+    stdio: "inherit",
+  });
+}
+
+function resolveTargetSha(requestedSha, targetRef) {
+  fetchTargetRef(targetRef);
+  const revision = requestedSha || "HEAD";
+  const resolved = runStatus("git", ["rev-parse", "--verify", `${revision}^{commit}`], {
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const resolvedSha = typeof resolved.stdout === "string" ? resolved.stdout.trim() : "";
+  if (resolved.status !== 0 || !resolvedSha) {
+    throw new Error(
+      targetRef
+        ? `Target SHA ${revision} is not available locally after fetching ${targetRef}`
+        : `Target SHA ${revision} is not available locally; pass --target-ref so it can be fetched by name`,
+    );
+  }
+  return resolvedSha;
+}
+
 export function releaseProfileForTarget(
   targetSha,
   readPackageJson = (sha) => run("git", ["show", `${sha}:package.json`]),
@@ -241,20 +290,23 @@ function collectRunId(dispatchOutput) {
 }
 
 function findLatestRunId(branch, sha) {
-  const json = run("gh", [
-    "run",
-    "list",
-    "--workflow",
-    WORKFLOW,
-    "--branch",
-    branch,
-    "--event",
-    "workflow_dispatch",
-    "--limit",
-    "20",
-    "--json",
-    "databaseId,headSha,createdAt",
-  ]);
+  const json = execGhRead(
+    [
+      "run",
+      "list",
+      "--workflow",
+      WORKFLOW,
+      "--branch",
+      branch,
+      "--event",
+      "workflow_dispatch",
+      "--limit",
+      "20",
+      "--json",
+      "databaseId,headSha,createdAt",
+    ],
+    GH_READ_OPTIONS,
+  );
   const runs = JSON.parse(json);
   const match = runs.find((runItem) => runItem.headSha === sha);
   return match?.databaseId ? String(match.databaseId) : "";
@@ -265,7 +317,7 @@ function readWorkflowRun(parentRunId, workflowSha) {
     throw new Error("parent run ID must be a positive decimal");
   }
   const workflowRun = JSON.parse(
-    run("gh", ["api", `repos/openclaw/openclaw/actions/runs/${parentRunId}`]),
+    execGhRead(["api", `repos/openclaw/openclaw/actions/runs/${parentRunId}`], GH_READ_OPTIONS),
   );
   if (workflowRun.head_sha !== workflowSha) {
     throw new Error(
@@ -320,21 +372,39 @@ export function releaseEvidenceVerificationArgs(parentRunId) {
 }
 
 export function shouldDeleteTemporaryWorkflowRef(params) {
-  return !params.keepBranch && (params.dryRun || params.parentConclusion === "success");
+  return (
+    !params.keepBranch &&
+    (params.dryRun || (params.parentConclusion === "success" && params.evidenceVerified))
+  );
+}
+
+export function assertTrustedWorkflowHarness(
+  workflowSha,
+  pathExists = (relativePath) =>
+    runStatus("git", ["cat-file", "-e", `${workflowSha}:${relativePath}`], {
+      stdio: ["ignore", "ignore", "ignore"],
+    }).status === 0,
+) {
+  if (!pathExists(TRUSTED_WORKFLOW_PATH)) {
+    throw new Error(
+      `trusted workflow SHA ${workflowSha} does not contain ${TRUSTED_WORKFLOW_PATH}`,
+    );
+  }
+  const verifierPath = RELEASE_EVIDENCE_VERIFIER_PATHS.find((relativePath) =>
+    pathExists(relativePath),
+  );
+  if (!verifierPath) {
+    throw new Error(
+      `trusted workflow SHA ${workflowSha} does not contain a supported release evidence verifier`,
+    );
+  }
+  return verifierPath;
 }
 
 export function releaseEvidenceVerifierPath(worktreeRoot) {
-  const candidates = [
-    join(worktreeRoot, "scripts", "release-ci-summary.mjs"),
-    join(
-      worktreeRoot,
-      ".agents",
-      "skills",
-      "release-openclaw-ci",
-      "scripts",
-      "release-ci-summary.mjs",
-    ),
-  ];
+  const candidates = RELEASE_EVIDENCE_VERIFIER_PATHS.map((relativePath) =>
+    join(worktreeRoot, relativePath),
+  );
   const verifier = candidates.find((candidate) => existsSync(candidate));
   if (!verifier) {
     throw new Error("trusted workflow checkout does not contain a release evidence verifier");
@@ -368,32 +438,41 @@ function verifyReleaseEvidence(parentRunId, workflowSha) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const targetSha = resolveSha(args.sha);
+  const targetSha = resolveTargetSha(args.sha, args.targetRef);
   args.inputs.release_profile ??= releaseProfileForTarget(targetSha);
   args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
+  assertTrustedWorkflowHarness(workflowSha);
   const shortSha = workflowSha.slice(0, 12);
   const branch = `release-ci/${shortSha}-${Date.now()}`;
   const remoteBranchRef = `refs/heads/${branch}`;
+  const targetBranch = `validation/target-${targetSha.slice(0, 12)}-${Date.now()}`;
+  const remoteTargetBranchRef = `refs/heads/${targetBranch}`;
   const dispatchInputs = {
-    ref: targetSha,
+    ref: targetBranch,
     ...(targetContextRef !== targetSha ? { target_context_ref: targetContextRef } : {}),
     ...args.inputs,
   };
 
   console.log(`Target SHA: ${targetSha}`);
   console.log(`Trusted workflow SHA: ${workflowSha}`);
+  console.log(`Temporary target ref: ${targetBranch}`);
   console.log(`Temporary workflow ref: ${branch}`);
-
-  run("git", ["push", "origin", `${workflowSha}:${remoteBranchRef}`], {
-    dryRun: args.dryRun,
-    stdio: "inherit",
-  });
 
   let parentRunId;
   let parentConclusion = "";
+  let evidenceVerified = false;
   try {
+    run("git", ["push", "origin", `${targetSha}:${remoteTargetBranchRef}`], {
+      dryRun: args.dryRun,
+      stdio: "inherit",
+    });
+    run("git", ["push", "origin", `${workflowSha}:${remoteBranchRef}`], {
+      dryRun: args.dryRun,
+      stdio: "inherit",
+    });
+
     const dispatchArgs = ["workflow", "run", WORKFLOW, "--ref", branch];
     for (const [key, value] of Object.entries(dispatchInputs)) {
       dispatchArgs.push("-f", `${key}=${value}`);
@@ -429,23 +508,30 @@ function main() {
       );
     }
     verifyReleaseEvidence(parentRunId, workflowSha);
+    evidenceVerified = true;
   } finally {
     if (
       shouldDeleteTemporaryWorkflowRef({
         keepBranch: args.keepBranch,
         dryRun: args.dryRun,
         parentConclusion,
+        evidenceVerified,
       })
     ) {
-      run("git", ["push", "origin", `:${remoteBranchRef}`], {
+      run("git", ["push", "origin", `:${remoteBranchRef}`, `:${remoteTargetBranchRef}`], {
         dryRun: args.dryRun,
         stdio: "inherit",
       });
     } else {
+      const keptRefs = `${remoteBranchRef} and ${remoteTargetBranchRef}`;
       console.warn(
         args.keepBranch
-          ? `Kept ${remoteBranchRef}`
-          : `Kept ${remoteBranchRef}: parent concluded ${parentConclusion || "without a conclusion"}. Keep it through any GitHub reruns; delete it after a successful parent attempt.`,
+          ? `Kept ${keptRefs}`
+          : `Kept ${keptRefs}: ${
+              parentConclusion === "success"
+                ? "release evidence was not verified"
+                : `parent concluded ${parentConclusion || "without a conclusion"}`
+            }. Keep it through GitHub reruns or evidence diagnosis; delete it after verified success.`,
       );
     }
   }
@@ -455,7 +541,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     main();
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
+    console.error(
+      `[full-release-validation] FAILED: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    console.error("[full-release-validation] FAILED (exit 1)");
+    process.exitCode = 1;
   }
 }

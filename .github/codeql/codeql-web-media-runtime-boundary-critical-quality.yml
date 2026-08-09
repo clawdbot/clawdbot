@@ -16,7 +16,7 @@ query-filters:
 paths:
   - src/web-fetch
   - src/web-search
-  - packages/web-content-core/src/provider-runtime-shared.ts
+  - src/web/provider-runtime-shared.ts
   - src/media
   - src/media-understanding
   - src/image-generation

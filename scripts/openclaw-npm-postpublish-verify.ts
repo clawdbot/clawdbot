@@ -27,7 +27,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
-import { readBoundedResponseText } from "./lib/bounded-response.ts";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { formatErrorMessage } from "./lib/error-format.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
@@ -60,8 +60,15 @@ type InstalledBundledExtensionManifestRecord = {
 const MAX_BUNDLED_EXTENSION_MANIFEST_BYTES = 1024 * 1024;
 const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
   "Failed to load legacy context engine runtime.";
+// Package verification always covers the complete published inventory, even
+// when the invoking build inherited a plugin-selection filter.
+const PACKAGED_BUNDLED_PLUGIN_ARTIFACTS = new Set(
+  listBundledPluginPackArtifacts({
+    env: { ...process.env, OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined },
+  }),
+);
 const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
-  (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
+  (relativePath) => PACKAGED_BUNDLED_PLUGIN_ARTIFACTS.has(relativePath),
 );
 const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
 const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
@@ -946,7 +953,7 @@ export function resolveInstalledBinaryCommandInvocation(
 
 function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
   const ids = new Set<string>();
-  for (const relativePath of listBundledPluginPackArtifacts()) {
+  for (const relativePath of PACKAGED_BUNDLED_PLUGIN_ARTIFACTS) {
     const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
     if (match) {
       ids.add(expectDefined(match[1], "bundled package extension id"));

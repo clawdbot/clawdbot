@@ -178,6 +178,13 @@ describe("getSlashCommands", () => {
 });
 
 describe("helpText", () => {
+  it.each([{}, { local: true }])("documents multiline input shortcuts", (options) => {
+    const output = helpText(options);
+
+    expect(output).toContain("Enter: send message");
+    expect(output).toContain("Shift+Enter or Ctrl+J: insert a newline");
+  });
+
   it.each(["/verbose <on|off|full>", "/reasoning <on|off|stream>"])(
     "includes the full canonical directive levels for %s",
     (usage) => {
@@ -193,6 +200,25 @@ describe("helpText", () => {
     expect(output).toContain("/gateway-status");
     expect(output).toContain("/gwstatus");
     expect(output).toContain("/openclaw [request]");
+  });
+
+  it.each(["goal", "btw", "queue", "stop"])(
+    "keeps /%s visible in completion and help across TUI modes",
+    (name) => {
+      for (const options of [{}, { local: true }]) {
+        expect(getSlashCommands(options).map((command) => command.name)).toContain(name);
+        expect(helpText(options)).toContain(`/${name}`);
+      }
+    },
+  );
+
+  it.each([{}, { local: true }])("shows required arguments in shared command help", (options) => {
+    const output = helpText(options);
+
+    expect(output).toContain("/goal start <objective>");
+    expect(output).toContain("/goal edit <objective>");
+    expect(output).toContain("/btw <side question>");
+    expect(output).not.toContain("/btw [side question]");
   });
 
   it("does not advertise Gateway-owned commands in local mode", () => {

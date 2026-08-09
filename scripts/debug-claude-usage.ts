@@ -7,7 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { normalizeOptionalString } from "../packages/normalization-core/src/string-coerce.js";
-import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response.ts";
+import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response.mjs";
 import {
   maskIdentifier,
   parseStrictIntegerOption,

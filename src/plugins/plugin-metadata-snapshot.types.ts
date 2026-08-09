@@ -27,7 +27,7 @@ export type PluginMetadataSnapshotOwnerMaps = {
   providerRequests?: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
 };
 
-export type PluginMetadataSnapshotMetrics = {
+type PluginMetadataSnapshotMetrics = {
   registrySnapshotMs: number;
   manifestRegistryMs: number;
   ownerMapsMs: number;
@@ -36,7 +36,7 @@ export type PluginMetadataSnapshotMetrics = {
   manifestPluginCount: number;
 };
 
-export type PluginMetadataSnapshotRegistryDiagnostic = {
+type PluginMetadataSnapshotRegistryDiagnostic = {
   level: "info" | "warn";
   code:
     | "persisted-registry-missing"
@@ -63,7 +63,10 @@ export type PluginMetadataSnapshot = {
   discovery?: PluginDiscoveryResult;
 };
 
-export type PluginMetadataRegistryView = Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
+export type PluginMetadataRegistryView = Pick<
+  PluginMetadataSnapshot,
+  "index" | "manifestRegistry" | "discovery"
+>;
 
 export type PluginMetadataManifestView = Pick<PluginMetadataSnapshot, "index" | "plugins">;
 
@@ -76,9 +79,9 @@ export type LoadPluginMetadataSnapshotParams = {
   pluginIds?: readonly string[];
   pluginIdScope?: PluginMetadataSnapshotPluginIdScope;
   preferPersisted?: boolean;
+  allowCurrent?: boolean;
 };
 
 export type ResolvePluginMetadataSnapshotParams = LoadPluginMetadataSnapshotParams & {
-  allowCurrent?: boolean;
   allowWorkspaceScopedCurrent?: boolean;
 };

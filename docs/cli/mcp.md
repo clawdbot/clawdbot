@@ -398,11 +398,11 @@ config to Codex.
 
 Commands:
 
-- `openclaw mcp list`
-- `openclaw mcp show [name]`
-- `openclaw mcp status [--verbose]`
-- `openclaw mcp doctor [name] [--probe]`
-- `openclaw mcp probe [name]`
+- `openclaw mcp list [--json]`
+- `openclaw mcp show [name] [--json]`
+- `openclaw mcp status [--verbose] [--json]`
+- `openclaw mcp doctor [name] [--probe] [--json]`
+- `openclaw mcp probe [name] [--json]`
 - `openclaw mcp add <name> [flags]`
 - `openclaw mcp set <name> <json>`
 - `openclaw mcp configure <name> [flags]`
@@ -423,7 +423,7 @@ Notes:
 - `set` expects one JSON object value on the command line.
 - `configure` updates enablement, tool filters, timeouts, OAuth, TLS, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
 - `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
-- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. The first run prints an authorization URL; rerun with `--code` after approval.
+- `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. For a loopback redirect, OpenClaw listens for the browser callback and completes login automatically. The printed `--code` command remains the fallback for remote, headless, or unreachable callbacks.
 - `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
 - `reload` disposes cached in-process MCP runtimes for the current CLI process only. Gateway or agent processes in another process still need their own reload or restart path.
 - Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
@@ -602,7 +602,7 @@ Use `--json` for scripts and dashboards. Field sets can grow over time, so consu
     }
     ```
 
-    `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). Use `probe` for reachability and capability proof, not for static config audits.
+    `probe --json` opens a live MCP client session and prints its result directly; unlike `status`/`doctor`, the output has no top-level `path` field. `resources` and `prompts` keys are present only when the server actually advertises that capability (a server without prompts omits the `prompts` key rather than reporting `false`). The command prints the complete result before exiting nonzero when diagnostics are present or a selected enabled server did not connect, so automation can inspect partial successes. Use `probe` for reachability and capability proof, not for static config audits.
 
   </Accordion>
 </AccordionGroup>
@@ -731,11 +731,11 @@ When a remote MCP service is already backed by a separate OpenClaw refresh-capab
     openclaw mcp login docs
     ```
 
-    OpenClaw prints the authorization URL and stores temporary OAuth verifier state in shared SQLite.
+    OpenClaw starts the registered loopback callback, prints the authorization URL, and stores temporary OAuth verifier state in shared SQLite. Approve the request in the browser and return to the terminal; token exchange completes automatically after the callback arrives.
 
   </Step>
-  <Step title="Finish with the code">
-    After approving in the browser, pass the returned code back to OpenClaw.
+  <Step title="Use the manual fallback when needed">
+    If the browser runs on another machine or cannot reach the printed loopback address, copy the returned code and pass it back to OpenClaw.
 
     ```bash
     openclaw mcp login docs --code abc123
@@ -808,6 +808,8 @@ Registry commands do not start the channel bridge. Only `probe` and `doctor --pr
 ## Control UI
 
 The browser Control UI includes a dedicated MCP settings page at `/settings/mcp`; the previous `/mcp` path remains an alias. The page shows configured server counts, enabled/OAuth/filter summaries, per-server transport rows, enable/disable controls, common CLI commands, and a scoped editor for the `mcp` config section.
+
+For a shorter setup walkthrough covering Settings, the composer path (**+** → **Connectors** → **Add MCP server…**) and its **This session** / **Everywhere** scopes, CLI, and direct config, see [Connect MCP servers](/tools/mcp).
 
 Use the page for operator edits and quick inventory. Use `openclaw mcp doctor --probe` or `openclaw mcp probe` when you need live server proof.
 
@@ -900,5 +902,6 @@ Current limits:
 
 ## Related
 
+- [Connect MCP servers](/tools/mcp)
 - [CLI reference](/cli)
 - [Plugins](/cli/plugins)

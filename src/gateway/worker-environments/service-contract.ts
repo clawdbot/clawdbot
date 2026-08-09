@@ -17,6 +17,7 @@ export type WorkerEnvironmentServiceRecord = {
   idleSinceAtMs: number | null;
   attachedSessionIds: readonly string[];
   tunnelStatus: WorkerTunnelStatus;
+  error?: string;
 };
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */

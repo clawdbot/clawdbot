@@ -3,6 +3,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import {
@@ -57,6 +58,8 @@ type GatewayScopedToolSurface = "http" | "loopback";
 /** Resolve the tools visible to a gateway caller after agent, channel, and surface policy. */
 export function resolveGatewayScopedTools(params: {
   cfg: OpenClawConfig;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
   sessionKey: string;
   runtimePolicySessionKey?: string;
   agentId?: string;
@@ -76,6 +79,7 @@ export function resolveGatewayScopedTools(params: {
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplyOnly?: boolean;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   agentTo?: string;
@@ -164,7 +168,7 @@ export function resolveGatewayScopedTools(params: {
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
-    accountId: params.accountId ?? null,
+    accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.accountId ?? null,
     senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
@@ -177,6 +181,7 @@ export function resolveGatewayScopedTools(params: {
           : "always"
         : "when-sender-id",
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
+    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
@@ -192,7 +197,14 @@ export function resolveGatewayScopedTools(params: {
   const gatewayToolsCfg = params.cfg.gateway?.tools;
   const defaultGatewayDeny =
     surface === "http"
-      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
+      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
+          // Config allow entries may use legacy tool names (e.g. "cron");
+          // normalize both sides so they still lift the matching default deny.
+          (name) =>
+            !gatewayToolsCfg?.allow?.some(
+              (allowed) => normalizeToolName(allowed) === normalizeToolName(name),
+            ),
+        )
       : [];
   const ownerOnlyGatewayDeny =
     params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
@@ -245,6 +257,7 @@ export function resolveGatewayScopedTools(params: {
     agentAccountId: params.accountId,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
+    sourceReplyOnly: params.sourceReplyOnly,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
@@ -262,6 +275,10 @@ export function resolveGatewayScopedTools(params: {
     disablePluginTools: params.disablePluginTools,
     wrapBeforeToolCallHook: false,
     config: params.cfg,
+    agentDir: params.agentDir,
+    authProfileStore: params.authProfileStore,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
     clientCaps: params.clientCaps,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,

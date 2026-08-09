@@ -1,22 +1,21 @@
 // Model list result building resolves visible model catalogs for an agent and
 // strips runtime-only provider params before sending the browse API payload.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
-  resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
-import {
-  createModelAuthAvailabilityResolver,
-  type ModelAuthAvailability,
-  type ModelAuthAvailabilityEvaluation,
-  type ModelAuthAvailabilityResolver,
+import type {
+  ModelAuthAvailability,
+  ModelAuthAvailabilityEvaluation,
+  ModelAuthAvailabilityResolver,
 } from "../../agents/model-auth-availability.js";
-import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth.js";
+import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth-provider-config.js";
 import {
   buildProviderConfigModelCatalogForBrowse,
   loadPreparedModelCatalogSnapshotForBrowse,
@@ -48,17 +47,19 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
+import { createModelsListAuthResolver } from "./models-list-auth-resolver.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListView = ModelCatalogBrowseView;
 type ModelsListEntry = Pick<
   ModelCatalogEntry,
   "alias" | "contextWindow" | "id" | "input" | "name" | "provider" | "reasoning"
-> & { available?: boolean };
+> & { available?: boolean; supportsTools?: boolean };
 type ModelsListEntryWithCapabilities = ModelsListEntry & {
   agentRuntime?: GatewayAgentRuntime;
   apiKeySupported?: boolean;
@@ -79,10 +80,6 @@ function resolveModelsListView(params: Record<string, unknown>): ModelsListView 
   return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
 }
 
-function resolvePositiveSafeInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
 // Project explicitly onto the public protocol shape. Concrete route, base URL,
 // auth, and cost facts stay private; runtime intent is attached separately.
 function buildPublicModelProjection(entry: ModelCatalogEntry): ModelsListEntry {
@@ -94,6 +91,9 @@ function buildPublicModelProjection(entry: ModelCatalogEntry): ModelsListEntry {
     ...(entry.alias ? { alias: entry.alias } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(typeof entry.reasoning === "boolean" ? { reasoning: entry.reasoning } : {}),
+    ...(typeof entry.compat?.supportsTools === "boolean"
+      ? { supportsTools: entry.compat.supportsTools }
+      : {}),
   };
 }
 
@@ -117,49 +117,6 @@ function resolveModelChoiceAgentRuntime(params: {
     id: harnessPolicy.runtime,
     source: harnessPolicy.runtimeSource ?? "implicit",
   };
-}
-
-function listEnabledSyntheticAuthProviderRefs(params: {
-  cfg: OpenClawConfig;
-  workspaceDir: string;
-}): readonly string[] {
-  const result = loadPluginRegistrySnapshotWithMetadata({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: process.env,
-  });
-  if (result.source !== "persisted" && result.source !== "provided") {
-    return [];
-  }
-  return result.snapshot.plugins
-    .filter((plugin) => plugin.enabled)
-    .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
-}
-
-function createModelsListAuthResolver(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  includeOpenAIExternalProfiles: boolean;
-  workspaceDir: string;
-  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
-}): ModelAuthAvailabilityResolver {
-  const agentDir = resolveAgentDir(params.cfg, params.agentId);
-  // Browse reads persisted auth because another CLI process may have refreshed
-  // it after the Gateway execution snapshot was built.
-  const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
-    allowKeychainPrompt: false,
-  });
-  return createModelAuthAvailabilityResolver({
-    cfg: params.cfg,
-    authStore,
-    agentDir,
-    workspaceDir: params.workspaceDir,
-    env: process.env,
-    skipSetupProviderFallback: true,
-    syntheticAuthProviderRefs: listEnabledSyntheticAuthProviderRefs(params),
-    externalCliProviderIds: params.includeOpenAIExternalProfiles ? ["openai"] : [],
-    routeResolverFactory: params.routeResolverFactory,
-  });
 }
 
 function resolveLegacyEntryAvailability(params: {
@@ -247,9 +204,38 @@ function resolveGatewayModelCatalogRouteKey(entry: ModelCatalogEntry): string {
   );
 }
 
+/** Configured dynamic-catalog providers that omit explicit model inventory. */
+function listConfiguredRuntimeDiscoveryProviderIds(
+  cfg: OpenClawConfig,
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">,
+): Set<string> {
+  const ids = new Set<string>();
+  const providers = cfg.models?.providers;
+  if (!providers || typeof providers !== "object" || !metadataSnapshot) {
+    return ids;
+  }
+  const dynamicProviders = new Set<string>();
+  for (const plugin of metadataSnapshot.plugins) {
+    for (const [providerRaw, mode] of Object.entries(plugin.modelCatalog?.discovery ?? {})) {
+      const providerId = normalizeProviderId(providerRaw);
+      if (providerId && (mode === "runtime" || mode === "refreshable")) {
+        dynamicProviders.add(providerId);
+      }
+    }
+  }
+  for (const [providerRaw, provider] of Object.entries(providers)) {
+    const providerId = normalizeProviderId(providerRaw);
+    if (providerId && dynamicProviders.has(providerId) && !Array.isArray(provider?.models)) {
+      ids.add(providerId);
+    }
+  }
+  return ids;
+}
+
 function resolveProviderConfigInventoryEntries(params: {
   authoredEntries: readonly ModelCatalogEntry[];
   canonicalEntries: readonly ModelCatalogEntry[];
+  discoveryOnlyProviderIds?: ReadonlySet<string>;
 }): ModelCatalogEntry[] {
   const canonicalByKey = new Map<string, ModelCatalogEntry>();
   for (const entry of params.canonicalEntries) {
@@ -270,6 +256,21 @@ function resolveProviderConfigInventoryEntries(params: {
     // route metadata; configured logical overrides are applied by the projector.
     inventory.push(canonicalByKey.get(key) ?? authoredEntry);
   }
+  if (params.discoveryOnlyProviderIds) {
+    // Providers configured without explicit model lists (for example litellm)
+    // surface their key-scoped discovered rows as the configured inventory.
+    for (const canonicalEntry of params.canonicalEntries) {
+      const key = resolveGatewayModelCatalogRouteKey(canonicalEntry);
+      if (seen.has(key)) {
+        continue;
+      }
+      if (!params.discoveryOnlyProviderIds.has(normalizeProviderId(canonicalEntry.provider))) {
+        continue;
+      }
+      seen.add(key);
+      inventory.push(canonicalEntry);
+    }
+  }
   return inventory;
 }
 
@@ -278,11 +279,21 @@ export function createGatewayAgentModelCatalogProjector(params: {
   cfg: OpenClawConfig;
   agentId: string;
   snapshot: ModelCatalogSnapshot;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  preparedAuthStore?: AuthProfileStore;
   preferredProfileId?: string;
   lockedProfileId?: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
 }) {
   const defaultModel = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
+  // The Gateway owns one process-lifecycle plugin metadata snapshot. Carry it
+  // through the whole projection so per-model normalization cannot rediscover it.
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    getCurrentPluginMetadataSnapshot({
+      config: params.cfg,
+      allowWorkspaceScopedSnapshot: true,
+    });
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog: params.snapshot.entries,
@@ -290,6 +301,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
     defaultModel,
     agentId: params.agentId,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    manifestPlugins: metadataSnapshot?.plugins,
   });
   const workspaceDir =
     resolveAgentWorkspaceDir(params.cfg, params.agentId) ?? resolveDefaultAgentWorkspaceDir();
@@ -321,6 +333,8 @@ export function createGatewayAgentModelCatalogProjector(params: {
     includeOpenAIExternalProfiles:
       projectionCatalog.some((entry) => normalizeProviderId(entry.provider) === "openai") ||
       [...visibilityPolicy.configuredKeys].some((key) => key.startsWith("openai/")),
+    metadataSnapshot,
+    ...(params.preparedAuthStore ? { preparedAuthStore: params.preparedAuthStore } : {}),
     workspaceDir,
     routeResolverFactory: params.routeResolverFactory,
   });
@@ -334,6 +348,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
   let projectedCatalog: Promise<ModelCatalogEntry[]> | undefined;
   return {
     evaluateEntry,
+    metadataSnapshot,
     projectCatalog: () =>
       (projectedCatalog ??= Promise.all(
         logicalEntries.map(async (entry) => {
@@ -488,6 +503,7 @@ export async function buildModelsListResult(
   };
   let snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg: initialConfig,
+    agentId: initialAgentId,
     view,
     loadCatalog: async (loadParams) => {
       loadedReadOnly = loadParams.readOnly ?? true;
@@ -509,13 +525,18 @@ export async function buildModelsListResult(
   if (
     loadedSnapshot &&
     loadedReadOnly &&
-    modelCatalogBrowseRequiresFullDiscovery({ cfg: loadedSnapshot.config, view })
+    modelCatalogBrowseRequiresFullDiscovery({
+      cfg: loadedSnapshot.config,
+      agentId: loadedSnapshot.agentId,
+      view,
+    })
   ) {
     const escalationAgentId = loadedSnapshot.agentId;
     let escalationTimedOut = false;
     let fullSnapshot: typeof loadedSnapshot | undefined;
     const escalatedCatalog = await loadPreparedModelCatalogSnapshotForBrowse({
       cfg: loadedSnapshot.config,
+      agentId: escalationAgentId,
       view,
       loadCatalog: async ({ readOnly }) => {
         fullSnapshot = await params.context.loadGatewayModelCatalogSnapshot({
@@ -553,6 +574,12 @@ export async function buildModelsListResult(
     resolveDefaultAgentWorkspaceDir();
   const catalog = snapshot.entries;
   const routeVariants = snapshot.routeVariants;
+  const metadataSnapshot =
+    (usedPreloadedCatalog ? params.catalogProjector?.metadataSnapshot : undefined) ??
+    getCurrentPluginMetadataSnapshot({
+      config: cfg,
+      allowWorkspaceScopedSnapshot: true,
+    });
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
   const capableProviders = includeProviderCapabilities
     ? apiKeyProviderCapabilities({ cfg, workspaceDir })
@@ -567,6 +594,10 @@ export async function buildModelsListResult(
       entries: resolveProviderConfigInventoryEntries({
         authoredEntries,
         canonicalEntries: catalog,
+        discoveryOnlyProviderIds: listConfiguredRuntimeDiscoveryProviderIds(
+          sourceConfig,
+          metadataSnapshot,
+        ),
       }),
       routeVariants,
     };
@@ -597,6 +628,7 @@ export async function buildModelsListResult(
     defaultModel,
     agentId,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+    manifestPlugins: metadataSnapshot?.plugins,
   });
   const evaluateEntry =
     (usedPreloadedCatalog ? params.catalogProjector?.evaluateEntry : undefined) ??
@@ -609,6 +641,7 @@ export async function buildModelsListResult(
         includeOpenAIExternalProfiles:
           catalog.some((entry) => normalizeProviderId(entry.provider) === "openai") ||
           [...visibilityPolicy.configuredKeys].some((key) => key.startsWith("openai/")),
+        metadataSnapshot,
         workspaceDir,
         routeResolverFactory: params.routeResolverFactory,
       }),

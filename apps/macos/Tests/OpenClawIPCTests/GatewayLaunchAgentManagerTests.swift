@@ -2,7 +2,12 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
+@Suite(.serialized)
 struct GatewayLaunchAgentManagerTests {
+    @Test func `daemon commands tolerate first run state migrations`() {
+        #expect(GatewayLaunchAgentManager.startupMigrationTolerance >= 120)
+    }
+
     @Test func `reads Gateway service ownership command directly from launchd`() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-gateway-\(UUID().uuidString).plist")
@@ -73,6 +78,22 @@ struct GatewayLaunchAgentManagerTests {
         #expect(kickstartError == nil)
         #expect(FileManager().fileExists(atPath: marker.path))
         #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+    }
+
+    @Test func `unintercepted daemon commands fail closed during tests`() async {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-no-disable-marker-\(UUID().uuidString)")
+        defer {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+        }
+
+        GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+        GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+
+        let error = await GatewayLaunchAgentManager.kickstart()
+
+        #expect(error == "Gateway daemon commands require explicit interception during tests")
     }
 
     @Test func `launch agent plist snapshot parses args and env`() throws {

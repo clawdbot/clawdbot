@@ -33,6 +33,226 @@ describe("Codex plugin metadata cache", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("coalesces installed plugins through the exact Codex 0.146 endpoint", async () => {
+    const cache = new CodexPluginMetadataCache();
+    let release: ((response: v2.PluginInstalledResponse) => void) | undefined;
+    const request = vi.fn(
+      async () =>
+        await new Promise<v2.PluginInstalledResponse>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const requestParams = { cwds: ["/workspace/a"] } satisfies v2.PluginInstalledParams;
+    const params = {
+      appCacheKey: "runtime-a",
+      queryKind: "installed" as const,
+      requestParams,
+      request,
+    };
+
+    const first = cache.load(params);
+    const second = cache.load(params);
+    expect(request).toHaveBeenCalledExactlyOnceWith("plugin/installed", requestParams);
+    const response = installedPlugins("workspace-directory", "calendar");
+    release?.(response);
+
+    const [firstSnapshot, secondSnapshot] = await Promise.all([first, second]);
+    expect(firstSnapshot).toBe(secondSnapshot);
+    expect(firstSnapshot.response).toBe(response);
+    expect(cache.read("runtime-a", "installed", requestParams)).toBe(firstSnapshot);
+    expect(cache.read("runtime-a", "installed")).toBeUndefined();
+    await expect(cache.load(params)).resolves.toBe(firstSnapshot);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps installed workspaces, catalog queries, and runtime identities separate", async () => {
+    const cache = new CodexPluginMetadataCache();
+    const request = vi.fn(
+      async (
+        method: "plugin/list" | "plugin/installed",
+        params: v2.PluginListParams | v2.PluginInstalledParams,
+      ) =>
+        method === "plugin/installed"
+          ? installedPlugins("workspace-directory", params.cwds?.[0] ?? "home")
+          : pluginList("openai-curated-remote", "calendar"),
+    );
+    const installedRequest = async (
+      method: "plugin/installed",
+      params: v2.PluginInstalledParams,
+    ): Promise<v2.PluginInstalledResponse> =>
+      (await request(method, params)) as v2.PluginInstalledResponse;
+    const catalogRequest = async (
+      method: "plugin/list",
+      params: v2.PluginListParams,
+    ): Promise<v2.PluginListResponse> => (await request(method, params)) as v2.PluginListResponse;
+
+    const workspaceA = await cache.load({
+      appCacheKey: "runtime-a",
+      queryKind: "installed",
+      requestParams: { cwds: ["/workspace/a"] },
+      request: installedRequest,
+    });
+    const workspaceB = await cache.load({
+      appCacheKey: "runtime-a",
+      queryKind: "installed",
+      requestParams: { cwds: ["/workspace/b"] },
+      request: installedRequest,
+    });
+    const curated = await cache.load({
+      appCacheKey: "runtime-a",
+      queryKind: "curated-global",
+      requestParams: {},
+      request: catalogRequest,
+    });
+    const otherRuntime = await cache.load({
+      appCacheKey: "runtime-b",
+      queryKind: "installed",
+      requestParams: { cwds: ["/workspace/a"] },
+      request: installedRequest,
+    });
+
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenNthCalledWith(1, "plugin/installed", {
+      cwds: ["/workspace/a"],
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "plugin/installed", {
+      cwds: ["/workspace/b"],
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "plugin/list", {});
+    expect(request).toHaveBeenNthCalledWith(4, "plugin/installed", {
+      cwds: ["/workspace/a"],
+    });
+    expect(cache.read("runtime-a", "installed", { cwds: ["/workspace/a"] })).toBe(workspaceA);
+    expect(cache.read("runtime-a", "installed", { cwds: ["/workspace/b"] })).toBe(workspaceB);
+    expect(cache.read("runtime-a", "curated-global")).toBe(curated);
+    expect(cache.read("runtime-b", "installed", { cwds: ["/workspace/a"] })).toBe(otherRuntime);
+  });
+
+  it("coalesces omitted and null installed-plugin scope as the same upstream query", async () => {
+    const cache = new CodexPluginMetadataCache();
+    const request = vi.fn(async () => installedPlugins("openai-curated-remote", "calendar"));
+
+    const omitted = await cache.load({
+      appCacheKey: "runtime-a",
+      queryKind: "installed",
+      requestParams: {},
+      request,
+    });
+    const explicitNull = await cache.load({
+      appCacheKey: "runtime-a",
+      queryKind: "installed",
+      requestParams: { cwds: null, installSuggestionPluginNames: null },
+      request,
+    });
+
+    expect(explicitNull).toBe(omitted);
+    expect(cache.read("runtime-a", "installed")).toBe(omitted);
+    expect(request).toHaveBeenCalledExactlyOnceWith("plugin/installed", {});
+  });
+
+  it("keys installed suggestion sets using Codex's actual order-independent contract", async () => {
+    const cache = new CodexPluginMetadataCache();
+    const request = vi.fn(async () => installedPlugins("workspace-directory", "calendar"));
+    const load = (installSuggestionPluginNames: string[]) =>
+      cache.load({
+        appCacheKey: "runtime-a",
+        queryKind: "installed",
+        requestParams: {
+          cwds: ["/workspace/a"],
+          installSuggestionPluginNames,
+        },
+        request,
+      });
+
+    const first = await load(["calendar", "drive", "calendar"]);
+    await expect(load(["drive", "calendar"])).resolves.toBe(first);
+    await load(["calendar"]);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(1, "plugin/installed", {
+      cwds: ["/workspace/a"],
+      installSuggestionPluginNames: ["calendar", "drive", "calendar"],
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "plugin/installed", {
+      cwds: ["/workspace/a"],
+      installSuggestionPluginNames: ["calendar"],
+    });
+  });
+
+  it("does not cache a failed installed-plugin request", async () => {
+    const cache = new CodexPluginMetadataCache();
+    const response = installedPlugins("workspace-directory", "calendar");
+    const request = vi
+      .fn<() => Promise<v2.PluginInstalledResponse>>()
+      .mockRejectedValueOnce(new Error("installed plugins unavailable"))
+      .mockResolvedValueOnce(response);
+    const requestParams = { cwds: ["/workspace/a"] } satisfies v2.PluginInstalledParams;
+    const params = {
+      appCacheKey: "runtime-a",
+      queryKind: "installed" as const,
+      requestParams,
+      request,
+    };
+
+    await expect(cache.load(params)).rejects.toThrow("installed plugins unavailable");
+    expect(cache.read("runtime-a", "installed", requestParams)).toBeUndefined();
+    await expect(cache.load(params)).resolves.toMatchObject({ response });
+    expect(cache.read("runtime-a", "installed", requestParams)?.response).toBe(response);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache installed marketplaces that Codex reports as incomplete", async () => {
+    const cache = new CodexPluginMetadataCache();
+    const incomplete = installedPlugins("workspace-directory", "calendar");
+    incomplete.marketplaceLoadErrors.push({
+      marketplacePath: "/workspace/a/.codex/plugins",
+      message: "workspace marketplace unavailable",
+    });
+    const healthy = installedPlugins("workspace-directory", "calendar");
+    const request = vi
+      .fn<() => Promise<v2.PluginInstalledResponse>>()
+      .mockResolvedValueOnce(incomplete)
+      .mockResolvedValueOnce(healthy);
+    const requestParams = { cwds: ["/workspace/a"] } satisfies v2.PluginInstalledParams;
+    const params = {
+      appCacheKey: "runtime-a",
+      queryKind: "installed" as const,
+      requestParams,
+      request,
+    };
+
+    await expect(cache.load(params)).resolves.toMatchObject({ response: incomplete });
+    expect(cache.read("runtime-a", "installed", requestParams)).toBeUndefined();
+    await expect(cache.load(params)).resolves.toMatchObject({ response: healthy });
+    expect(cache.read("runtime-a", "installed", requestParams)?.response).toBe(healthy);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates every installed workspace snapshot for the changed runtime only", async () => {
+    const cache = new CodexPluginMetadataCache();
+    const request = vi.fn(async () => installedPlugins("workspace-directory", "calendar"));
+    const load = (appCacheKey: string, cwd: string) =>
+      cache.load({
+        appCacheKey,
+        queryKind: "installed",
+        requestParams: { cwds: [cwd] },
+        request,
+      });
+
+    await load("runtime-a", "/workspace/a");
+    await load("runtime-a", "/workspace/b");
+    const unrelated = await load("runtime-b", "/workspace/a");
+
+    cache.invalidate("runtime-a");
+
+    expect(cache.read("runtime-a", "installed", { cwds: ["/workspace/a"] })).toBeUndefined();
+    expect(cache.read("runtime-a", "installed", { cwds: ["/workspace/b"] })).toBeUndefined();
+    expect(cache.read("runtime-b", "installed", { cwds: ["/workspace/a"] })).toBe(unrelated);
+
+    await load("runtime-a", "/workspace/a");
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
   it("does not settle snapshots the caller marks uncacheable", async () => {
     // Upstream plugin/list fails open for remote catalogs (local-only response,
     // empty marketplaceLoadErrors); such a snapshot must not settle negatives.
@@ -78,22 +298,14 @@ describe("Codex plugin metadata cache", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps query kinds and runtime identities separate", async () => {
+  it("keeps curated catalog runtime identities separate", async () => {
     const cache = new CodexPluginMetadataCache();
-    const request = vi.fn(async (_method: string, params: v2.PluginListParams) =>
-      pluginList(params.marketplaceKinds ? "workspace-directory" : "openai-curated-remote"),
-    );
+    const request = vi.fn(async () => pluginList("openai-curated-remote"));
 
     await cache.load({
       appCacheKey: "runtime-a",
       queryKind: "curated-global",
       requestParams: {},
-      request,
-    });
-    await cache.load({
-      appCacheKey: "runtime-a",
-      queryKind: "workspace-directory",
-      requestParams: { cwds: [], marketplaceKinds: ["workspace-directory"] },
       request,
     });
     await cache.load({
@@ -103,7 +315,7 @@ describe("Codex plugin metadata cache", () => {
       request,
     });
 
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("does not cache failed requests", async () => {
@@ -129,7 +341,9 @@ describe("Codex plugin metadata cache", () => {
   it("does not cache responses with marketplace load errors", async () => {
     const cache = new CodexPluginMetadataCache();
     const incomplete = pluginList("openai-curated-remote");
-    incomplete.marketplaceLoadErrors = [{ message: "catalog unavailable" }];
+    incomplete.marketplaceLoadErrors = [
+      { marketplacePath: "/marketplaces/openai-curated", message: "catalog unavailable" },
+    ];
     const request = vi
       .fn<() => Promise<v2.PluginListResponse>>()
       .mockResolvedValueOnce(incomplete)
@@ -206,24 +420,6 @@ describe("Codex plugin metadata cache", () => {
     });
     expect(ownerRequest).toHaveBeenCalledTimes(1);
     expect(joiningRequest).toHaveBeenCalledTimes(1);
-  });
-
-  it("reuses a successful workspace snapshot for the process lifetime", async () => {
-    const cache = new CodexPluginMetadataCache();
-    const request = vi.fn(async () => pluginList("workspace-directory"));
-    const params = {
-      appCacheKey: "runtime-a",
-      queryKind: "workspace-directory" as const,
-      requestParams: {
-        cwds: [],
-        marketplaceKinds: ["workspace-directory"],
-      } satisfies v2.PluginListParams,
-      request,
-    };
-
-    const first = await cache.load(params);
-    await expect(cache.load(params)).resolves.toBe(first);
-    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an unrelated runtime load cacheable across invalidation", async () => {
@@ -303,5 +499,19 @@ function pluginList(marketplaceName: string, pluginId?: string): v2.PluginListRe
     ],
     marketplaceLoadErrors: [],
     featuredPluginIds: [],
+  };
+}
+
+function installedPlugins(marketplaceName: string, pluginId?: string): v2.PluginInstalledResponse {
+  const { marketplaces } = pluginList(marketplaceName, pluginId);
+  for (const marketplace of marketplaces) {
+    for (const plugin of marketplace.plugins) {
+      plugin.installed = true;
+      plugin.enabled = true;
+    }
+  }
+  return {
+    marketplaces,
+    marketplaceLoadErrors: [],
   };
 }

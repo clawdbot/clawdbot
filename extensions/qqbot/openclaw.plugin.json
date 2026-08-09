@@ -1,5 +1,9 @@
 {
   "id": "qqbot",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "name": "QQ Bot",
   "description": "OpenClaw QQ Bot channel plugin for group and direct-message workflows.",
   "icon": "https://cdn.simpleicons.org/qq",
@@ -99,10 +103,6 @@
           "contextVisibility": { "$ref": "#/$defs/contextVisibility" },
           "systemPrompt": { "type": "string" },
           "markdownSupport": { "type": "boolean" },
-          "voiceDirectUploadFormats": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
           "audioFormatPolicy": { "$ref": "#/$defs/audioFormatPolicy" },
           "urlDirectUpload": { "type": "boolean" },
           "upgradeUrl": { "type": "string" },
@@ -142,10 +142,6 @@
       "contextVisibility": { "$ref": "#/$defs/contextVisibility" },
       "systemPrompt": { "type": "string" },
       "markdownSupport": { "type": "boolean" },
-      "voiceDirectUploadFormats": {
-        "type": "array",
-        "items": { "type": "string" }
-      },
       "audioFormatPolicy": { "$ref": "#/$defs/audioFormatPolicy" },
       "stt": { "$ref": "#/$defs/stt" },
       "urlDirectUpload": { "type": "boolean" },

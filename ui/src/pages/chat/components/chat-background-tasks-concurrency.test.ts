@@ -1,13 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { TaskSummary } from "../../../lib/tasks/data.ts";
+import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import {
   createBackgroundTasksProps,
   handleBackgroundTasksEvent,
   type BackgroundTasksHost,
 } from "./chat-background-tasks.ts";
-
-const openSession = { onOpenSession: () => {} };
 
 function flushAsync() {
   return new Promise<void>((resolve) => {
@@ -70,11 +68,11 @@ async function refreshingHost(tasks: TaskSummary[], initial = false) {
     hello: null,
     requestUpdate: vi.fn(),
   };
-  createBackgroundTasksProps(host, openSession);
+  createBackgroundTasksProps(host);
   if (!initial) {
     await flushAsync();
     deferRefresh = true;
-    createBackgroundTasksProps(host, openSession).onRefresh();
+    createBackgroundTasksProps(host).onRefresh();
   }
   return {
     host,
@@ -124,7 +122,7 @@ describe("background tasks concurrent snapshots", () => {
   ])("replays $name during the initial load without a stale second load", async (test) => {
     const refresh = await refreshingHost(test.stale, true);
     expect(refresh.request).toHaveBeenCalledTimes(2);
-    expect(createBackgroundTasksProps(refresh.host, openSession).tasks).toBeNull();
+    expect(createBackgroundTasksProps(refresh.host).tasks).toBeNull();
 
     handleBackgroundTasksEvent(refresh.host, test.event);
     handleBackgroundTasksEvent(refresh.host, {
@@ -142,10 +140,7 @@ describe("background tasks concurrent snapshots", () => {
 
     expect(refresh.request).toHaveBeenCalledTimes(2);
     expect(
-      createBackgroundTasksProps(refresh.host, openSession).tasks?.map((task) => [
-        task.id,
-        task.status,
-      ]),
+      createBackgroundTasksProps(refresh.host).tasks?.map((task) => [task.id, task.status]),
     ).toEqual(test.expected);
   });
 
@@ -166,7 +161,7 @@ describe("background tasks concurrent snapshots", () => {
     refresh.resolveRecent({ tasks: stale });
     await flushAsync();
 
-    const props = createBackgroundTasksProps(refresh.host, openSession);
+    const props = createBackgroundTasksProps(refresh.host);
     expect(props.error).toBe("Initial task snapshot unavailable");
     expect(props.tasks?.map((task) => [task.id, task.status])).toEqual([
       ["task-snapshot-failed", "completed"],
@@ -193,7 +188,7 @@ describe("background tasks concurrent snapshots", () => {
     refresh.resolveRecent({ tasks });
     await flushAsync();
 
-    const props = createBackgroundTasksProps(refresh.host, openSession);
+    const props = createBackgroundTasksProps(refresh.host);
     expect(props.tasks).toHaveLength(10);
     expect(new Set(props.tasks?.map((task) => task.id)).size).toBe(10);
     expect(props.tasks?.every((task) => task.status === "completed")).toBe(true);
@@ -207,19 +202,15 @@ describe("background tasks concurrent snapshots", () => {
     const tasks = [makeTask({ id: "task-cancelled" })];
     const refresh = await refreshingHost(tasks);
 
-    createBackgroundTasksProps(refresh.host, openSession).onCancel("task-cancelled");
+    createBackgroundTasksProps(refresh.host).onCancel("task-cancelled");
     await flushAsync();
-    expect(createBackgroundTasksProps(refresh.host, openSession).tasks?.[0]?.status).toBe(
-      "cancelled",
-    );
+    expect(createBackgroundTasksProps(refresh.host).tasks?.[0]?.status).toBe("cancelled");
 
     refresh.resolveActive({ tasks });
     refresh.resolveRecent({ tasks });
     await flushAsync();
 
-    expect(createBackgroundTasksProps(refresh.host, openSession).tasks?.[0]?.status).toBe(
-      "cancelled",
-    );
+    expect(createBackgroundTasksProps(refresh.host).tasks?.[0]?.status).toBe("cancelled");
   });
 
   it("discards an in-flight snapshot after a same-client connection-epoch change", async () => {
@@ -229,19 +220,19 @@ describe("background tasks concurrent snapshots", () => {
     refresh.setFallbackTasks(replacement);
     refresh.host.connectionEpoch = 2;
 
-    createBackgroundTasksProps(refresh.host, openSession);
+    createBackgroundTasksProps(refresh.host);
     await flushAsync();
-    expect(
-      createBackgroundTasksProps(refresh.host, openSession).tasks?.map((task) => task.id),
-    ).toEqual(["task-new-account"]);
+    expect(createBackgroundTasksProps(refresh.host).tasks?.map((task) => task.id)).toEqual([
+      "task-new-account",
+    ]);
 
     refresh.resolveActive({ tasks: stale });
     refresh.resolveRecent({ tasks: stale });
     await flushAsync();
 
-    expect(
-      createBackgroundTasksProps(refresh.host, openSession).tasks?.map((task) => task.id),
-    ).toEqual(["task-new-account"]);
+    expect(createBackgroundTasksProps(refresh.host).tasks?.map((task) => task.id)).toEqual([
+      "task-new-account",
+    ]);
     expect(refresh.request).toHaveBeenCalledTimes(4);
   });
 });

@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   sanitizeOpenAIResponsesReplayForStream,
@@ -45,12 +46,7 @@ async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unkn
   return events;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireAssistantMessage(message: AgentMessage | undefined): AssistantMessage {
   if (!message || message.role !== "assistant") {
@@ -96,6 +92,122 @@ function toolResultSummary(message: AgentMessage | undefined) {
 }
 
 describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
+  it("preserves a fenced allowed-tool example in live and terminal output", async () => {
+    const parts = ["`", "``json\n", "[re", 'ad]\n{"path":"example.txt"}\n[/read]\n', "```"];
+    const rawText = parts.join("");
+    const createMessage = () => ({
+      role: "assistant",
+      content: [{ type: "text", text: rawText }],
+      stopReason: "stop",
+    });
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          ...parts.map((delta) => ({ type: "text_delta", contentIndex: 0, delta })),
+          { type: "text_end", contentIndex: 0, content: rawText },
+          { type: "done", reason: "stop", message: createMessage() },
+        ],
+        resultMessage: createMessage(),
+      }),
+    );
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["read"]));
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    const events = (await collectStreamEvents(stream)).map((event) =>
+      requireRecord(event, "event"),
+    );
+    const result = requireRecord(await stream.result(), "result message");
+
+    expect(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => event.delta)
+        .join(""),
+    ).toBe(rawText);
+    expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
+    expect(requireRecord(events.at(-1)?.message, "done message").content).toEqual([
+      { type: "text", text: rawText },
+    ]);
+    expect(result.content).toEqual([{ type: "text", text: rawText }]);
+  });
+
+  it("preserves a fenced example split across adjacent text blocks", async () => {
+    const textParts = [
+      "```json\n",
+      ["[read]", '{"path":"example.txt"}', "[/read]", "\n"].join("\n"),
+      "```",
+    ];
+    const content = textParts.map((text) => ({ type: "text", text }));
+    const createMessage = () => ({
+      role: "assistant",
+      content,
+      stopReason: "stop",
+    });
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          ...textParts.flatMap((text, contentIndex) => [
+            { type: "text_delta", contentIndex, delta: text },
+            { type: "text_end", contentIndex, content: text },
+          ]),
+          { type: "done", reason: "stop", message: createMessage() },
+        ],
+        resultMessage: createMessage(),
+      }),
+    );
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["read"]));
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    const events = (await collectStreamEvents(stream)).map((event) =>
+      requireRecord(event, "event"),
+    );
+    const result = requireRecord(await stream.result(), "result message");
+
+    expect(
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => event.delta)
+        .join(""),
+    ).toBe(textParts.join(""));
+    expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
+    expect(requireRecord(events.at(-1)?.message, "done message").content).toEqual(content);
+    expect(result.content).toEqual(content);
+  });
+
+  it("does not promote an indented code example from terminal output", async () => {
+    const rawText = ["    [read]", '    {"path":"example.txt"}', "    [/read]"].join("\n");
+    const createMessage = () => ({
+      role: "assistant",
+      content: [{ type: "text", text: rawText }],
+      stopReason: "stop",
+    });
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [{ type: "done", reason: "stop", message: createMessage() }],
+        resultMessage: createMessage(),
+      }),
+    );
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(baseFn as never, new Set(["read"]));
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    const events = (await collectStreamEvents(stream)).map((event) =>
+      requireRecord(event, "event"),
+    );
+    const result = requireRecord(await stream.result(), "result message");
+
+    expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
+    expect(requireRecord(events.at(-1)?.message, "done message").content).toEqual([
+      { type: "text", text: rawText },
+    ]);
+    expect(result.content).toEqual([{ type: "text", text: rawText }]);
+  });
+
   it("promotes standalone serialized parameter XML text to structured tool calls", async () => {
     // Some providers emit tool calls as text blocks; promote only allowed tool
     // names into structured toolCall content.

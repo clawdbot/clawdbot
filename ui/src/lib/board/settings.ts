@@ -1,7 +1,10 @@
 import type { SessionBoardFace } from "../../../../src/shared/session-types.js";
+import type { BoardTab } from "./types.ts";
 
 export type BoardFace = SessionBoardFace;
-export type BoardVisibleChatDock = "bottom" | "left" | "right";
+// Canonical visible-dock union, derived from the protocol BoardTab shape so
+// persisted settings and render code can never drift from the wire contract.
+export type BoardVisibleChatDock = Exclude<BoardTab["chatDock"], "hidden">;
 
 export type BoardSessionView = {
   activeTabId?: string;

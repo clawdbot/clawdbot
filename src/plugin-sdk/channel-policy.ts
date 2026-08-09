@@ -1,4 +1,5 @@
 // Channel policy helpers evaluate plugin channel runtime policy and operator-facing warnings.
+import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeStringEntries,
   uniqueStrings,
@@ -103,12 +104,6 @@ type StandardAllowlistScope = {
   prefix: string;
   account: Record<string, unknown>;
 };
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 /** Collect the common account, nested-DM, and group/room allowlist paths for doctor warnings. */
 export function collectStandardAllowlistLists(

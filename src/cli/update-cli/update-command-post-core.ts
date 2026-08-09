@@ -43,8 +43,9 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import {
   loadInstalledPluginIndexInstallRecords,
-  writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsWithLease,
 } from "../../plugins/installed-plugin-index-records.js";
+import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -107,11 +108,13 @@ export async function reportPreMutationUpdateFailure(params: {
     steps: [],
     durationMs: 0,
   };
-  await writeControlPlaneUpdateRestartSentinelBestEffort({
-    meta: params.controlPlaneUpdateSentinelMeta,
-    result,
-    jsonMode: Boolean(params.opts.json),
-  });
+  if (params.opts.dryRun !== true) {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: params.controlPlaneUpdateSentinelMeta,
+      result,
+      jsonMode: Boolean(params.opts.json),
+    });
+  }
   printResult(result, params.opts);
   defaultRuntime.exit(1);
 }
@@ -136,6 +139,15 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   if (timeoutMs === null) {
     return;
   }
+  const requestedChannel = normalizeUpdateChannel(opts.channel);
+  if (opts.channel !== undefined && !requestedChannel) {
+    defaultRuntime.error(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+
   assertConfigWriteAllowedInCurrentMode();
 
   const root = await resolveUpdateRoot();
@@ -153,14 +165,6 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
             : configSnapshot.sourceConfig,
         }
       : undefined);
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
   if (requestedChannel === "extended-stable") {
     const updateStatus = await checkUpdateStatus({
       root,
@@ -510,10 +514,33 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     records: params.pluginInstallRecords,
     targetVersion: postCoreHostVersion,
   });
+  let tentativePluginIndex:
+    | Awaited<ReturnType<typeof writePersistedInstalledPluginIndexInstallRecordsWithLease>>
+    | undefined;
+  const restoreTentativePluginIndex = async () => {
+    const tentative = tentativePluginIndex;
+    if (!tentative) {
+      return;
+    }
+    await withPluginLifecycleLease({}, async (lease) => {
+      await restorePersistedInstalledPluginIndexIfCurrent(tentative.previous, tentative.revision, {
+        lease,
+      });
+    });
+    tentativePluginIndex = undefined;
+  };
 
   try {
     if (pluginInstallRecords && pluginInstallRecords !== params.pluginInstallRecords) {
-      await writePersistedInstalledPluginIndexInstallRecords(pluginInstallRecords);
+      await withPluginLifecycleLease({}, async (lease) => {
+        tentativePluginIndex = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
+          pluginInstallRecords,
+          {
+            ...(params.preUpdateConfig ? { config: params.preUpdateConfig.sourceConfig } : {}),
+            lease,
+          },
+        );
+      });
     }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
@@ -605,9 +632,19 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       if (pluginUpdate) {
         return { resumed: true, pluginUpdate };
       }
+      await restoreTentativePluginIndex();
       return { resumed: false, exitCode };
     }
     return { resumed: true, ...(pluginUpdate ? { pluginUpdate } : {}) };
+  } catch (error) {
+    try {
+      await restoreTentativePluginIndex();
+    } catch (rollbackError) {
+      throw new Error("Post-core update failed and could not restore the previous plugin index", {
+        cause: rollbackError,
+      });
+    }
+    throw error;
   } finally {
     await fs.rm(resultDir, { recursive: true, force: true }).catch(() => undefined);
   }
@@ -633,8 +670,15 @@ export function didCoreUpdateChangeInstall(result: UpdateRunResult): boolean {
 export function shouldResumePostCoreUpdateInFreshProcess(params: {
   result: UpdateRunResult;
   downgradeRisk: boolean;
+  installKindChanged?: boolean;
 }): boolean {
-  return !params.downgradeRisk && didCoreUpdateChangeInstall(params.result);
+  // A package-to-git switch can land on the same version already cloned at its
+  // target SHA. The package root still changed, so old hashed chunks are unsafe.
+  return (
+    params.result.status === "ok" &&
+    !params.downgradeRisk &&
+    (params.installKindChanged === true || didCoreUpdateChangeInstall(params.result))
+  );
 }
 
 export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {

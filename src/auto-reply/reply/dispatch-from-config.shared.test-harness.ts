@@ -1,6 +1,7 @@
 // Shared harness for dispatch-from-config tests and mocked runtimes.
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-session-recovery.js";
 import type {
@@ -25,16 +26,34 @@ type AbortResult = {
   rejectionReason?: "finalizing";
   stoppedSubagents?: number;
 };
+type FastApproveResult = { handled: false } | { handled: true; reply?: ReplyPayload };
 type PluginTargetedInboundClaimOutcome = Awaited<
   ReturnType<ReturnType<typeof createHookRunner>["runInboundClaimForPluginOutcome"]>
 >;
 
 const mocks = vi.hoisted(() => ({
   isRoutableChannel: vi.fn((_channel: string | undefined) => true),
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn(
+    async (
+      _params: unknown,
+    ): Promise<{
+      ok: boolean;
+      delivered: boolean;
+      messageId?: string;
+      suppressed?: boolean;
+      error?: string;
+    }> => ({
+      ok: true,
+      delivered: true,
+      messageId: "mock",
+    }),
+  ),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
+  })),
+  tryFastApproveFromMessage: vi.fn<() => Promise<FastApproveResult>>(async () => ({
+    handled: false,
   })),
 }));
 const globalMocks = vi.hoisted(() => ({
@@ -195,6 +214,17 @@ const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
     synthesizeToolAudio: false,
+    statusSnapshot: {
+      autoMode: "always",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    } as {
+      autoMode: TtsAutoMode;
+      provider: string;
+      maxLength: number;
+      summarize: boolean;
+    },
   };
   return {
     state,
@@ -241,7 +271,12 @@ const transcriptMocks = vi.hoisted(() => ({
   persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
   appendAssistantMessageToSessionTranscript: vi.fn(async (_params: unknown) => ({
     ok: true,
-    sessionFile: "/tmp/session.jsonl",
+    target: {
+      agentId: "main",
+      sessionId: "test-session",
+      sessionKey: "agent:main",
+      storePath: "/tmp/sessions.json",
+    },
     messageId: "message-1",
   })),
 }));
@@ -256,7 +291,8 @@ const stageSandboxMediaMocks = vi.hoisted(() => ({
   ),
 }));
 const runtimePluginMocks = vi.hoisted(() => ({
-  ensureRuntimePluginsLoaded: vi.fn(),
+  pluginRegistry: { plugins: [], tools: [], diagnostics: [] },
+  loadAgentRuntimePluginRegistryHandle: vi.fn(),
 }));
 const conversationBindingMocks = vi.hoisted(() => {
   type BindingMsgContext = {
@@ -440,6 +476,10 @@ vi.mock("./abort.runtime.js", () => ({
   },
 }));
 
+vi.mock("./fast-approve.runtime.js", () => ({
+  tryFastApproveFromMessage: mocks.tryFastApproveFromMessage,
+}));
+
 vi.mock("../../globals.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../globals.js")>();
   return {
@@ -587,6 +627,8 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
 }));
 vi.mock("./dispatch-acp-manager.runtime.js", () => ({
   getAcpSessionManager: () => acpManagerRuntimeMocks.getAcpSessionManager(),
+  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+    acpMocks.readAcpSessionEntry(params),
   getSessionBindingService: () => ({
     listBySession: (targetSessionKey: string) =>
       sessionBindingMocks.listBySession(targetSessionKey),
@@ -608,8 +650,8 @@ vi.mock("./reply-media-paths.runtime.js", () => ({
 vi.mock("./stage-sandbox-media.runtime.js", () => ({
   stageSandboxMedia: (params: unknown) => stageSandboxMediaMocks.stageSandboxMedia(params),
 }));
-vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
-  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
+vi.mock("../../agents/runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle: runtimePluginMocks.loadAgentRuntimePluginRegistryHandle,
 }));
 vi.mock("./conversation-binding-input.js", () => ({
   resolveConversationBindingAccountIdFromMessage:
@@ -624,15 +666,7 @@ vi.mock("./conversation-binding-input.js", () => ({
     conversationBindingMocks.resolveConversationBindingThreadIdFromMessage,
 }));
 vi.mock("../../tts/status-config.js", () => ({
-  resolveStatusTtsSnapshot: () => ({
-    autoMode: "always",
-    provider: "auto",
-    maxLength: 1500,
-    summarize: true,
-  }),
-}));
-vi.mock("./dispatch-acp-tts.runtime.js", () => ({
-  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+  resolveStatusTtsSnapshot: () => ttsMocks.state.statusSnapshot,
 }));
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
   persistAcpDispatchTranscript: (params: unknown) =>
@@ -641,10 +675,6 @@ vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
 vi.mock("../../config/sessions/transcript.js", () => ({
   appendAssistantMessageToSessionTranscript: (params: unknown) =>
     transcriptMocks.appendAssistantMessageToSessionTranscript(params),
-}));
-vi.mock("./dispatch-acp-session.runtime.js", () => ({
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-    acpMocks.readAcpSessionEntry(params),
 }));
 vi.mock("../../tts/tts-config.js", () => ({
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
@@ -703,6 +733,12 @@ export function resetPluginTtsAndThreadMocks() {
   pluginConversationBindingMocks.shownFallbackNoticeBindingIds.clear();
   ttsMocks.state.synthesizeFinalAudio = false;
   ttsMocks.state.synthesizeToolAudio = false;
+  ttsMocks.state.statusSnapshot = {
+    autoMode: "always",
+    provider: "auto",
+    maxLength: 1500,
+    summarize: true,
+  };
   ttsMocks.maybeApplyTtsToPayload.mockReset().mockImplementation(async (paramsUnknown: unknown) => {
     const params = paramsUnknown as {
       payload: ReplyPayload;

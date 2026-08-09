@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import {
   deriveConceptTags,
   summarizeConceptTagScriptCoverage,
@@ -12,6 +11,7 @@ import {
   openMemoryCoreStateStore,
   readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import { filterLiveShortTermRecallEntries } from "./short-term-promotion-record.js";
 import {
   SHORT_TERM_LOCK_STALE_MS,
   isProcessLikelyAlive,
@@ -52,10 +52,6 @@ export function resolveShortTermRecallLockPath(workspaceDir: string): string {
 
 export async function auditShortTermPromotionArtifacts(params: {
   workspaceDir: string;
-  qmd?: {
-    dbPath?: string;
-    collections?: number;
-  };
 }): Promise<ShortTermAuditSummary> {
   const workspaceDir = params.workspaceDir.trim();
   const storePath = resolveStorePath(workspaceDir);
@@ -67,6 +63,7 @@ export async function auditShortTermPromotionArtifacts(params: {
   let conceptTaggedEntryCount = 0;
   let conceptTagScripts: ConceptTagScriptCoverage | undefined;
   let invalidEntryCount = 0;
+  let danglingEntryCount = 0;
   let updatedAt: string | undefined;
 
   const nowIso = new Date().toISOString();
@@ -108,6 +105,19 @@ export async function auditShortTermPromotionArtifacts(params: {
         fixable: true,
       });
     }
+    const liveEntries = await filterLiveShortTermRecallEntries({
+      workspaceDir,
+      entries: Object.values(store.entries),
+    });
+    danglingEntryCount = normalizedEntryCount - liveEntries.length;
+    if (danglingEntryCount > 0) {
+      issues.push({
+        severity: "warn",
+        code: "recall-store-dangling",
+        message: `Short-term recall store contains ${danglingEntryCount} entr${danglingEntryCount === 1 ? "y" : "ies"} whose source file is missing or not a regular file.`,
+        fixable: true,
+      });
+    }
     if (normalizedEntryCount > SHORT_TERM_RECALL_MAX_ENTRIES) {
       issues.push({
         severity: "warn",
@@ -140,49 +150,6 @@ export async function auditShortTermPromotionArtifacts(params: {
     }
   }
 
-  let qmd: ShortTermAuditSummary["qmd"];
-  if (params.qmd) {
-    qmd = {
-      dbPath: params.qmd.dbPath,
-      collections: params.qmd.collections,
-    };
-    if (typeof params.qmd.collections === "number" && params.qmd.collections <= 0) {
-      issues.push({
-        severity: "warn",
-        code: "qmd-collections-empty",
-        message: "QMD reports zero managed collections.",
-        fixable: false,
-      });
-    }
-    const dbPath = params.qmd.dbPath?.trim();
-    if (dbPath) {
-      try {
-        const stat = await fs.stat(dbPath);
-        qmd.dbBytes = stat.size;
-        if (!stat.isFile() || stat.size <= 0) {
-          issues.push({
-            severity: "error",
-            code: "qmd-index-empty",
-            message: "QMD index file exists but is empty.",
-            fixable: false,
-          });
-        }
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code === "ENOENT") {
-          issues.push({
-            severity: "error",
-            code: "qmd-index-missing",
-            message: "QMD index file is missing.",
-            fixable: false,
-          });
-        } else {
-          throw err;
-        }
-      }
-    }
-  }
-
   return {
     storePath,
     lockPath,
@@ -194,8 +161,8 @@ export async function auditShortTermPromotionArtifacts(params: {
     conceptTaggedEntryCount,
     ...(conceptTagScripts ? { conceptTagScripts } : {}),
     invalidEntryCount,
+    danglingEntryCount,
     issues,
-    ...(qmd ? { qmd } : {}),
   };
 }
 
@@ -206,6 +173,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   const nowIso = new Date().toISOString();
   let rewroteStore = false;
   let removedInvalidEntries = 0;
+  let removedDanglingEntries = 0;
   let removedOverflowEntries = 0;
   let removedStaleLock = false;
 
@@ -268,12 +236,39 @@ export async function repairShortTermPromotionArtifacts(params: {
         updatedAt: normalized.updatedAt,
         entries: nextEntries,
       };
+      const liveEntries = await filterLiveShortTermRecallEntries({
+        workspaceDir,
+        entries: Object.values(comparableStore.entries),
+      });
+      const liveEntryKeys = new Set(liveEntries.map((entry) => entry.key));
+      const danglingEntryKeys = new Set<string>();
+      for (const key of Object.keys(comparableStore.entries)) {
+        if (!liveEntryKeys.has(key)) {
+          delete comparableStore.entries[key];
+          danglingEntryKeys.add(key);
+          removedDanglingEntries += 1;
+        }
+      }
       removedOverflowEntries = enforceShortTermRecallStoreRetention(comparableStore);
       const needsRewrite =
         removedInvalidEntries > 0 ||
+        removedDanglingEntries > 0 ||
         removedOverflowEntries > 0 ||
         JSON.stringify(normalized.entries) !== JSON.stringify(comparableStore.entries);
       if (needsRewrite) {
+        let phaseSignals: Awaited<ReturnType<typeof readPhaseSignalStore>> | undefined;
+        if (removedDanglingEntries > 0) {
+          phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
+          for (const key of danglingEntryKeys) {
+            delete phaseSignals.entries[key];
+          }
+          phaseSignals.updatedAt = nowIso;
+        }
+        // Phase signals are derived from recall rows. Remove signals for recalls
+        // already proven dangling first so a later failure stays retryable.
+        if (phaseSignals) {
+          await writePhaseSignalStore(workspaceDir, phaseSignals);
+        }
         await writeStore(workspaceDir, {
           ...comparableStore,
           updatedAt: nowIso,
@@ -286,6 +281,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   return {
     changed: rewroteStore || removedStaleLock,
     removedInvalidEntries,
+    removedDanglingEntries,
     removedOverflowEntries,
     rewroteStore,
     removedStaleLock,

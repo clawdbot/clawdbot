@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mjs";
 
 const CONTROL_UI_INDEX = "dist/control-ui/index.html";
+const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
 const CONTROL_UI_ASSETS = [
   "dist/control-ui/assets/app.js",
   "dist/control-ui/assets/app.js.br",
@@ -65,8 +66,13 @@ function withPackedPackage(
             }),
       }),
     );
-    writeFixtureFile(packageRoot, "dist/postinstall-inventory.json", JSON.stringify(inventory));
+    writeFixtureFile(
+      packageRoot,
+      "dist/postinstall-inventory.json",
+      JSON.stringify([...new Set([...inventory, CODE_MODE_WORKER_PATH])]),
+    );
     writeFixtureFile(packageRoot, "dist/index.js", "export {};\n");
+    writeFixtureFile(packageRoot, CODE_MODE_WORKER_PATH, "export {};\n");
     writeFixtureFile(
       packageRoot,
       CONTROL_UI_INDEX,
@@ -215,6 +221,7 @@ describe("packaged Control UI postinstall inventory", () => {
       expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
 
       const installedPackageRoot = installPackedPackage(root, tarball);
+      expect(existsSync(join(installedPackageRoot, CODE_MODE_WORKER_PATH))).toBe(true);
       for (const relativePath of CONTROL_UI_FILES) {
         expect(existsSync(join(installedPackageRoot, relativePath))).toBe(true);
       }

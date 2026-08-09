@@ -92,11 +92,6 @@ type RunLivenessAttempt = Pick<
   "lastAssistant" | "replayMetadata" | "terminal"
 >;
 
-const REPLAY_UNSAFE_FALLBACK_METADATA: EmbeddedRunAttemptResult["replayMetadata"] = {
-  hadPotentialSideEffects: true,
-  replaySafe: false,
-};
-
 export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
   hasTerminalOutput?: boolean;
@@ -162,13 +157,6 @@ export function buildAttemptReplayMetadata(
     hadPotentialSideEffects,
     replaySafe: !hadPotentialSideEffects,
   };
-}
-
-/** Falls back to replay-unsafe metadata when older attempt records lack replay details. */
-export function resolveAttemptReplayMetadata(attempt: {
-  replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
-}): EmbeddedRunAttemptResult["replayMetadata"] {
-  return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
 type TerminalAttemptState = Pick<
@@ -299,8 +287,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  return params.hadPotentialSideEffects ||
-    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
+  return params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
@@ -359,7 +346,7 @@ export function shouldRetryMissingAssistantTurn(params: {
     return false;
   }
 
-  return !resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects;
+  return !params.attempt.replayMetadata.hadPotentialSideEffects;
 }
 
 function joinAssistantTexts(assistantTexts?: readonly string[]): string {
@@ -498,7 +485,7 @@ export function resolveReplayInvalidFlag(params: {
 }): boolean {
   const terminal = projectAgentRunAttemptTerminal(params.attempt.terminal);
   return (
-    !resolveAttemptReplayMetadata(params.attempt).replaySafe ||
+    !params.attempt.replayMetadata.replaySafe ||
     terminal.promptErrorSource === "compaction" ||
     terminal.timedOutDuringCompaction ||
     Boolean(params.incompleteTurnText)
@@ -577,9 +564,8 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   }
   // Current-attempt evidence avoids blocking on prior committed effects; older
   // harnesses retain the cumulative, fail-closed behavior.
-  const retryReplayMetadata = resolveAttemptReplayMetadata({
-    replayMetadata: params.attempt.currentAttemptReplayMetadata ?? params.attempt.replayMetadata,
-  });
+  const retryReplayMetadata =
+    params.attempt.currentAttemptReplayMetadata ?? params.attempt.replayMetadata;
   if (retryReplayMetadata.hadPotentialSideEffects) {
     return false;
   }
@@ -667,6 +653,8 @@ function shouldSkipNonVisibleTurnRetry(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
+  /** Reply-optional silent classification tolerates committed side effects; retries never can. */
+  tolerateSideEffects?: boolean;
 }): boolean {
   return Boolean(
     params.aborted ||
@@ -676,7 +664,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
-    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects,
+    (params.tolerateSideEffects !== true && params.attempt.replayMetadata.hadPotentialSideEffects),
   );
 }
 
@@ -684,12 +672,21 @@ function shouldSkipNonVisibleTurnRetry(params: {
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   onlyExplicitSilentReply?: boolean;
+  terminalReplyExpectation?: "required" | "optional";
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipNonVisibleTurnRetry(params)) {
+  // "optional" is the run consumer's declaration that no user-facing reply is
+  // owed (e.g. cron without a delivery route). Silence after side-effecting
+  // tools is intentional there; retry is replay-unsafe, so erroring would mark
+  // successful tool-only runs as failures.
+  const terminalReplyOptional = params.terminalReplyExpectation === "optional";
+  if (
+    !params.allowEmptyAssistantReplyAsSilent ||
+    shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: terminalReplyOptional })
+  ) {
     return false;
   }
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
@@ -703,18 +700,10 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   ) {
     return true;
   }
-  if (params.onlyExplicitSilentReply) {
-    return false;
-  }
-  // Post-tool empty stops are ambiguous provider failures, not intentional silence.
-  // Let the retry/incomplete-turn paths decide whether replay is safe.
-  if (
-    params.attempt.toolMetas.length > 0 &&
-    isEmptyResponseAssistantTurn({
-      payloadCount: params.payloadCount,
-      attempt: params.attempt,
-    })
-  ) {
+  // A visible turn owes a reply unless the model explicitly chose NO_REPLY.
+  // Bare empty and reasoning-only stops are provider failures, even when the
+  // conversation policy permits deliberate silence.
+  if (params.onlyExplicitSilentReply || !terminalReplyOptional) {
     return false;
   }
   return isNonVisibleAssistantTurnEligibleForSilentReply({
@@ -795,15 +784,20 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
       attempt: params.attempt,
     }),
   );
-  // Idle is not proof of completion: a toolUse terminal whose requested tools never
-  // (or only partially) dispatched must keep the incomplete-turn error, or the model
-  // could claim skipped side effects succeeded. Lifecycle counts are attempt-cumulative
-  // and alias across batches, so completion is proven per tool-call id: every toolCall
-  // in the terminal assistant needs a non-error toolResult in the message snapshot.
-  const requestedToolCallIds = Array.isArray(assistant?.content)
+  // Idle is not proof of settlement: skipped or partially dispatched tools must
+  // never be described as completed. Match each terminal call's id and owner to
+  // its own current-batch result; a reported failure is settled, not successful.
+  const requestedToolCalls = Array.isArray(assistant?.content)
     ? assistant.content.flatMap((item) => {
-        const block = item as { type?: unknown; id?: unknown } | null;
-        return block?.type === "toolCall" ? [typeof block.id === "string" ? block.id : null] : [];
+        const block = item as { type?: unknown; id?: unknown; name?: unknown } | null;
+        return block?.type === "toolCall"
+          ? [
+              {
+                id: typeof block.id === "string" ? block.id : null,
+                name: typeof block.name === "string" ? block.name : null,
+              },
+            ]
+          : [];
       })
     : [];
   // Scan only results AFTER the terminal assistant: the snapshot spans the whole
@@ -812,28 +806,58 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   // the snapshot fails closed to the existing incomplete-turn error.
   const snapshot = params.attempt.messagesSnapshot ?? [];
   const assistantIndex = assistant ? snapshot.indexOf(assistant) : -1;
-  const completedToolCallIds = new Set(
+  const settledToolResults = new Map(
     (assistantIndex >= 0 ? snapshot.slice(assistantIndex + 1) : []).flatMap((message) => {
-      const result = message as { role?: unknown; toolCallId?: unknown; isError?: unknown };
+      const result = message as {
+        role?: unknown;
+        toolCallId?: unknown;
+        toolName?: unknown;
+        isError?: unknown;
+      };
       return result.role === "toolResult" &&
-        result.isError !== true &&
-        typeof result.toolCallId === "string"
-        ? [result.toolCallId]
+        typeof result.toolCallId === "string" &&
+        typeof result.toolName === "string"
+        ? [
+            [
+              result.toolCallId,
+              { toolName: result.toolName, isError: result.isError === true },
+            ] as const,
+          ]
         : [];
     }),
   );
-  const allToolsProvenComplete =
+  const allToolsProvenSettled =
     params.attempt.itemLifecycle?.activeCount === 0 &&
-    requestedToolCallIds.length > 0 &&
-    requestedToolCallIds.every((id) => id !== null && completedToolCallIds.has(id));
+    requestedToolCalls.length > 0 &&
+    requestedToolCalls.every(
+      ({ id, name }) =>
+        id !== null && name !== null && settledToolResults.get(id)?.toolName === name,
+    );
+  const failedTerminalToolNames = new Set(
+    requestedToolCalls.flatMap(({ id, name }) =>
+      id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
+    ),
+  );
+  const hasSettledTerminalToolFailure = allToolsProvenSettled && failedTerminalToolNames.size > 0;
+  // ToolErrorSummary has no call id: its owner must match a failed result in the
+  // proven terminal batch, or a stale/unrelated error could authorize finalization.
+  const hasUnsettledToolError = Boolean(
+    params.attempt.lastToolError &&
+    (assistant?.stopReason !== "toolUse" ||
+      !hasSettledTerminalToolFailure ||
+      !failedTerminalToolNames.has(params.attempt.lastToolError.toolName)),
+  );
   if (
     params.payloadCount !== 0 ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
     params.promptError != null ||
     params.timedOut ||
-    (assistant?.stopReason === "toolUse" ? !allToolsProvenComplete : !emptyStopAfterSettledTools) ||
-    params.attempt.lastToolError ||
+    (assistant?.stopReason === "toolUse" ? !allToolsProvenSettled : !emptyStopAfterSettledTools) ||
+    hasUnsettledToolError ||
+    (hasSettledTerminalToolFailure &&
+      (hasAsyncStartedToolActivity(params.attempt.toolMetas) ||
+        hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns))) ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt
@@ -853,7 +877,9 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   ) {
     return null;
   }
-  return SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION;
+  return hasSettledTerminalToolFailure
+    ? `${SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If any tool failed, state that failure plainly and do not claim it succeeded.`
+    : SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION;
 }
 
 /**

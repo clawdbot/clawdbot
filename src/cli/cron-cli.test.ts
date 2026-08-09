@@ -289,9 +289,11 @@ async function runCronRunAndCaptureExit(params: {
   enqueued?: boolean;
   runId?: string;
   runStatus?: "ok" | "error" | "skipped";
+  runStatuses?: Array<"ok" | "error" | "skipped" | undefined>;
   args?: string[];
 }) {
   resetGatewayMock();
+  let runPollCount = 0;
   callGatewayFromCli.mockImplementation(
     async (method: string, _opts: unknown, callParams?: unknown) => {
       if (method === "cron.status") {
@@ -307,8 +309,10 @@ async function runCronRunAndCaptureExit(params: {
         };
       }
       if (method === "cron.runs") {
+        const runStatus = params.runStatuses?.[runPollCount] ?? params.runStatus;
+        runPollCount += 1;
         return {
-          entries: params.runStatus ? [{ status: params.runStatus }] : [],
+          entries: runStatus ? [{ status: runStatus }] : [],
         };
       }
       return { ok: true, params: callParams };
@@ -391,6 +395,107 @@ describe("cron cli", () => {
       expect(stdoutText()).toContain(`"status": "${status}"`);
     },
   );
+
+  it.each([
+    {
+      name: "bounds the default history RPC by the wait deadline",
+      waitTimeout: "1s",
+      rpcTimeout: undefined,
+      expectedEnqueueTimeout: "600000",
+      expectedMaxPollTimeoutMs: 1_000,
+    },
+    {
+      name: "preserves a shorter explicit history RPC timeout",
+      waitTimeout: "1s",
+      rpcTimeout: "5",
+      expectedEnqueueTimeout: "5",
+      expectedMaxPollTimeoutMs: 5,
+    },
+    {
+      name: "bounds a longer explicit history RPC by the wait deadline",
+      waitTimeout: "10ms",
+      rpcTimeout: "5000",
+      expectedEnqueueTimeout: "5000",
+      expectedMaxPollTimeoutMs: 10,
+    },
+    {
+      name: "keeps one immediate history poll for a zero wait deadline",
+      waitTimeout: "0ms",
+      rpcTimeout: undefined,
+      expectedEnqueueTimeout: "600000",
+      expectedMaxPollTimeoutMs: 1,
+    },
+  ])(
+    "$name",
+    async ({ waitTimeout, rpcTimeout, expectedEnqueueTimeout, expectedMaxPollTimeoutMs }) => {
+      const { calls, exitSpy, runOpts } = await runCronRunAndCaptureExit({
+        enqueued: true,
+        runId: "manual:job-1:123:0",
+        runStatus: "ok",
+        args: [
+          "cron",
+          "run",
+          "job-1",
+          "--wait",
+          "--wait-timeout",
+          waitTimeout,
+          "--poll-interval",
+          "1ms",
+          ...(rpcTimeout === undefined ? [] : ["--timeout", rpcTimeout]),
+        ],
+      });
+
+      const historyCalls = calls.filter(([method]) => method === "cron.runs");
+      const historyOptions = historyCalls[0]?.[1] as { timeout?: string } | undefined;
+      const pollTimeoutMs = Number(historyOptions?.timeout);
+
+      expect(exitSpy).toHaveBeenCalledWith(0);
+      expect(historyCalls).toHaveLength(1);
+      expect(runOpts.timeout).toBe(expectedEnqueueTimeout);
+      expect(Number.isSafeInteger(pollTimeoutMs)).toBe(true);
+      expect(pollTimeoutMs).toBeGreaterThan(0);
+      expect(pollTimeoutMs).toBeLessThanOrEqual(expectedMaxPollTimeoutMs);
+    },
+  );
+
+  it("reduces each history RPC timeout as the cron run wait budget elapses", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-27T12:00:00.000Z"));
+
+    const pendingRun = runCronRunAndCaptureExit({
+      enqueued: true,
+      runId: "manual:job-1:123:0",
+      runStatuses: [undefined, "ok"],
+      args: [
+        "cron",
+        "run",
+        "job-1",
+        "--wait",
+        "--wait-timeout",
+        "100ms",
+        "--poll-interval",
+        "25ms",
+      ],
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.runs")).toHaveLength(
+      1,
+    );
+    await vi.advanceTimersByTimeAsync(25);
+
+    const { calls, exitSpy, runOpts } = await pendingRun;
+    const pollTimeouts = calls
+      .filter(([method]) => method === "cron.runs")
+      .map(([, options]) => Number((options as { timeout?: string }).timeout));
+
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(runOpts.timeout).toBe("600000");
+    expect(pollTimeouts).toHaveLength(2);
+    expect(pollTimeouts[0]).toBeLessThanOrEqual(100);
+    expect(pollTimeouts[1]).toBeLessThanOrEqual(75);
+    expect(pollTimeouts[1]).toBeLessThan(pollTimeouts[0] ?? 0);
+  });
 
   it("rejects zero poll interval for cron run wait before enqueueing", async () => {
     await expectCronCommandExit([
@@ -549,7 +654,9 @@ describe("cron cli", () => {
       "Option prompt",
     ]);
 
-    expectRuntimeErrorContaining("Pass the cron job message either positionally or with --message");
+    expectRuntimeErrorContaining(
+      "Pass the automation message either positionally or with --message",
+    );
   });
 
   it("rejects ambiguous cron add names", async () => {
@@ -565,7 +672,7 @@ describe("cron cli", () => {
       "tick",
     ]);
 
-    expectRuntimeErrorContaining("Pass the cron job name either positionally or with --name");
+    expectRuntimeErrorContaining("Pass the automation name either positionally or with --name");
   });
 
   it("rejects webhook delivery mixed with chat delivery on cron add", async () => {
@@ -882,6 +989,13 @@ describe("cron cli", () => {
     });
   });
 
+  it.each(["", "   "])("rejects a blank cron list agent filter %j", async (agent) => {
+    await expectCronCommandExit(["cron", "list", "--agent", agent]);
+
+    expectRuntimeErrorContaining("--agent must not be blank");
+    expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.list")).toBe(false);
+  });
+
   it("routes cron get to cron.get with the provided id", async () => {
     await runCronCommand(["cron", "get", "job-1"]);
 
@@ -889,6 +1003,33 @@ describe("cron cli", () => {
     expect(getCall?.[2]).toEqual({ id: "job-1" });
     expect(stdoutText()).toContain('"id": "job-1"');
   });
+
+  it.each([
+    {
+      name: "get",
+      args: ["cron", "get", "job-1", "--json"],
+      method: "cron.get",
+      params: { id: "job-1" },
+    },
+    {
+      name: "runs",
+      args: ["cron", "runs", "--id", "job-1", "--json"],
+      method: "cron.runs",
+      params: { id: "job-1", limit: 50 },
+    },
+  ])(
+    "accepts --json for cron $name and prints one JSON object",
+    async ({ args, method, params }) => {
+      await runCronCommand(args);
+
+      const gatewayCall = callGatewayFromCli.mock.calls.find(
+        ([calledMethod]) => calledMethod === method,
+      );
+      expect(gatewayCall?.[2]).toEqual(params);
+      expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
+      expect(() => JSON.parse(stdoutText())).not.toThrow();
+    },
+  );
 
   it("rejects partial cron runs limit", async () => {
     await expectCronCommandExit(["cron", "runs", "--id", "job-1", "--limit", "10x"]);
@@ -898,6 +1039,13 @@ describe("cron cli", () => {
       expect.anything(),
       expect.anything(),
     );
+  });
+
+  it.each(["", "   "])("rejects a blank cron run history filter %j", async (runId) => {
+    await expectCronCommandExit(["cron", "runs", "--id", "job-1", "--run-id", runId]);
+
+    expectRuntimeErrorContaining("--run-id must not be blank");
+    expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.runs")).toBe(false);
   });
 
   it("paginates cron show lookups", async () => {
@@ -1067,6 +1215,41 @@ describe("cron cli", () => {
 
     expect(params?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
   });
+
+  it.each([
+    {
+      kind: "systemEvent",
+      args: ["--system-event", "tick"],
+      tools: "read,write",
+    },
+    {
+      kind: "command",
+      args: ["--command", "echo ok"],
+      tools: "read write",
+    },
+    {
+      kind: "command",
+      args: ["--command-argv", '["echo","ok"]'],
+      tools: "read,write",
+    },
+    {
+      kind: "agentTurn",
+      args: ["--message", "hello"],
+      tools: "read write",
+    },
+  ])(
+    "preserves the requested tool allowlist for $kind cron jobs",
+    async ({ kind, args, tools }) => {
+      const params = await runCronAddAndGetParams(
+        namedCronAddArgs(`Restricted ${kind}`, ...args, "--tools", tools),
+      );
+
+      expect(params?.payload).toMatchObject({
+        kind,
+        toolsAllow: ["read", "write"],
+      });
+    },
+  );
 
   it("sets fallback models on cron add", async () => {
     const params = await runCronAddAndGetParams(
@@ -1507,6 +1690,63 @@ describe("cron cli", () => {
     expect(params.schedule.at).toBe("2026-03-23T22:00:00.000Z");
   });
 
+  it.each([
+    ["2027-02-28T24:00:00", "UTC", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00", "UTC", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00:00.000", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
+    ["2027-02-28T24:00:00", "America/New_York", "2027-03-01T05:00:00.000Z"],
+    ["2027-02-28T24:00:00", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
+    ["2027-03-13T24:00:00", "America/New_York", "2027-03-14T05:00:00.000Z"],
+    ["2027-03-14T24:00:00", "America/New_York", "2027-03-15T04:00:00.000Z"],
+    ["2027-03-14t24:00", "America/New_York", "2027-03-15T04:00:00.000Z"],
+    ["2027-03-27T24:00:00", "Europe/Oslo", "2027-03-27T23:00:00.000Z"],
+    ["2027-03-28T24:00:00", "Europe/Oslo", "2027-03-28T22:00:00.000Z"],
+  ])(
+    "rolls local end-of-day --at %s into the next day in %s on cron add",
+    async (at, tz, expected) => {
+      const params = await runCronAddAndGetParams([
+        "--name",
+        "tz-at-end-of-day",
+        "--at",
+        at,
+        "--tz",
+        tz,
+        "--session",
+        "isolated",
+        "--message",
+        "test",
+      ]);
+
+      expect(params.schedule).toEqual({ kind: "at", at: expected });
+    },
+  );
+
+  it.each([
+    ["2027-02-28T24:01:00", "UTC"],
+    ["2027-02-28t24:01", "UTC"],
+    ["2027-02-28T24:00:00.001", "America/New_York"],
+    ["2027-02-28t24:00:00.001", "America/New_York"],
+    ["2027-09-04T24:00:00", "America/Santiago"],
+  ])(
+    "rejects invalid or nonexistent local end-of-day --at %s in %s on cron add",
+    async (at, tz) => {
+      await expectCronCommandExit([
+        "cron",
+        "add",
+        "--name",
+        "invalid-tz-at-end-of-day",
+        "--at",
+        at,
+        "--tz",
+        tz,
+        "--session",
+        "isolated",
+        "--message",
+        "test",
+      ]);
+    },
+  );
+
   it("does not apply --tz when --at already has an offset", async () => {
     await runCronCommand([
       "cron",
@@ -1648,6 +1888,39 @@ describe("cron cli", () => {
     });
     expect(patch?.patch).not.toHaveProperty("deleteAfterRun");
   });
+
+  it.each([
+    ["2027-02-28T24:00:00", "UTC", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00", "UTC", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00:00.000", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
+    ["2027-02-28T24:00:00", "America/New_York", "2027-03-01T05:00:00.000Z"],
+    ["2027-02-28T24:00:00", "Europe/Oslo", "2027-02-28T23:00:00.000Z"],
+    ["2027-03-13T24:00:00", "America/New_York", "2027-03-14T05:00:00.000Z"],
+    ["2027-03-14T24:00:00", "America/New_York", "2027-03-15T04:00:00.000Z"],
+    ["2027-03-14t24:00", "America/New_York", "2027-03-15T04:00:00.000Z"],
+    ["2027-03-27T24:00:00", "Europe/Oslo", "2027-03-27T23:00:00.000Z"],
+    ["2027-03-28T24:00:00", "Europe/Oslo", "2027-03-28T22:00:00.000Z"],
+  ])(
+    "rolls local end-of-day --at %s into the next day in %s on cron edit",
+    async (at, tz, expected) => {
+      const patch = await runCronEditAndGetPatch(["--at", at, "--tz", tz]);
+
+      expect(patch.patch?.schedule).toEqual({ kind: "at", at: expected });
+    },
+  );
+
+  it.each([
+    ["2027-02-28T24:01:00", "UTC"],
+    ["2027-02-28t24:01", "UTC"],
+    ["2027-02-28T24:00:00.001", "America/New_York"],
+    ["2027-02-28t24:00:00.001", "America/New_York"],
+    ["2027-09-04T24:00:00", "America/Santiago"],
+  ])(
+    "rejects invalid or nonexistent local end-of-day --at %s in %s on cron edit",
+    async (at, tz) => {
+      await expectCronCommandExit(["cron", "edit", "job-1", "--at", at, "--tz", tz]);
+    },
+  );
 
   it("preserves an explicit keep policy when converting to --at", async () => {
     const patch = await runCronEditAndGetPatch([

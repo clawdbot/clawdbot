@@ -35,7 +35,7 @@ async function runOpenClaw(args: string[], env: NodeJS.ProcessEnv): Promise<stri
     return result.stdout;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(message.replaceAll(openAiApiKey, "[REDACTED]"));
+    throw new Error(message.replaceAll(openAiApiKey, "[REDACTED]"), { cause: error });
   }
 }
 

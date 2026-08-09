@@ -25,6 +25,7 @@ Plaintext credentials remain agent-readable when they sit in files the agent can
 - Reload validates each mapped owner independently, then publishes one atomic snapshot. Healthy owners refresh. An eligible failed owner keeps its last-known-good value and becomes stale only when its ref identities, provider definitions, and complete non-secret owner contract are unchanged; a changed or new failed owner becomes cold. A strict failure rejects the reload and preserves the active snapshot.
 - Policy violations (for example an OAuth-mode auth profile combined with SecretRef input) fail activation before the runtime swap.
 - Runtime requests read only the active in-memory snapshot. Model-provider SecretRef credentials pass through auth storage and stream options as process-local sentinels until egress. Outbound delivery paths (Discord reply/thread delivery, Telegram action sends) also read that snapshot and do not re-resolve refs per send.
+- Read-only channel capability discovery evaluates accounts independently. A configured-but-unavailable account does not hide healthy sibling accounts' message actions, while direct sends through the unavailable account still fail closed.
 
 This keeps secret-provider outages off hot request paths.
 
@@ -80,7 +81,7 @@ SecretRefs are validated only on effectively active surfaces:
   - `gateway.remote.url` is configured
   - `gateway.tailscale.mode` is `serve` or `funnel`
   - In local mode without those remote surfaces: `gateway.remote.token` is active when token auth can win and no env/auth token is configured; `gateway.remote.password` is active only when password auth can win and no env/auth password is configured.
-- `gateway.auth.token` SecretRef is inactive for startup auth resolution when `OPENCLAW_GATEWAY_TOKEN` is set, because env token input wins for that runtime.
+- Active `gateway.auth.token` / `gateway.auth.password` SecretRefs stay authoritative over `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`; environment credentials are fallbacks when the corresponding local config input is absent.
 
 </Accordion>
 
@@ -205,16 +206,16 @@ Define providers under `secrets.providers`:
 - `mode: "json"` (default) expects a JSON object payload and resolves `id` as a JSON pointer.
 - `mode: "singleValue"` expects ref id `"value"` and returns the raw file contents (trailing newline stripped).
 - Path must pass ownership/permission checks; `timeoutMs` (default 5000) and `maxBytes` (default 1 MiB) bound the read.
-- Windows fail-closed: if ACL verification is unavailable for the path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass the check.
+- Windows fail-closed: if ACL verification is unavailable for the path, resolution fails. Move the secret to a path whose ACLs OpenClaw can verify; there is no provider-level bypass.
 
 </Accordion>
 
 <Accordion title="Exec provider">
 - Runs the configured absolute binary path directly, no shell.
-- By default `command` must be a regular file, not a symlink. Set `allowSymlinkCommand: true` to allow symlink command paths (for example Homebrew shims), and pair it with `trustedDirs` (for example `["/opt/homebrew"]`) so only package-manager paths qualify.
+- `command` must be a regular file, not a symlink. For package-manager shims, resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute path. Use `trustedDirs` to restrict executables to approved directories.
 - Supports `timeoutMs` (default 5000), `noOutputTimeoutMs` (default equals `timeoutMs`), `maxOutputBytes` (default 1 MiB), `env`/`passEnv` allowlist, and `trustedDirs`.
 - `jsonOnly` defaults to `true`. With `jsonOnly: false` and a single requested id, plain non-JSON stdout is accepted as that id's value.
-- Windows fail-closed: if ACL verification is unavailable for the command path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass the check.
+- Windows fail-closed: if ACL verification is unavailable for the command path, resolution fails. Use a command path whose ACLs OpenClaw can verify; there is no provider-level bypass.
 - Plugin-managed exec providers can use `pluginIntegration` instead of a copied `command`/`args`. OpenClaw resolves the current command details from the installed plugin manifest during startup/reload; if the plugin is disabled, removed, untrusted, or no longer declares the integration, active SecretRefs on that provider fail closed.
 
 Request payload (stdin):
@@ -375,9 +376,8 @@ For a dedicated 1Password guide covering service accounts, the bundled agent ski
         providers: {
           vault_openai: {
             source: "exec",
-            command: "/opt/homebrew/bin/vault",
-            allowSymlinkCommand: true, // required for Homebrew symlinked binaries
-            trustedDirs: ["/opt/homebrew"],
+            command: "/absolute/non-symlink/path/to/vault",
+            trustedDirs: ["/absolute/non-symlink/path/to"],
             args: ["kv", "get", "-field=OPENAI_API_KEY", "secret/openclaw"],
             passEnv: ["VAULT_ADDR", "VAULT_TOKEN"],
             jsonOnly: false,
@@ -483,9 +483,8 @@ For a dedicated 1Password guide covering service accounts, the bundled agent ski
         providers: {
           sops_openai: {
             source: "exec",
-            command: "/opt/homebrew/bin/sops",
-            allowSymlinkCommand: true, // required for Homebrew symlinked binaries
-            trustedDirs: ["/opt/homebrew"],
+            command: "/absolute/non-symlink/path/to/sops",
+            trustedDirs: ["/absolute/non-symlink/path/to"],
             args: ["-d", "--extract", '["providers"]["openai"]["apiKey"]', "/path/to/secrets.enc.json"],
             passEnv: ["SOPS_AGE_KEY_FILE"],
             jsonOnly: false,

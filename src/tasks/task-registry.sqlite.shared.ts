@@ -1,4 +1,5 @@
 // Shares SQLite row mapping helpers between task registry persistence modules.
+import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord } from "../utils.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -8,11 +9,7 @@ function parseSqliteJsonValue<T>(raw: string | null): T | undefined {
   if (!raw?.trim()) {
     return undefined;
   }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return undefined;
-  }
+  return safeParseJson(raw) as T | undefined;
 }
 
 export function parseDeliveryContextJson(raw: string | null): DeliveryContext | undefined {

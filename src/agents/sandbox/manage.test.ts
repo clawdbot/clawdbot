@@ -43,9 +43,14 @@ vi.mock("./registry.js", () => ({
 
 vi.mock("./docker-backend.js", () => ({
   createDockerSandboxBackend: vi.fn(),
+  createPodmanSandboxBackend: vi.fn(),
   dockerSandboxBackendManager: {
     describeRuntime: backendMocks.describeRuntime,
     removeRuntime: backendMocks.removeRuntime,
+  },
+  podmanSandboxBackendManager: {
+    describeRuntime: vi.fn(),
+    removeRuntime: vi.fn(),
   },
 }));
 

@@ -1,7 +1,4 @@
-import {
-  createDefaultModelsPresetAppliers,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-onboard";
+import { createDefaultModelsPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildFireworksCatalogModels,
   buildFireworksProvider,
@@ -9,9 +6,9 @@ import {
   FIREWORKS_DEFAULT_MODEL_REF,
 } from "./provider-catalog.js";
 
-const fireworksPresetAppliers = createDefaultModelsPresetAppliers({
+export const { applyConfig: applyFireworksConfig } = createDefaultModelsPresetAppliers<[]>({
   primaryModelRef: FIREWORKS_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => {
+  resolveParams: () => {
     const defaultProvider = buildFireworksProvider();
     return {
       providerId: "fireworks",
@@ -23,7 +20,3 @@ const fireworksPresetAppliers = createDefaultModelsPresetAppliers({
     };
   },
 });
-
-export function applyFireworksConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return fireworksPresetAppliers.applyConfig(cfg);
-}

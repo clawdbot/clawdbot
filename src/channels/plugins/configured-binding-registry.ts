@@ -9,11 +9,7 @@ import type {
   ConfiguredBindingRecordResolution,
   ConfiguredBindingResolution,
 } from "./binding-types.js";
-import {
-  countCompiledBindingRegistry,
-  primeCompiledBindingRegistry,
-  resolveCompiledBindingRegistry,
-} from "./configured-binding-compiler.js";
+import { resolveCompiledBindingRegistry } from "./configured-binding-compiler.js";
 import {
   materializeConfiguredBindingRecord,
   resolveMatchingConfiguredBinding,
@@ -60,7 +56,11 @@ export function primeConfiguredBindingRegistry(params: { cfg: OpenClawConfig }):
   bindingCount: number;
   channelCount: number;
 } {
-  return countCompiledBindingRegistry(primeCompiledBindingRegistry(params.cfg));
+  const { rulesByChannel } = resolveCompiledBindingRegistry(params.cfg);
+  return {
+    bindingCount: [...rulesByChannel.values()].reduce((sum, rules) => sum + rules.length, 0),
+    channelCount: rulesByChannel.size,
+  };
 }
 
 /**
@@ -73,33 +73,17 @@ export function resolveConfiguredBindingRecord(params: {
   conversationId: string;
   parentConversationId?: string;
 }): ConfiguredBindingRecordResolution | null {
-  const conversation = toConfiguredBindingConversationRef({
-    channel: params.channel,
-    accountId: params.accountId,
-    conversationId: params.conversationId,
-    parentConversationId: params.parentConversationId,
-  });
-  if (!conversation) {
-    return null;
-  }
-  return resolveConfiguredBindingRecordForConversation({
-    cfg: params.cfg,
-    conversation,
-  });
-}
-
-/**
- * Resolves a configured binding record from a normalized conversation reference.
- */
-function resolveConfiguredBindingRecordForConversation(params: {
-  cfg: OpenClawConfig;
-  conversation: ConversationRef;
-}): ConfiguredBindingRecordResolution | null {
-  const resolved = resolveMaterializedConfiguredBinding(params);
-  if (!resolved) {
-    return null;
-  }
-  return resolved.materializedTarget;
+  return (
+    resolveMaterializedConfiguredBinding({
+      cfg: params.cfg,
+      conversation: {
+        channel: params.channel,
+        accountId: params.accountId,
+        conversationId: params.conversationId,
+        parentConversationId: params.parentConversationId,
+      },
+    })?.materializedTarget ?? null
+  );
 }
 
 /**

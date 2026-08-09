@@ -1,5 +1,9 @@
 {
   "id": "reef",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "name": "Reef",
   "description": "Guarded end-to-end encrypted claw channel",
   "activation": {

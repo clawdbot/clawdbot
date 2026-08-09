@@ -1158,14 +1158,14 @@ describe("plugin publication artifact", () => {
       createTarball([
         { path: "package/", type: "5" },
         { content: metaPackageJson(markerPath), path: "package/package.json" },
-        ...Array.from({ length: 10_000 }, (_, index) => ({
+        ...Array.from({ length: 20_000 }, (_, index) => ({
           path: `package/file-${index.toString().padStart(5, "0")}`,
         })),
       ]),
     );
 
     expect(() => createPluginPublicationArtifact(publicationParams(artifactDir))).toThrow(
-      /exceeds the 10000 entry limit/u,
+      /exceeds the 20000 entry limit/u,
     );
   });
 

@@ -214,9 +214,9 @@ canonical subscription `github-copilot` provider and is **never** selected by
 }
 ```
 
-The harness claims its provider, runtime, CLI session key, and auth profile
-prefix in `extensions/copilot/doctor-contract-api.ts`, which `openclaw doctor`
-auto-loads. For configuration, auth, transcript mirroring, compaction, the
+The plugin manifest declares the harness provider, runtime, CLI session key,
+and auth profile prefix without requiring `openclaw doctor` to load plugin
+code. For configuration, auth, transcript mirroring, compaction, the
 declarative doctor contract, and the broader PI vs Codex vs Copilot SDK
 decision, see [GitHub Copilot agent runtime](/plugins/copilot).
 

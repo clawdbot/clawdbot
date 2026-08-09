@@ -144,15 +144,13 @@ export async function prepareContextEngineSubagentSpawn(params: {
       childSessionKey: params.childSessionKey,
       contextMode: params.context.mode,
       parentSessionId: params.context.parentEntry?.sessionId,
-      parentSessionFile: params.context.parentEntry?.sessionFile,
+      parentSessionFile: params.requesterInternalKey,
       childSessionId:
         params.context.mode === "fork"
           ? params.context.forked.sessionId
           : params.context.childEntry?.sessionId,
       childSessionFile:
-        params.context.mode === "fork"
-          ? params.context.forked.sessionFile
-          : params.context.childEntry?.sessionFile,
+        params.context.mode === "fork" ? params.context.forked.sessionFile : params.childSessionKey,
       ttlMs: finiteSecondsToTimerSafeMilliseconds(params.runTimeoutSeconds, {
         floorSeconds: true,
       }),

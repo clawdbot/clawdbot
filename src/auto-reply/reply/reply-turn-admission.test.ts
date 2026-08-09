@@ -2,6 +2,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -30,8 +31,24 @@ import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 
 const recoveryOwnerReleaseMocks = vi.hoisted(() => ({
+  beforeRelease: vi.fn(async () => {}),
   schedulePendingTarget: vi.fn(),
 }));
+
+vi.mock("../../agents/main-session-recovery-store.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../agents/main-session-recovery-store.js")>();
+  return {
+    ...actual,
+    releaseMainSessionRecoveryOwner: async (
+      lease: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[0],
+      options: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[1],
+    ) => {
+      await recoveryOwnerReleaseMocks.beforeRelease();
+      return await actual.releaseMainSessionRecoveryOwner(lease, options);
+    },
+  };
+});
 
 vi.mock("../../agents/main-session-recovery-owner-release.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/main-session-recovery-owner-release.js")>()),
@@ -84,7 +101,22 @@ describe("reply turn admission", () => {
   afterEach(() => {
     testing.resetReplyRunRegistry();
     resetDiagnosticRunActivityForTest();
+    recoveryOwnerReleaseMocks.beforeRelease.mockClear();
     recoveryOwnerReleaseMocks.schedulePendingTarget.mockClear();
+  });
+
+  it("binds the originating transcript leaf to the admitted operation", async () => {
+    const admission = await admitTestReplyTurn({
+      sessionKey: "agent:main:main",
+      sessionId: "session-originating-leaf",
+      originatingLeafEntryId: "leaf-before-run",
+    });
+
+    expect(admission.status).toBe("owned");
+    if (admission.status === "owned") {
+      expect(admission.operation.originatingLeafEntryId).toBe("leaf-before-run");
+      admission.operation.complete();
+    }
   });
 
   it("rejects a reply when an archive commits before admission", async () => {
@@ -392,6 +424,229 @@ describe("reply turn admission", () => {
       });
     },
   );
+
+  it.each(["visible", "queued_followup"] as const)(
+    "waits for restart-recovery owner release before %s successor admission",
+    async (kind) => {
+      const sessionKey = `agent:main:telegram:topic:recovery-successor:${kind}`;
+      const sessionId = "interrupted-session";
+      const storePath = createSessionStore({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 100,
+          status: "running",
+          abortedLastRun: true,
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 1,
+            chargedAttempts: 0,
+          },
+        },
+      });
+      const owner = await admitTestReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+      });
+      expect(owner.status).toBe("owned");
+      if (owner.status !== "owned") {
+        return;
+      }
+
+      const releaseStarted = createDeferred();
+      const allowRelease = createDeferred();
+      recoveryOwnerReleaseMocks.beforeRelease.mockImplementationOnce(async () => {
+        releaseStarted.resolve();
+        await allowRelease.promise;
+      });
+      owner.operation.complete();
+      await releaseStarted.promise;
+
+      const successor = admitTestReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+        kind,
+      });
+      let successorSettled = false;
+      void successor.then(() => {
+        successorSettled = true;
+      });
+      await Promise.resolve();
+      expect(successorSettled).toBe(false);
+      await expect(
+        admitTestReplyTurn({
+          sessionKey,
+          sessionId,
+          expectedSessionId: sessionId,
+          storePath,
+          kind: "heartbeat",
+        }),
+      ).resolves.toEqual({ status: "skipped", reason: "active-run" });
+
+      allowRelease.resolve();
+      const admitted = await successor;
+      expect(admitted.status).toBe("owned");
+      if (admitted.status === "owned") {
+        admitted.operation.complete();
+      }
+      await vi.waitFor(async () => {
+        const entry = await readSessionEntry(storePath, sessionKey);
+        expect(entry?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+      });
+    },
+  );
+
+  it("waits through deferred owner release retries beyond one settle slice", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionKey = "agent:main:telegram:topic:deferred-recovery-release";
+      const sessionId = "interrupted-session";
+      const storePath = createSessionStore({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 100,
+          status: "running",
+          abortedLastRun: true,
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 1,
+            chargedAttempts: 0,
+          },
+        },
+      });
+      const owner = await admitTestReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+      });
+      expect(owner.status).toBe("owned");
+      if (owner.status !== "owned") {
+        return;
+      }
+      const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
+      let failures = 0;
+      vi.spyOn(sessionAccessor, "applySessionEntryReplacements").mockImplementation(
+        async (params) => {
+          if (failures < 15) {
+            failures += 1;
+            throw new Error("transient session-store failure");
+          }
+          return await applySessionEntryReplacements(params);
+        },
+      );
+
+      owner.operation.complete();
+      const successor = admitTestReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+      });
+      let successorSettled = false;
+      void successor.then(() => {
+        successorSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS + 1);
+      expect(successorSettled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      const admitted = await successor;
+      expect(admitted.status).toBe("owned");
+      if (admitted.status === "owned") {
+        admitted.operation.complete();
+      }
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves a source recovery identity after adopting a distinct target session", async () => {
+    const sourceSessionKey = "agent:main:telegram:slash:recovery-source";
+    const sourceSessionId = "recovery-source-session";
+    const targetSessionKey = "agent:main:telegram:group:recovery-target";
+    const targetSessionId = "recovery-target-session";
+    const storePath = createSessionStore({
+      [sourceSessionKey]: {
+        sessionId: sourceSessionId,
+        updatedAt: 100,
+        status: "running",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 1,
+          chargedAttempts: 0,
+        },
+      },
+      [targetSessionKey]: { sessionId: targetSessionId, updatedAt: 100 },
+    });
+    const source = await admitTestReplyTurn({
+      sessionKey: sourceSessionKey,
+      sessionId: sourceSessionId,
+      expectedSessionId: sourceSessionId,
+      storePath,
+    });
+    expect(source.status).toBe("owned");
+    if (source.status !== "owned") {
+      return;
+    }
+
+    const adoption = await admitTestReplyTurn({
+      sessionKey: targetSessionKey,
+      sessionId: source.operation.sessionId,
+      expectedSessionId: targetSessionId,
+      storePath,
+      waitForActive: false,
+      adoptOperation: source.operation,
+    });
+    expect(adoption.status).toBe("owned");
+    if (adoption.status !== "owned") {
+      source.operation.complete();
+      return;
+    }
+    adoption.operation.updateSessionId(targetSessionId);
+    expect(adoption.operation).toBe(source.operation);
+    expect(adoption.operation.key).toBe(targetSessionKey);
+    expect(adoption.operation.sessionId).toBe(targetSessionId);
+
+    const releaseStarted = createDeferred();
+    const allowRelease = createDeferred();
+    recoveryOwnerReleaseMocks.beforeRelease.mockImplementationOnce(async () => {
+      releaseStarted.resolve();
+      await allowRelease.promise;
+    });
+    adoption.operation.complete();
+    await releaseStarted.promise;
+
+    const successor = admitTestReplyTurn({
+      sessionKey: sourceSessionKey,
+      sessionId: sourceSessionId,
+      expectedSessionId: sourceSessionId,
+      storePath,
+    });
+    let successorSettled = false;
+    void successor.then(() => {
+      successorSettled = true;
+    });
+    await Promise.resolve();
+    expect(successorSettled).toBe(false);
+
+    allowRelease.resolve();
+    const admitted = await successor;
+    expect(admitted.status).toBe("owned");
+    if (admitted.status === "owned") {
+      expect(admitted.operation.sessionId).toBe(sourceSessionId);
+      admitted.operation.complete();
+    }
+    await vi.waitFor(async () => {
+      const entry = await readSessionEntry(storePath, sourceSessionKey);
+      expect(entry?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+    });
+  });
 
   it.each(["visible", "heartbeat"] as const)(
     "rejects %s reply admission for a tombstoned recovery session",
@@ -1138,7 +1393,10 @@ describe("reply turn admission", () => {
       });
       active.attachBackend({
         kind: "embedded",
-        cancel,
+        cancel: (reason) => {
+          cancel(reason);
+          active.complete();
+        },
         isStreaming: () => true,
       });
       active.setPhase("running");
@@ -1213,7 +1471,10 @@ describe("reply turn admission", () => {
       });
       active.attachBackend({
         kind: "embedded",
-        cancel,
+        cancel: (reason) => {
+          cancel(reason);
+          active.complete();
+        },
         isStreaming: () => true,
       });
       active.setPhase("running");
@@ -1306,19 +1567,19 @@ describe("reply turn admission", () => {
   it("lets visible turns reclaim terminal operations after settle grace elapsed", async () => {
     vi.useFakeTimers();
     try {
-      const startedAt = Date.now();
       const active = createTestReplyOperation({
         sessionKey: "agent:main:telegram:topic:terminal-unreleased",
         sessionId: "terminal-unreleased-session",
       });
       active.setPhase("running");
       active.abortByUser();
-      vi.setSystemTime(startedAt + REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
 
-      const result = await admitTestReplyTurn({
+      const admission = admitTestReplyTurn({
         sessionKey: "agent:main:telegram:topic:terminal-unreleased",
         sessionId: "replacement-terminal-session",
       });
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS);
+      const result = await admission;
 
       expect(active.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
       expect(replyRunRegistry.get("agent:main:telegram:topic:terminal-unreleased")).not.toBe(

@@ -5,24 +5,15 @@ import {
   parseControlUiGitHubPreviewTarget,
   type ControlUiGitHubPreviewTarget,
 } from "../control-ui-github-preview.js";
-import {
-  loadControlUiSessionPullRequests,
-  parseControlUiSessionPullRequestsParams,
-  type ControlUiSessionPullRequestsParams,
-} from "../control-ui-session-prs.js";
+import { parseControlUiSessionPullRequestsSubscribeParams } from "../control-ui-session-pr-subscriptions.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type LoadGitHubPreview = (
   target: ControlUiGitHubPreviewTarget,
 ) => ReturnType<typeof loadControlUiGitHubPreview>;
 
-type LoadSessionPullRequests = (
-  params: ControlUiSessionPullRequestsParams,
-) => ReturnType<typeof loadControlUiSessionPullRequests>;
-
 export function createControlUiHandlers(
   loadGitHubPreview: LoadGitHubPreview = loadControlUiGitHubPreview,
-  loadSessionPullRequests: LoadSessionPullRequests = loadControlUiSessionPullRequests,
 ): GatewayRequestHandlers {
   return {
     "controlUi.githubPreview": async ({ params, respond }) => {
@@ -48,28 +39,35 @@ export function createControlUiHandlers(
         );
       }
     },
-    "controlUi.sessionPullRequests": async ({ params, respond }) => {
-      const parsed = parseControlUiSessionPullRequestsParams(params);
+    "controlUi.sessionPullRequests.subscribe": async ({ params, client, context, respond }) => {
+      const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
       if (!parsed) {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.sessionPullRequests params"),
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "invalid controlUi.sessionPullRequests.subscribe params",
+          ),
         );
         return;
       }
-      try {
-        respond(true, await loadSessionPullRequests(parsed), undefined);
-      } catch (error) {
-        const statusCode = error instanceof ControlUiGitHubError ? error.statusCode : undefined;
+      const connId = client?.connId?.trim();
+      const subscriptions = context.controlUiSessionPullRequests;
+      if (!connId || !subscriptions) {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "session pull requests unavailable", {
-            retryable: statusCode === 429 || statusCode === 502,
-          }),
+          errorShape(ErrorCodes.UNAVAILABLE, "session pull request subscriptions unavailable"),
         );
+        return;
       }
+      if (parsed.refreshSessionKeys.length > 0) {
+        await subscriptions.replace(connId, parsed.sessionKeys, new Set(parsed.refreshSessionKeys));
+      } else {
+        await subscriptions.replace(connId, parsed.sessionKeys);
+      }
+      respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
     },
   };
 }

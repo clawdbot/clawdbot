@@ -173,7 +173,7 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
-        { name: "cron" },
+        { name: "automations" },
         { name: "message" },
         { name: "exec" },
       ] as unknown as AnyAgentTool[],
@@ -201,7 +201,7 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
-        { name: "cron" },
+        { name: "automations" },
         { name: "message" },
         { name: "exec" },
       ] as unknown as AnyAgentTool[],
@@ -233,7 +233,7 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
-        { name: "cron" },
+        { name: "automations" },
         { name: "message" },
         { name: "exec" },
       ] as unknown as AnyAgentTool[],
@@ -265,7 +265,7 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
-        { name: "cron" },
+        { name: "automations" },
         { name: "message" },
         { name: "exec" },
       ] as unknown as AnyAgentTool[],
@@ -303,7 +303,7 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
-        { name: "cron" },
+        { name: "automations" },
         { name: "message" },
         { name: "exec" },
       ] as unknown as AnyAgentTool[],
@@ -332,7 +332,7 @@ describe("applyModelProviderToolPolicy", () => {
       },
     );
 
-    expect(toolNames(filtered)).toEqual(["read", "browser", "cron", "message", "exec"]);
+    expect(toolNames(filtered)).toEqual(["read", "browser", "automations", "message", "exec"]);
   });
 
   it("keeps heavyweight tools when the experimental lean local-model flag is not enabled", () => {
@@ -340,7 +340,7 @@ describe("applyModelProviderToolPolicy", () => {
       [
         { name: "read" },
         { name: "browser" },
-        { name: "cron" },
+        { name: "automations" },
         { name: "message" },
         { name: "exec" },
       ] as unknown as AnyAgentTool[],
@@ -360,6 +360,6 @@ describe("applyModelProviderToolPolicy", () => {
       },
     );
 
-    expect(toolNames(filtered)).toEqual(["read", "browser", "cron", "message", "exec"]);
+    expect(toolNames(filtered)).toEqual(["read", "browser", "automations", "message", "exec"]);
   });
 });

@@ -1,5 +1,5 @@
 // Chat-owned composer display controls: the View menu plus model controls.
-import { html } from "lit";
+import { html, nothing } from "lit";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
@@ -11,9 +11,10 @@ type ChatControlsProps = {
   paneId: string;
   model: ChatModelControlsProps;
   onboarding: boolean;
+  preferencesBrowserOnly: boolean;
   settings: UiSettings;
   viewMenuOpen: boolean;
-  onSettingsChange: (next: UiSettings) => void;
+  onSettingsChange: (patch: Partial<UiSettings>) => void;
   onViewMenuOpenChange: (
     open: boolean,
     options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
@@ -36,20 +37,17 @@ function chatViewMenuRows(props: ChatControlsProps): ChatViewMenuRow[] {
     {
       label: t("chat.view.reasoning"),
       checked: showThinking,
-      onToggle: () =>
-        props.onSettingsChange({ ...settings, chatShowThinking: !settings.chatShowThinking }),
+      onToggle: () => props.onSettingsChange({ chatShowThinking: !settings.chatShowThinking }),
     },
     {
       label: t("chat.view.toolCalls"),
       checked: showToolCalls,
-      onToggle: () =>
-        props.onSettingsChange({ ...settings, chatShowToolCalls: !settings.chatShowToolCalls }),
+      onToggle: () => props.onSettingsChange({ chatShowToolCalls: !settings.chatShowToolCalls }),
     },
     {
       label: t("chat.view.commentary"),
       checked: persistCommentary,
-      onToggle: () =>
-        props.onSettingsChange({ ...settings, chatPersistCommentary: !persistCommentary }),
+      onToggle: () => props.onSettingsChange({ chatPersistCommentary: !persistCommentary }),
     },
   ];
 }
@@ -108,6 +106,11 @@ export function renderChatControls(props: ChatControlsProps) {
               </wa-dropdown-item>
             `,
           )}
+          ${props.preferencesBrowserOnly
+            ? html`<div class="chat-view-menu__provenance" role="note">
+                ${t("quickSettings.personal.browserOnly")}
+              </div>`
+            : nothing}
         </wa-dropdown>
       </openclaw-tooltip>
     </div>

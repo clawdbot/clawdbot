@@ -130,7 +130,7 @@ export function prepareAgentRequestPreflight(
     const pendingCollectorLaunch =
       registeredCollector?.swarmLaunchPending === true &&
       !registeredCollector.collectorCompletion &&
-      typeof registeredCollector.endedAt !== "number";
+      typeof registeredCollector.execution.endedAt !== "number";
     if (
       (!swarmEnabled && !collectorDedupe) ||
       !canUseInternalRuntimeHandoff ||
@@ -235,6 +235,30 @@ export function prepareAgentRequestPreflight(
     return undefined;
   }
   const inputProvenance = normalizeInputProvenance(request.inputProvenance);
+  const isRestartRecoveryResumeRun =
+    canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance);
+  if (request.internalExecutionIdentityRetry !== undefined && !isRestartRecoveryResumeRun) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "internal execution identity retry mode is reserved for main-session restart recovery.",
+      ),
+    );
+    return undefined;
+  }
+  if (request.forceCodeModeTools === true && !isRestartRecoveryResumeRun) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "forceCodeModeTools is reserved for main-session restart recovery.",
+      ),
+    );
+    return undefined;
+  }
   const sessionEffects =
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
   const agentDedupeKeys = resolveAgentDedupeKeys({
@@ -293,8 +317,7 @@ export function prepareAgentRequestPreflight(
       groupSpace: request.groupSpace,
     }),
     inputProvenance,
-    isRestartRecoveryResumeRun:
-      canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance),
+    isRestartRecoveryResumeRun,
     preserveUserFacingSessionModelState:
       canUseInternalRuntimeHandoff &&
       shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance),

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { safeRealpathSync } from "../../infra/boundary-path.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
@@ -33,7 +34,7 @@ export function resolveDefaultSessionStorePath(agentId: string): string {
   return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
 }
 
-export type SessionFilePathOptions = {
+type SessionFilePathOptions = {
   agentId?: string;
   sessionsDir?: string;
 };
@@ -195,14 +196,6 @@ function resolveStructuralSessionFallbackPath(
   return path.normalize(path.resolve(candidateAbsPath));
 }
 
-function safeRealpathSync(filePath: string): string | undefined {
-  try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return undefined;
-  }
-}
-
 function resolvePathWithinSessionsDir(
   sessionsDir: string,
   candidate: string,
@@ -295,11 +288,14 @@ export function resolveSessionTranscriptPath(
 }
 export function resolveSessionFilePath(
   sessionId: string,
-  entry?: { sessionFile?: string },
+  entry?: object,
   opts?: SessionFilePathOptions,
 ): string {
   const sessionsDir = resolveSessionsDir(opts);
-  const candidate = entry?.sessionFile?.trim();
+  const candidate =
+    entry && "sessionFile" in entry && typeof entry.sessionFile === "string"
+      ? entry.sessionFile.trim()
+      : undefined;
   if (candidate) {
     if (candidate.startsWith(SQLITE_TRANSCRIPT_TARGET_PREFIX)) {
       return candidate;

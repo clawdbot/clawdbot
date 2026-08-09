@@ -15,9 +15,11 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
+  prepareProviderStaticCatalog,
   resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog,
   runProviderStaticCatalog,
+  type PreparedProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
@@ -56,11 +58,14 @@ type ImplicitProviderParams = {
   agentDir: string;
   authStore?: AuthProfileStore;
   config?: OpenClawConfig;
+  discoveryAuthConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+  preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerDiscoveryProviderIds?: readonly string[];
+  staticCatalogProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
 };
@@ -361,6 +366,10 @@ async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
   providers: import("../plugins/types.js").ProviderPlugin[],
   order: import("../plugins/types.js").ProviderCatalogOrder,
+  preparedStaticResults?: ReadonlyMap<
+    import("../plugins/types.js").ProviderPlugin,
+    PreparedProviderStaticCatalog["entries"][number]["result"]
+  >,
 ): Promise<Record<string, ProviderConfig> | undefined> {
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
@@ -413,33 +422,27 @@ async function resolvePluginImplicitProviders(
       (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));
     // Static catalogs are preferred for entries-only discovery and as a fallback
     // when runtime discovery produces no usable provider config.
-    let result = useStaticCatalog
-      ? await runProviderStaticCatalog({
-          provider,
-          config: catalogConfig,
-          agentDir: ctx.agentDir,
-          workspaceDir: ctx.workspaceDir,
-          env: ctx.env,
-        })
-      : await runProviderCatalogWithTimeout({
-          provider,
-          config: catalogConfig,
-          agentDir: ctx.agentDir,
-          workspaceDir: ctx.workspaceDir,
-          env: ctx.env,
-          resolveProviderApiKey: resolveCatalogProviderApiKey,
-          resolveProviderAuth: (providerId, options) =>
-            ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
-          timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
-        });
-    if (!result && !useStaticCatalog && provider.staticCatalog) {
-      result = await runProviderStaticCatalog({
+    const hasPreparedStaticResult = preparedStaticResults?.has(provider) === true;
+    let result;
+    if (useStaticCatalog) {
+      result = hasPreparedStaticResult
+        ? preparedStaticResults.get(provider)
+        : await runProviderStaticCatalog({ provider });
+    } else {
+      result = await runProviderCatalogWithTimeout({
         provider,
         config: catalogConfig,
         agentDir: ctx.agentDir,
         workspaceDir: ctx.workspaceDir,
         env: ctx.env,
+        resolveProviderApiKey: resolveCatalogProviderApiKey,
+        resolveProviderAuth: (providerId, options) =>
+          ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+        timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
       });
+    }
+    if (!result && !useStaticCatalog && provider.staticCatalog) {
+      result = await runProviderStaticCatalog({ provider });
     }
     if (!result) {
       continue;
@@ -534,28 +537,20 @@ async function runProviderCatalogWithTimeout(
   }
 }
 
-/** Resolve all implicit provider configs contributed by runtime plugin discovery. */
-export async function resolveImplicitProviders(
-  params: ImplicitProviderParams,
-): Promise<NonNullable<OpenClawConfig["models"]>["providers"]> {
-  const providers: Record<string, ProviderConfig> = {};
+/** Prepares sterile provider catalog results for one workspace/config generation. */
+export async function prepareImplicitProviderStaticCatalog(
+  params: Pick<
+    ImplicitProviderParams,
+    | "config"
+    | "env"
+    | "pluginMetadataSnapshot"
+    | "providerDiscoveryProviderIds"
+    | "staticCatalogProviderIds"
+    | "workspaceDir"
+  >,
+): Promise<PreparedProviderStaticCatalog> {
   const env = params.env ?? process.env;
-  let authStore = params.authStore;
-  const getAuthStore = () =>
-    (authStore ??= ensureAuthProfileStore(params.agentDir, {
-      allowKeychainPrompt: false,
-      externalCliProviderIds: params.providerDiscoveryProviderIds,
-    }));
-  const context: ImplicitProviderContext = {
-    ...params,
-    get authStore() {
-      return getAuthStore();
-    },
-    env,
-    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, params.config),
-    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, params.config),
-  };
-  const discoveryProviders = await resolveRuntimePluginDiscoveryProviders({
+  const providers = await resolveRuntimePluginDiscoveryProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
@@ -571,13 +566,129 @@ export async function resolveImplicitProviders(
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
       : {}),
-    ...(params.providerDiscoveryEntriesOnly === true ? { discoveryEntriesOnly: true } : {}),
+    discoveryEntriesOnly: true,
+    includeSyntheticAuthProviders: true,
   });
+  const staticCatalogProviderIds = params.staticCatalogProviderIds
+    ? new Set(params.staticCatalogProviderIds.map((provider) => normalizeProviderId(provider)))
+    : undefined;
+  const prepared = await prepareProviderStaticCatalog({
+    providers: staticCatalogProviderIds
+      ? providers.filter((provider) =>
+          [provider.id, ...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some((id) =>
+            staticCatalogProviderIds.has(normalizeProviderId(id)),
+          ),
+        )
+      : providers,
+  });
+  // Synthetic auth consumes the complete configured provider entrypoint set. Static results may
+  // be narrower because startup only executes hooks for unresolved configured model refs.
+  return Object.freeze({
+    providers: Object.freeze(providers),
+    entries: prepared.entries,
+  });
+}
 
+/** Resolve all implicit provider configs contributed by runtime plugin discovery. */
+export async function resolveImplicitProviders(
+  params: ImplicitProviderParams,
+): Promise<NonNullable<OpenClawConfig["models"]>["providers"]> {
+  const providers: Record<string, ProviderConfig> = {};
+  const env = params.env ?? process.env;
+  let authStore = params.authStore;
+  const getAuthStore = () =>
+    (authStore ??= ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+      externalCliProviderIds: params.providerDiscoveryProviderIds,
+    }));
+  const discoveryPluginIds = resolveProviderDiscoveryFilter({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+    resolveOwners: params.pluginMetadataSnapshot
+      ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
+      : undefined,
+    providerIds: params.providerDiscoveryProviderIds,
+  });
+  // The runtime config has already resolved SecretRefs at its owning boundary.
+  // Re-resolving source refs here would execute unrelated file/exec providers on catalog reads.
+  const discoveryAuthConfig = params.discoveryAuthConfig ?? params.config;
+  const context: ImplicitProviderContext = {
+    ...params,
+    get authStore() {
+      return getAuthStore();
+    },
+    env,
+    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, discoveryAuthConfig),
+    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, discoveryAuthConfig),
+  };
+  const preparedStaticEntries = params.preparedStaticProviderCatalog
+    ? params.preparedStaticProviderCatalog.entries.filter(
+        ({ provider }) =>
+          discoveryPluginIds === undefined ||
+          (provider.pluginId !== undefined && discoveryPluginIds.includes(provider.pluginId)),
+      )
+    : undefined;
+  const preparedProviders =
+    params.providerDiscoveryEntriesOnly === true && params.preparedStaticProviderCatalog?.providers
+      ? params.preparedStaticProviderCatalog.providers.filter(
+          (provider) =>
+            discoveryPluginIds === undefined ||
+            (provider.pluginId !== undefined && discoveryPluginIds.includes(provider.pluginId)),
+        )
+      : [];
+  const preparedPluginIds = new Set(
+    preparedProviders.flatMap((provider) => (provider.pluginId ? [provider.pluginId] : [])),
+  );
+  const missingDiscoveryPluginIds =
+    discoveryPluginIds?.filter((pluginId) => !preparedPluginIds.has(pluginId)) ??
+    (preparedProviders.length > 0 ? undefined : discoveryPluginIds);
+  const resolvedProviders =
+    missingDiscoveryPluginIds === undefined || missingDiscoveryPluginIds.length > 0
+      ? await resolveRuntimePluginDiscoveryProviders({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env,
+          onlyPluginIds: missingDiscoveryPluginIds,
+          ...(params.pluginMetadataSnapshot
+            ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+            : {}),
+          ...(params.providerDiscoveryEntriesOnly === true ? { discoveryEntriesOnly: true } : {}),
+        })
+      : [];
+  const discoveryProviders = [
+    ...new Map(
+      [...resolvedProviders, ...preparedProviders].map((provider) => [
+        `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
+        provider,
+      ]),
+    ).values(),
+  ];
+  const preparedStaticResultsByProvider = new Map(
+    preparedStaticEntries?.map(({ provider, result }) => [
+      `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
+      result,
+    ]) ?? [],
+  );
+  const preparedStaticResults = params.preparedStaticProviderCatalog
+    ? new Map(
+        discoveryProviders.flatMap((provider) => {
+          const key = `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`;
+          return preparedStaticResultsByProvider.has(key)
+            ? [[provider, preparedStaticResultsByProvider.get(key)] as const]
+            : [];
+        }),
+      )
+    : undefined;
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
     mergeImplicitProviderSet(
       providers,
-      await resolvePluginImplicitProviders(context, discoveryProviders, order),
+      await resolvePluginImplicitProviders(
+        context,
+        discoveryProviders,
+        order,
+        preparedStaticResults,
+      ),
     );
   }
 

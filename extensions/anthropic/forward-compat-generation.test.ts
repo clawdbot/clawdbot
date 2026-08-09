@@ -47,6 +47,32 @@ describe("unreleased Claude generations", () => {
     expect(supportsClaudeAdaptiveThinking({ id: "claude-haiku-4-5-20251001" })).toBe(false);
   });
 
+  it("carries manifest catalog compat onto hand-built modern rows", () => {
+    // The hand-built forward-compat row replaces the catalog row when the
+    // runtime prefers plugin-resolved modern models. Dropping compat here
+    // silently disables catalog-driven behavior such as codeMode "auto",
+    // including on env-key-only runs whose model registry is empty.
+    expect(resolveModel("claude-opus-5")?.compat).toEqual({ codeMode: "preferred" });
+    expect(resolveModel("claude-sonnet-5")?.compat).toEqual({ codeMode: "preferred" });
+    // The Claude CLI provider rows are intentionally unflagged: those runs use
+    // the CLI harness where OpenClaw code mode does not apply.
+    expect(resolveModel("claude-opus-5", "claude-cli")?.compat).toBeUndefined();
+  });
+
+  it("prefers registry compat over the manifest index", () => {
+    const model = buildAnthropicProvider().resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-opus-5",
+      config: {},
+      modelRegistry: {
+        find: () => ({ compat: { codeMode: "capable" } }),
+      },
+    } as unknown as Parameters<
+      NonNullable<ReturnType<typeof buildAnthropicProvider>["resolveDynamicModel"]>
+    >[0]);
+    expect(model?.compat).toEqual({ codeMode: "capable" });
+  });
+
   it("does not claim non-Claude ids", () => {
     // Third-party models reach the Anthropic-compatible transport too.
     expect(resolveModel("mimo-v2-flash")).toBeUndefined();
