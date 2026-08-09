@@ -51,6 +51,19 @@ const TERMINAL_COMPACTION_REASONS = new Set<TerminalCompactionFailureReason>([
 
 const COMPACTION_FAILURE_KEYS = new Set(["disposition", "reason", "status"]);
 
+/** Returns whether a value claims the typed compaction-failure contract. */
+export function hasCompactionFailureDisposition(value: unknown): boolean {
+  if (!value || (typeof value !== "object" && typeof value !== "function")) {
+    return false;
+  }
+  try {
+    return "disposition" in value;
+  } catch {
+    // An uninspectable value must fail closed instead of entering legacy parsing.
+    return true;
+  }
+}
+
 function normalizeStatus(status: unknown): number | undefined {
   return typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599
     ? status

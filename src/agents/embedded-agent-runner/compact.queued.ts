@@ -41,6 +41,7 @@ import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import {
   compactionFailureFromFailoverReason,
+  isStructuredCompactionFailure,
   terminalCompactionFailure,
 } from "./compaction-failure.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -848,7 +849,7 @@ async function compactResolvedContextEngine(
           ok: result.ok,
           compacted: result.compacted,
           reason: result.reason,
-          failure: result.failure,
+          ...(isStructuredCompactionFailure(result.failure) ? { failure: result.failure } : {}),
           result: result.result
             ? {
                 summary: result.result.summary ?? "",

@@ -977,6 +977,40 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry?.compactionCount).toBe(1);
   });
 
+  it("rejects malformed typed binding failures without clearing the native binding", async () => {
+    const compactAgentHarnessSession = vi.fn(async () => ({
+      ok: false,
+      compacted: false,
+      reason: "thread not found: thread-malformed",
+      failure: {
+        disposition: "fallback",
+        reason: "stale_thread_binding",
+        rawError: "thread not found: leaked",
+      },
+    }));
+    const scenario = await prepareCompactionScenario({
+      suffix: "codex-malformed-stale-binding",
+      tmpDir,
+      provider: "codex",
+      model: "gpt-5.5",
+      sessionEntry: {
+        agentHarnessId: "codex",
+        cliSessionBindings: { codex: { sessionId: "thread-malformed" } },
+        cliSessionIds: { codex: "thread-malformed" },
+      },
+      deps: { maybeCompactAgentHarnessSession: compactAgentHarnessSession as never },
+    });
+
+    await expect(scenario.run()).rejects.toThrow(
+      "CLI native harness compaction failed for codex/gpt-5.5",
+    );
+    expect(scenario.compactCalls).toHaveLength(0);
+    expect(scenario.recordCliCompactionInStore).not.toHaveBeenCalled();
+    expect(scenario.sessionStore[scenario.sessionKey]?.cliSessionBindings?.codex).toEqual({
+      sessionId: "thread-malformed",
+    });
+  });
+
   it("clears stale Codex native binding when context-engine fallback is below target", async () => {
     const compactAgentHarnessSession = vi.fn(async () => ({
       ok: false,

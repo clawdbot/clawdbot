@@ -4006,6 +4006,28 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(sync).not.toHaveBeenCalled();
   });
 
+  it("omits malformed typed failures returned by a context engine", async () => {
+    contextEngineCompactMock.mockResolvedValue({
+      ok: false,
+      compacted: false,
+      reason: "malformed failure",
+      failure: {
+        disposition: "retryable",
+        reason: "rate_limit",
+        rawError: "provider detail",
+      },
+    } as never);
+
+    const result = await compactEmbeddedAgentSession(wrappedCompactionArgs());
+
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: "malformed failure",
+    });
+    expect(result).not.toHaveProperty("failure");
+  });
+
   it("surfaces a hung/throwing engine compact() as a clean ok:false result", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     // The safety-timeout wrapper rejects on timeout; a thrown rejection here

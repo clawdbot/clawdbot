@@ -152,7 +152,8 @@ export async function delegateCompactionToRuntime(
 ): Promise<CompactResult> {
   // Load through the dedicated runtime boundary without introducing another
   // source-level static edge into the embedded runner graph.
-  const { compactEmbeddedAgentSessionDirect } = await loadCompactRuntime();
+  const { compactEmbeddedAgentSessionDirect, isStructuredCompactionFailure } =
+    await loadCompactRuntime();
   type RuntimeCompactionParams = Parameters<typeof compactEmbeddedAgentSessionDirect>[0];
 
   // runtimeContext carries host-resolved runtime fields set by internal
@@ -196,12 +197,9 @@ export async function delegateCompactionToRuntime(
         sessionKey,
       })
     : undefined;
-  const structuredFailure =
-    result.failure?.disposition === "retryable" ||
-    result.failure?.disposition === "fallback" ||
-    result.failure?.disposition === "terminal"
-      ? result.failure
-      : undefined;
+  const structuredFailure = isStructuredCompactionFailure(result.failure)
+    ? result.failure
+    : undefined;
 
   return {
     ok: result.ok,

@@ -71,9 +71,15 @@ const { compactEmbeddedAgentSessionDirectMock } = vi.hoisted(() => ({
   compactEmbeddedAgentSessionDirectMock: vi.fn(),
 }));
 
-vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
-  compactEmbeddedAgentSessionDirect: compactEmbeddedAgentSessionDirectMock,
-}));
+vi.mock("../agents/embedded-agent-runner/compact.runtime.js", async () => {
+  const { isStructuredCompactionFailure } = await vi.importActual<
+    typeof import("../agents/embedded-agent-runner/compaction-failure.js")
+  >("../agents/embedded-agent-runner/compaction-failure.js");
+  return {
+    compactEmbeddedAgentSessionDirect: compactEmbeddedAgentSessionDirectMock,
+    isStructuredCompactionFailure,
+  };
+});
 
 function installCompactRuntimeSpy() {
   return compactEmbeddedAgentSessionDirectMock.mockResolvedValue({
@@ -319,6 +325,40 @@ describe("Engine contract tests", () => {
         sessionTarget,
       },
     });
+  });
+
+  it("delegateCompactionToRuntime forwards only strictly validated failure envelopes", async () => {
+    const validFailure = {
+      disposition: "fallback",
+      reason: "missing_thread_binding",
+    } as const;
+    const invalidFailures = [
+      { ...validFailure, rawError: "thread not found: leaked" },
+      { disposition: "retryable", reason: "auth" },
+      { disposition: "terminal", reason: "auth", status: 99 },
+    ];
+
+    compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      failure: validFailure,
+    });
+    await expect(
+      delegateCompactionToRuntime({ sessionId: "valid-failure", sessionKey: "global" }),
+    ).resolves.toMatchObject({ failure: validFailure });
+
+    for (const [index, failure] of invalidFailures.entries()) {
+      compactEmbeddedAgentSessionDirectMock.mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        failure,
+      });
+      const result = await delegateCompactionToRuntime({
+        sessionId: `invalid-failure-${index}`,
+        sessionKey: "global",
+      });
+      expect(result).not.toHaveProperty("failure");
+    }
   });
 
   it("delegateCompactionToRuntime returns successor sessionTarget without sessionFile", async () => {

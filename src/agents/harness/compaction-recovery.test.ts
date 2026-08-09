@@ -35,6 +35,38 @@ describe("native harness compaction recovery", () => {
   });
 
   it.each([
+    {
+      label: "prose-only fallback reason",
+      failure: { disposition: "fallback", reason: "thread not found: spoofed" },
+    },
+    {
+      label: "forbidden raw provider error",
+      failure: {
+        disposition: "fallback",
+        reason: "missing_thread_binding",
+        rawError: "thread not found: leaked",
+      },
+    },
+    {
+      label: "invalid fallback status",
+      failure: { disposition: "fallback", reason: "stale_thread_binding", status: 99 },
+    },
+    {
+      label: "explicitly undefined disposition",
+      failure: { disposition: undefined, reason: "missing_thread_binding" },
+    },
+  ])("rejects malformed typed $label envelopes", ({ failure }) => {
+    expect(
+      isRecoverableNativeHarnessBindingFailure({
+        ok: false,
+        compacted: false,
+        reason: "thread not found: top-level fallback must not win",
+        failure,
+      } as never),
+    ).toBe(false);
+  });
+
+  it.each([
     { failure: { reason: "missing_thread_binding" } },
     { reason: "thread not found: legacy-thread" },
   ])("keeps the released untyped binding fallback: %j", (legacy) => {

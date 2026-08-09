@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compactionFailureFromFailoverReason,
   failoverReasonFromCompactionFailure,
+  hasCompactionFailureDisposition,
   isStructuredCompactionFailure,
   terminalCompactionFailure,
 } from "./compaction-failure.js";
@@ -85,6 +86,9 @@ describe("compaction failure policy", () => {
     expect(isStructuredCompactionFailure(accessor)).toBe(false);
     expect(isStructuredCompactionFailure(symbolField)).toBe(false);
     expect(isStructuredCompactionFailure(hiddenLegacyField)).toBe(false);
+    expect(hasCompactionFailureDisposition(inherited)).toBe(true);
+    expect(hasCompactionFailureDisposition(accessor)).toBe(true);
+    expect(hasCompactionFailureDisposition({ reason: "rate_limit" })).toBe(false);
   });
 
   it("normalizes status values without retaining raw provider errors", () => {
