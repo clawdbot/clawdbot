@@ -6,7 +6,11 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/sessi
 /** Resolves the configured owner for Talk work that has no agent-scoped session key. */
 export function resolveTalkTargetAgentId(config: OpenClawConfig): string {
   return normalizeAgentId(
-    normalizeOptionalString(config.talk?.agentId) ?? resolveDefaultAgentId(config),
+    normalizeOptionalString(config.talk?.agentId) ??
+      resolveDefaultAgentId(config, {
+        surface: "Talk relay ownership",
+        hint: "Set talk.agentId to the agent that owns unscoped Talk sessions.",
+      }),
   );
 }
 

@@ -1,7 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { AgentSelectionRequiredError, listAgentIds } from "../../agents/agent-scope-config.js";
+import {
+  classifySessionKeyShape,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { getRuntimeConfig } from "../io.js";
+import {
+  resolveSessionStoreCompatibilityAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../legacy.default-agent-owner.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { updateSessionEntry } from "./session-accessor.entry-mutation.js";
 import {
@@ -16,6 +25,7 @@ import {
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-write.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
+import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
 import type {
   SessionTranscriptWriteScope,
   TranscriptMessageAppendResult,
@@ -30,6 +40,42 @@ import {
   runWithOwnedSessionTranscriptWrite,
 } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
+
+function resolveTranscriptCompatibilityAgentId(config: OpenClawConfig): string | undefined {
+  return isPerAgentSessionStoreConfig(config.session?.store)
+    ? tryResolveLegacyCompatibilityAgentId(config)
+    : resolveSessionStoreCompatibilityAgentId(config);
+}
+
+function resolveTranscriptTurnAgentId(params: {
+  config: OpenClawConfig;
+  scopeAgentId?: string;
+  sessionKey: string;
+}): string {
+  const keyShape = classifySessionKeyShape(params.sessionKey);
+  if (keyShape === "malformed_agent") {
+    throw new Error("Malformed agent session key; refusing transcript turn persistence.");
+  }
+  const scopedAgentId = params.scopeAgentId?.trim()
+    ? normalizeAgentId(params.scopeAgentId.trim())
+    : undefined;
+  const parsedAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  const keyAgentId = parsedAgentId ? normalizeAgentId(parsedAgentId) : undefined;
+  if (scopedAgentId && keyAgentId && scopedAgentId !== keyAgentId) {
+    throw new Error(
+      `Session key owner "${keyAgentId}" does not match requested agent "${scopedAgentId}".`,
+    );
+  }
+  const agentId =
+    scopedAgentId ?? keyAgentId ?? resolveTranscriptCompatibilityAgentId(params.config);
+  if (agentId) {
+    return normalizeAgentId(agentId);
+  }
+  throw new AgentSelectionRequiredError(listAgentIds(params.config), {
+    surface: "transcript turn persistence",
+    hint: "Pass an agentId or use an agent-qualified session key.",
+  });
+}
 
 /** Appends one prepared ordered group in the existing transcript turn transaction. */
 export async function appendTranscriptMessages<TMessage>(
@@ -212,15 +258,11 @@ async function persistExpectedSessionTranscriptTurn(
   }
   const storePath = scope.storePath;
   const expectedSessionId = options.expectedSessionId;
-  const agentId =
-    scope.agentId ??
-    resolveAgentIdFromSessionKey(
-      sessionKey,
-      resolveDefaultAgentId(options.config ?? getRuntimeConfig()),
-    );
-  if (!agentId) {
-    throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
-  }
+  const agentId = resolveTranscriptTurnAgentId({
+    config: options.config ?? getRuntimeConfig(),
+    scopeAgentId: scope.agentId,
+    sessionKey,
+  });
   const resolved = scope.sessionStore
     ? resolveSessionEntryFromStore({ store: scope.sessionStore, sessionKey })
     : resolveSessionEntrySelection({
@@ -315,12 +357,11 @@ async function resolveTranscriptTurnTarget(
   if (!sessionKey || !scope.sessionId) {
     throw new Error("Cannot persist a transcript turn without a session key and session id");
   }
-  const agentId =
-    scope.agentId ??
-    resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(config ?? getRuntimeConfig()));
-  if (!agentId) {
-    throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
-  }
+  const agentId = resolveTranscriptTurnAgentId({
+    config: config ?? getRuntimeConfig(),
+    scopeAgentId: scope.agentId,
+    sessionKey,
+  });
   const storePath =
     scope.storePath ??
     resolveSessionStorePathCore(getRuntimeConfig().session?.store, {

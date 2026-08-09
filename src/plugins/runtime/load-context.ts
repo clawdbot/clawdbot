@@ -1,5 +1,5 @@
 // Plugin runtime load context helpers resolve agent and workspace facts for runtime activation.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   fingerprintPluginAutoEnableConfig,
@@ -180,7 +180,7 @@ export function resolvePluginRuntimeLoadContext(
   const env = options?.env ?? process.env;
   const rawConfig = options?.config ?? getRuntimeConfig();
   const rawWorkspaceDir =
-    options?.workspaceDir ?? resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig));
+    options?.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(rawConfig, env);
   const initialMetadataSnapshot =
     options?.metadataSnapshot ??
     (options?.manifestRegistry === undefined
@@ -205,8 +205,7 @@ export function resolvePluginRuntimeLoadContext(
     snapshot: initialMetadataSnapshot,
   });
   const config = autoEnabled.config;
-  const workspaceDir =
-    options?.workspaceDir ?? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const workspaceDir = options?.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(config, env);
   const metadataSnapshot =
     options?.manifestRegistry !== undefined
       ? undefined

@@ -9,7 +9,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -640,7 +640,7 @@ function resolveReadOnlyWorkspaceDir(
   cfg: OpenClawConfig,
   options: ReadOnlyChannelPluginOptions,
 ): string | undefined {
-  return options.workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  return options.workspaceDir ?? tryResolveConfiguredAgentWorkspaceDir(cfg, options.env);
 }
 
 function listExternalChannelManifestRecords(

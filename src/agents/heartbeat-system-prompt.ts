@@ -11,9 +11,16 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { listAgentEntries, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { listAgentEntries, resolveAgentConfig, tryResolveSoleAgentId } from "./agent-scope.js";
 
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
+
+function tryResolveHeartbeatOwnerAgentId(config?: OpenClawConfig): string | undefined {
+  return (
+    normalizeOptionalString(config?.agents?.defaults?.heartbeat?.agentId) ??
+    tryResolveSoleAgentId(config ?? {})
+  );
+}
 
 // System prompt heartbeat config inherits defaults, then per-agent overrides,
 // matching runtime scheduling without exposing disabled agents to the section.
@@ -43,7 +50,11 @@ function isHeartbeatEnabledByAgentPolicy(config: OpenClawConfig, agentId: string
       (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry.id) === resolvedAgentId,
     );
   }
-  return resolvedAgentId === resolveDefaultAgentId(config);
+  const heartbeatOwnerAgentId = tryResolveHeartbeatOwnerAgentId(config);
+  return (
+    heartbeatOwnerAgentId !== undefined &&
+    resolvedAgentId === normalizeAgentId(heartbeatOwnerAgentId)
+  );
 }
 
 function isHeartbeatCadenceEnabled(heartbeat?: HeartbeatConfig): boolean {
@@ -65,7 +76,7 @@ function shouldIncludeHeartbeatGuidanceForSystemPrompt(params: {
   agentId?: string;
   defaultAgentId?: string;
 }): boolean {
-  const defaultAgentId = params.defaultAgentId ?? resolveDefaultAgentId(params.config ?? {});
+  const defaultAgentId = params.defaultAgentId ?? tryResolveHeartbeatOwnerAgentId(params.config);
   const agentId = params.agentId ?? defaultAgentId;
   if (!agentId || normalizeAgentId(agentId) !== normalizeAgentId(defaultAgentId)) {
     return false;
@@ -84,7 +95,10 @@ export function resolveHeartbeatPromptForSystemPrompt(params: {
   defaultAgentId?: string;
 }): string | undefined {
   const agentId =
-    params.agentId ?? params.defaultAgentId ?? resolveDefaultAgentId(params.config ?? {});
+    params.agentId ?? params.defaultAgentId ?? tryResolveHeartbeatOwnerAgentId(params.config);
+  if (!agentId) {
+    return undefined;
+  }
   const heartbeat = resolveHeartbeatConfigForSystemPrompt(params.config, agentId);
   if (!shouldIncludeHeartbeatGuidanceForSystemPrompt(params)) {
     return undefined;

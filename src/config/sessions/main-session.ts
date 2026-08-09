@@ -1,10 +1,11 @@
-import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 // Main-session keys normalize configured agents and legacy aliases into store keys.
 import {
   normalizeAgentId,
   normalizeMainKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveCanonicalMainSessionKey } from "./main-session-key.js";
 import type { SessionScope } from "./types.js";
@@ -20,7 +21,12 @@ function buildMainSessionKey(agentId: string, mainKey?: string): string {
 /** Resolves the configured main session key, honoring global session scope. */
 export function resolveMainSessionKey(cfg: OpenClawConfig): string {
   return resolveCanonicalMainSessionKey({
-    agentId: resolveDefaultAgentId(cfg),
+    agentId:
+      tryResolveLegacyCompatibilityAgentId(cfg) ??
+      resolveDefaultAgentId(cfg, {
+        surface: "main-session routing",
+        hint: "Pass an explicit agent/session key instead of the unscoped main alias.",
+      }),
     mainKey: cfg.session?.mainKey,
     sessionScope: cfg.session?.scope,
   });
@@ -28,11 +34,9 @@ export function resolveMainSessionKey(cfg: OpenClawConfig): string {
 
 /** Stable fingerprint for the config values that canonicalize chat session keys. */
 export function resolveSessionRoutingContract(cfg: OpenClawConfig): string {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
   const scope = cfg?.session?.scope ?? "per-sender";
-  return [scope, normalizeMainKey(cfg?.session?.mainKey), normalizeAgentId(defaultAgentId)].join(
-    "|",
-  );
+  const defaultId = tryResolveLegacyCompatibilityAgentId(cfg) ?? listAgentIds(cfg)[0] ?? "main";
+  return [scope, normalizeMainKey(cfg?.session?.mainKey), normalizeAgentId(defaultId)].join("|");
 }
 
 export { resolveAgentIdFromSessionKey };

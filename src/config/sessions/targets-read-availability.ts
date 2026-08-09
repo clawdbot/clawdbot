@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { readSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
@@ -83,7 +83,7 @@ function resolveFixedSessionStoreTargetsReadOnly(
   cache?: SessionStoreTargetsReadCache,
 ): SessionStoreTargetsReadResult {
   const storeConfig = cfg.session?.store;
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
   const fixedTarget = {
     agentId: requested,
     storePath: resolveSessionStorePathCore(storeConfig, { agentId: requested, env }),
@@ -151,7 +151,7 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
   for (const target of targets) {
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
-      defaultAgentId: resolveDefaultAgentId(cfg),
+      defaultAgentId: target.agentId,
       env,
     });
     const snapshot = readSessionStoreTargetSnapshot({

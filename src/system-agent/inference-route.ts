@@ -42,7 +42,12 @@ export function resolveSystemAgentTargetAgentId(
   if (configuredAgentId) {
     return normalizeAgentId(configuredAgentId);
   }
-  return normalizeAgentId(resolveDefaultAgentId(config));
+  return normalizeAgentId(
+    resolveDefaultAgentId(config, {
+      surface: "system-agent consult routing",
+      hint: "Set agents.defaults.systemAgent.agentId or pass an explicit consult agent id.",
+    }),
+  );
 }
 
 export type SystemAgentConfiguredRouteDeps = {
@@ -276,16 +281,10 @@ export async function projectInferenceRoute(
     const { runConfig: _runConfig, ...routeWithoutConfig } = route;
     projectedRoute = routeWithoutConfig;
   }
-  const explicitDefaultIds = requestedAgentId
-    ? [routeAgentId]
-    : list.filter((entry) => entry.default).map((entry) => normalizeAgentId(entry.id));
   return {
     route: projectedRoute,
     defaultSelection: {
-      explicitIds: explicitDefaultIds,
-      ...(!requestedAgentId && explicitDefaultIds.length === 0 && list[0]?.id
-        ? { fallbackId: normalizeAgentId(list[0].id) }
-        : {}),
+      explicitIds: [routeAgentId],
     },
     auth: {
       profiles: authProfiles,

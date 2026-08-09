@@ -2,11 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  listAgentEntries,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentEntries, tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
@@ -165,7 +161,7 @@ function listChannelSecretContractRecords(params: {
   // External plugin discovery can proceed without a workspace scan in that case.
   const workspaceDir =
     listAgentEntries(params.config).length > 0
-      ? resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), params.env)
+      ? tryResolveConfiguredAgentWorkspaceDir(params.config, params.env)
       : undefined;
   const snapshot = loadPluginMetadataSnapshot({
     config: params.config,

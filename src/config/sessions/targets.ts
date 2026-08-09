@@ -14,6 +14,7 @@ import {
   createOpenClawAgentDatabasePathMatcher,
   listOpenClawRegisteredAgentDatabases,
 } from "../../state/openclaw-agent-db-registry.js";
+import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
@@ -22,6 +23,7 @@ import {
   listDurableSqliteTargetOwnersForSessionStorePath,
   resolveSqliteTargetFromSessionStorePath,
 } from "./session-sqlite-target.js";
+import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
   type SessionStoreTarget,
@@ -29,6 +31,8 @@ import {
 
 export type { SessionStoreTarget } from "./targets-collision.js";
 export { dedupeSessionStoreTargetsBySqliteTarget } from "./targets-collision.js";
+export { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
+export { isPerAgentSessionStoreConfig } from "./session-store-config.js";
 
 /** CLI/session-store target selection options. */
 export type SessionStoreSelectionOptions = {
@@ -125,7 +129,7 @@ export function listKnownSessionStoreAgentIds(
   params: { env?: NodeJS.ProcessEnv } = {},
 ): string[] {
   const env = params.env ?? process.env;
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
   const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
   const ids = new Set(listConfiguredSessionStoreAgentIds(cfg));
   if (!isPerAgentSessionStoreConfig(cfg.session?.store)) {
@@ -191,12 +195,6 @@ export function listKnownSessionStoreAgentIds(
 export function isConfiguredSessionStoreAgentId(cfg: OpenClawConfig, agentId: string): boolean {
   const normalizedAgentId = normalizeAgentId(agentId);
   return listConfiguredSessionStoreAgentIds(cfg).includes(normalizedAgentId);
-}
-
-/** Whether session.store resolves to a distinct store for each agent. */
-export function isPerAgentSessionStoreConfig(storeConfig: string | undefined): boolean {
-  const normalized = storeConfig?.trim();
-  return !normalized || normalized.includes("{agentId}");
 }
 
 function resolveValidatedDiscoveredStorePathSync(params: {
@@ -408,7 +406,7 @@ export function resolveAllAgentSessionStoreTargetsSync(
   });
   return dedupeSessionStoreTargetsBySqliteTarget(
     [...validatedConfiguredTargets, ...discoveredTargets],
-    { defaultAgentId: resolveDefaultAgentId(cfg), env },
+    { defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg), env },
   );
 }
 
@@ -421,7 +419,7 @@ export function resolveExistingAgentSessionStoreTargetsSync(
   const env = params.env ?? process.env;
   const requested = normalizeAgentId(agentId);
   const storeConfig = cfg.session?.store;
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
   if (!isPerAgentSessionStoreConfig(storeConfig)) {
     const fixedTarget = {
       agentId: requested,
@@ -570,7 +568,7 @@ export function resolveAllAgentSessionStoreCandidateTargetsSync(
   });
   return dedupeSessionStoreTargetsBySqliteTarget(
     [...validatedConfiguredTargets, ...discoveredTargets],
-    { defaultAgentId: resolveDefaultAgentId(cfg), env },
+    { defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg), env },
   );
 }
 
@@ -675,13 +673,13 @@ export function resolveSessionStoreTargets(
   if (opts.store && (hasAgent || allAgents)) {
     throw new Error("--store cannot be combined with --agent or --all-agents");
   }
-  const defaultAgentId = resolveDefaultAgentId(cfg);
-
   if (opts.store) {
+    const defaultAgentId = resolveDefaultAgentId(cfg);
     return [resolveExplicitSessionStoreTarget({ defaultAgentId, env, store: opts.store })];
   }
 
   if (allAgents) {
+    const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
     const targets = listConfiguredSessionStoreAgentIds(cfg).map((agentId) => ({
       agentId,
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId, env }),
@@ -711,6 +709,7 @@ export function resolveSessionStoreTargets(
     ];
   }
 
+  const defaultAgentId = resolveDefaultAgentId(cfg);
   return [
     {
       agentId: defaultAgentId,

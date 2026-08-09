@@ -3,20 +3,21 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
   buildAgentPeerSessionKey,
   normalizeAgentId,
   normalizeMainKey,
-  resolveAgentIdFromSessionKey,
+  parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import type { MsgContext } from "../templating.js";
 
 type RuntimePolicyContext = Pick<
   MsgContext,
+  | "AgentId"
   | "AccountId"
   | "ChatType"
   | "CommandTargetSessionKey"
@@ -103,10 +104,13 @@ export function resolveRuntimePolicySessionKey(params: {
     return undefined;
   }
 
-  const agentId = resolveAgentIdFromSessionKey(
-    sessionKey,
-    params.cfg ? resolveDefaultAgentId(params.cfg) : undefined,
-  );
+  const agentId =
+    parseAgentSessionKey(sessionKey)?.agentId ??
+    normalizeOptionalString(params.ctx?.AgentId) ??
+    (params.cfg ? tryResolveLegacyCompatibilityAgentId(params.cfg) : undefined);
+  if (!agentId) {
+    return sessionKey;
+  }
   if (!isMainSessionAlias({ cfg: params.cfg, agentId, sessionKey })) {
     return sessionKey;
   }
