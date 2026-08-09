@@ -118,6 +118,16 @@ function isPendingUpdatePayload(payload) {
   );
 }
 
+// Keep this self-contained helper aligned with resolveImmutableSqliteFileUri;
+// the detached script cannot import the TypeScript runtime after replacement.
+function resolveImmutableStateDatabaseUri(databasePath) {
+  if (process.platform === "win32") {
+    const namespacedPath = path.toNamespacedPath(path.resolve(databasePath));
+    return "file:" + encodeURIComponent(namespacedPath) + "?mode=ro&immutable=1";
+  }
+  return pathToFileURL(path.resolve(databasePath)).href + "?mode=ro&immutable=1";
+}
+
 function assertStateDatabaseWriteAllowed(database) {
   if (
     !params.stateDatabasePath ||
@@ -130,10 +140,9 @@ function assertStateDatabaseWriteAllowed(database) {
   let db = database;
   if (!db) {
     const sqlite = require("node:sqlite");
-    db = new sqlite.DatabaseSync(
-      pathToFileURL(params.stateDatabasePath).href + "?mode=ro&immutable=1",
-      { readOnly: true },
-    );
+    db = new sqlite.DatabaseSync(resolveImmutableStateDatabaseUri(params.stateDatabasePath), {
+      readOnly: true,
+    });
   }
   try {
     if (ownsDatabase) {
