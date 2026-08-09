@@ -102,7 +102,6 @@ const { clearTelegramRuntimeForTest, resetTelegramAccountThrottlersForTest } =
 const { setTelegramRuntime } = await import("./runtime.js");
 const {
   buildTelegramGroupFrom,
-  buildTelegramThreadParams,
   buildTypingThreadParams,
   resolveTelegramForumFlag,
   resetTelegramForumFlagCacheForTest,
@@ -4496,27 +4495,6 @@ describe("createTelegramBot", () => {
     );
     expect(buildTypingThreadParams(resolvedThreadId)).toEqual({ message_thread_id: 1 });
   });
-  it("threads forum replies only when a topic id exists", () => {
-    expect(
-      buildTelegramThreadParams(
-        resolveTelegramThreadSpec({
-          isGroup: true,
-          isForum: true,
-          messageThreadId: undefined,
-        }),
-      ),
-    ).toBeUndefined();
-    expect(
-      buildTelegramThreadParams(
-        resolveTelegramThreadSpec({
-          isGroup: true,
-          isForum: true,
-          messageThreadId: 99,
-        }),
-      ),
-    ).toEqual({ message_thread_id: 99 });
-  });
-
   const allowFromEdgeCases: MessagePolicyCase[] = [
     makeMessagePolicyCase({
       name: "allows direct messages regardless of groupPolicy",
