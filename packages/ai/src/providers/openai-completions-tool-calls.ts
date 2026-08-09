@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
+import { measureUtf8AppendBytes } from "../transports/openai-transport-shared.js";
 
 type ChatCompletionToolCallDelta = ChatCompletionChunk.Choice.Delta.ToolCall;
-const MAX_BUFFERED_LEGACY_TOOL_CALL_ARGUMENT_BYTES = 256_000;
+const MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES = 256_000;
 const MAX_BUFFERED_LEGACY_FOLLOWING_DELTA_BYTES = 256_000;
 const MAX_BUFFERED_LEGACY_FOLLOWING_DELTAS = 1_024;
 
@@ -26,6 +27,8 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
   let pendingLegacyArgumentBytes = 0;
   let pendingFollowingDeltaBytes = 0;
   let pendingLegacyToolCall: ChatCompletionToolCallDelta | undefined;
+  type ModernArgumentState = { bytes: number; pendingHighSurrogate: boolean };
+  const modernArguments = new Map<number | string, ModernArgumentState>();
   const pendingFollowingDeltas: ChatCompletionChunk.Choice.Delta[] = [];
 
   const takePendingFollowingDeltas = (): NormalizedOpenAICompletionsDelta[] => {
@@ -79,6 +82,29 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
   return (delta, finishReason) => {
     const ordinaryDelta = withoutToolCalls(delta);
     if (delta.tool_calls && delta.tool_calls.length > 0) {
+      for (const toolCall of delta.tool_calls) {
+        const index = typeof toolCall.index === "number" ? toolCall.index : undefined;
+        // Both consumers resolve index first, then id; bind every supplied alias
+        // to one byte state so compatible id-only continuations cannot reset the cap.
+        const state = (index === undefined ? undefined : modernArguments.get(index)) ??
+          (toolCall.id ? modernArguments.get(toolCall.id) : undefined) ?? {
+            bytes: 0,
+            pendingHighSurrogate: false,
+          };
+        if (index !== undefined) {
+          modernArguments.set(index, state);
+        }
+        if (toolCall.id) {
+          modernArguments.set(toolCall.id, state);
+        }
+        const argumentDelta = toolCall.function?.arguments ?? "";
+        const append = measureUtf8AppendBytes(state.pendingHighSurrogate, argumentDelta);
+        state.bytes += append.bytes;
+        if (state.bytes > MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES) {
+          throw new Error("Exceeded tool-call argument buffer limit");
+        }
+        state.pendingHighSurrogate = append.endsWithHighSurrogate;
+      }
       const precedingDeltas = takePendingFollowingDeltas();
       sawModernToolCall = true;
       pendingLegacyArgumentBytes = 0;
@@ -113,10 +139,7 @@ export function createOpenAICompletionsToolCallDeltaNormalizer(): (
       const nextArgumentBytes =
         Buffer.byteLength(functionCall.arguments ?? "", "utf8") +
         Buffer.byteLength(nextFunctionName ?? "", "utf8");
-      if (
-        pendingLegacyArgumentBytes + nextArgumentBytes >
-        MAX_BUFFERED_LEGACY_TOOL_CALL_ARGUMENT_BYTES
-      ) {
+      if (pendingLegacyArgumentBytes + nextArgumentBytes > MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES) {
         throw new Error("Exceeded tool-call argument buffer limit");
       }
       pendingLegacyArgumentBytes += nextArgumentBytes;

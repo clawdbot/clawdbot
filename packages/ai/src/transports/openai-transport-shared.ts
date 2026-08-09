@@ -123,6 +123,24 @@ export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   }
 }
 
+/** Measure one UTF-8 append without double-counting a surrogate pair split across chunks. */
+export function measureUtf8AppendBytes(bufferEndsWithHighSurrogate: boolean, chunk: string) {
+  let bytes = Buffer.byteLength(chunk, "utf8");
+  if (!chunk) {
+    return { bytes, endsWithHighSurrogate: bufferEndsWithHighSurrogate };
+  }
+  const nextCodeUnit = chunk.charCodeAt(0);
+  if (bufferEndsWithHighSurrogate && nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff) {
+    // Each isolated surrogate counts as three UTF-8 bytes; the joined scalar is four.
+    bytes -= 2;
+  }
+  const finalCodeUnit = chunk.charCodeAt(chunk.length - 1);
+  return {
+    bytes,
+    endsWithHighSurrogate: finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff,
+  };
+}
+
 export function createModelStreamCooperativeScheduler(
   signal?: AbortSignal,
 ): ModelStreamCooperativeScheduler {
