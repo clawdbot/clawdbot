@@ -4,10 +4,6 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat,
-} from "../plugins/bundled-compat.js";
 import { resolvePluginRegistryLoadCacheKey } from "../plugins/loader.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -87,16 +83,18 @@ function setCompatibleActiveMediaUnderstandingRegistry(
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
-  const compatibleConfig = withBundledPluginVitestCompat({
-    config: withBundledPluginEnablementCompat({
-      config: cfg,
-      pluginIds,
-    }),
-    pluginIds,
-    env: process.env,
-  });
+  cfg.plugins = {
+    ...cfg.plugins,
+    enabled: true,
+    allow: [...new Set([...(cfg.plugins?.allow ?? []), ...pluginIds])],
+    entries: {
+      ...Object.fromEntries(pluginIds.map((pluginId) => [pluginId, { enabled: true }])),
+      ...cfg.plugins?.entries,
+    },
+    slots: { ...cfg.plugins?.slots, memory: "none" },
+  };
   const cacheKey = resolvePluginRegistryLoadCacheKey({
-    config: compatibleConfig,
+    config: cfg,
     env: process.env,
   });
   setActivePluginRegistry(pluginRegistry, cacheKey);

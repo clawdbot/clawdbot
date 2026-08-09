@@ -63,7 +63,6 @@ export function resolvePluginDocumentExtractors(params?: {
       contract: "documentExtractors",
       compatMode: {
         enablement: "always",
-        vitest: true,
       },
     }).map((plugin) => plugin.id);
   for (const pluginId of pluginIds) {

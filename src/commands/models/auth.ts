@@ -286,7 +286,6 @@ async function resolveModelsAuthContext(params?: {
     workspaceDir,
     mode: "setup",
     includeUntrustedWorkspacePlugins: false,
-    bundledProviderVitestCompat: true,
     ...(providerRef
       ? {
           providerRefs: [providerRef],

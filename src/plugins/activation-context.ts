@@ -1,10 +1,7 @@
 // Builds plugin activation context from config, discovery, and manifests.
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat,
-} from "./bundled-compat.js";
+import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -17,12 +14,10 @@ import type { PluginManifestRegistry } from "./manifest-registry.js";
 
 type PluginActivationCompatConfig = {
   enablementPluginIds?: readonly string[];
-  vitestPluginIds?: readonly string[];
 };
 
 export type PluginActivationBundledCompatMode = {
   enablement?: "always";
-  vitest?: boolean;
 };
 
 type PluginActivationInputs = {
@@ -109,28 +104,19 @@ export function withActivatedPluginIds(params: {
 function applyPluginCompatibilityOverrides(params: {
   config?: OpenClawConfig;
   compat?: PluginActivationCompatConfig;
-  env: NodeJS.ProcessEnv;
 }): OpenClawConfig | undefined {
-  const enablementCompat = params.compat?.enablementPluginIds?.length
+  return params.compat?.enablementPluginIds?.length
     ? withBundledPluginEnablementCompat({
         config: params.config,
         pluginIds: params.compat.enablementPluginIds,
       })
     : params.config;
-  const vitestCompat = params.compat?.vitestPluginIds?.length
-    ? withBundledPluginVitestCompat({
-        config: enablementCompat,
-        pluginIds: params.compat.vitestPluginIds,
-        env: params.env,
-      })
-    : enablementCompat;
-  return vitestCompat;
 }
 
 function shouldResolveBundledCompatPluginIds(params: {
   compatMode: PluginActivationBundledCompatMode;
 }): boolean {
-  return params.compatMode.enablement === "always" || params.compatMode.vitest === true;
+  return params.compatMode.enablement === "always";
 }
 
 function createBundledPluginCompatConfig(params: {
@@ -140,7 +126,6 @@ function createBundledPluginCompatConfig(params: {
   return {
     enablementPluginIds:
       params.compatMode.enablement === "always" ? params.compatPluginIds : undefined,
-    vitestPluginIds: params.compatMode.vitest ? params.compatPluginIds : undefined,
   };
 }
 
@@ -245,7 +230,6 @@ function resolvePluginActivationInputs(params: {
   const config = applyPluginCompatibilityOverrides({
     config: snapshot.config,
     compat: params.compat,
-    env,
   });
 
   return {
@@ -339,7 +323,6 @@ export function resolveBundledPluginCompatibleLoadValues(
       compatMode: params.compatMode,
       compatPluginIds,
     }),
-    env,
   });
 
   return {

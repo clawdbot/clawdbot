@@ -42,7 +42,6 @@ const mocks = vi.hoisted(() => ({
     plugins: [],
   })),
   withBundledPluginEnablementCompat: vi.fn(({ config }) => config),
-  withBundledPluginVitestCompat: vi.fn(({ config }) => config),
   readBundledDiscoveryMode: vi.fn<() => "compat" | "allowlist" | undefined>(() => "allowlist"),
 }));
 
@@ -125,7 +124,6 @@ vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
 
 vi.mock("./bundled-compat.js", () => ({
   withBundledPluginEnablementCompat: mocks.withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat: mocks.withBundledPluginVitestCompat,
 }));
 
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
@@ -290,11 +288,6 @@ function expectBundledCompatLoadPath(params: {
     config: params.cfg,
     pluginIds: ["openai"],
   });
-  expect(mocks.withBundledPluginVitestCompat).toHaveBeenCalledWith({
-    config: params.enablementCompat,
-    pluginIds: ["openai"],
-    env: process.env,
-  });
   expectActiveRegistryLookup(["openai"]);
 }
 
@@ -353,7 +346,6 @@ function expectCompatChainApplied(params: {
 }) {
   setBundledCapabilityFixture(params.contractKey);
   mocks.withBundledPluginEnablementCompat.mockReturnValue(params.enablementCompat);
-  mocks.withBundledPluginVitestCompat.mockReturnValue(params.enablementCompat);
   expectNoResolvedCapabilityProviders(
     resolvePluginCapabilityProviders({ key: params.key, cfg: params.cfg }),
   );
@@ -390,8 +382,6 @@ describe("resolvePluginCapabilityProviders", () => {
     mocks.loadBundledCapabilityRuntimeRegistry.mockImplementation(() => mocks.createMockRegistry());
     mocks.withBundledPluginEnablementCompat.mockReset();
     mocks.withBundledPluginEnablementCompat.mockImplementation(({ config }) => config);
-    mocks.withBundledPluginVitestCompat.mockReset();
-    mocks.withBundledPluginVitestCompat.mockImplementation(({ config }) => config);
     mocks.readBundledDiscoveryMode.mockReset();
     mocks.readBundledDiscoveryMode.mockReturnValue("allowlist");
   });
@@ -1573,7 +1563,6 @@ describe("resolvePluginCapabilityProviders", () => {
     const { cfg, enablementCompat } = createCompatChainConfig();
     setBundledCapabilityFixture("mediaUnderstandingProviders");
     mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
-    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
 
     expectNoResolvedCapabilityProviders(
       resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
@@ -1590,7 +1579,6 @@ describe("resolvePluginCapabilityProviders", () => {
     const second = createCompatChainConfig();
     setBundledCapabilityFixture("mediaUnderstandingProviders");
     mocks.withBundledPluginEnablementCompat.mockReturnValue(first.enablementCompat);
-    mocks.withBundledPluginVitestCompat.mockReturnValue(first.enablementCompat);
 
     expectNoResolvedCapabilityProviders(
       resolvePluginCapabilityProviders({
@@ -1646,7 +1634,6 @@ describe("resolvePluginCapabilityProviders", () => {
     } as never);
     setBundledCapabilityFixture("mediaUnderstandingProviders", "google", "google");
     mocks.withBundledPluginEnablementCompat.mockReturnValue(compatConfig);
-    mocks.withBundledPluginVitestCompat.mockReturnValue(compatConfig);
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? undefined : loaded,
     );
@@ -1669,7 +1656,6 @@ describe("resolvePluginCapabilityProviders", () => {
     };
     setBundledCapabilityFixture("mediaUnderstandingProviders");
     mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
-    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
 
     expectNoResolvedCapabilityProviders(
       resolvePluginCapabilityProviders({
@@ -1703,7 +1689,6 @@ describe("resolvePluginCapabilityProviders", () => {
     expectNoResolvedCapabilityProviders(providers);
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginEnablementCompat).not.toHaveBeenCalled();
-    expect(mocks.withBundledPluginVitestCompat).not.toHaveBeenCalled();
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
   });
 
@@ -1726,7 +1711,6 @@ describe("resolvePluginCapabilityProviders", () => {
       { id: "microsoft", contracts: { speechProviders: ["microsoft"] } },
     ]);
     mocks.withBundledPluginEnablementCompat.mockReturnValue(compatConfig);
-    mocks.withBundledPluginVitestCompat.mockReturnValue(compatConfig);
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? undefined : loaded,
     );
@@ -1860,7 +1844,6 @@ describe("resolvePluginCapabilityProviders", () => {
       diagnostics: [],
     });
     mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
-    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? undefined : loaded,
     );
@@ -1919,7 +1902,6 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(provider).toBeUndefined();
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginEnablementCompat).not.toHaveBeenCalled();
-    expect(mocks.withBundledPluginVitestCompat).not.toHaveBeenCalled();
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
   });
 
@@ -1939,7 +1921,6 @@ describe("resolvePluginCapabilityProviders", () => {
       { id: "openai", contracts: { speechProviders: ["openai"] } },
     ]);
     mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
-    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? undefined : loaded,
     );

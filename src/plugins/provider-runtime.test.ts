@@ -196,7 +196,6 @@ function expectProviderRuntimePluginLoad(params: { provider: string; expectedPlu
   expect(plugin?.id).toBe(params.expectedPluginId);
   expectRecordFields(getLastResolvePluginProvidersParams(), {
     providerRefs: [params.provider],
-    bundledProviderVitestCompat: true,
   });
 }
 
@@ -1017,9 +1016,7 @@ describe("provider-runtime", () => {
       }),
     };
     resolvePluginProvidersMock.mockImplementation((params) =>
-      params.applyAutoEnable === false && params.bundledProviderVitestCompat === false
-        ? []
-        : [runtimeProvider],
+      params.applyAutoEnable === false ? [] : [runtimeProvider],
     );
 
     expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(runtimeProvider);

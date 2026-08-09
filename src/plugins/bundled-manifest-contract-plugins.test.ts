@@ -40,7 +40,6 @@ describe("resolveEnabledBundledManifestContractPlugins", () => {
         contract: "documentExtractors",
         compatMode: {
           enablement: "always",
-          vitest: true,
         },
       }).map((plugin) => plugin.id),
     ).toStrictEqual(["document-extract"]);
@@ -50,7 +49,6 @@ describe("resolveEnabledBundledManifestContractPlugins", () => {
         contract: "documentExtractors",
         compatMode: {
           enablement: "always",
-          vitest: true,
         },
       }),
     ).toStrictEqual([]);

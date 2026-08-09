@@ -31,7 +31,6 @@ export function resolvePluginWebContentExtractors(params?: {
     contract: "webContentExtractors",
     compatMode: {
       enablement: "always",
-      vitest: true,
     },
   })) {
     const loaded = loadBundledWebContentExtractorEntriesFromDir({
