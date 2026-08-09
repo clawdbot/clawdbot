@@ -1869,6 +1869,46 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("records a skip when an image exceeds the remaining request budget (native route)", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ agentDir, modelHasVision: true });
+
+      // Same mixed-size contract as the fallback route: the second image
+      // overflows the 1-byte remaining allowance and must be recorded as
+      // skipped rather than throwing away the loaded image.
+      const firstBuf = Buffer.alloc(4, 255);
+      firstBuf[0] = 1;
+      const smallPng = encodePngRgba(firstBuf, 1, 1);
+      const bigPng = createLargeColorBlockPng(64);
+      const budgetBytes = smallPng.byteLength + 1;
+      const result = await tool.execute("native-budget-skip", {
+        prompt: "Describe.",
+        images: [
+          `data:image/png;base64,${smallPng.toString("base64")}`,
+          `data:image/png;base64,${bigPng.toString("base64")}`,
+        ],
+        maxBytesMb: budgetBytes / (1024 * 1024),
+      });
+
+      const typed = result as {
+        content?: Array<{ type?: string; text?: string }>;
+        details?: Record<string, unknown>;
+      };
+      const text = typed.content?.find((block) => block.type === "text")?.text ?? "";
+      expect(text).toBe(
+        "Loaded 1 image for direct visual inspection. Skipped 1 image: the request byte budget was exhausted.",
+      );
+      expect(typed.details).toMatchObject({
+        transport: "native",
+        skippedImages: {
+          count: 1,
+          reason: "request_budget_exhausted",
+          budgetBytes,
+        },
+      });
+    });
+  });
+
   it("sends moonshot image requests with user+image payloads only", async () => {
     await withTempAgentDir(async (agentDir) => {
       installFastLocalImageProviderStubs(minimaxProvider, moonshotProvider);
@@ -2648,12 +2688,16 @@ describe("image tool MiniMax VLM routing", () => {
     testing.setProviderDepsForTest();
   });
 
-  async function createMinimaxVlmFixture(baseResp: { status_code: number; status_msg: string }) {
+  async function createMinimaxVlmFixture(
+    baseResp: { status_code: number; status_msg: string },
+    configure?: (cfg: OpenClawConfig) => void,
+  ) {
     const fetchMock = stubMinimaxFetch(baseResp, baseResp.status_code === 0 ? "ok" : "");
 
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-vlm-"));
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = createMinimaxImageConfig();
+    configure?.(cfg);
     const tool = createRequiredImageTool({ config: cfg, agentDir });
     return { fetch: fetchMock, tool };
   }
@@ -2904,6 +2948,84 @@ describe("image tool MiniMax VLM routing", () => {
     });
     const text = result.content?.find((block) => block.type === "text")?.text ?? "";
     expect(text).toContain("Skipped 17 image(s)");
+  });
+
+  it("keeps operator mediaMaxMb per-image when the model supplies no maxBytesMb", async () => {
+    // 140 bytes: above each 70-byte image but below the 210-byte combined
+    // total, so an (incorrect) aggregate reading would skip images.
+    const { fetch, tool } = await createMinimaxVlmFixture(
+      { status_code: 0, status_msg: "" },
+      (cfg) => {
+        const defaults = cfg.agents?.defaults;
+        if (defaults) {
+          defaults.mediaMaxMb = 140 / (1024 * 1024);
+        }
+      },
+    );
+
+    const pngs = Array.from({ length: 3 }, (_, i) => {
+      const buf = Buffer.alloc(4, 255);
+      buf[0] = i;
+      return encodePngRgba(buf, 1, 1);
+    });
+    const result = await tool.execute("t1", {
+      prompt: "Describe.",
+      images: pngs.map((png) => `data:image/png;base64,${png.toString("base64")}`),
+    });
+
+    // Operator mediaMaxMb is a per-image contract: all three images load.
+    expect(fetch).toHaveBeenCalledTimes(3);
+    const details = result.details as
+      | { images?: unknown[]; skippedImages?: unknown }
+      | undefined;
+    expect(details?.images).toHaveLength(3);
+    expect(details?.skippedImages).toBeUndefined();
+  });
+
+  it("records a skip when an image exceeds the remaining request budget", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    // Mixed sizes: the budget leaves 1 byte after the first image, so the
+    // second (larger) image overflows the remaining allowance mid-loop. That
+    // expected overflow must become a recorded skip, not a thrown call.
+    const firstBuf = Buffer.alloc(4, 255);
+    firstBuf[0] = 1;
+    const smallPng = encodePngRgba(firstBuf, 1, 1);
+    const thirdBuf = Buffer.alloc(4, 255);
+    thirdBuf[0] = 3;
+    const thirdPng = encodePngRgba(thirdBuf, 1, 1);
+    const bigPng = createLargeColorBlockPng(64);
+    const budgetBytes = smallPng.byteLength + 1;
+    const result = await tool.execute("t1", {
+      prompt: "Describe.",
+      images: [
+        `data:image/png;base64,${smallPng.toString("base64")}`,
+        `data:image/png;base64,${bigPng.toString("base64")}`,
+        `data:image/png;base64,${thirdPng.toString("base64")}`,
+      ],
+      maxBytesMb: budgetBytes / (1024 * 1024),
+    });
+
+    // Only the first image reaches the provider; the oversized second image
+    // and everything after it are recorded as skipped. A single loaded image
+    // uses the singular `image` details form.
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const details = result.details as
+      | {
+          image?: string;
+          images?: unknown[];
+          skippedImages?: { count: number; reason: string; budgetBytes: number };
+        }
+      | undefined;
+    expect(details?.image).toBeDefined();
+    expect(details?.images).toBeUndefined();
+    expect(details?.skippedImages).toEqual({
+      count: 2,
+      reason: "request_budget_exhausted",
+      budgetBytes,
+    });
+    const text = result.content?.find((block) => block.type === "text")?.text ?? "";
+    expect(text).toContain("Skipped 2 image(s)");
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {

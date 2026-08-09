@@ -7,6 +7,7 @@ import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { MediaSizeCapExceededError } from "../../media/media-size-cap-error.js";
 import { extractAssistantText } from "../embedded-agent-utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
@@ -107,7 +108,9 @@ export function decodeDataUrl(
   const b64 = (match[2] ?? "").trim();
   if (typeof opts?.maxBytes === "number" && estimateBase64DecodedBytes(b64) > opts.maxBytes) {
     // Estimate before decoding so oversized inline payloads do not allocate large buffers.
-    throw new Error("Invalid data URL: payload exceeds size limit.");
+    throw new MediaSizeCapExceededError("Invalid data URL: payload exceeds size limit.", {
+      capBytes: opts.maxBytes,
+    });
   }
   const buffer = Buffer.from(b64, "base64");
   if (buffer.length === 0) {

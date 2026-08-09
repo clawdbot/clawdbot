@@ -20,6 +20,7 @@ import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
+import { MediaSizeCapExceededError } from "../../media/media-size-cap-error.js";
 import type {
   ImageCompressionModelPolicy,
   ImageCompressionPolicy,
@@ -991,11 +992,13 @@ export function createImageTool(options?: {
         message: "maxBytesMb must be greater than 0",
       });
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
-      // The effective byte limit is one aggregate budget for the whole
-      // model-originated request: 20 images at the 100 MiB per-image cap would
-      // otherwise retain ~2 GiB of buffers before native/fallback dispatch.
-      // Each load draws from the remaining budget; exhaustion skips the rest.
-      let remainingImageBudgetBytes = maxBytes;
+      // Only a model-supplied maxBytesMb opens an aggregate budget for the
+      // whole request: 20 images at the 100 MiB per-image cap would otherwise
+      // retain ~2 GiB of buffers before native/fallback dispatch. Operator
+      // mediaMaxMb keeps its per-image contract (docs/gateway/protocol.md) and
+      // never becomes a request budget. Each load draws from the remaining
+      // budget; exhaustion skips the rest.
+      let remainingImageBudgetBytes = maxBytesMb !== undefined ? maxBytes : undefined;
       let imageRoute:
         | { kind: "native" }
         | {
@@ -1144,36 +1147,54 @@ export function createImageTool(options?: {
         });
         const imageWebMedia = await imageToolProviderDeps.loadImageWebMediaRuntime();
 
-        const media = isDataUrl
-          ? await (async () => {
-              const decoded = decodeDataUrl(resolvedImage, {
-                maxBytes: remainingImageBudgetBytes,
-              });
-              return await imageWebMedia.optimizeImageBufferForWebMedia({
-                buffer: decoded.buffer,
-                contentType: decoded.mimeType,
-                maxBytes: remainingImageBudgetBytes,
-                imageCompression,
-              });
-            })()
-          : sandboxConfig
-            ? await imageWebMedia.loadWebMedia(resolvedPath ?? resolvedImage, {
-                maxBytes: remainingImageBudgetBytes,
-                sandboxValidated: true,
-                readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
-                imageCompression,
-              })
-            : await imageWebMedia.loadWebMedia(resolvedPath ?? resolvedImage, {
-                maxBytes: remainingImageBudgetBytes,
-                localRoots: mediaLocalRoots,
-                inboundRoots: mediaInboundRoots,
-                ssrfPolicy: remoteMediaSsrfPolicy,
-                ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
-                // Forward the run abort signal into the fetch layer so an abort
-                // mid-download disconnects the in-flight socket.
-                ...(signal ? { requestInit: { signal } } : {}),
-                imageCompression,
-              });
+        // Remaining model-budget allowance when a budget is active (always ≤
+        // the per-image cap), otherwise the plain per-image limit.
+        const loadMaxBytes = remainingImageBudgetBytes ?? maxBytes;
+        let media: Awaited<ReturnType<typeof imageWebMedia.loadWebMedia>>;
+        try {
+          media = isDataUrl
+            ? await (async () => {
+                const decoded = decodeDataUrl(resolvedImage, {
+                  maxBytes: loadMaxBytes,
+                });
+                return await imageWebMedia.optimizeImageBufferForWebMedia({
+                  buffer: decoded.buffer,
+                  contentType: decoded.mimeType,
+                  maxBytes: loadMaxBytes,
+                  imageCompression,
+                });
+              })()
+            : sandboxConfig
+              ? await imageWebMedia.loadWebMedia(resolvedPath ?? resolvedImage, {
+                  maxBytes: loadMaxBytes,
+                  sandboxValidated: true,
+                  readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
+                  imageCompression,
+                })
+              : await imageWebMedia.loadWebMedia(resolvedPath ?? resolvedImage, {
+                  maxBytes: loadMaxBytes,
+                  localRoots: mediaLocalRoots,
+                  inboundRoots: mediaInboundRoots,
+                  ssrfPolicy: remoteMediaSsrfPolicy,
+                  ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
+                  // Forward the run abort signal into the fetch layer so an abort
+                  // mid-download disconnects the in-flight socket.
+                  ...(signal ? { requestInit: { signal } } : {}),
+                  imageCompression,
+                });
+        } catch (err) {
+          // An image that only exceeds the remaining model-request budget takes
+          // the same recorded-skip path as budget exhaustion instead of
+          // failing the whole call and discarding already-loaded images.
+          if (remainingImageBudgetBytes !== undefined && err instanceof MediaSizeCapExceededError) {
+            budgetSkippedImageCount = imageInputs.length - loadedImages.length;
+            logWarn(
+              `image-tool: image exceeds remaining request byte budget; skipping ${budgetSkippedImageCount} image(s)`,
+            );
+            break;
+          }
+          throw err;
+        }
         if (media.kind !== "image") {
           throw new Error(`Unsupported media type: ${media.kind}`);
         }
