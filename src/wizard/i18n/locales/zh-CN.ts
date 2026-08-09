@@ -423,7 +423,7 @@ export const zh_CN = {
       workspaceDirectory: "工作区目录",
     },
     security: {
-      askForHelp: "启用工具或将其暴露到互联网之前，请向有经验的人寻求帮助。",
+      askForHelp: "启用工具或暴露到互联网之前，请找有经验的人协助。",
       attribution:
         "OpenClaw 是由 OpenClaw 基金会（非营利组织）开发的开源助手，会与你一同学习成长。",
       baselineDmSessions:
@@ -434,17 +434,17 @@ export const zh_CN = {
       baselineSharedInbox:
         "共享收件箱：使用独立的 gateway 和凭据；独立 OS 用户或主机可提供更强隔离。",
       baselineStrongModel: "对启用了工具或使用共享/公开收件箱的 bot，使用可用的最强模型。",
-      confirm: "我理解 OpenClaw 默认面向个人使用；共享使用需要额外的安全措施。继续？",
+      confirm: "我理解 OpenClaw 默认面向个人使用；共享/多用户使用需要加固。继续？",
       hardeningRequired: "如果你不熟悉访问控制和安全加固，请在获得帮助前不要运行 OpenClaw。",
-      learnMore: "了解更多",
-      notMultitenant: "不要依靠同一个启用了工具的 agent 将访问级别不同的人彼此隔离。",
-      personalAgent: "OpenClaw 主要面向一位操作员的个人使用。",
+      learnMore: "了解更多请访问",
+      notMultitenant: "默认情况下，OpenClaw 并非旨在安全地隔离多个用户。",
+      personalAgent: "默认情况下，OpenClaw 是供一位操作员使用的个人 agent。",
       promptRisk: "恶意 prompt 可能诱导它执行不安全操作。",
-      recommendedBaseline: "更安全的设置",
+      recommendedBaseline: "推荐的更安全设置",
       runRegularly: "定期运行",
       sharedAuthority:
-        "按发送者设置的工具策略可以限制某人能做什么，但不能提供完全隔离：人们仍可影响同一个 agent 如何使用共享的文件、账户和工具。",
-      title: "安全提示：启用工具前请阅读",
+        "如果多个用户能向同一个启用工具的 agent 发消息，他们都能影响它如何使用工具。",
+      title: "安全免责声明",
       toolAccess: "如果启用了工具，这个 bot 可以读取文件并执行操作。",
     },
     skills: {

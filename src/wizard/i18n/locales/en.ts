@@ -431,7 +431,7 @@ export const en = {
     },
     security: {
       askForHelp:
-        "Ask someone experienced for help before enabling tools or exposing it to the internet.",
+        "Ask someone experienced to help before enabling tools or exposing it to the internet.",
       attribution:
         "OpenClaw is an open-source assistant that learns and grows with you, by the OpenClaw Foundation (a non-profit).",
       baselineDmSessions:
@@ -444,18 +444,17 @@ export const en = {
       baselineStrongModel:
         "Use the strongest available model for bots with tools or shared/public inboxes.",
       confirm:
-        "I understand OpenClaw is personal by default and shared use needs extra safeguards. Continue?",
+        "I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?",
       hardeningRequired:
         "If you're not comfortable managing access controls and security hardening, don't run OpenClaw without help.",
-      learnMore: "Learn more",
-      notMultitenant:
-        "Do not rely on one tool-enabled agent to keep people with different access levels separate.",
-      personalAgent: "OpenClaw is designed strictly for personal use by one operator.",
+      learnMore: "Learn more at",
+      notMultitenant: "OpenClaw is not designed to safely separate multiple users by default.",
+      personalAgent: "By default, OpenClaw is a personal agent for one operator.",
       promptRisk: "A bad prompt can trick it into doing unsafe things.",
-      recommendedBaseline: "Safer setup",
+      recommendedBaseline: "Recommended safer setup",
       runRegularly: "Run regularly",
       sharedAuthority:
-        "Per-sender tool policies can limit what someone can do, but they do not provide complete isolation: people can still influence one agent's use of shared files, accounts, and tools.",
+        "If multiple users can message one tool-enabled agent, they can all influence how it uses its tools.",
       title: "Security disclaimer",
       toolAccess: "This bot can read files and run actions if tools are enabled.",
     },
