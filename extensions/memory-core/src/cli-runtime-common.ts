@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
-import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   defaultRuntime,
@@ -159,7 +158,6 @@ async function withMemoryManagerForAgent(params: {
   agentId: string;
   purpose?: MemoryManagerPurpose;
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
   run: (manager: MemoryManager) => Promise<void>;
 }): Promise<void> {
   const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
@@ -171,9 +169,6 @@ async function withMemoryManagerForAgent(params: {
   }
   if (params.acquireLocalService) {
     managerParams.acquireLocalService = params.acquireLocalService;
-  }
-  if (params.withLease) {
-    managerParams.withLease = params.withLease;
   }
   await withManager<MemoryManager>({
     getManager: () => getMemorySearchManager(managerParams),
@@ -193,7 +188,6 @@ export async function withMemoryCommand(params: {
   diagnosticsToStderr?: boolean;
   purpose?: MemoryManagerPurpose;
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
   run: (context: { manager: MemoryManager; cfg: OpenClawConfig; agentId: string }) => Promise<void>;
 }): Promise<OpenClawConfig> {
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig(
@@ -210,7 +204,6 @@ export async function withMemoryCommand(params: {
       agentId,
       purpose: params.purpose,
       acquireLocalService: params.acquireLocalService,
-      withLease: params.withLease,
       run: async (manager) => params.run({ manager, cfg, agentId }),
     });
   }
