@@ -12,7 +12,6 @@ import {
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
-import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import {
   getPreparedModelRuntimeMocks,
   getPreparedModelRuntimeTestApi,
@@ -167,10 +166,6 @@ describe("prepared model runtime owner selection", () => {
     });
     expect(configured?.inboundPluginRegistry).toBeDefined();
     expect(configured?.pluginRegistry).not.toBe(configured?.inboundPluginRegistry);
-    expect(getPreparedPluginRuntimeLoadContext(configured?.inboundPluginRegistry)).toMatchObject({
-      rawConfig: config,
-      workspaceDir: "/tmp/unused-workspace",
-    });
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();

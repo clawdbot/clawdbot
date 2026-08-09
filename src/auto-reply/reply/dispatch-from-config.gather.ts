@@ -22,7 +22,6 @@ import {
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
 import type { FinalizedRuntimeMsgContext as FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
@@ -383,139 +382,135 @@ export async function gatherDispatchRequest(
         allowGatewaySubagentBinding: true,
       });
     }));
-  return await withPluginRuntimeRegistryScope(pluginRegistry, async () => {
-    const hookRunner = getGlobalHookRunner();
-    // Extract message context for hooks (plugin and internal)
-    const timestamp =
-      typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
-        ? ctx.Timestamp
-        : undefined;
-    const messageIdForHook =
-      ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-    const hookCtx = { ...ctx };
-    const buildHookState = (sourceCtx: FinalizedMsgContext) => {
-      const nextHookContext = deriveInboundMessageHookContext(sourceCtx, {
-        messageId: messageIdForHook,
-      });
-      const inboundClaim = toPluginInboundClaimPair(nextHookContext, {
-        commandAuthorized:
-          typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
-        wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
-      });
-      return {
-        hookContext: nextHookContext,
-        inboundClaimContext: inboundClaim.context,
-        inboundClaimEvent: inboundClaim.event,
-      };
-    };
-    const hookState = buildHookState(hookCtx);
-    const { isGroup, groupId } = hookState.hookContext;
-    let hookMediaPrepared = false;
-    let hookMediaMetadataStaged = false;
-    const prepareHookMediaMetadata = async () => {
-      if (hookMediaPrepared) {
-        return;
-      }
-      hookMediaPrepared = true;
-      // Plugin hooks may run in a different Codex cwd from core dispatch, so
-      // only actual hook/plugin-claim consumers get remote-cache media paths.
-      // Keep ctx unstaged for the normal get-reply single-stage path.
-      const staged = await traceReplyPhase("reply.stage_remote_media_for_dispatch", () =>
-        stageRemoteInboundMediaIfNeeded({
-          ctx: hookCtx,
-          cfg,
-          sessionKey: acpDispatchSessionKey,
-          workspaceDir,
-          remoteMediaMode: "cache",
-        }),
-      );
-      if (staged) {
-        hookMediaMetadataStaged = true;
-        Object.assign(hookState, buildHookState(hookCtx));
-      }
-    };
-    const buildMessageReceivedHookContext = () => {
-      const mediaRemoteHost = normalizeOptionalString(ctx.MediaRemoteHost);
-      const { hookContext } = hookState;
-      const hasUnstagedRemoteMediaMetadata = Boolean(hookContext.media?.length);
-      if (hookMediaMetadataStaged || !mediaRemoteHost || !hasUnstagedRemoteMediaMetadata) {
-        return hookContext;
-      }
-      const messageReceivedCtx = { ...hookCtx };
-      // message_received hooks run before normal get-reply staging, so remote
-      // host paths are not safe as live media. Keep originals as debug metadata.
-      stripLegacyMediaContextFields(messageReceivedCtx);
-      delete messageReceivedCtx.media;
-      return {
-        ...buildHookState(messageReceivedCtx).hookContext,
-        mediaRemoteHost,
-        mediaStagingPending: true,
-        originalMedia: hookContext.media?.map((entry) => ({ ...entry })),
-        originalMediaPath: hookContext.mediaPath,
-        originalMediaUrl: hookContext.mediaUrl,
-        originalMediaType: hookContext.mediaType,
-        originalMediaPaths: hookContext.mediaPaths,
-        originalMediaUrls: hookContext.mediaUrls,
-        originalMediaTypes: hookContext.mediaTypes,
-      };
-    };
-    const nextState = extendPreparedDispatchState(state, {
-      ctx,
-      cfg,
-      dispatcher,
-      sessionKey,
-      traceReplyPhase,
-      recordProcessed,
-      recordAgentDispatchStarted,
-      recordAgentDispatchCompleted,
-      markProcessing,
-      markIdle,
-      markInboundDedupeReplayUnsafe,
-      acpDispatchSessionKey,
-      markProgress,
-      sessionStoreEntry,
-      notePreparedSession,
-      resolvePreparedTranscriptBinding,
-      sessionAgentId,
-      shouldEmitVerboseProgress,
-      shouldEmitFullVerboseProgress,
-      replyRoute,
-      routeReplyThreadId,
-      inboundAudio,
-      sessionTtsAuto,
-      workspaceDir,
-      pluginRegistry,
-      replyOperationRunState,
-      completeDispatchReplyOperation,
-      dispatchHookDispatcher,
-      ensureDispatchReplyOperation,
-      failDispatchReplyOperation,
-      getDispatchAbortOperation,
-      getDispatchAbortSignal,
-      getDispatchReplyOperation,
-      getObservedReplyDelivery,
-      getPreDispatchAbortSignal,
-      getReplyOptions,
-      isDispatchOperationAborted,
-      isPreDispatchOperationAborted,
-      markObservedReplyDelivery,
-      releasePreDispatchLifecycleAdmission,
-      runWithDispatchLifecycleAdmission,
-      throwIfDispatchOperationAborted,
-      trackDispatchLifecycleWork,
-      turnLedger,
-      maybeApplyTtsWithFinalizationLease,
-      hookRunner,
-      timestamp,
-      messageIdForHook,
-      isGroup,
-      groupId,
-      hookState,
-      prepareHookMediaMetadata,
-      buildMessageReceivedHookContext,
+  const hookRunner = getGlobalHookRunner();
+  // Extract message context for hooks (plugin and internal)
+  const timestamp =
+    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
+  const messageIdForHook =
+    ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+  const hookCtx = { ...ctx };
+  const buildHookState = (sourceCtx: FinalizedMsgContext) => {
+    const nextHookContext = deriveInboundMessageHookContext(sourceCtx, {
+      messageId: messageIdForHook,
     });
-    return { status: "ready" as const, state: nextState };
+    const inboundClaim = toPluginInboundClaimPair(nextHookContext, {
+      commandAuthorized:
+        typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
+      wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+    });
+    return {
+      hookContext: nextHookContext,
+      inboundClaimContext: inboundClaim.context,
+      inboundClaimEvent: inboundClaim.event,
+    };
+  };
+  const hookState = buildHookState(hookCtx);
+  const { isGroup, groupId } = hookState.hookContext;
+  let hookMediaPrepared = false;
+  let hookMediaMetadataStaged = false;
+  const prepareHookMediaMetadata = async () => {
+    if (hookMediaPrepared) {
+      return;
+    }
+    hookMediaPrepared = true;
+    // Plugin hooks may run in a different Codex cwd from core dispatch, so
+    // only actual hook/plugin-claim consumers get remote-cache media paths.
+    // Keep ctx unstaged for the normal get-reply single-stage path.
+    const staged = await traceReplyPhase("reply.stage_remote_media_for_dispatch", () =>
+      stageRemoteInboundMediaIfNeeded({
+        ctx: hookCtx,
+        cfg,
+        sessionKey: acpDispatchSessionKey,
+        workspaceDir,
+        remoteMediaMode: "cache",
+      }),
+    );
+    if (staged) {
+      hookMediaMetadataStaged = true;
+      Object.assign(hookState, buildHookState(hookCtx));
+    }
+  };
+  const buildMessageReceivedHookContext = () => {
+    const mediaRemoteHost = normalizeOptionalString(ctx.MediaRemoteHost);
+    const { hookContext } = hookState;
+    const hasUnstagedRemoteMediaMetadata = Boolean(hookContext.media?.length);
+    if (hookMediaMetadataStaged || !mediaRemoteHost || !hasUnstagedRemoteMediaMetadata) {
+      return hookContext;
+    }
+    const messageReceivedCtx = { ...hookCtx };
+    // message_received hooks run before normal get-reply staging, so remote
+    // host paths are not safe as live media. Keep originals as debug metadata.
+    stripLegacyMediaContextFields(messageReceivedCtx);
+    delete messageReceivedCtx.media;
+    return {
+      ...buildHookState(messageReceivedCtx).hookContext,
+      mediaRemoteHost,
+      mediaStagingPending: true,
+      originalMedia: hookContext.media?.map((entry) => ({ ...entry })),
+      originalMediaPath: hookContext.mediaPath,
+      originalMediaUrl: hookContext.mediaUrl,
+      originalMediaType: hookContext.mediaType,
+      originalMediaPaths: hookContext.mediaPaths,
+      originalMediaUrls: hookContext.mediaUrls,
+      originalMediaTypes: hookContext.mediaTypes,
+    };
+  };
+  const nextState = extendPreparedDispatchState(state, {
+    ctx,
+    cfg,
+    dispatcher,
+    sessionKey,
+    traceReplyPhase,
+    recordProcessed,
+    recordAgentDispatchStarted,
+    recordAgentDispatchCompleted,
+    markProcessing,
+    markIdle,
+    markInboundDedupeReplayUnsafe,
+    acpDispatchSessionKey,
+    markProgress,
+    sessionStoreEntry,
+    notePreparedSession,
+    resolvePreparedTranscriptBinding,
+    sessionAgentId,
+    shouldEmitVerboseProgress,
+    shouldEmitFullVerboseProgress,
+    replyRoute,
+    routeReplyThreadId,
+    inboundAudio,
+    sessionTtsAuto,
+    workspaceDir,
+    pluginRegistry,
+    replyOperationRunState,
+    completeDispatchReplyOperation,
+    dispatchHookDispatcher,
+    ensureDispatchReplyOperation,
+    failDispatchReplyOperation,
+    getDispatchAbortOperation,
+    getDispatchAbortSignal,
+    getDispatchReplyOperation,
+    getObservedReplyDelivery,
+    getPreDispatchAbortSignal,
+    getReplyOptions,
+    isDispatchOperationAborted,
+    isPreDispatchOperationAborted,
+    markObservedReplyDelivery,
+    releasePreDispatchLifecycleAdmission,
+    runWithDispatchLifecycleAdmission,
+    throwIfDispatchOperationAborted,
+    trackDispatchLifecycleWork,
+    turnLedger,
+    maybeApplyTtsWithFinalizationLease,
+    hookRunner,
+    timestamp,
+    messageIdForHook,
+    isGroup,
+    groupId,
+    hookState,
+    prepareHookMediaMetadata,
+    buildMessageReceivedHookContext,
   });
+  return { status: "ready" as const, state: nextState };
 }
 
 type GatherDispatchRequestResult = Awaited<ReturnType<typeof gatherDispatchRequest>>;

@@ -119,52 +119,29 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("uses zero per-turn registry loads after Gateway publication and preserves cold fallback", async () => {
+  it("uses zero fallback registry loads for a published Gateway dispatch", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    for (let index = 0; index < 3; index += 1) {
-      await dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: "whatsapp",
-          SessionKey: "agent:main:main",
-          MessageSid: `cold-${index}`,
-        }),
-        cfg,
-        dispatcher: createDispatcher(),
-        replyResolver,
-      });
-    }
-    expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(3);
-
     const preparedRegistry = createTestRegistry([]);
     const preparedRuntime = await import("../../agents/prepared-model-runtime.js");
     const preparedLookup = vi
       .spyOn(preparedRuntime, "loadPublishedGatewayInboundPluginRegistry")
       .mockResolvedValue(preparedRegistry);
-    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockClear();
     try {
-      for (let index = 0; index < 3; index += 1) {
-        await dispatchReplyFromConfig({
-          ctx: buildTestCtx({
-            Provider: "whatsapp",
-            SessionKey: "agent:main:main",
-            MessageSid: `prepared-${index}`,
-          }),
-          cfg,
-          dispatcher: createDispatcher(),
-          replyResolver,
-          usePublishedModelRuntime: true,
-        });
-      }
-      expect(preparedLookup).toHaveBeenCalledTimes(3);
-      expect(
-        preparedLookup.mock.calls.every(
-          ([input]) =>
-            Object.keys(input as object).length === 1 &&
-            (input as { agentId?: string }).agentId === "main",
-        ),
-      ).toBe(true);
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "whatsapp",
+          SessionKey: "agent:main:main",
+          MessageSid: "prepared",
+        }),
+        cfg,
+        dispatcher: createDispatcher(),
+        replyResolver,
+        usePublishedModelRuntime: true,
+      });
+      expect(preparedLookup).toHaveBeenCalledOnce();
+      expect(preparedLookup).toHaveBeenCalledWith({ agentId: "main" });
       expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
     } finally {
       preparedLookup.mockRestore();

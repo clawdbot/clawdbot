@@ -160,7 +160,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     resetPluginTtsAndThreadMocks();
   });
 
-  it("returns handled dispatch results from plugins", async () => {
+  it("runs a handled plugin reply hook in the registry scope", async () => {
     hookMocks.runner.runReplyDispatch.mockImplementation(async () => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(
         runtimePluginMocks.pluginRegistry,

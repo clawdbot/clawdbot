@@ -1,6 +1,7 @@
 import "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -50,13 +51,8 @@ describe("prepared model runtime inbound registry", () => {
       firstRegistry,
     );
 
-    let finishReplacement!: () => void;
-    mocks.prepareStaticCatalog.mockImplementationOnce(
-      async () =>
-        await new Promise<{ entries: [] }>((resolve) => {
-          finishReplacement = () => resolve({ entries: [] });
-        }),
-    );
+    const replacementCatalog = createDeferred<{ entries: [] }>();
+    mocks.prepareStaticCatalog.mockImplementationOnce(async () => await replacementCatalog.promise);
     const refresh = refreshPreparedModelRuntimeSnapshots(replacementConfig, {
       catalogMode: "static",
       allowGatewaySubagentBinding: true,
@@ -75,7 +71,7 @@ describe("prepared model runtime inbound registry", () => {
     await Promise.resolve();
     expect(resolvedRegistry).toBeUndefined();
 
-    finishReplacement();
+    replacementCatalog.resolve({ entries: [] });
     await expect(refresh).resolves.toBeUndefined();
     await expect(read).resolves.toBe(replacementRegistry);
     expect(replacementRegistry).not.toBe(firstRegistry);
@@ -127,17 +123,15 @@ describe("prepared model runtime inbound registry", () => {
     expect(dynamicLease.snapshot.inboundPluginRegistry).toBeUndefined();
     dynamicLease.release();
     const callsBeforeAuthRefresh = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
-    let unregister = () => {};
-    const published = new Promise<void>((resolve) => {
-      unregister = registerPreparedModelRuntimePublicationListener((event) => {
-        if (event.phase === "published") {
-          resolve();
-        }
-      });
+    const published = createDeferred();
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "published") {
+        published.resolve();
+      }
     });
 
     mocks.mutationListener?.({ affectsInheritedStores: true });
-    await published;
+    await published.promise;
     unregister();
 
     const authRefreshCalls =

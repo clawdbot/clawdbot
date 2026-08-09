@@ -193,12 +193,7 @@ export async function prepareWorkspaceBuildGroup(
   const runtimePluginMs = performance.now() - runtimePluginStartedAt;
   return await withPluginRuntimeRegistryScope(runtimePluginRegistry, async () => {
     const pluginMetadataStartedAt = performance.now();
-    const pluginMetadataSnapshot = prepareOwnedPluginLoadContext(
-      input,
-      env,
-      runtimePluginRegistry,
-      inboundPluginRegistry,
-    );
+    const pluginMetadataSnapshot = prepareOwnedPluginLoadContext(input, env, runtimePluginRegistry);
     const pluginMetadataMs = performance.now() - pluginMetadataStartedAt;
     const matchesStaticModelId = createStaticModelIdMatcher({
       manifestPlugins: pluginMetadataSnapshot.plugins,
