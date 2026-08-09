@@ -2141,6 +2141,12 @@ jobs:
           path: .release-harness
           persist-credentials: false
 
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
       - name: Plan Docker E2E images
         id: plan
         shell: bash
@@ -2179,13 +2185,6 @@ jobs:
               }
           fi
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Node environment
-        if: (steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == '') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
 
       - name: Setup artifact package validation environment
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
