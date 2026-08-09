@@ -98,19 +98,25 @@ type BedrockEventSink = { push(event: AssistantMessageEvent): void };
  * silently resolving to `{}` on large payloads.
  *
  * `pushStreamingJsonPreview` (see packages/ai/src/utils/json-parse.ts) fixes
- * this at the root instead of trading it off: the JSON-repair step is now
+ * this at the root instead of trading it off. The JSON-repair step is
  * genuinely incremental (O(delta) per call, proven byte-identical to the
- * non-incremental repair via a differential fuzz test), and the remaining
+ * non-incremental repair via a differential fuzz test). On top of that, once
+ * a top-level string argument (e.g. this `write_file`-style document body)
+ * is located, further deltas are appended directly onto it via a hot path -
+ * O(delta) per call, and the exposed value changes on *every* delta with no
+ * staleness window at all, not just "refreshes often". The remaining
  * JSON.parse/partial-json fallback - which has no incremental API and must
- * still scan the whole buffer - only re-runs once the buffer has grown by
- * `STREAMING_JSON_REPARSE_GROWTH_FACTOR` since the last full parse (a
- * cumulative-work/amortized-doubling bound, not a wall-clock interval - see
- * that constant's doc comment for why gating on elapsed time doesn't
- * actually bound total cost regardless of delta cadence). The live preview
- * keeps refreshing continuously for arguments of any realistic size, unlike
- * the previous design which simply froze the preview once a size threshold
- * was crossed. `handleContentBlockStop` still forces one final, unthrottled
- * resolution (see below) so correctness never depends on the growth gate.
+ * scan the whole buffer - is reserved for cases the hot path doesn't cover
+ * (a string/key boundary just closed, or the shape isn't a flat top-level
+ * string field - e.g. numbers or nested containers): it runs immediately on
+ * those boundary deltas (rare relative to payload size for the shapes this
+ * fix targets) or once the buffer has grown by
+ * `STREAMING_JSON_REPARSE_GROWTH_FACTOR` since the last full parse otherwise
+ * (a cumulative-work/amortized-doubling bound, not a wall-clock interval -
+ * see that constant's doc comment for why gating on elapsed time doesn't
+ * actually bound total cost regardless of delta cadence). `handleContentBlockStop`
+ * still forces one final, unthrottled resolution (see below) so correctness
+ * never depends on either the hot path or the growth gate.
  */
 
 function getOrCreateJsonPreview(block: Block): StreamingJsonPreviewState {
@@ -733,9 +739,9 @@ function handleContentBlockStop(
       break;
     case "toolCall":
       // Always force one final, unthrottled resolution from the complete
-      // buffer here, regardless of the reparse-interval cap applied to the
-      // live preview above - this is what guarantees correctness
-      // independent of stream timing.
+      // buffer here, regardless of the hot path or reparse growth gate
+      // applied to the live preview above - this is what guarantees
+      // correctness independent of stream timing.
       block.arguments = block.jsonPreview
         ? finalizeStreamingJsonPreview(block.jsonPreview)
         : parseStreamingJson(block.partialJson);

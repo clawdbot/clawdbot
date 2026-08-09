@@ -34,10 +34,14 @@ type StreamingToolCall = ToolCall & {
 // extensions/amazon-bedrock/stream.runtime.ts for the full explanation and
 // the shared fix - this adapter can receive the same raw per-delta stream
 // forwarded from that provider via Worker inference). `pushStreamingJsonPreview`
-// keeps the live preview refreshing on every delta via an incremental JSON
-// repair step, while gating the remaining (unavoidably O(buffer-size))
-// JSON.parse/partial-json fallback on cumulative buffer growth rather than
-// elapsed time, so the cost bound holds regardless of delta cadence - see
+// makes the JSON-repair step itself incremental, and additionally appends
+// directly onto an already-located top-level string argument via a hot path
+// so the exposed preview changes on *every* delta with no staleness window
+// at all for that (dominant, large-single-field) case; the remaining
+// (unavoidably O(buffer-size)) JSON.parse/partial-json fallback is reserved
+// for what the hot path doesn't cover (field boundaries, numbers, nested
+// containers) and is gated on cumulative buffer growth rather than elapsed
+// time there, so the cost bound holds regardless of delta cadence - see
 // packages/ai/src/utils/json-parse.ts for the full rationale.
 
 type WorkerInferenceStreamAdapterOptions = {
@@ -204,9 +208,9 @@ function processInferenceEvent(
       }
       const streaming = content as StreamingToolCall;
       // Always force one final, unthrottled resolution from the complete
-      // buffer here, regardless of the reparse growth gate applied to the
-      // live preview above - this guarantees correctness independent of
-      // stream timing.
+      // buffer here, regardless of the hot path or reparse growth gate
+      // applied to the live preview above - this guarantees correctness
+      // independent of stream timing.
       content.arguments = streaming.jsonPreview
         ? finalizeStreamingJsonPreview(streaming.jsonPreview)
         : parseStreamingJson(streaming.partialJson);

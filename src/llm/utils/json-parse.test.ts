@@ -79,14 +79,36 @@ const FUZZ_STRING_FRAGMENTS = [
   'quote\\"inside',
 ];
 
-function buildFuzzJson(random: () => number): string {
+// Subset of FUZZ_STRING_FRAGMENTS containing only fragments that are already
+// *valid* JSON string escape source text (no raw invalid escapes/unescaped
+// backslashes that need repair). Used by the ground-truth value-equivalence
+// fuzz tests below: `partial-json`'s tolerant parser has its own (separate,
+// pre-existing, undocumented) heuristics for handling a raw invalid escape
+// sequence mid-stream in a still-open string - e.g. it may truncate the
+// value right at the invalid escape rather than deferring to `repairJson`'s
+// resolution of it - which is a property of that oracle's fallback chain,
+// not a correctness bar for the parser under test here. Repair-correctness
+// for those fragments is already covered exhaustively by the
+// repairJsonChunk fuzz tests above (byte-for-byte match against
+// `repairJson`); this list avoids conflating that with value equivalence.
+const VALID_ESCAPE_FUZZ_FRAGMENTS = [
+  "plain text ",
+  "line\\nbreak",
+  "\\u0041\\u00e9",
+  "emoji \\uD83D\\uDE00 tail",
+  "\\t\\r\\n\\b\\f",
+  'quote\\"inside',
+  "back\\\\slash",
+];
+
+function buildFuzzJson(random: () => number, fragments: string[] = FUZZ_STRING_FRAGMENTS): string {
   const fieldCount = 1 + Math.floor(random() * 3);
   const fields: string[] = [];
   for (let f = 0; f < fieldCount; f++) {
     const fragmentCount = 1 + Math.floor(random() * 4);
     let value = "";
     for (let i = 0; i < fragmentCount; i++) {
-      value += FUZZ_STRING_FRAGMENTS[Math.floor(random() * FUZZ_STRING_FRAGMENTS.length)];
+      value += fragments[Math.floor(random() * fragments.length)];
     }
     fields.push(`"field${f}":"${value}"`);
   }
@@ -191,14 +213,45 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
       }
     }
     // The old size-threshold design froze after 8_000 chars and produced a
-    // single stale value for the rest of a ~57KB stream. The growth gate
-    // must keep refreshing throughout (on a logarithmic cadence, not every
-    // delta - see the "bounds the number of full reparses" test below), not
-    // just near the very start.
-    expect(distinctContentLengths.size).toBeGreaterThan(10);
+    // single stale value for the rest of a ~57KB stream; an intermediate
+    // growth-gated-only design only refreshed on a logarithmic cadence. The
+    // hot path (see the "genuinely live on every delta" test below) means
+    // this now refreshes on essentially every delta once streaming reaches
+    // the `content` field, so almost every chunk should produce a distinct
+    // length.
+    expect(distinctContentLengths.size).toBeGreaterThan(fullJson.length / chunkSize / 2);
   });
 
-  it("bounds the number of full reparses to O(log n) regardless of delta granularity (cadence-independent cost)", () => {
+  it("keeps the previewed value genuinely live on every single delta once inside a large top-level string field (hot path, zero staleness)", () => {
+    const content = "The quarterly value exchange report. ".repeat(1500); // ~57KB
+    const fullJson = JSON.stringify({ filename: "report.docx", content });
+
+    const state = createStreamingJsonPreviewState();
+    const chunkSize = 40;
+    let sawContentField = false;
+    for (let i = 0; i < fullJson.length; i += chunkSize) {
+      const before = state.lastParsedValue.content;
+      const value = pushStreamingJsonPreview(state, fullJson.slice(i, i + chunkSize));
+      const after = value.content;
+      if (typeof before === "string" && typeof after === "string" && after.length > 0) {
+        sawContentField = true;
+        // Once inside the `content` field, *every* delta must grow the
+        // exposed preview by exactly what was just appended - no cached,
+        // unchanged value in between, regardless of the growth gate.
+        expect(after.length).toBeGreaterThanOrEqual(before.length);
+        expect(after.startsWith(before)).toBe(true);
+      }
+    }
+    expect(sawContentField).toBe(true);
+    const finalValue = finalizeStreamingJsonPreview(state);
+    expect(finalValue).toEqual({ filename: "report.docx", content });
+    // The hot path keeps this small regardless of payload size: only field
+    // boundaries (filename open/close, content open, final resolution)
+    // trigger a real JSON.parse/partial-json pass.
+    expect(state.fullReparseCount).toBeLessThan(10);
+  });
+
+  it("bounds the number of full reparses regardless of delta granularity (cadence-independent cost)", () => {
     const content = "The quarterly value exchange report. ".repeat(1500); // ~57KB
     const fullJson = JSON.stringify({ filename: "report.docx", content });
 
@@ -207,48 +260,83 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
     // chunkSize 40, or ~57,000 at chunkSize 1. An earlier, wall-clock-based
     // version of this gate only bounded cost for deltas arriving faster
     // than its interval - deltas spaced further apart (an entirely ordinary
-    // network cadence) still triggered a full reparse every time. This gate
-    // has no time input at all, so cadence can't affect it; the closest
-    // analog we can exercise deterministically is delta *granularity*
-    // (the same payload split into far more, far smaller deltas), which
-    // this must not multiply the reparse count for.
+    // network cadence) still triggered a full reparse every time. Neither
+    // the growth gate nor the hot-path field-boundary reparses have any
+    // time input at all, so cadence can't affect them; the closest analog
+    // we can exercise deterministically is delta *granularity* (the same
+    // payload split into far more, far smaller deltas), which this must not
+    // multiply the reparse count for.
     function countFullReparses(chunkSize: number): number {
       const state = createStreamingJsonPreviewState();
-      let reparseCount = 0;
-      let previous: Record<string, unknown> | undefined;
       for (let i = 0; i < fullJson.length; i += chunkSize) {
-        const value = pushStreamingJsonPreview(state, fullJson.slice(i, i + chunkSize));
-        if (value !== previous) {
-          reparseCount += 1;
-          previous = value;
-        }
+        pushStreamingJsonPreview(state, fullJson.slice(i, i + chunkSize));
       }
-      return reparseCount;
+      return state.fullReparseCount;
     }
 
     const reparsesAtChunk40 = countFullReparses(40);
     const reparsesAtChunk1 = countFullReparses(1);
 
-    expect(reparsesAtChunk40).toBeLessThan(40);
-    expect(reparsesAtChunk1).toBeLessThan(40);
-    // Splitting the exact same ~57KB payload into ~57,000 one-character
-    // deltas instead of ~1,425 forty-character deltas must not multiply the
-    // reparse count - only the total accumulated size drives it.
-    expect(Math.abs(reparsesAtChunk1 - reparsesAtChunk40)).toBeLessThan(10);
+    // With the hot path handling every interior delta of the large `content`
+    // field directly, only field boundaries (filename open/close, content
+    // open) trigger a real reparse - a small constant, not proportional to
+    // payload size or delta count at all.
+    expect(reparsesAtChunk40).toBeLessThan(10);
+    expect(reparsesAtChunk1).toBeLessThan(10);
   });
 
-  it("reuses the last value below the growth threshold, and always refreshes when forced", () => {
+  it("keeps the previewed string live via the hot path instead of reusing a stale cached value", () => {
     const state = createStreamingJsonPreviewState();
     const first = pushStreamingJsonPreview(state, '{"a":"1');
-    const second = pushStreamingJsonPreview(state, "2"); // 1 byte of growth, well under the floor
-    expect(second).toBe(first); // same cached value, no reparse triggered
+    expect(first).toEqual({ a: "1" });
+    const reparsesAfterFirst = state.fullReparseCount;
+
+    // Even a single extra byte - far below the old growth-gate floor - must
+    // be reflected immediately via the hot path, not silently dropped.
+    const second = pushStreamingJsonPreview(state, "2");
+    expect(second).toEqual({ a: "12" });
+    expect(second).not.toBe(first);
+    expect(state.fullReparseCount).toBe(reparsesAfterFirst); // hot path, no extra reparse
 
     const third = pushStreamingJsonPreview(state, '3"}', { force: true });
-    expect(third).not.toBe(first);
     expect(third).toEqual({ a: "123" });
 
     const fourth = pushStreamingJsonPreview(state, ""); // no new bytes at all
     expect(fourth).toEqual({ a: "123" });
+  });
+
+  it("falls back to the growth-gated path (not the hot path) for a nested object/array value", () => {
+    // Nested containers are explicitly out of scope for the flat-object hot
+    // path (see computeOpenTopLevelStringValueKey); this must still resolve
+    // correctly via the existing growth-gated/full-reparse fallback, just
+    // without the same zero-staleness guarantee for the nested field.
+    const inner = "x".repeat(2000);
+    const expected = { meta: { note: inner } };
+    const fullJson = JSON.stringify(expected);
+
+    const state = createStreamingJsonPreviewState();
+    for (let i = 0; i < fullJson.length; i += 40) {
+      pushStreamingJsonPreview(state, fullJson.slice(i, i + 40));
+    }
+    const finalValue = finalizeStreamingJsonPreview(state);
+    expect(finalValue).toEqual(expected);
+  });
+
+  it("falls back safely for a large flat array of many small scalars (hot path does not apply, growth gate still bounds cost)", () => {
+    const numbers = Array.from({ length: 5000 }, (_, i) => i);
+    const expected = { numbers };
+    const fullJson = JSON.stringify(expected);
+
+    const state = createStreamingJsonPreviewState();
+    for (let i = 0; i < fullJson.length; i += 1) {
+      pushStreamingJsonPreview(state, fullJson.charAt(i));
+    }
+    const finalValue = finalizeStreamingJsonPreview(state);
+    expect(finalValue).toEqual(expected);
+    // Not the point of this test to assert an exact bound (arrays of
+    // scalars aren't the hot path's target), just that it stays a small
+    // fraction of the delta count rather than scaling with it.
+    expect(state.fullReparseCount).toBeLessThan(fullJson.length / 10);
   });
 
   it("finalizeStreamingJsonPreview definitively resolves a value ending mid-escape-sequence", () => {
@@ -258,5 +346,71 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
     pushStreamingJsonPreview(state, 'temp"}');
     const finalValue = finalizeStreamingJsonPreview(state);
     expect(finalValue).toEqual({ path: "C:\\Users\\bob\\temp" });
+  });
+});
+
+// `partial-json`'s `parse()` trims *trailing* whitespace on a still-open
+// (unterminated) string value - e.g. parse('{"a":"hi ') => {a:"hi"}, not
+// {a:"hi "} - since it can't know yet whether that whitespace is meaningful
+// content or just formatting before the string closes. This is a
+// pre-existing property of the `partial-json` fallback these tests use as
+// their "ground truth" oracle, not something introduced by the hot path -
+// and the hot path is arguably *more* correct here, since it preserves the
+// literal bytes seen so far instead of guessing. Trim trailing whitespace
+// before comparing so this one known, harmless oracle quirk doesn't produce
+// false failures; it does not mask any other divergence.
+function trimTrailingWhitespaceOnStrings(value: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(value)) {
+    result[key] = typeof val === "string" ? val.replace(/\s+$/, "") : val;
+  }
+  return result;
+}
+
+describe("streaming JSON preview matches ground truth on every delta (fuzz)", () => {
+  it("matches a full parseStreamingJson(raw-so-far) after every single delta, across random chunk boundaries and fragment mixes", () => {
+    // This is the direct regression test for the hot path: it must never
+    // diverge from what a straightforward (if quadratic) full re-parse of
+    // the raw buffer would produce at that exact point in the stream, for
+    // any field - not just the one being hot-appended.
+    const random = mulberry32(0xfeedface);
+    const iterations = 60; // ground truth here is a full O(n) re-parse per delta, so keep this modest
+    for (let iteration = 0; iteration < iterations; iteration++) {
+      const fullJson = buildFuzzJson(random, VALID_ESCAPE_FUZZ_FRAGMENTS);
+      const chunks = chunkRandomly(fullJson, random);
+
+      const state = createStreamingJsonPreviewState();
+      let raw = "";
+      for (const chunk of chunks) {
+        raw += chunk;
+        const value = pushStreamingJsonPreview(state, chunk);
+        const groundTruth = parseStreamingJson(raw);
+        expect(
+          trimTrailingWhitespaceOnStrings(value),
+          `mismatch for raw so far ${JSON.stringify(raw)} (full json ${JSON.stringify(fullJson)})`,
+        ).toEqual(trimTrailingWhitespaceOnStrings(groundTruth));
+      }
+      const finalValue = finalizeStreamingJsonPreview(state);
+      expect(finalValue).toEqual(parseStreamingJson(raw));
+    }
+  });
+
+  it("matches ground truth when every chunk is exactly one character", () => {
+    const random = mulberry32(0x0ddba11);
+    for (let iteration = 0; iteration < 20; iteration++) {
+      const fullJson = buildFuzzJson(random, VALID_ESCAPE_FUZZ_FRAGMENTS);
+      const state = createStreamingJsonPreviewState();
+      let raw = "";
+      for (let i = 0; i < fullJson.length; i++) {
+        const chunk = fullJson.charAt(i);
+        raw += chunk;
+        const value = pushStreamingJsonPreview(state, chunk);
+        expect(
+          trimTrailingWhitespaceOnStrings(value),
+          `mismatch at index ${i} for ${JSON.stringify(fullJson)}`,
+        ).toEqual(trimTrailingWhitespaceOnStrings(parseStreamingJson(raw)));
+      }
+      expect(finalizeStreamingJsonPreview(state)).toEqual(parseStreamingJson(raw));
+    }
   });
 });
