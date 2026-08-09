@@ -3,6 +3,10 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
+  buildModelCatalogMergeKey,
+  parseModelCatalogRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
@@ -47,7 +51,6 @@ import {
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
 import {
-  completeConfiguredRuntimeModels,
   collectPreparedModelRuntimeConfiguredRefs,
   collectConfiguredProviderIdsNeedingStaticCatalog,
   collectPreparedModelRuntimeProviderIds,
@@ -614,6 +617,41 @@ function groupConfiguredRegistrySources(
     }
   }
   return [...groups.values()].flat();
+}
+
+function completeConfiguredRuntimeModels(params: {
+  configuredModelRefs: readonly ConfiguredModelRef[];
+  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
+  resolveDynamicModel: (lookup: {
+    provider: string;
+    modelId: string;
+  }) => ProviderRuntimeModel | undefined;
+}): PreparedConfiguredRuntimeModel[] {
+  const existing = new Map(
+    params.configuredRuntimeModels.map((configured) => [
+      buildModelCatalogMergeKey(configured.provider, configured.modelId),
+      configured,
+    ]),
+  );
+  const completed: PreparedConfiguredRuntimeModel[] = [];
+  const seen = new Set<string>();
+  for (const { value } of params.configuredModelRefs) {
+    const parsed = parseModelCatalogRef(value);
+    if (!parsed) {
+      continue;
+    }
+    const key = buildModelCatalogMergeKey(parsed.provider, parsed.modelId);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const prepared = existing.get(key);
+    const model = prepared?.model ?? params.resolveDynamicModel(parsed);
+    if (model) {
+      completed.push({ provider: parsed.provider, modelId: parsed.modelId, model });
+    }
+  }
+  return completed;
 }
 
 export function prepareConfiguredRuntimeFactsBatch(params: {

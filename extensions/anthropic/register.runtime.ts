@@ -477,6 +477,9 @@ function resolveAnthropicManifestModel(modelId: string): ProviderRuntimeModel | 
       if (api && baseUrl) {
         anthropicManifestModelIndex.set(model.id, {
           ...model,
+          input: model.input.filter(
+            (item): item is "text" | "image" => item === "text" || item === "image",
+          ),
           provider: PROVIDER_ID,
           api,
           baseUrl,
