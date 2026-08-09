@@ -109,7 +109,6 @@ export function runPluginRegisterSyncInRegistry(
 export function createPluginModuleLoader(options: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
-  aliasOverrides?: Readonly<Record<string, string>>;
   tryNative?: boolean;
   loaderFilename?: string;
   installNativeSdkResolver?: boolean;
@@ -125,16 +124,13 @@ export function createPluginModuleLoader(options: {
         pluginSdkResolution: options.pluginSdkResolution,
       });
     }
-    const defaultAliasMap = buildPluginLoaderAliasMap(
+    const aliasMap = buildPluginLoaderAliasMap(
       modulePath,
       process.argv[1],
       import.meta.url,
       options.pluginSdkResolution,
       options.devSourceRoot,
     );
-    const aliasMap = options.aliasOverrides
-      ? { ...defaultAliasMap, ...options.aliasOverrides }
-      : defaultAliasMap;
     return getCachedPluginModuleLoader({
       cache: moduleLoaders,
       modulePath,

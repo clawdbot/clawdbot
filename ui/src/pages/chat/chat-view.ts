@@ -412,7 +412,6 @@ export function renderChat(props: ChatProps) {
             showThinking: props.showThinking,
             showToolCalls: props.showToolCalls,
             persistCommentary: props.persistCommentary,
-            readOnly: true,
             sessions: props.sessions,
             sessionHost: props.sessionHost,
             gatewayUrl: props.gatewayUrl,
@@ -627,7 +626,7 @@ export function renderChat(props: ChatProps) {
                 : ""}"
             >
               <div class="chat-main__conversation">
-                ${thread}
+                ${thread} ${scrollToBottomButton}
                 ${props.inlineApproval && props.onApprovalDecision
                   ? html`<div class="chat-inline-approval">
                       ${renderExecApprovalCard({
@@ -665,7 +664,6 @@ export function renderChat(props: ChatProps) {
                   onResolve: (suggestion, resolution) =>
                     props.onResolveSessionSuggestion?.(suggestion, resolution),
                 })}
-                ${scrollToBottomButton}
                 ${renderChatSwarmProgress({
                   sessions: props.swarmSessions ?? [],
                   sessionKey: props.sessionKey,

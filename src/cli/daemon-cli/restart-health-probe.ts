@@ -7,7 +7,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
-import { inspectPortUsage, LOOPBACK_PORT_PROBE_HOSTS, type PortUsage } from "../../infra/ports.js";
+import { inspectPortUsage } from "../../infra/ports-inspect.js";
+import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
+import type { PortUsage } from "../../infra/ports-types.js";
 import type { GatewayPortHealthSnapshot } from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 

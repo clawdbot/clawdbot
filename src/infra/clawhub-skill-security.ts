@@ -1,4 +1,5 @@
 // Shared owner-qualified ClawHub security verdict resolution.
+import { asOptionalRecord as readObject } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import pLimit from "p-limit";
 import {
@@ -74,12 +75,6 @@ function partitionCompatibleBatches(
     batch.legacyKeys.add(legacyKey);
   }
   return batches.map((batch) => batch.items);
-}
-
-function readObject(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function readOptionalStringField(value: unknown, field: string): string | undefined {

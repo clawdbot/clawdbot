@@ -124,7 +124,9 @@ describe("agent concurrency benchmark", () => {
       await expect(
         Promise.race([
           drain.then(() => "drained"),
-          new Promise<string>((resolve) => setImmediate(() => resolve("pending"))),
+          new Promise<string>((resolve) => {
+            setImmediate(() => resolve("pending"));
+          }),
         ]),
       ).resolves.toBe("pending");
 

@@ -90,6 +90,55 @@ struct CLIInstallerTests {
         #expect(CLIInstaller.installWatchdogTimeout(for: .exact(String())) == 900)
     }
 
+    @Test func `installer events map to concise live status`() {
+        let cases: [(String, String)] = [
+            (#"{"event":"step","name":"disk-space","status":"start"}"#, "Checking available disk space…"),
+            (#"{"event":"step","name":"node","status":"start"}"#, "Installing Node.js runtime…"),
+            (#"{"event":"step","name":"git-tools","status":"start"}"#, "Preparing Git and pnpm…"),
+            (#"{"event":"step","name":"git-clone","status":"start"}"#, "Downloading OpenClaw source…"),
+            (#"{"event":"step","name":"git-update","status":"start"}"#, "Updating OpenClaw source…"),
+            (#"{"event":"step","name":"dependencies","status":"start"}"#, "Installing dependencies…"),
+            (#"{"event":"step","name":"control-ui","status":"start"}"#, "Building interface…"),
+            (#"{"event":"step","name":"cli-build","status":"start"}"#, "Building OpenClaw CLI…"),
+            (#"{"event":"step","name":"openclaw","status":"retry"}"#, "Retrying OpenClaw CLI install…"),
+            (
+                #"{"event":"step","name":"disk-space","status":"warn"}"#,
+                "Couldn’t verify free disk space; continuing…"),
+            (
+                #"{"event":"step","name":"git-update","status":"warn"}"#,
+                "Using the existing modified OpenClaw source…"),
+            (
+                #"{"event":"step","name":"control-ui","status":"warn"}"#,
+                "Interface build did not finish; continuing…"),
+        ]
+
+        for (line, expected) in cases {
+            #expect(CLIInstaller.installStatus(forEventLine: line) == expected)
+        }
+    }
+
+    @Test func `installer status ignores malformed unknown and terminal events`() {
+        for line in [
+            "not json",
+            #"{"event":"step","name":"future-stage","status":"start"}"#,
+            #"{"event":"step","name":"dependencies","status":"ok"}"#,
+            #"{"event":"done","ok":true,"version":"2026.7.3"}"#,
+            #"{"event":"error","message":"failed"}"#,
+        ] {
+            #expect(CLIInstaller.installStatus(forEventLine: line) == nil)
+        }
+    }
+
+    @Test func `installer extracts one actionable disk preflight error`() {
+        let output = """
+        {"event":"step","name":"disk-space","status":"start"}
+        {"event":"error","message":"Fresh Git installs require at least 6 GiB of free disk space; only 2.0 GiB is available. Free disk space and retry."}
+        """
+
+        #expect(CLIInstaller.installErrorMessage(from: output) ==
+            "Fresh Git installs require at least 6 GiB of free disk space; only 2.0 GiB is available. Free disk space and retry.")
+    }
+
     @Test func `managed update uses the canonical updater without accepting downgrades`() {
         let command = CLIInstaller.managedUpdateCommand(
             executable: "/Users/Test User/.openclaw/bin/openclaw",

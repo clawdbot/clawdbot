@@ -1,4 +1,5 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CodexAppServerLiveThreadOwnership } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
@@ -17,6 +18,8 @@ type CodexAppServerThreadLifecycle = {
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
   liveThreadConfigFingerprint?: string;
+  /** Process-local claim proof; never write this callback into durable binding state. */
+  liveThreadOwnership?: CodexAppServerLiveThreadOwnership;
   clearInheritedServiceTier?: true;
 };
 
@@ -63,6 +66,8 @@ export type CodexStartOrResumeThreadParams = {
   userMcpServersEnabled?: boolean;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
+  /** Versioned owner of configured MCP for scheduled dynamic-tool execution. */
+  configuredMcpOwnershipVersion?: 1;
   environmentSelection?: CodexTurnEnvironmentParams[];
   appServerRuntimeFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;

@@ -35,13 +35,22 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { sleepWithAbort } from "../internal/retry-sleep.js";
+import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
+import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  suppressOpenAIResponsesCompaction,
+  type OpenAIResponsesReplayMode,
+} from "../transports/openai-responses-compaction-replay.js";
 import { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
+import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
 import { createResponsesPromptEgressObserver } from "../transports/openai-responses-prompt-observer-internal.js";
 import {
-  processResponsesStream,
-  ResponsesStreamFailure,
-} from "../transports/openai-responses-stream-internal.js";
+  isInvalidEncryptedContentError,
+  resolveNextResponsesEncryptedContentAttempt,
+  type ResponsesEncryptedContentAttempt,
+} from "../transports/openai-responses-replay-internal.js";
+import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type {
@@ -50,7 +59,6 @@ import type {
   Model,
   SimpleStreamOptions,
   StreamFunction,
-  StreamOptions,
 } from "../types.js";
 import {
   appendAssistantMessageDiagnostic,
@@ -106,7 +114,7 @@ const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
 // Types
 // ============================================================================
 
-interface OpenAICodexResponsesOptions extends StreamOptions {
+interface OpenAICodexResponsesOptions extends BaseOpenAIStreamOptions {
   reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
@@ -285,11 +293,18 @@ export const streamOpenAICodexResponses: StreamFunction<
       const optionHeaders = resolveAiTransportHeaderSentinels(options?.headers);
 
       const accountId = extractOpenAICodexAccountId(apiKey);
-      let body = buildRequestBody(model, context, options);
-      const nextBody = await options?.onPayload?.(body, model);
-      if (nextBody !== undefined) {
-        body = nextBody as RequestBody;
-      }
+      const buildBody = async (replayMode: OpenAIResponsesReplayMode) => {
+        let body = buildRequestBody(model, context, options, replayMode);
+        const nextBody = await options?.onPayload?.(body, model);
+        if (nextBody !== undefined) {
+          body = nextBody as RequestBody;
+        }
+        return body;
+      };
+      let semanticAttempt: ResponsesEncryptedContentAttempt<RequestBody> = {
+        kind: "initial",
+        request: await buildBody("checkpoint"),
+      };
       const observePromptEgress = createResponsesPromptEgressObserver(
         options,
         context.systemPrompt,
@@ -318,23 +333,36 @@ export const streamOpenAICodexResponses: StreamFunction<
           sessionId || createCodexRequestId(),
         );
         let websocketStarted = false;
+        let websocketRequestSent = false;
         let retriedWebSocketConnectionLimit = false;
         while (true) {
+          const activeAttempt = semanticAttempt;
           websocketStarted = false;
+          websocketRequestSent = false;
           try {
             await processWebSocketStream(
               resolveCodexWebSocketUrl(model.baseUrl),
-              body,
+              activeAttempt.request,
               websocketHeaders,
               output,
               stream,
               model,
               () => {
+                if (activeAttempt.kind === "compaction-stripped") {
+                  suppressOpenAIResponsesCompaction(output, model, {
+                    sessionId: options?.sessionId,
+                    authProfileId: options?.authProfileId,
+                  });
+                }
                 websocketStarted = true;
               },
               requestOptions,
               firstEventAbort.abort,
               observePromptEgress,
+              activeAttempt.kind,
+              () => {
+                websocketRequestSent = true;
+              },
             );
 
             if (activeSignal?.aborted) {
@@ -352,6 +380,23 @@ export const streamOpenAICodexResponses: StreamFunction<
             return;
           } catch (error) {
             const aborted = activeSignal?.aborted;
+            // Observer and local send failures happen before dispatch and must not
+            // be classified as provider rejection of encrypted replay state.
+            const nextSemanticAttempt =
+              !aborted &&
+              websocketRequestSent &&
+              !websocketStarted &&
+              error instanceof CodexApiError &&
+              isInvalidEncryptedContentError(error)
+                ? await resolveNextResponsesEncryptedContentAttempt(activeAttempt, error, {
+                    buildFullHistoryRequest: () => buildBody("full-history"),
+                  })
+                : undefined;
+            if (nextSemanticAttempt) {
+              semanticAttempt = nextSemanticAttempt;
+              retriedWebSocketConnectionLimit = false;
+              continue;
+            }
             const connectionLimitBeforeStart =
               !websocketStarted && isWebSocketConnectionLimitReachedError(error);
             if (!aborted && connectionLimitBeforeStart && !retriedWebSocketConnectionLimit) {
@@ -370,7 +415,8 @@ export const streamOpenAICodexResponses: StreamFunction<
                 phase: websocketStarted
                   ? "after_message_stream_start"
                   : "before_message_stream_start",
-                requestBytes: new TextEncoder().encode(JSON.stringify(body)).byteLength,
+                requestBytes: new TextEncoder().encode(JSON.stringify(activeAttempt.request))
+                  .byteLength,
               }),
             );
             if (transport === "auto" && options?.sessionId) {
@@ -384,102 +430,135 @@ export const streamOpenAICodexResponses: StreamFunction<
         }
       }
 
-      const sseHeaders = buildSSEHeaders(modelHeaders, optionHeaders, accountId, apiKey, sessionId);
-      const bodyJson = JSON.stringify(body);
-      const canCompressSseBody = model.provider === "openai" && !sseHeaders.has("content-encoding");
-      const compressedBody = canCompressSseBody ? compressRequestBodyZstd(bodyJson) : null;
-      if (compressedBody) {
-        sseHeaders.set("content-encoding", "zstd");
-      }
-      const sseBody: BodyInit = compressedBody ?? bodyJson;
-
-      // Fetch with retry logic for rate limits and transient errors
       let response: Response | undefined;
-      let lastError: Error | undefined;
       const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
-
-      for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        if (activeSignal?.aborted) {
-          throw transportAbortError(activeSignal);
+      while (true) {
+        const activeAttempt = semanticAttempt;
+        response = undefined;
+        const sseHeaders = buildSSEHeaders(
+          modelHeaders,
+          optionHeaders,
+          accountId,
+          apiKey,
+          sessionId,
+        );
+        const bodyJson = JSON.stringify(activeAttempt.request);
+        const canCompressSseBody =
+          model.provider === "openai" && !sseHeaders.has("content-encoding");
+        const compressedBody = canCompressSseBody ? compressRequestBodyZstd(bodyJson) : null;
+        if (compressedBody) {
+          sseHeaders.set("content-encoding", "zstd");
         }
+        const sseBody: BodyInit = compressedBody ?? bodyJson;
+        let terminalResponseError: CodexApiError | undefined;
 
-        let attemptResponse: Response;
-        let errorText: string;
-        try {
-          observePromptEgress?.(body, {
+        // Ordinary transient retries stay inside one semantic payload attempt.
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+          if (activeSignal?.aborted) {
+            throw transportAbortError(activeSignal);
+          }
+          observePromptEgress?.(activeAttempt.request, {
             egress: "native-codex-sse",
-            payloadVariant: "initial",
+            payloadVariant: activeAttempt.kind,
           });
-          attemptResponse = await fetch(resolveCodexUrl(model.baseUrl), {
-            method: "POST",
-            headers: sseHeaders,
-            body: sseBody,
-            signal: activeSignal,
-          });
+
+          let attemptResponse: Response;
+          try {
+            attemptResponse = await fetch(resolveCodexUrl(model.baseUrl), {
+              method: "POST",
+              headers: sseHeaders,
+              body: sseBody,
+              signal: activeSignal,
+            });
+          } catch (error) {
+            if (error instanceof Error) {
+              if (
+                isRequestTimeoutError(
+                  error,
+                  options?.signal,
+                  requestTimeoutSignal,
+                  requestTimeoutMs,
+                ) &&
+                requestTimeoutMs !== undefined
+              ) {
+                throw formatRequestTimeoutError(requestTimeoutMs, error);
+              }
+              if (error.name === "AbortError" || error.message === "Request was aborted") {
+                throw new Error("Request was aborted", { cause: error });
+              }
+              if (error.name === "TimeoutError" && requestTimeoutMs !== undefined) {
+                throw new Error(`Request timed out after ${requestTimeoutMs}ms`, { cause: error });
+              }
+            }
+            const tlsCertificateError = inspectTlsCertificateError(error);
+            const lastError = toErrorObject(error, String(error));
+            // Deterministic certificate failures cannot recover through backoff.
+            if (
+              attempt < maxRetries &&
+              !lastError.message.includes("usage limit") &&
+              !tlsCertificateError
+            ) {
+              const delayMs = BASE_DELAY_MS * 2 ** attempt;
+              await sleepWithAbort(delayMs, activeSignal);
+              continue;
+            }
+            throw lastError;
+          }
+
           response = attemptResponse;
           await options?.onResponse?.(
             { status: attemptResponse.status, headers: headersToRecord(attemptResponse.headers) },
             model,
           );
-
           if (attemptResponse.ok) {
             break;
           }
-          errorText = await readChatGptResponsesErrorTextLimited(attemptResponse);
-        } catch (error) {
-          if (error instanceof Error) {
-            if (
-              isRequestTimeoutError(
-                error,
-                options?.signal,
-                requestTimeoutSignal,
-                requestTimeoutMs,
-              ) &&
-              requestTimeoutMs !== undefined
-            ) {
-              throw formatRequestTimeoutError(requestTimeoutMs, error);
-            }
-            if (error.name === "AbortError" || error.message === "Request was aborted") {
-              throw new Error("Request was aborted", { cause: error });
-            }
-            if (error.name === "TimeoutError" && requestTimeoutMs !== undefined) {
-              throw new Error(`Request timed out after ${requestTimeoutMs}ms`, { cause: error });
-            }
-          }
-          const tlsCertificateError = inspectTlsCertificateError(error);
-          lastError = toErrorObject(error, String(error));
-          // Deterministic certificate failures cannot recover through backoff.
-          if (
-            attempt < maxRetries &&
-            !lastError.message.includes("usage limit") &&
-            !tlsCertificateError
-          ) {
-            const delayMs = BASE_DELAY_MS * 2 ** attempt;
-            await sleepWithAbort(delayMs, activeSignal);
+          const errorText = await readChatGptResponsesErrorTextLimited(attemptResponse);
+          if (attempt < maxRetries && isRetryableError(attemptResponse.status, errorText)) {
+            await sleepWithAbort(resolveHttpRetryDelayMs(attemptResponse, attempt), activeSignal);
             continue;
           }
-          throw lastError;
+          const info = parseErrorResponseText(
+            errorText,
+            attemptResponse.status,
+            attemptResponse.statusText,
+          );
+          terminalResponseError = new CodexApiError(info.friendlyMessage || info.message, {
+            code: info.code,
+          });
+          break;
         }
 
-        if (attempt < maxRetries && isRetryableError(attemptResponse.status, errorText)) {
-          await sleepWithAbort(resolveHttpRetryDelayMs(attemptResponse, attempt), activeSignal);
-          continue;
+        if (response?.ok) {
+          if (!response.body) {
+            throw new Error("No response body");
+          }
+          if (activeSignal?.aborted) {
+            throw transportAbortError(activeSignal);
+          }
+          if (activeAttempt.kind === "compaction-stripped") {
+            suppressOpenAIResponsesCompaction(output, model, {
+              sessionId: options?.sessionId,
+              authProfileId: options?.authProfileId,
+            });
+          }
+          break;
         }
 
-        const info = parseErrorResponseText(
-          errorText,
-          attemptResponse.status,
-          attemptResponse.statusText,
-        );
-        throw new Error(info.friendlyMessage || info.message);
-      }
-
-      if (!response?.ok) {
-        throw lastError ?? new Error("Failed after retries");
-      }
-
-      if (!response.body) {
-        throw new Error("No response body");
+        if (activeSignal?.aborted) {
+          throw transportAbortError(activeSignal);
+        }
+        const nextSemanticAttempt = terminalResponseError
+          ? await resolveNextResponsesEncryptedContentAttempt(
+              activeAttempt,
+              terminalResponseError,
+              { buildFullHistoryRequest: () => buildBody("full-history") },
+            )
+          : undefined;
+        if (!nextSemanticAttempt) {
+          throw terminalResponseError ?? new Error("Failed after retries");
+        }
+        semanticAttempt = nextSemanticAttempt;
       }
 
       stream.push({ type: "start", partial: output });
@@ -533,6 +612,8 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
 
   const resolvedOptions = {
     ...buildBaseOptions(model, options, apiKey),
+    authProfileId: (options as (SimpleStreamOptions & { authProfileId?: string }) | undefined)
+      ?.authProfileId,
     reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
   } satisfies OpenAICodexResponsesOptions;
   responsesPromptObserver.copy(options, resolvedOptions);
@@ -547,10 +628,14 @@ function buildRequestBody(
   model: Model<"openai-chatgpt-responses">,
   context: Context,
   options?: OpenAICodexResponsesOptions,
+  replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ): RequestBody {
   const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
     includeSystemPrompt: false,
     replayResponsesItemIds: false,
+    sessionId: options?.sessionId,
+    authProfileId: options?.authProfileId,
+    replayMode,
   });
 
   const body: RequestBody = {
@@ -655,6 +740,10 @@ async function processStream(
     abortFirstEventStream,
     onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
     signal: options?.signal,
+    reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+      sessionId: options?.sessionId,
+      authProfileId: options?.authProfileId,
+    }),
     resolveServiceTier: resolveCodexServiceTier,
     applyServiceTierPricing: (usage, serviceTier) =>
       applyResponsesServiceTierPricing(usage, serviceTier, model),
@@ -1478,6 +1567,8 @@ async function processWebSocketStream(
   options?: OpenAICodexResponsesOptions,
   abortFirstEventStream?: (reason: Error) => void,
   observePromptEgress?: ObserveResponsesPromptEgress,
+  payloadVariant: ResponsesEncryptedContentAttempt<RequestBody>["kind"] = "initial",
+  onRequestSent?: () => void,
 ): Promise<void> {
   const { socket, entry, release } = await acquireWebSocket(
     url,
@@ -1499,9 +1590,10 @@ async function processWebSocketStream(
     }
     observePromptEgress?.(requestBody, {
       egress: "native-codex-websocket",
-      payloadVariant: "initial",
+      payloadVariant,
     });
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
+    onRequestSent?.();
     await processResponsesStream(
       startWebSocketOutputOnFirstEvent(
         mapCodexEvents(parseWebSocket(socket, options?.signal)),
@@ -1518,6 +1610,10 @@ async function processWebSocketStream(
         abortFirstEventStream,
         onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
         signal: options?.signal,
+        reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+          sessionId: options?.sessionId,
+          authProfileId: options?.authProfileId,
+        }),
         resolveServiceTier: resolveCodexServiceTier,
         applyServiceTierPricing: (usage, serviceTier) =>
           applyResponsesServiceTierPricing(usage, serviceTier, model),
@@ -1533,6 +1629,8 @@ async function processWebSocketStream(
         {
           includeSystemPrompt: false,
           replayResponsesItemIds: false,
+          sessionId: options?.sessionId,
+          authProfileId: options?.authProfileId,
         },
       ).filter((item) => item.type !== "function_call_output");
       entry.continuation = {
@@ -1611,9 +1709,10 @@ function parseErrorResponseText(
   raw: string,
   status: number,
   statusText: string,
-): { message: string; friendlyMessage?: string } {
+): { code?: string; message: string; friendlyMessage?: string } {
   let message = raw || statusText || "Request failed";
   let friendlyMessage: string | undefined;
+  let code: string | undefined;
 
   try {
     const parsed = JSON.parse(raw) as {
@@ -1627,9 +1726,9 @@ function parseErrorResponseText(
     };
     const err = parsed?.error;
     if (err) {
-      const code = err.code || err.type || "";
+      code = err.code || err.type || undefined;
       if (
-        /usage_limit_reached|usage_not_included|rate_limit_exceeded/i.test(code) ||
+        /usage_limit_reached|usage_not_included|rate_limit_exceeded/i.test(code ?? "") ||
         status === 429
       ) {
         const plan = err.plan_type ? ` (${err.plan_type.toLowerCase()} plan)` : "";
@@ -1643,7 +1742,7 @@ function parseErrorResponseText(
     }
   } catch {}
 
-  return { message, friendlyMessage };
+  return { ...(code ? { code } : {}), message, friendlyMessage };
 }
 
 // ============================================================================

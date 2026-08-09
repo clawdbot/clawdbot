@@ -40,6 +40,12 @@ const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
   /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
 const RUNTIME_SIDECAR_BASELINE_PATH_RE =
   /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
+// Doctor-contract declaration truth depends on arbitrary plugin source (artifacts
+// re-export from src), so any non-test extension module or plugin manifest change
+// must re-prove the src/plugins-owned declaration and closure-guard tests that the
+// extension lanes would otherwise never select.
+const DOCTOR_CONTRACT_OWNER_TEST_PATH_RE =
+  /^extensions\/[^/]+\/(?:openclaw\.plugin\.json$|(?!.*\.test\.).*\.(?:c|m)?[jt]s$)/u;
 const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
   /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
 const PLUGIN_SDK_API_BASELINE_PATH_RE =
@@ -278,6 +284,13 @@ export function shouldRunControlUiI18nVerify(paths) {
 
 export function shouldRunRuntimeSidecarBaselineCheck(paths) {
   return paths.some((changedPath) => RUNTIME_SIDECAR_BASELINE_PATH_RE.test(changedPath));
+}
+
+/** Returns whether changed files can drift bundled doctor-contract declarations or closures. */
+export function shouldRunDoctorContractOwnerTests(paths) {
+  return paths.some((changedPath) =>
+    DOCTOR_CONTRACT_OWNER_TEST_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
 }
 
 /** Returns whether changed files can affect the sessions/transcripts SQLite schema baseline. */
@@ -521,6 +534,7 @@ export function createChangedCheckPlan(result, options = {}) {
     ]);
   }
   add("changelog attributions", ["check:changelog-attributions"]);
+  add("doctor deprecation registry", ["check:doctor-deprecation-registry"]);
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
@@ -557,6 +571,17 @@ export function createChangedCheckPlan(result, options = {}) {
     add(
       "runtime sidecar owner test",
       ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
+      baseEnv,
+    );
+  }
+  if (shouldRunDoctorContractOwnerTests(result.paths)) {
+    add(
+      "doctor contract declaration + closure guard tests",
+      [
+        "test:serial",
+        "src/plugins/doctor-contract-declarations.test.ts",
+        "src/plugins/doctor-contract-closure-guard.test.ts",
+      ],
       baseEnv,
     );
   }

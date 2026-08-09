@@ -88,6 +88,7 @@ async function sendMessageTelegramWithContext(
   });
   const threadSpec = resolveTelegramSendThreadSpec({
     targetMessageThreadId: target.messageThreadId,
+    targetDirectMessagesTopicId: target.directMessagesTopicId,
     messageThreadId: opts.messageThreadId,
     chatType: target.chatType,
   });

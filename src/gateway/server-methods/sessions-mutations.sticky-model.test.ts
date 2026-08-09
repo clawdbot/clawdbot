@@ -133,7 +133,7 @@ describe("sessions.patch sticky model persistence", () => {
     },
   );
 
-  it("keeps a non-admin model switch session-scoped", async () => {
+  it("keeps a write-scoped model switch session-only without persisting the configured default", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dm:non-admin";
       await upsertSessionEntry(

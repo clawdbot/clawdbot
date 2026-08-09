@@ -21,6 +21,7 @@ import {
   validateSessionsCompanionStateParams,
   validateSessionsCreateParams,
   validateSessionsObserverVisibilityParams,
+  validateSessionsPatchManyParams,
   validateSessionsPatchParams,
   validateSessionsSearchParams,
   validateSessionsSendParams,
@@ -195,6 +196,80 @@ describe("lazy protocol validators", () => {
     expectRejected(validateSessionsPatchParams, [
       sessionPatch({ key: "agent:main:self-archive", expectedSessionId: "" }),
       sessionPatch({ key: "agent:main:self-archive", expectedLifecycleRevision: "" }),
+    ]);
+  });
+
+  it("validates bounded closed bulk session patch requests", () => {
+    expect(protocol.SESSIONS_PATCH_MANY_MAX_TARGETS).toBe(100);
+    const target = {
+      key: "agent:main:patch-me",
+      agentId: "main",
+      expectedSessionId: "session-patch-me",
+      expectedLifecycleRevision: "revision-patch-me",
+    };
+    const fullPatch = {
+      label: "Label",
+      category: "Category",
+      boardFace: "dashboard",
+      icon: "name:spark",
+      statusNote: "Working",
+      attention: "hand",
+      ttlMinutes: 30,
+      archived: false,
+      pinned: true,
+      unread: true,
+      thinkingLevel: "high",
+      fastMode: "auto",
+      toolOverrides: null,
+      verboseLevel: "full",
+      traceLevel: "full",
+      reasoningLevel: "high",
+      responseUsage: "full",
+      elevatedLevel: "on",
+      execHost: "gateway",
+      execSecurity: "allowlist",
+      execAsk: "on-miss",
+      execNode: "node-1",
+      model: "openai/gpt-5.6-luna",
+      completionOwnerSessionKey: "agent:main:main",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read"],
+      inheritedToolDeny: ["write"],
+      sendPolicy: "allow",
+      groupActivation: "mention",
+    } as const;
+    expectAccepted(validateSessionsPatchManyParams, [
+      { targets: [target], patch: fullPatch },
+      {
+        targets: Array.from({ length: 100 }, (_, index) => ({
+          key: `agent:main:patch-${index}`,
+        })),
+        patch: { archived: false },
+      },
+    ]);
+    expectRejected(validateSessionsPatchManyParams, [
+      { targets: [], patch: { archived: true } },
+      {
+        targets: Array.from({ length: 101 }, (_, index) => ({
+          key: `agent:main:patch-${index}`,
+        })),
+        patch: { archived: true },
+      },
+      { targets: [target], patch: {} },
+      { targets: [{ key: "" }], patch: { archived: true } },
+      { targets: [{ key: target.key, agentId: "" }], patch: { archived: true } },
+      { targets: [{ key: target.key, expectedSessionId: "" }], patch: { archived: true } },
+      {
+        targets: [{ key: target.key, expectedLifecycleRevision: "" }],
+        patch: { archived: true },
+      },
+      { targets: [{ key: target.key, extra: true }], patch: { archived: true } },
+      { targets: [target], patch: { key: target.key } },
+      { targets: [target], patch: { agentId: "main" } },
+      { targets: [target], patch: { expectedSessionId: "session" } },
+      { targets: [target], patch: { expectedLifecycleRevision: "revision" } },
+      { targets: [target], patch: { archived: true, extra: true } },
+      { targets: [target], patch: { archived: true }, extra: true },
     ]);
   });
 

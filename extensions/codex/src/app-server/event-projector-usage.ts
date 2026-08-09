@@ -14,18 +14,36 @@ function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normal
 }
 
 function readCodexThreadContextSnapshot(params: JsonObject): {
+  activeContextTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteInputTokens?: number;
+  inputTokens?: number;
   modelContextWindow?: number;
+  outputTokens?: number;
   promptTokens?: number;
+  reasoningOutputTokens?: number;
 } {
   const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
   const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
   const modelContextWindow = tokenUsage
     ? readTokenCount(tokenUsage, "modelContextWindow")
     : undefined;
-  const promptTokens = last ? readTokenCount(last, "inputTokens") : undefined;
+  // `last.totalTokens` is the provider-backed active-context base; `tokenUsage.total` is billing.
+  const activeContextTokens = last ? readTokenCount(last, "totalTokens") : undefined;
+  const inputTokens = last ? readTokenCount(last, "inputTokens") : undefined;
+  const cachedInputTokens = last ? readTokenCount(last, "cachedInputTokens") : undefined;
+  const cacheWriteInputTokens = last ? readTokenCount(last, "cacheWriteInputTokens") : undefined;
+  const outputTokens = last ? readTokenCount(last, "outputTokens") : undefined;
+  const reasoningOutputTokens = last ? readTokenCount(last, "reasoningOutputTokens") : undefined;
   return {
+    ...(activeContextTokens !== undefined ? { activeContextTokens } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(cacheWriteInputTokens !== undefined ? { cacheWriteInputTokens } : {}),
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
     ...(modelContextWindow && modelContextWindow > 0 ? { modelContextWindow } : {}),
-    ...(promptTokens !== undefined ? { promptTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(inputTokens !== undefined ? { promptTokens: inputTokens } : {}),
+    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
   };
 }
 
@@ -37,7 +55,7 @@ export function projectCodexThreadUsageUpdate(
 ): void {
   applyUsage(readCodexThreadTokenUsage(params) ?? currentUsage);
   const context = readCodexThreadContextSnapshot(params);
-  if (context.modelContextWindow !== undefined || context.promptTokens !== undefined) {
+  if (Object.keys(context).length > 0) {
     emitContext(context);
   }
 }

@@ -1,5 +1,6 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
+import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -7,6 +8,7 @@ import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
 import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -16,20 +18,20 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
-import {
-  getActiveGatewayRootWorkCount,
-  runWithGatewayIndependentRootWorkAdmission,
-} from "../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
+  canReadDetailedUpdateMetadata,
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  projectUpdateAvailable,
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
+import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
-import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
+import type { GatewayClient } from "./server-methods/shared-types.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
@@ -47,8 +49,6 @@ const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
-const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 0;
-const AGENT_RUNTIME_PLUGIN_PREWARM_RETRY_DELAY_MS = 250;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 type Awaitable<T> = T | Promise<T>;
@@ -299,73 +299,6 @@ function scheduleProviderAuthStatePrewarm(params: {
         clearTimeout(rewarmTimer);
         rewarmTimer = undefined;
       }
-    },
-  };
-}
-
-function scheduleAgentRuntimePluginPrewarm(params: {
-  getConfig: () => OpenClawConfig;
-  workspaceDir: string;
-  startupTrace?: GatewayStartupTrace;
-  log: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-  };
-  delayMs?: number;
-  waitForPostReadyWork?: () => Promise<void>;
-}): GatewayPostReadySidecarHandle {
-  let stopped = false;
-  let idleTask: GatewayIdleTaskHandle | undefined;
-  const isStopped = () => stopped;
-  const scheduledAt = performance.now();
-  const delayMs = Math.max(0, params.delayMs ?? AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS);
-  void (async () => {
-    await params.waitForPostReadyWork?.();
-    if (isStopped()) {
-      return;
-    }
-    idleTask = scheduleGatewayIdleTask({
-      // The readiness barrier and configured delay overlap; do not turn two startup windows
-      // into one additive delay before the first agent request can use the warm registry.
-      delayMs: Math.max(0, delayMs - (performance.now() - scheduledAt)),
-      retryDelayMs: AGENT_RUNTIME_PLUGIN_PREWARM_RETRY_DELAY_MS,
-      isClosing: isStopped,
-      isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
-      run: async () => {
-        await measureStartup(params.startupTrace, "post-ready.agent-runtime-plugins", async () => {
-          if (isStopped()) {
-            return;
-          }
-          const started = performance.now();
-          const { loadAgentRuntimePluginRegistryHandle } =
-            await import("../agents/runtime-plugins.js");
-          const cfg = params.getConfig();
-          if (isStopped()) {
-            return;
-          }
-          loadAgentRuntimePluginRegistryHandle({
-            config: cfg,
-            workspaceDir: params.workspaceDir,
-            allowGatewaySubagentBinding: true,
-          });
-          if (!isStopped()) {
-            params.log.info(
-              `agent runtime plugins pre-warmed in ${(performance.now() - started).toFixed(0)}ms`,
-            );
-          }
-        });
-      },
-      log: params.log,
-      errorMessage: "agent runtime plugin pre-warm failed",
-    });
-  })().catch((err: unknown) => {
-    params.log.warn(`agent runtime plugin pre-warm failed: ${String(err)}`);
-  });
-  return {
-    stop: () => {
-      stopped = true;
-      idleTask?.stop();
-      idleTask = undefined;
     },
   };
 }
@@ -701,6 +634,12 @@ export async function startGatewaySidecars(params: {
       params.prewarmPrimaryModel,
     ),
   );
+  // Gateway readiness owns process-stable reply module activation so the first operator turn
+  // does not become the module loader under contention.
+  await measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
+    const { prewarmConfigDrivenReplyRuntime } = await loadGetReplyFromConfigRuntime();
+    await prewarmConfigDrivenReplyRuntime();
+  });
   await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
     await params.refreshChatMetadata?.();
   });
@@ -963,12 +902,35 @@ function createDeferredGatewayUpdateCheck(params: {
     warn: (msg: string) => void;
   };
   isNixMode: boolean;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
   waitForPostReadyWork?: () => Promise<void>;
+  activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
 }): { start: () => void; stop: () => void } {
   let started = false;
   let stopped = false;
   let stopUpdateCheck: (() => void) | null = null;
+  let latestUpdateAvailable: GatewayUpdateAvailableEventPayload["updateAvailable"] = null;
+  let latestSchedule: GatewayUpdateAvailableEventPayload["schedule"];
+
+  const broadcastUpdateAvailable = (payload: GatewayUpdateAvailableEventPayload) => {
+    const detailedConnIds = params.getClientConnIds((client) =>
+      canReadDetailedUpdateMetadata(client.connect.role ?? "operator", client.connect.scopes ?? []),
+    );
+    const legacyConnIds = new Set(params.getClientConnIds());
+    for (const connId of detailedConnIds) {
+      legacyConnIds.delete(connId);
+    }
+    params.broadcastToConnIds(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, detailedConnIds, {
+      dropIfSlow: true,
+    });
+    params.broadcastToConnIds(
+      GATEWAY_EVENT_UPDATE_AVAILABLE,
+      { updateAvailable: projectUpdateAvailable(payload.updateAvailable, false) ?? null },
+      legacyConnIds,
+      { dropIfSlow: true },
+    );
+  };
 
   const stop = () => {
     stopped = true;
@@ -999,9 +961,24 @@ function createDeferredGatewayUpdateCheck(params: {
                 cfg: params.cfg,
                 log: params.log,
                 isNixMode: params.isNixMode,
+                ...(params.activeWorkInspectors
+                  ? { activeWorkInspectors: params.activeWorkInspectors }
+                  : {}),
                 onUpdateAvailableChange: (updateAvailable) => {
-                  const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
-                  params.broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
+                  latestUpdateAvailable = updateAvailable;
+                  const payload: GatewayUpdateAvailableEventPayload = {
+                    updateAvailable,
+                    ...(latestSchedule ? { schedule: latestSchedule } : {}),
+                  };
+                  broadcastUpdateAvailable(payload);
+                },
+                onUpdateScheduleChange: (schedule) => {
+                  latestSchedule = schedule;
+                  const payload: GatewayUpdateAvailableEventPayload = {
+                    updateAvailable: latestUpdateAvailable,
+                    schedule,
+                  };
+                  broadcastUpdateAvailable(payload);
                 },
               }),
             ),
@@ -1046,7 +1023,8 @@ export async function startGatewayPostAttachRuntime(
     };
     isNixMode: boolean;
     startupStartedAt?: number;
-    broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+    broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+    getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
     broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
     tailscaleMode: GatewayTailscaleMode;
     resetOnExit: boolean;
@@ -1102,6 +1080,7 @@ export async function startGatewayPostAttachRuntime(
       getConfig?: () => OpenClawConfig;
     };
     waitForPostReadyWork?: () => Promise<void>;
+    activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
   },
   runtimeDeps: GatewayPostAttachRuntimeDeps = defaultGatewayPostAttachRuntimeDeps,
 ) {
@@ -1199,8 +1178,10 @@ export async function startGatewayPostAttachRuntime(
         cfg: params.cfgAtStart,
         log: params.log,
         isNixMode: params.isNixMode,
-        broadcast: params.broadcast,
+        broadcastToConnIds: params.broadcastToConnIds,
+        getClientConnIds: params.getClientConnIds,
         waitForPostReadyWork: params.waitForPostReadyWork,
+        activeWorkInspectors: params.activeWorkInspectors,
       });
 
   const tailscaleCleanupPromise = params.minimalTestGateway
@@ -1332,16 +1313,6 @@ export async function startGatewayPostAttachRuntime(
         if (workerEnvironmentSidecar) {
           gatewayLifetimeSidecars.push(workerEnvironmentSidecar);
         }
-        gatewayLifetimeSidecars.push(
-          scheduleAgentRuntimePluginPrewarm({
-            getConfig:
-              params.providerAuthPrewarm?.getConfig ?? (() => params.gatewayPluginConfigAtStart),
-            workspaceDir: params.defaultWorkspaceDir,
-            startupTrace: params.startupTrace,
-            log: params.log,
-            waitForPostReadyWork: params.waitForPostReadyWork,
-          }),
-        );
         if (params.providerAuthPrewarm && params.providerAuthPrewarm.enabled !== false) {
           gatewayLifetimeSidecars.push(
             scheduleProviderAuthStatePrewarm({
@@ -1455,7 +1426,6 @@ export async function startGatewayPostAttachRuntime(
 }
 
 export const testing = {
-  agentRuntimePluginPrewarmStartDelayMs: AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS,
   providerAuthPrewarmStartDelayMs: PROVIDER_AUTH_PREWARM_START_DELAY_MS,
   hasRestartSentinelFast,
   prewarmConfiguredPrimaryModel,

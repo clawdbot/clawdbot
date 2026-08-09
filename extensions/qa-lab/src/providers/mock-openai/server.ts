@@ -32,6 +32,7 @@ import {
   TINY_PNG_BASE64,
   QA_REASONING_ONLY_RECOVERY_PROMPT_RE,
   QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE,
+  QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT_RE,
   QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE,
   QA_THINKING_VISIBILITY_OFF_PROMPT_RE,
   QA_THINKING_VISIBILITY_MAX_PROMPT_RE,
@@ -789,9 +790,8 @@ async function buildResponsesPayload(
     compactionSummaryFaultMode?: MockCompactionSummaryFaultMode;
   } = {},
 ) {
-  const providerVariant = resolveProviderVariant(
-    typeof body.model === "string" ? body.model : undefined,
-  );
+  const model = typeof body.model === "string" ? body.model : "";
+  const providerVariant = resolveProviderVariant(model);
   const input = normalizeResponsesInput(body.input);
   const toolDeclarationBody = resolveCurrentToolDeclarationSurface(body, input);
   const prompt = extractLastUserText(input);
@@ -1159,7 +1159,13 @@ async function buildResponsesPayload(
     ?.text.match(QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE)?.[1]
     ?.toLowerCase();
   if (terminalCompletionCase && /Internal task completion event/i.test(allInputText)) {
-    if (terminalCompletionCase === "empty") {
+    const visibleRepresentation =
+      terminalCompletionCase === "silent"
+        ? QA_SUBAGENT_TERMINAL_MARKERS.silent
+        : terminalCompletionCase === "empty"
+          ? QA_SUBAGENT_TERMINAL_MARKERS.empty
+          : undefined;
+    if (visibleRepresentation) {
       if (completedToolName === "message") {
         return buildAssistantEvents("");
       }
@@ -1174,15 +1180,15 @@ async function buildResponsesPayload(
           );
         return buildToolCallEventsWithArgs("message", {
           action: "send",
-          message: QA_SUBAGENT_TERMINAL_MARKERS.empty,
+          message: visibleRepresentation,
           ...(requiresFinal ? { final: true } : {}),
         });
       }
-      return buildAssistantEvents(QA_SUBAGENT_TERMINAL_MARKERS.empty);
+      return buildAssistantEvents(visibleRepresentation);
     }
-    // The direct delivery fallback owns visible, silent, restart, and sanitized
-    // fallback results. Use explicit silence so generic empty-response recovery
-    // cannot replay the historical spawn before that fallback runs.
+    // The direct delivery fallback owns visible, restart, and sanitized fallback
+    // results. Use explicit silence so generic empty-response recovery cannot
+    // replay the historical spawn before that fallback runs.
     return buildAssistantEvents("NO_REPLY");
   }
   const terminalWorkerCase = Array.from(
@@ -1351,6 +1357,17 @@ async function buildResponsesPayload(
       );
     }
     return buildAssistantEvents("BUG-SHOULD-NOT-AUTO-RETRY");
+  }
+  if (QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT_RE.test(allInputText)) {
+    // The catalog's default mock alternate and the explicit proof model both
+    // recover, so the scenario exercises the same fallback path with or without flags.
+    if (model === "gpt-5.6-luna-alt" || model === "mock-visible-fallback") {
+      return buildAssistantEvents("MODEL-FALLBACK-VISIBLE-OK");
+    }
+    return buildReasoningAndAssistantEvents({
+      reasoningId: `rs_mock_mixed_blank_${model.replaceAll(/[^a-z0-9]+/gi, "_")}`,
+      answerText: " ",
+    });
   }
   if (QA_THINKING_VISIBILITY_MAX_PROMPT_RE.test(prompt)) {
     return buildReasoningAndAssistantEvents({

@@ -14,6 +14,12 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import {
+  cloneSystemEventOwner,
+  recordSystemEventOwner,
+  resolveSystemEventOptionsOwnerAgentId,
+  resolveSystemEventOwnerAgentId,
+} from "./system-event-ownership.js";
 
 export type SystemEvent = {
   text: string;
@@ -72,10 +78,12 @@ function getOrCreateSessionQueue(sessionKey: string): SessionQueue {
 }
 
 function cloneSystemEvent(event: SystemEvent): SystemEvent {
-  return {
+  const clone = {
     ...event,
     ...(event.deliveryContext ? { deliveryContext: { ...event.deliveryContext } } : {}),
   };
+  cloneSystemEventOwner(event, clone);
+  return clone;
 }
 
 export function isSystemEventContextChanged(
@@ -92,8 +100,9 @@ function findDuplicateInQueue(
   text: string,
   contextKey: string | null,
   deliveryContext: DeliveryContext | undefined,
+  ownerAgentId: string | null,
 ): boolean {
-  const incoming = { text, contextKey, deliveryContext };
+  const incoming = { text, contextKey, deliveryContext, ownerAgentId };
   if (contextKey === null) {
     const last = queue[queue.length - 1];
     return last ? isDuplicateSystemEvent(last, incoming) : false;
@@ -102,6 +111,13 @@ function findDuplicateInQueue(
 }
 
 export function enqueueSystemEventEntry(
+  text: string,
+  options: SystemEventOptions,
+): SystemEvent | null {
+  return enqueueOwnedSystemEventEntry(text, options);
+}
+
+function enqueueOwnedSystemEventEntry(
   text: string,
   options: SystemEventOptions,
 ): SystemEvent | null {
@@ -116,7 +132,16 @@ export function enqueueSystemEventEntry(
   }
   const normalizedContextKey = normalizeContextKey(options.contextKey);
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
-  if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)) {
+  const normalizedOwnerAgentId = resolveSystemEventOptionsOwnerAgentId(options);
+  if (
+    findDuplicateInQueue(
+      entry.queue,
+      cleaned,
+      normalizedContextKey,
+      normalizedDeliveryContext,
+      normalizedOwnerAgentId,
+    )
+  ) {
     return null;
   }
   if (normalizedContextKey !== null) {
@@ -128,6 +153,7 @@ export function enqueueSystemEventEntry(
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
   };
+  recordSystemEventOwner(event, normalizedOwnerAgentId);
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -174,9 +200,11 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     throw new Error("replaced system events require a contextKey");
   }
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
+  const normalizedOwnerAgentId = resolveSystemEventOptionsOwnerAgentId(options);
   const matching = entry.queue.filter(
     (event) =>
       (event.contextKey ?? null) === normalizedContextKey &&
+      resolveSystemEventOwnerAgentId(event) === normalizedOwnerAgentId &&
       areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
   );
   if (matching.length === 1 && matching[0]?.text === cleaned) {
@@ -188,6 +216,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
   entry.queue = entry.queue.filter(
     (event) =>
       (event.contextKey ?? null) !== normalizedContextKey ||
+      resolveSystemEventOwnerAgentId(event) !== normalizedOwnerAgentId ||
       !areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
   );
   const event: SystemEvent = {
@@ -196,6 +225,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
   };
+  recordSystemEventOwner(event, normalizedOwnerAgentId);
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -206,11 +236,14 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
 
 function isDuplicateSystemEvent(
   existing: SystemEvent,
-  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext">,
+  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext"> & {
+    ownerAgentId: string | null;
+  },
 ): boolean {
   return (
     existing.text === incoming.text &&
     (existing.contextKey ?? null) === (incoming.contextKey ?? null) &&
+    resolveSystemEventOwnerAgentId(existing) === incoming.ownerAgentId &&
     areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
   );
 }
@@ -220,6 +253,7 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.text === right.text &&
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
+    resolveSystemEventOwnerAgentId(left) === resolveSystemEventOwnerAgentId(right) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }

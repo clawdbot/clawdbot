@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { runLocalCommandToFile, writeEligibleGitFiles } from "./workspace-sync-local.js";
+import { createGitTransferList, runLocalCommandToFile } from "./workspace-sync-local.js";
 
 async function waitForFile(filePath: string): Promise<void> {
   const deadline = Date.now() + 5_000;
@@ -70,10 +70,8 @@ describe("runLocalCommandToFile", () => {
       "node_modules/pkg/index.js",
       ".DS_Store",
     ];
-    const eligiblePath = path.join(root, "eligible");
-    const ignoredPath = path.join(root, "ignored");
-    const selectedPath = path.join(root, "selected");
-    const outputPath = path.join(root, "output");
+    const temporaryDirectory = path.join(root, "..", `${path.basename(root)}-transfer`);
+    const initOutputPath = path.join(root, "..", `${path.basename(root)}-git-init-output`);
     try {
       await Promise.all(
         files.map(async (file) => {
@@ -81,25 +79,29 @@ describe("runLocalCommandToFile", () => {
           await fs.writeFile(path.join(root, file), file);
         }),
       );
-      await Promise.all([
-        fs.writeFile(eligiblePath, `${files.join("\0")}\0`),
-        fs.writeFile(ignoredPath, ""),
-        fs.writeFile(selectedPath, ""),
-      ]);
+      await runLocalCommandToFile({
+        argv: ["git", "-C", root, "init", "--quiet"],
+        outputPath: initOutputPath,
+        signal: new AbortController().signal,
+        timeoutMs: 10_000,
+      });
 
-      await writeEligibleGitFiles({
+      const outputPath = await createGitTransferList({
         gitRoot: root,
-        eligiblePath,
-        ignoredPath,
-        selectedPath,
-        outputPath,
+        temporaryDirectory,
+        signal: new AbortController().signal,
+        timeoutMs: 10_000,
       });
 
       expect((await fs.readFile(outputPath, "utf8")).split("\0").filter(Boolean)).toEqual([
         "src/keep.ts",
       ]);
     } finally {
-      await fs.rm(root, { recursive: true, force: true });
+      await Promise.all([
+        fs.rm(root, { recursive: true, force: true }),
+        fs.rm(temporaryDirectory, { recursive: true, force: true }),
+        fs.rm(initOutputPath, { force: true }),
+      ]);
     }
   });
 });

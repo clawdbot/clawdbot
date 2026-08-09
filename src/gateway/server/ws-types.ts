@@ -47,6 +47,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   };
   clientIp?: string;
   internal?: {
+    /** Handshake-attested direct-local transport; never accepted from wire params. */
+    isLocalClient?: true;
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
   };

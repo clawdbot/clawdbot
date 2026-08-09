@@ -266,10 +266,10 @@ inside every shard.
     onboarding, configures Telegram through the installed CLI, then reuses
     the live Telegram QA lane with that installed package as the SUT
     Gateway.
-  - The wrapper mounts only the `qa-lab` harness source from the checkout;
-    the installed package owns `dist`, `openclaw/plugin-sdk`, and bundled
-    plugin runtime, so the lane does not mix current checkout plugins into
-    the package under test.
+  - The trusted checkout owns the QA harness source, taxonomy, scenarios,
+    dependencies, and private SDK build. The installed package remains the
+    absolute CLI, Gateway, and bundled-plugin runtime under test, and its CLI
+    writes the package candidate's persisted auth state.
   - Defaults to `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC=openclaw@beta`; set
     `OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ=/path/to/openclaw-current.tgz` or
     `OPENCLAW_CURRENT_PACKAGE_TGZ` to test a resolved local tarball instead
@@ -280,7 +280,10 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
     `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the run.
     `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` selects the Telegram QA scenario to
-    sample; the supported RTT target is `channel-canary`.
+    sample; the supported RTT target is `channel-canary`. The package runner
+    promotes that portable canary once to the first position, making
+    canary+RTT the preflight before the remaining taxonomy-backed fail-fast
+    release scenarios.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus

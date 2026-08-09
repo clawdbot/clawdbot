@@ -29,6 +29,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
   /** Registry value owned by this generation; omitted from read-only/static-catalog builds. */
   pluginRegistry?: PluginRegistry;
+  /** Generic inbound registry owned by the same Gateway publication generation. */
+  inboundPluginRegistry?: PluginRegistry;
   allowGatewaySubagentBinding: boolean;
   /**
    * Configured model projection used by turn admission and synchronous callers.

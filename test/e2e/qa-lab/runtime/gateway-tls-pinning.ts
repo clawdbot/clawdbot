@@ -206,9 +206,9 @@ function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
         clearTimeout(timer);
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         clearTimeout(timer);
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       },
     );
   });
@@ -235,7 +235,7 @@ async function connectWithExactPin(url: string, tlsFingerprint: string): Promise
   try {
     client.start();
     await withTimeout(hello.promise, "Gateway exact-pin hello");
-    const health = await client.request<Record<string, unknown>>("health", {});
+    const health = await client.request("health", {});
     return health !== null && typeof health === "object";
   } finally {
     await client.stopAndWait().catch(() => undefined);

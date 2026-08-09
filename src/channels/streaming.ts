@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Channel streaming config normalization and progress-draft formatting helpers.
+import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -12,7 +13,6 @@ import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
   ChannelStreamingCommandTextMode,
-  ChannelStreamingConfig,
   ChannelStreamingProgressConfig,
   StreamingMode,
   TextChunkMode,
@@ -22,8 +22,16 @@ import {
   selectProgressLabel,
 } from "../shared/progress-labels.js";
 import { asBoolean } from "../utils/boolean.js";
+import {
+  getChannelStreamingConfigObject,
+  type StreamingCompatEntry,
+} from "./streaming-config-readers.js";
 
-export type StreamingCompatEntry = { streaming?: unknown };
+export {
+  getChannelStreamingConfigObject,
+  resolveChannelStreamingNativeTransport,
+} from "./streaming-config-readers.js";
+export type { StreamingCompatEntry } from "./streaming-config-readers.js";
 
 export type {
   ChannelDeliveryStreamingConfig,
@@ -39,12 +47,6 @@ export type {
 export type { SlackChannelStreamingConfig } from "../config/types.slack.js";
 
 // Runtime reads are nested-only; doctor migrates legacy streaming spellings.
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function asInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
@@ -761,13 +763,6 @@ export function createChannelProgressDraftGate(params: {
   };
 }
 
-export function getChannelStreamingConfigObject(
-  entry: StreamingCompatEntry | null | undefined,
-): ChannelStreamingConfig | undefined {
-  const streaming = asObjectRecord(entry?.streaming);
-  return streaming ? (streaming as ChannelStreamingConfig) : undefined;
-}
-
 export function resolveChannelStreamingChunkMode(
   entry: StreamingCompatEntry | null | undefined,
 ): TextChunkMode | undefined {
@@ -914,12 +909,6 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
     return true;
   }
   return options?.previewToolProgressEnabled ?? resolveChannelStreamingPreviewToolProgress(entry);
-}
-
-export function resolveChannelStreamingNativeTransport(
-  entry: StreamingCompatEntry | null | undefined,
-): boolean | undefined {
-  return asBoolean(getChannelStreamingConfigObject(entry)?.nativeTransport);
 }
 
 export function resolveChannelPreviewStreamMode(

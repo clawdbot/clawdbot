@@ -11,8 +11,8 @@
       "openclaw/plugin-sdk/sandbox": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/sandbox.d.ts"
       ],
-      "openclaw/plugin-sdk/runtime-doctor": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor.d.ts"
+      "openclaw/plugin-sdk/runtime-doctor-migrations": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor-migrations.d.ts"
       ],
       "openclaw/plugin-sdk/approval-reference-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/approval-reference-runtime.d.ts"
@@ -359,6 +359,9 @@
       "openclaw/plugin-sdk/realtime-voice-audio-queue": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice-audio-queue.d.ts"
       ],
+      "openclaw/plugin-sdk/realtime-voice-activation": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice-activation.d.ts"
+      ],
       "openclaw/plugin-sdk/realtime-voice": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice.d.ts"
       ],
@@ -377,11 +380,20 @@
       "openclaw/plugin-sdk/memory-core-host-embedding-registry": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-embedding-registry.d.ts"
       ],
+      "openclaw/plugin-sdk/memory-core-host-engine-curated": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-curated.d.ts"
+      ],
       "openclaw/plugin-sdk/memory-core-host-engine-embeddings": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-embeddings.d.ts"
       ],
+      "openclaw/plugin-sdk/memory-core-host-engine-fs": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-fs.d.ts"
+      ],
       "openclaw/plugin-sdk/memory-core-host-engine-qmd": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-qmd.d.ts"
+      ],
+      "openclaw/plugin-sdk/memory-core-host-engine-schema": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-schema.d.ts"
       ],
       "openclaw/plugin-sdk/memory-core-host-engine-storage": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-storage.d.ts"
@@ -864,6 +876,21 @@
       ],
       "@openclaw/plugin-sdk/*": [
         "../dist/plugin-sdk/*.d.ts"
+      ],
+      "openclaw/plugin-sdk/doctor-repair-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/doctor-repair-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/plugin-state-store-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/plugin-state-store-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/model-ref-parse": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/model-ref-parse.d.ts"
+      ],
+      "openclaw/plugin-sdk/outbound-echo-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/outbound-echo-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/session-store-paths": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/session-store-paths.d.ts"
       ]
     }
   }

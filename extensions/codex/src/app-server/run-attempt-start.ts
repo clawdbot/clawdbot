@@ -8,6 +8,7 @@ import {
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import { joinPresentSections } from "./run-attempt-state.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
@@ -43,6 +44,10 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     sandboxExecServerEnabled,
   } = runtime;
   const { toolBridge, toolState } = attemptTools;
+  const developerInstructions = joinPresentSections(
+    turnState.promptBuild.developerInstructions,
+    attemptTools.scheduledConfiguredMcp?.diagnosticNotice,
+  );
   const {
     params,
     attemptClientFactory,
@@ -94,9 +99,10 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       dynamicTools: toolBridge.specs,
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
-      developerInstructions: turnState.promptBuild.developerInstructions,
+      developerInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       bundleMcpThreadConfig,
+      configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
       nativeToolSurfaceEnabled,
       nativeProviderWebSearchSupport,
       sandboxExecServerEnabled,
@@ -200,7 +206,10 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   recordCodexTrajectoryContext(trajectoryRecorder, {
     attempt: params,
     cwd: effectiveCwd,
-    developerInstructions: buildRenderedCodexDeveloperInstructions(),
+    developerInstructions: joinPresentSections(
+      buildRenderedCodexDeveloperInstructions(),
+      attemptTools.scheduledConfiguredMcp?.diagnosticNotice,
+    ),
     prompt: turnState.codexTurnPromptText,
     tools: toolBridge.availableSpecs,
   });

@@ -4,10 +4,14 @@ import {
   type AgentHarnessQuestionGatewayCall,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
 type GatewayCallRecord = { method: string; opts: unknown; params: unknown };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createParams(signal?: AbortSignal): EmbeddedRunAttemptParams {
   return {
@@ -222,7 +226,7 @@ describe("Codex app-server user input bridge", () => {
     );
   });
 
-  it("passes Codex autoResolutionMs and option-less free text through", async () => {
+  it("keeps legacy requests blocking and ignores deprecated autoResolutionMs", async () => {
     const params = createParams();
     const gateway = createGatewayStub();
     const bridge = createCodexUserInputBridge({
@@ -249,12 +253,98 @@ describe("Codex app-server user input bridge", () => {
     });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
     expect(gateway.calls[0]?.params).toMatchObject({
-      timeoutMs: 60_000,
+      timeoutMs: 90_000,
       questions: [expect.objectContaining({ questionId: "notes", options: [] })],
     });
     await claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "Refactor it" });
     await expect(response).resolves.toEqual({
       answers: { notes: { answers: ["Refactor it"] } },
     });
+  });
+
+  it("auto-resolves nonblocking gateway questions after exactly 120 seconds", async () => {
+    vi.useFakeTimers();
+    const params = createParams();
+    const calls: GatewayCallRecord[] = [];
+    const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, opts, rawParams) => {
+      calls.push({ method, opts, params: rawParams });
+      if (method === "question.request") {
+        return { id: (rawParams as { id: string }).id };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          setTimeout(() => resolve({ status: "pending" }), 120_000);
+        });
+      }
+      if (method === "question.resolve") {
+        return { status: "cancelled" };
+      }
+      throw new Error(`unexpected gateway method: ${method}`);
+    };
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      gatewayCall,
+    });
+
+    const response = bridge.handleRequest({
+      id: "input-nonblocking",
+      params: requestParams({ isBlocking: false, autoResolutionMs: 60_000 }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.find((entry) => entry.method === "question.request")?.params).toMatchObject({
+      timeoutMs: 120_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(119_999);
+    let settled = false;
+    void response.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(response).resolves.toEqual({ answers: {} });
+  });
+
+  it("auto-resolves nonblocking secret prompts after exactly 120 seconds", async () => {
+    vi.useFakeTimers();
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const response = bridge.handleRequest({
+      id: "input-secret-nonblocking",
+      params: requestParams({
+        isBlocking: false,
+        autoResolutionMs: 60_000,
+        questions: [
+          {
+            id: "token",
+            header: "Secret",
+            question: "Enter token",
+            isOther: true,
+            isSecret: true,
+            options: null,
+          },
+        ],
+      }),
+    });
+
+    await vi.advanceTimersByTimeAsync(119_999);
+    let settled = false;
+    void response.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(response).resolves.toEqual({ answers: {} });
+    expect(bridge.claimPendingRequest()).toBeUndefined();
   });
 });

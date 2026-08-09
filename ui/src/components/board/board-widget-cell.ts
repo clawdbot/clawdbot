@@ -74,6 +74,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardWidgetCellCallbacks;
   @property({ attribute: false }) observer?: BoardObserverContext;
+  @property({ type: Boolean }) active = true;
   @property({ type: Boolean }) dragging = false;
   @property({ type: Number }) focusTabIndex = -1;
   @property({ type: Number }) positionInSet = 1;
@@ -81,7 +82,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ type: Boolean }) busy = false;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
-  @property({ type: Boolean }) ticketRefreshEnabled = true;
 
   @state() private actionError = "";
   @state() private actionPending = false;
@@ -91,12 +91,14 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   private pluginRendererKind = "";
   private pluginRendererLoadToken: object | null = null;
   private readonly appView = new BoardMcpAppLifecycle({
+    active: () => this.active,
     connected: () => this.isConnected,
     requestUpdate: () => this.requestUpdate(),
     sessionKey: () => this.sessionKey,
     widget: () => this.widget,
   });
   private readonly frame = new BoardWidgetFrameLifecycle({
+    active: () => this.active,
     connected: () => this.isConnected,
     context: () => this.context,
     refreshFrame: () => this.callbacks?.frameLoadFailed,
@@ -104,7 +106,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     requestUpdate: () => this.requestUpdate(),
     resolveFrameUrl: () => this.widgetFrameUrl,
     root: () => this,
-    ticketRefreshEnabled: () => this.ticketRefreshEnabled,
     widget: () => this.widget,
   });
 
@@ -121,6 +122,16 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       this.frame.widgetChanged(previousWidget, this.widget);
     }
     this.appView.update(this.widget, this.callbacks);
+    if (changed.has("active")) {
+      this.appView.activityChanged();
+      this.frame.activityChanged();
+      if (this.active) {
+        this.appView.observe(
+          this.querySelector(".board-widget"),
+          this.widget?.contentKind === "mcp-app",
+        );
+      }
+    }
     this.syncPluginRenderer();
   }
 
@@ -131,7 +142,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     }
     this.appView.observe(
       this.querySelector(".board-widget"),
-      this.widget?.contentKind === "mcp-app",
+      this.active && this.widget?.contentKind === "mcp-app",
     );
     queueMicrotask(() => {
       if (this.isConnected) {
@@ -222,6 +233,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       accessNotice,
       appView: this.appView.state,
       busy: this.busy || this.actionPending || !this.canMutate,
+      active: this.active,
       loading: this.appView.loading,
       nearVisible: this.appView.nearVisible,
       rectHeight: this.rect?.h ?? 4,
@@ -272,6 +284,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         return this.pluginRenderer({
           widget,
           sessionKey: this.sessionKey,
+          active: this.active,
           canMutate: this.canMutate && !widget.readOnly,
           requestUpdate: () => this.requestUpdate(),
         });

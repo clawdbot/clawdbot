@@ -1,3 +1,4 @@
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 /**
  * Extracts visible delivery evidence from embedded-agent run results.
@@ -95,10 +96,6 @@ export function hasCompletedTerminalDeliveryEvidence(
     (explicitFinal === undefined && hasVisibleOutboundDeliveryEvidence(result)) ||
     result.didSendDeterministicApprovalPrompt === true
   );
-}
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function hasNonEmptyArray(value: unknown): boolean {
@@ -519,13 +516,22 @@ export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence
   );
 }
 
+/** Returns whether committed non-messaging resource effects make replay unsafe. */
+function hasCommittedNonMessagingOutboundDeliveryEvidence(
+  result: Pick<AgentDeliveryEvidence, "acceptedSessionSpawns" | "successfulCronAdds">,
+): boolean {
+  return (
+    (Array.isArray(result.acceptedSessionSpawns) &&
+      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
+    hasPositiveNumber(result.successfulCronAdds)
+  );
+}
+
 /** Returns whether committed outbound evidence makes replay unsafe. */
 export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasMessagingToolDeliveryEvidence(result) ||
-    (Array.isArray(result.acceptedSessionSpawns) &&
-      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
-    hasPositiveNumber(result.successfulCronAdds)
+    hasCommittedNonMessagingOutboundDeliveryEvidence(result)
   );
 }
 

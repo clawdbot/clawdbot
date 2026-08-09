@@ -1,9 +1,8 @@
 // Test Projects tests cover test projects script behavior.
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
+import fs, { globSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import fg from "fast-glob";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mjs";
 import {
@@ -107,13 +106,10 @@ async function listMatchedTestFilesForConfig(configPath: string): Promise<string
       ? normalizeRepoPath(path.relative(dir, pattern))
       : normalizeRepoPath(pattern),
   );
-  return fg
-    .sync(include, {
-      absolute: false,
-      cwd: dir,
-      dot: false,
-      ignore: exclude,
-    })
+  return globSync(include, {
+    cwd: dir,
+    exclude,
+  })
     .map((file) => normalizeRepoPath(path.relative(process.cwd(), path.resolve(dir, file))))
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -135,12 +131,10 @@ function listNormalFullSuiteTestFiles(): string[] {
     "src/gateway/server.startup-matrix-migration.integration.test.ts",
     "src/gateway/sessions-history-http.test.ts",
   ]);
-  return fg
-    .sync(["**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"], {
-      cwd: process.cwd(),
-      dot: false,
-      ignore: ["**/.*/**", "**/dist/**", "**/node_modules/**", "**/vendor/**"],
-    })
+  return globSync(["**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"], {
+    cwd: process.cwd(),
+    exclude: ["**/.*/**", "**/dist/**", "**/node_modules/**", "**/vendor/**"],
+  })
     .map(normalizeRepoPath)
     .filter(
       (file) =>
@@ -1302,9 +1296,14 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps CI, dependency, and docs tooling edits on owner tests", () => {
+    const changedScopeTestFamily = fs
+      .readdirSync("src/scripts")
+      .filter((file) => /^ci-changed-scope(?:\.[^/]+)?\.test\.ts$/u.test(file))
+      .map((file) => `src/scripts/${file}`)
+      .toSorted((left, right) => left.localeCompare(right));
     expectChangedTargets(
       ["scripts/ci-changed-scope.mjs"],
-      ["src/scripts/ci-changed-scope.test.ts", "test/scripts/control-ui-i18n.test.ts"],
+      [...changedScopeTestFamily, "test/scripts/control-ui-i18n.test.ts"],
     );
 
     expectChangedTargets(

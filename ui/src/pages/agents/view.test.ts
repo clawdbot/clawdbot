@@ -932,11 +932,10 @@ describe("renderAgentFiles", () => {
         agentFilesError: null,
         agentFileActive: "USER.md",
         agentFileContents: {
-          "USER.md": "# User Profile\n\nHello world",
+          "USER.md":
+            "# User Profile\n\nHello world\n\n```ts\nconst answer = 42;\n```\n\n<script>alert('unsafe')</script>\n\n![Remote](https://e.co/i)",
         },
-        agentFileDrafts: {
-          "USER.md": "# User Profile\n\nHello world",
-        },
+        agentFileDrafts: {},
         agentFileSaving: false,
         onLoadFiles: () => undefined,
         onSelectFile: () => undefined,
@@ -947,9 +946,6 @@ describe("renderAgentFiles", () => {
       container,
     );
 
-    expect(container.querySelectorAll(".md-preview-dialog__reader.sidebar-markdown")).toHaveLength(
-      1,
-    );
     expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
       "USER.md",
     );
@@ -959,6 +955,10 @@ describe("renderAgentFiles", () => {
     expect(container.querySelector(".md-preview-dialog__eyebrow span")?.textContent?.trim()).toBe(
       "Markdown Preview",
     );
+    const reader = container.querySelector(".md-preview-dialog__reader.sidebar-markdown");
+    expect(reader?.querySelector("img")?.getAttribute("src")).toBe("https://e.co/i");
+    expect(reader?.querySelector("pre code")?.textContent).toBe("const answer = 42;\n");
+    expect(reader?.querySelector(".code-block-copy, script")).toBeNull();
   });
 
   it("renders preview header controls as icon-only buttons with accessible labels", () => {

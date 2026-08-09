@@ -59,6 +59,54 @@ function createDrainRecorder(expectedCalls = 1) {
 }
 
 describe("followup queue collect routing", () => {
+  it("carries queued local cron-authority unavailability through a followup drain", async () => {
+    const key = `test-followup-cron-authority-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const run = createRun({ prompt: "queued local operator turn" });
+    run.turnAdoptionLifecycle = {
+      admission: "cancel-only",
+      ownerKey: "gateway:local",
+      cronCreatorAuthorityUnavailable: "queued-local-operator",
+      onAdopted: async () => {},
+    };
+    enqueueFollowupRun(key, run, { ...createQueueSettings(), mode: "followup" });
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable).toBe(
+      "queued-local-operator",
+    );
+  });
+
+  it("carries queued local cron-authority unavailability through a collect batch", async () => {
+    const key = `test-collect-cron-authority-${Date.now()}`;
+    const { calls, done, runFollowup } = createDrainRecorder();
+    const first = createRun({ prompt: "first queued turn" });
+    first.turnAdoptionLifecycle = {
+      admission: "cancel-only",
+      ownerKey: "gateway:local",
+      cronCreatorAuthorityUnavailable: "queued-local-operator",
+      onAdopted: async () => {},
+    };
+    const second = createRun({ prompt: "second queued turn" });
+    second.turnAdoptionLifecycle = {
+      admission: "cancel-only",
+      ownerKey: "gateway:local",
+      onAdopted: async () => {},
+    };
+    const settings = createQueueSettings();
+    enqueueFollowupRun(key, first, settings);
+    enqueueFollowupRun(key, second, settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable).toBe(
+      "queued-local-operator",
+    );
+  });
+
   it("marks exclusive admission without onAbandoned and isolates collect identity", () => {
     // Failure window: cancel-only used to be inferred from missing onAbandoned,
     // so exclusive admission without onAbandoned shared collect identity.

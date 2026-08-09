@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   archiveLegacyStateSource,
   legacyStateFileExists,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   normalizeDailyIngestionState,
   normalizeSessionIngestionState,
@@ -21,12 +21,14 @@ import {
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "../dreaming-state.js";
+// Import from the defining modules, not the short-term-promotion barrel: the
+// barrel pulls memory-host-events/kysely, which doctor enumeration cold-loads.
+import { normalizeShortTermPhaseSignalStore } from "../short-term-promotion-store.js";
 import {
   SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH,
   SHORT_TERM_STORE_RELATIVE_PATH,
-  normalizeShortTermPhaseSignalStore,
-  normalizeShortTermRecallStore,
-} from "../short-term-promotion.js";
+} from "../short-term-promotion-types.js";
+import { normalizeShortTermRecallStore } from "../short-term-promotion-utils.js";
 import { resolveConfiguredWorkspaces } from "./doctor-workspaces.js";
 import { dreamingStateComparison } from "./dreaming-state-comparison.js";
 

@@ -3,6 +3,7 @@ import { TELEGRAM_GENERAL_TOPIC_ID, type TelegramThreadSpec } from "./bot/helper
 type TelegramThreadMessage = {
   message_id?: number;
   message_thread_id?: number;
+  direct_messages_topic?: { topic_id?: number };
   chat?: { type?: string };
 };
 
@@ -10,6 +11,9 @@ export function resolveTelegramProviderObservedThreadId(params: {
   message: TelegramThreadMessage;
   successfulSendThread?: TelegramThreadSpec;
 }): number | undefined {
+  if (params.successfulSendThread?.scope === "direct-messages") {
+    return params.message.direct_messages_topic?.topic_id;
+  }
   if (typeof params.message.message_thread_id === "number") {
     return params.message.message_thread_id;
   }

@@ -360,7 +360,7 @@ describe("chat pane header", () => {
   it("shows an incognito indicator for in-memory threads", () => {
     const { container } = mount({ session: row({ incognito: true }) });
     expect(container.querySelector(".chat-pane__incognito")?.getAttribute("aria-label")).toBe(
-      "Incognito thread",
+      "Incognito session",
     );
   });
 

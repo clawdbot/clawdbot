@@ -1,3 +1,4 @@
+import { hasNonEmptyString as hasString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 
 type SteerState = { sendState: "steering" } | { sendState?: undefined; pendingRunId: string };
@@ -5,10 +6,6 @@ type SteeredQueueItem = ChatQueueItem & { kind: "steered" };
 type SteeredChip = ChatQueueItem & { kind: "steered"; sendRunId: string } & SteerState;
 type InflightSteerChip = SteeredChip & { sendState: "steering" };
 type AckedSteeredChip = SteeredChip & { sendState?: undefined; pendingRunId: string };
-
-function hasString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 export function isSteeredQueueItem(item: ChatQueueItem): item is SteeredQueueItem {
   return item.kind === "steered";

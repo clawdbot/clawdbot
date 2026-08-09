@@ -1,4 +1,8 @@
-export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+export type {
+  UpdateAvailable,
+  UpdateHoldResult,
+  UpdateScheduleState,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentsListResult as ProtocolAgentsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";

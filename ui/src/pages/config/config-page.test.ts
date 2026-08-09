@@ -96,6 +96,14 @@ describe("configSelectionFromSearch", () => {
     expect(configSectionKeysForPage("talk")).toEqual(["talk"]);
   });
 
+  it("gives Updates ownership of the update config section", () => {
+    expect(configSectionKeysForPage("updates")).toEqual(["update"]);
+    expect(configSelectionFromSearch("advanced", "?section=update")).toEqual({
+      activeSection: null,
+      activeSubsection: null,
+    });
+  });
+
   it("keeps provider models off Agent Defaults", () => {
     expect(configSectionKeysForPage("ai-agents")).toEqual(["agents", "skills", "tools", "session"]);
   });
@@ -525,7 +533,134 @@ describe("ConfigPage curated mutation eligibility", () => {
   });
 });
 
+describe("ConfigPage Updates integration", () => {
+  it("refreshes update status once when the page becomes active", () => {
+    const refreshUpdateStatus = vi.fn(async () => {});
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      syncUpdateStatusRefresh: () => void;
+    };
+    state.context = {
+      gateway: {
+        snapshot: {
+          client: {},
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["update.status"] },
+          },
+        },
+      },
+      overlays: { refreshUpdateStatus },
+    } as unknown as ApplicationContext;
+
+    page.pageId = "updates";
+    state.syncUpdateStatusRefresh();
+    state.syncUpdateStatusRefresh();
+    expect(refreshUpdateStatus).toHaveBeenCalledOnce();
+
+    page.pageId = "advanced";
+    state.syncUpdateStatusRefresh();
+    page.pageId = "updates";
+    state.syncUpdateStatusRefresh();
+    expect(refreshUpdateStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("stages policy changes through patchForm and delegates Update now to overlays", () => {
+    const patchForm = vi.fn();
+    const runUpdate = vi.fn();
+    const page = new ConfigPage();
+    const state = page as unknown as { context: ApplicationContext };
+    page.pageId = "updates";
+    state.context = {
+      config: {
+        current: { assistantIdentity: { name: "OpenClaw" }, serverVersion: "2026.8.1" },
+      },
+      runtimeConfig: {
+        canSet: true,
+        state: {
+          connected: true,
+          configLoading: false,
+          configSaving: false,
+          configApplying: false,
+          configForm: { update: { channel: "stable", auto: { enabled: false } } },
+          configSnapshot: null,
+        },
+        patchForm,
+      },
+      gateway: {
+        snapshot: {
+          client: {},
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["update.run"] },
+          },
+        },
+      },
+      overlays: {
+        snapshot: {
+          updateAvailable: null,
+          updateSchedule: { channel: "stable", autoEnabled: false },
+          updateRunning: false,
+          updateReconciliationPending: false,
+          updateStatusBanner: null,
+        },
+        runUpdate,
+      },
+    } as unknown as ApplicationContext;
+    const container = document.createElement("div");
+
+    render(page.render(), container);
+
+    const channel = container.querySelector<HTMLElement & { value: string }>("wa-radio-group");
+    if (!channel) {
+      throw new Error("Missing update channel control");
+    }
+    channel.value = "beta";
+    channel.dispatchEvent(new Event("change"));
+    const automatic = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    if (!automatic) {
+      throw new Error("Missing automatic update control");
+    }
+    automatic.checked = true;
+    automatic.dispatchEvent(new Event("change"));
+    [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.includes("Update now"))
+      ?.click();
+
+    expect(patchForm).toHaveBeenCalledWith(["update", "channel"], "beta");
+    expect(patchForm).toHaveBeenCalledWith(["update", "auto", "enabled"], true);
+    expect(runUpdate).toHaveBeenCalledOnce();
+  });
+});
+
 describe("ConfigPage runtime config lifecycle", () => {
+  it("loads Updates without requesting the admin-only config schema", async () => {
+    const page = new ConfigPage();
+    page.pageId = "updates";
+    const state = page as unknown as {
+      synchronizeRuntimeConfig: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
+    };
+    const runtimeConfig = {
+      state: {
+        configSnapshot: null,
+        configLoading: false,
+        configSchema: null,
+        configSchemaLoading: false,
+      },
+      ensureLoaded: vi.fn(() => Promise.resolve()),
+      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
+    } as unknown as ApplicationContext["runtimeConfig"];
+
+    state.synchronizeRuntimeConfig(runtimeConfig);
+    await Promise.resolve();
+
+    expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+    expect(runtimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
+  });
+
   it("loads replacement sources and clears sensitive reveal state", async () => {
     const page = new ConfigPage();
     const state = page as unknown as {

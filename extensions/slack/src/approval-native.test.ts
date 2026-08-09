@@ -767,7 +767,7 @@ describe("slack native approval adapter", () => {
     );
 
     expect(target).toEqual({
-      to: "channel:team:T123:channel:C08GQH53EJM",
+      to: "team:T123:channel:C08GQH53EJM",
       threadId: undefined,
     });
   });

@@ -478,29 +478,34 @@ merge_run() {
   fi
 
   local ok=0
-  local comment_output=""
+  local comment_body
+  printf -v comment_body \
+    'Merged via %s.\n\n- Prepared head SHA: [%s](%s)\n- Landed commit: [%s](%s)' \
+    "$merge_label" \
+    "$PREP_HEAD_SHA" \
+    "$prep_sha_url" \
+    "$landed_sha" \
+    "$landed_sha_url"
+  local comment_url=""
+  local comment_err_file
+  comment_err_file=$(mktemp)
   local attempt
   for attempt in 1 2 3; do
-    if comment_output=$(
-      {
-        echo "Merged via $merge_label."
-        echo
-        echo "- Prepared head SHA: [$PREP_HEAD_SHA]($prep_sha_url)"
-        echo "- Landed commit: [$landed_sha]($landed_sha_url)"
-      } | gh_plain pr comment "$pr" -F - 2>&1
-    ); then
+    if comment_url=$(
+      gh_plain api \
+        --method POST \
+        "repos/{owner}/{repo}/issues/$pr/comments" \
+        --raw-field "body=$comment_body" \
+        --jq '.html_url // empty' \
+        2>"$comment_err_file"
+    ) && [ -n "$comment_url" ]; then
       ok=1
       break
     fi
     sleep 2
   done
+  rm -f "$comment_err_file"
   [ "$ok" -eq 1 ] || { echo "Failed to post PR comment after retries"; exit 1; }
-
-  local comment_url=""
-  comment_url=$(printf '%s\n' "$comment_output" | rg -o 'https://github.com/[^ ]+/pull/[0-9]+#issuecomment-[0-9]+' -m1 || true)
-  if [ -z "$comment_url" ]; then
-    comment_url="unresolved"
-  fi
 
   local root
   root=$(repo_root)

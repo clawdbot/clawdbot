@@ -75,6 +75,7 @@ const {
   setSessionStoreEntriesForTest,
   setMessageReactionSpy,
   setMyCommandsSpy,
+  syncTelegramMenuCommands,
   telegramBotDepsForTest,
   throttlerSpy,
   useSpy,
@@ -3470,6 +3471,36 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     }),
     makeMessagePolicyCase({
+      name: "inherits root per-group sender access in multi-account config",
+      telegram: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["111111111"],
+        groups: {
+          "-100123456789": { allowFrom: ["123456789"], requireMention: false },
+        },
+        accounts: {
+          default: { botToken: "123:default" },
+          shadow: { enabled: false },
+        },
+      },
+      expectedReplyCount: 1,
+    }),
+    makeMessagePolicyCase({
+      name: "enforces root per-group sender access in multi-account config",
+      telegram: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["123456789"],
+        groups: {
+          "-100123456789": { allowFrom: ["111111111"], requireMention: false },
+        },
+        accounts: {
+          default: { botToken: "123:default" },
+          shadow: { enabled: false },
+        },
+      },
+      expectedReplyCount: 0,
+    }),
+    makeMessagePolicyCase({
       name: "blocks group messages when allowFrom is configured with @username entries (numeric IDs required)",
       telegram: {
         groupPolicy: "allowlist",
@@ -4191,7 +4222,7 @@ describe("createTelegramBot", () => {
       { type: "emoji", emoji: EYES_EMOJI },
     ]);
   });
-  it("clears native commands when disabled", () => {
+  it("syncs one empty native command menu when disabled", () => {
     resetHarnessSpies();
     loadConfig.mockReturnValue({
       commands: { native: false },
@@ -4199,10 +4230,12 @@ describe("createTelegramBot", () => {
 
     createTelegramBot({ token: "tok" });
 
+    expect(syncTelegramMenuCommands).toHaveBeenCalledOnce();
+    expect(syncTelegramMenuCommands).toHaveBeenCalledWith(
+      expect.objectContaining({ commandsToRegister: [] }),
+    );
+    expect(setMyCommandsSpy).toHaveBeenCalledOnce();
     expect(setMyCommandsSpy).toHaveBeenCalledWith([]);
-    expect(setMyCommandsSpy).toHaveBeenCalledWith([], {
-      scope: { type: "all_group_chats" },
-    });
   });
   it("handles requireMention when mentions do and do not resolve", async () => {
     const cases = [

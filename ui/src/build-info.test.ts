@@ -7,6 +7,7 @@ describe("Control UI build info", () => {
   it("compares the normalized embedded version with the gateway", async () => {
     vi.stubGlobal("OPENCLAW_CONTROL_UI_BUILD_INFO", {
       version: "2026.7.19",
+      commit: COMMIT,
       buildId: "test",
     });
     vi.resetModules();
@@ -15,6 +16,8 @@ describe("Control UI build info", () => {
       const { controlUiVersionDiffersFrom } = await import("./build-info.ts");
       expect(controlUiVersionDiffersFrom(" 2026.7.19 ")).toBe(false);
       expect(controlUiVersionDiffersFrom("2026.7.20")).toBe(true);
+      expect(controlUiVersionDiffersFrom("2026.7.19", COMMIT.slice(0, 12))).toBe(false);
+      expect(controlUiVersionDiffersFrom("2026.7.19", "f".repeat(40))).toBe(true);
       expect(controlUiVersionDiffersFrom(undefined)).toBe(false);
     } finally {
       vi.unstubAllGlobals();

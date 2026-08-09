@@ -20,7 +20,7 @@ import {
   importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor";
+import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
@@ -31,7 +31,7 @@ import {
   matrixCredentialsStoreKey,
   type MatrixCredentialStateRecord,
   type MatrixStoredCredentialRecord,
-} from "./src/matrix/credentials-read.js";
+} from "./src/matrix/credentials-state.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   MATRIX_RECOVERY_KEY_FILENAME,

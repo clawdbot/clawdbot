@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import type {
   DoctorMemoryDreamActionPayload,
   DoctorMemoryDreamDiaryPayload,
@@ -284,14 +285,6 @@ function buildDreamDiaryActionSuccessMessage(
       });
   }
   return t("dreaming.actions.complete");
-}
-
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function resolveSelectedAgentId(state: DreamingState): string | null {

@@ -157,9 +157,9 @@ async function startStreamingProvider() {
     transportRequests,
     stop: async () => {
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }
@@ -170,7 +170,6 @@ async function connectOperator(
 ): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout>;
     const finish = (error?: Error) => {
       if (settled) {
         return;
@@ -202,7 +201,7 @@ async function connectOperator(
       onConnectError: (error) => finish(error),
       onClose: (code, reason) => finish(new Error(`Gateway closed (${code}): ${reason}`)),
     });
-    timeout = setTimeout(
+    const timeout = setTimeout(
       () => finish(new Error(`Gateway client connection timed out:\n${gateway.logs()}`)),
       REQUEST_TIMEOUT_MS,
     );
@@ -218,9 +217,8 @@ function asAgentEvent(event: GatewayEvent): AgentEvent | undefined {
 }
 
 function messageRole(message: unknown): string | undefined {
-  return message && typeof message === "object"
-    ? String((message as { role?: unknown }).role ?? "")
-    : undefined;
+  const role = message && typeof message === "object" ? (message as { role?: unknown }).role : null;
+  return typeof role === "string" ? role : undefined;
 }
 
 function messageText(message: unknown): string {

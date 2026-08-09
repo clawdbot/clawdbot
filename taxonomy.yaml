@@ -1538,7 +1538,7 @@ surfaces:
             description: Session worktree creation through sessions.create, persisted session worktree metadata, gc owner protection while the session is live, session-delete snapshot removal, and worktreePreserved reporting for locked checkouts.
           - name: "Managed worktrees — Workboard owner"
             coverageIds: [agent-runtime.managed-worktrees-workboard-lifecycle]
-            description: Workboard card workspace materialization as wb-<card-id> worktrees, card workspace writeback, and run-end lossless removal.
+            description: Workboard card workspace materialization as wb-<card-id> worktrees, card workspace writeback, run-end lossless removal, and dirty-checkout retention with a recorded cleanup outcome.
         docs:
           - docs/concepts/agent-loop.md
           - docs/cli/agent.md

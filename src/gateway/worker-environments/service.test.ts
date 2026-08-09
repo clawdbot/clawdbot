@@ -14,13 +14,19 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type { GatewaySessionRow } from "../session-utils.types.js";
+import { writeSessionStore } from "../test-helpers.js";
+import { directSessionReq } from "../test/server-sessions.test-helpers.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
+import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -1158,6 +1164,7 @@ describe("worker environment service", () => {
       workerService.create("development", "request-preparation-failure"),
     ).rejects.toMatchObject({
       code: "bootstrap_failure",
+      message: expect.stringContaining("npm install requires a released gateway package"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
 
     expect(provision).not.toHaveBeenCalled();
@@ -1204,11 +1211,12 @@ describe("worker environment service", () => {
     const destroy = vi.fn(async () => {});
     const workerService = createService(createProvider({ destroy }));
 
-    await expect(
-      workerService.create("development", "request-bootstrap-failure"),
-    ).rejects.toMatchObject({
+    const creation = workerService.create("development", "request-bootstrap-failure");
+    await expect(creation).rejects.toMatchObject({
       code: "bootstrap_failure",
+      message: expect.stringContaining("Worker bootstrap failed: remote bootstrap rejected"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
+    await expect(creation).rejects.not.toThrow(secret);
 
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(store.list()[0]).toMatchObject({
@@ -1219,6 +1227,67 @@ describe("worker environment service", () => {
       lastError: expect.stringContaining("remote bootstrap rejected"),
     });
     expect(store.list()[0]?.lastError).not.toContain(secret);
+  });
+
+  it("projects bounded bootstrap detail through sessions.describe after failed dispatch", async () => {
+    // Assembled at runtime so review-bundle secret scanners do not flag a key-shaped literal.
+    const secret = ["sk", "proj", "placement", "abcdefghijklmnopqrstuvwxyz"].join("-");
+    bootstrapWorker = vi.fn(async () => {
+      throw new Error(`remote bootstrap rejected ${secret} ${"failure ".repeat(200)}`);
+    });
+    const workerService = createService(createProvider());
+    const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+    const dispatch = createWorkerPlacementDispatchService({
+      placements,
+      environments: workerService,
+      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
+      runActivationBarrier: async ({ activate }) => activate(),
+      runReclaimBarrier: async ({ reclaim }) => await reclaim("/gateway/workspace"),
+      resolveWorkspacePath: async () => "/gateway/workspace",
+      reportWorkspaceResultConflict: async () => {},
+      resolveWorkspaceResultConflict: async () => undefined,
+    });
+
+    await expect(
+      dispatch.dispatch({
+        sessionId: "session-bootstrap-failure",
+        sessionKey: "agent:main:session-bootstrap-failure",
+        agentId: "main",
+        profileId: "development",
+      }),
+    ).rejects.toThrow("Worker bootstrap failed: remote bootstrap rejected");
+
+    const persisted = expectDefined(
+      placements.get("session-bootstrap-failure"),
+      "failed worker placement",
+    );
+    const sessionStorePath = path.join(root, "sessions.json");
+    await writeSessionStore({
+      entries: { main: { sessionId: persisted.sessionId, updatedAt: nowMs } },
+      storePath: sessionStorePath,
+    });
+    const described = await directSessionReq<{ session: GatewaySessionRow | null }>(
+      "sessions.describe",
+      { key: "main" },
+      {
+        context: {
+          getRuntimeConfig: () => ({ session: { store: sessionStorePath } }),
+          workerSessionPlacementService: placements,
+        },
+      },
+    );
+    const describedPlacement = described.payload?.session?.placement;
+    expect(described).toMatchObject({ ok: true });
+    expect(describedPlacement).toMatchObject({
+      state: "failed",
+      recoveryError: expect.stringContaining("remote bootstrap rejected"),
+    });
+    if (describedPlacement?.state !== "failed") {
+      throw new Error("sessions.describe did not project the failed worker placement");
+    }
+    expect(describedPlacement.recoveryError).not.toContain(secret);
+    expect(describedPlacement.recoveryError.length).toBeLessThanOrEqual(1_024);
   });
 
   it("keeps an indeterminate bootstrap teardown retryable", async () => {
@@ -1240,6 +1309,7 @@ describe("worker environment service", () => {
       workerService.create("development", "request-bootstrap-cleanup"),
     ).rejects.toMatchObject({
       code: "bootstrap_failure",
+      message: "Worker bootstrap failed; teardown is pending: remote bootstrap failed",
     } satisfies Partial<WorkerEnvironmentServiceError>);
     expect(store.list()[0]).toMatchObject({
       state: "destroying",
@@ -1260,7 +1330,13 @@ describe("worker environment service", () => {
   });
 
   it("bounds worker identity resolution as a provider operation", async () => {
-    bootstrapWorker = vi.fn(async ({ installation, resolveIdentity }) => {
+    const events: string[] = [];
+    let finishIdentity: (() => void) | undefined;
+    const identityPending = new Promise<void>((resolve) => {
+      finishIdentity = resolve;
+    });
+    bootstrapWorker = vi.fn(async ({ installation, resolveIdentity, signal }) => {
+      signal.addEventListener("abort", () => void events.push("abort"), { once: true });
       await resolveIdentity(SSH_ENDPOINT.keyRef);
       return {
         bundleHash: installation.bundleHash,
@@ -1268,18 +1344,34 @@ describe("worker environment service", () => {
         protocolFeatures: [...installation.protocolFeatures],
       };
     });
-    const destroy = vi.fn(async () => {});
+    const destroy = vi.fn(async () => {
+      events.push("destroy");
+    });
     const workerService = createService(createProvider({ destroy }), {
       providerCallTimeoutMs: 5,
-      resolveSshIdentity: async () => await new Promise<never>(() => {}),
+      resolveSshIdentity: async () => {
+        events.push("identity:start");
+        await identityPending;
+        events.push("identity:end");
+        return { kind: "path", path: "/keys/worker" };
+      },
     });
 
-    await expect(
-      workerService.create("development", "request-identity-timeout"),
-    ).rejects.toMatchObject({
+    const creation = workerService.create("development", "request-identity-timeout");
+    const creationResult = expect(creation).rejects.toMatchObject({
       code: "bootstrap_failure",
     } satisfies Partial<WorkerEnvironmentServiceError>);
+    try {
+      await waitForFast(() => expect(store.list()[0]).toMatchObject({ state: "destroying" }));
+      expect(events).toEqual(["identity:start", "abort"]);
+      expect(destroy).not.toHaveBeenCalled();
+    } finally {
+      finishIdentity?.();
+    }
+
+    await creationResult;
     expect(destroy).toHaveBeenCalledOnce();
+    expect(events).toEqual(["identity:start", "abort", "identity:end", "destroy"]);
     expect(store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
   });
 
@@ -1353,6 +1445,83 @@ describe("worker environment service", () => {
     expect(new Set(calls).size).toBe(1);
   });
 
+  it("serializes destroy and provision replay behind a timed-out provider operation", async () => {
+    const events: string[] = [];
+    const operationIds: string[] = [];
+    let active = 0;
+    let maxActive = 0;
+    let originalProvisionCalls = 0;
+    let finishFirstProvision: (() => void) | undefined;
+    const firstProvisionPending = new Promise<void>((resolve) => {
+      finishFirstProvision = resolve;
+    });
+    const destroy = vi.fn(async () => {
+      events.push("destroy:start");
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      active -= 1;
+      events.push("destroy:end");
+    });
+    const provider = createProvider({
+      provision: async (_profile, operationId) => {
+        originalProvisionCalls += 1;
+        const call = originalProvisionCalls;
+        operationIds.push(operationId);
+        events.push(`provision:${call}:start`);
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        if (call === 1) {
+          await firstProvisionPending;
+        }
+        active -= 1;
+        events.push(`provision:${call}:end`);
+        return { leaseId: "lease-timeout-replay", ssh: SSH_ENDPOINT };
+      },
+      destroy,
+    });
+    const workerService = createService(provider, { providerCallTimeoutMs: 20 });
+    const creation = workerService.create("development", "request-provider-timeout-race");
+    const creationResult = expect(creation).rejects.toMatchObject({
+      code: "provider_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    let environmentId: string | undefined;
+    let teardownResult: Promise<void> | undefined;
+    try {
+      await waitForFast(() => expect(events).toEqual(["provision:1:start"]));
+      const queuedEnvironmentId = expectDefined(
+        store.list()[0],
+        "timed-out provision row",
+      ).environmentId;
+      environmentId = queuedEnvironmentId;
+      const teardown = workerService.destroy(queuedEnvironmentId);
+      teardownResult = expect(teardown).resolves.toMatchObject({ state: "destroyed" });
+      await creationResult;
+      await waitForFast(() =>
+        expect(store.get(queuedEnvironmentId)?.destroyRequestedAtMs).not.toBeNull(),
+      );
+      expect(originalProvisionCalls).toBe(1);
+      expect(destroy).not.toHaveBeenCalled();
+      expect(maxActive).toBe(1);
+    } finally {
+      finishFirstProvision?.();
+    }
+
+    await teardownResult;
+    const finalEnvironmentId = expectDefined(environmentId, "timed-out provision environment id");
+    expect(operationIds).toHaveLength(2);
+    expect(new Set(operationIds).size).toBe(1);
+    expect(maxActive).toBe(1);
+    expect(events).toEqual([
+      "provision:1:start",
+      "provision:1:end",
+      "provision:2:start",
+      "provision:2:end",
+      "destroy:start",
+      "destroy:end",
+    ]);
+    expect(store.get(finalEnvironmentId)).toMatchObject({ state: "destroyed" });
+  });
+
   it("adopts an indeterminate allocation before a replay preparation failure", async () => {
     const events: string[] = [];
     let preparationFails = false;
@@ -1405,11 +1574,23 @@ describe("worker environment service", () => {
       { leaseId: "lease-invalid", ssh: { ...SSH_ENDPOINT, keyRef: "not-a-secret-ref" } },
       "SSH key must be a canonical SecretRef",
     ],
+    [
+      "excessive SSH fallback ports",
+      {
+        leaseId: "lease-invalid",
+        ssh: {
+          ...SSH_ENDPOINT,
+          fallbackPorts: Array.from({ length: 11 }, (_, index) => 2300 + index),
+        },
+      },
+      "SSH fallback ports cannot exceed 10",
+    ],
   ])("keeps %s from a provider retryable", async (_name, result, error) => {
     const workerService = createService(createProvider({ provision: async () => result as never }));
 
     await expect(workerService.create("development", "request-malformed")).rejects.toMatchObject({
       code: "provider_failure",
+      message: expect.stringContaining(error),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     expect(store.list()[0]).toMatchObject({
       state: "provisioning",
@@ -1442,6 +1623,7 @@ describe("worker environment service", () => {
 
     await expect(workerService.create("development", "request-invalid")).rejects.toMatchObject({
       code: "invalid_profile",
+      message: expect.stringContaining("region is required"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     const record = expectDefined(store.list()[0], "store.list()[0] test invariant");
     expect(record).toMatchObject({ state: "failed", lastError: "region is required" });
@@ -1774,6 +1956,7 @@ describe("worker environment service", () => {
     });
     expect(prepareInstallation).toHaveBeenCalledWith("npm");
     expect(bootstrapWorker).toHaveBeenCalledWith({
+      operationId: result.provisionOperationId,
       sshEndpoint: SSH_ENDPOINT,
       installation: NPM_ARTIFACT,
       resolveIdentity: expect.any(Function),
@@ -2078,6 +2261,45 @@ describe("worker environment service", () => {
     expect(order).toEqual(["tunnel-stop", "provider-destroy"]);
   });
 
+  it("stops a poisoned tunnel start and returns a typed deadline error", async () => {
+    vi.useFakeTimers();
+    seedReady("worker-tunnel-timeout");
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    let rejectStart!: (error: Error) => void;
+    const pendingStart = new Promise<never>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const tunnelManager = {
+      status: () => "connecting" as const,
+      start: vi.fn(() => {
+        signalStarted();
+        return pendingStart;
+      }),
+      stop: vi.fn(async () => {
+        rejectStart(new Error("tunnel stopped"));
+      }),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerTunnelManager;
+    const workerService = createService(createProvider(), { tunnelManager });
+
+    const starting = workerService.startTunnel({
+      environmentId: "worker-tunnel-timeout",
+      ownerEpoch: 1,
+    });
+    const rejected = expect(starting).rejects.toMatchObject({
+      code: "provider_failure",
+      message: expect.stringContaining("did not connect within 3 minutes"),
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    await started;
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+
+    await rejected;
+    expect(tunnelManager.stop).toHaveBeenCalledWith("worker-tunnel-timeout", 1);
+  });
+
   it("adopts an unpersisted provision result before destroying", async () => {
     const intent = store.createIntent({
       environmentId: "worker-pending-destroy",
@@ -2184,6 +2406,47 @@ describe("worker environment service", () => {
     expect(new Set(inspected.map(({ leaseId }) => leaseId))).toEqual(
       new Set(["lease:worker-concurrent-a", "lease:worker-concurrent-b"]),
     );
+  });
+
+  it("waits for timed-out provider work during shutdown", async () => {
+    let finishProvision: (() => void) | undefined;
+    const provisionPending = new Promise<void>((resolve) => {
+      finishProvision = resolve;
+    });
+    const provision = vi.fn(async () => {
+      await provisionPending;
+      return { leaseId: "lease-stop-timeout", ssh: SSH_ENDPOINT };
+    });
+    const stopAll = vi.fn(async () => {});
+    const tunnelManager = {
+      stopAll,
+    } as unknown as WorkerTunnelManager;
+    const workerService = createService(createProvider({ provision }), {
+      providerCallTimeoutMs: 5,
+      tunnelManager,
+    });
+    const creation = workerService.create("development", "request-stop-provider-timeout");
+    const creationResult = expect(creation).rejects.toMatchObject({
+      code: "provider_failure",
+    } satisfies Partial<WorkerEnvironmentServiceError>);
+    let stopped = false;
+    let stopping: Promise<void> | undefined;
+
+    try {
+      await waitForFast(() => expect(provision).toHaveBeenCalledOnce());
+      await creationResult;
+      stopping = workerService.stop().then(() => {
+        stopped = true;
+      });
+      await waitForFast(() => expect(stopAll).toHaveBeenCalledOnce());
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+    } finally {
+      finishProvision?.();
+    }
+
+    await stopping;
+    expect(stopped).toBe(true);
   });
 
   it("owns and clears one periodic reconciliation timer", async () => {

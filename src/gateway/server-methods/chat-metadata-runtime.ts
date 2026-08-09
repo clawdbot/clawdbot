@@ -5,6 +5,7 @@ import {
 } from "../../agents/agent-scope.js";
 import {
   getPreparedRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotRevision,
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -40,6 +41,7 @@ type PreparedAgentFacts = {
   agentId: string;
   owner: PreparedModelRuntimeSnapshot;
   authStore: AuthProfileStore;
+  authStoreRevision: string;
   skillsVersion: number;
 };
 
@@ -85,6 +87,7 @@ type ChatMetadataRuntimeDeps = {
     agentDir?: string,
     inheritedAuthDir?: string,
   ) => AuthProfileStore | undefined;
+  getAuthStoreRevision: (agentDir?: string) => number;
   getSkillsVersion: (workspaceDir?: string) => number;
   getPluginRegistryVersion: () => number;
   buildCommands: (params: {
@@ -150,6 +153,7 @@ function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerati
         version: 1,
         profiles: {},
       },
+      authStoreRevision: `${deps.getAuthStoreRevision(owner.agentDir)}:${deps.getAuthStoreRevision(owner.inheritedAuthDir)}`,
       skillsVersion: deps.getSkillsVersion(workspaceDir),
     };
   });
@@ -177,6 +181,7 @@ function generationFactsMatch(
     return (
       candidate?.agentId === agent.agentId &&
       candidate.owner === agent.owner &&
+      candidate.authStoreRevision === agent.authStoreRevision &&
       candidate.skillsVersion === agent.skillsVersion
     );
   });
@@ -277,6 +282,7 @@ export function createGatewayChatMetadataRuntime(params: {
     getContext: params.getContext,
     getPreparedOwner: getPreparedModelCatalogOwnerSnapshot,
     getPreparedAuthStore: getPreparedRuntimeAuthProfileStoreSnapshot,
+    getAuthStoreRevision: getRuntimeAuthProfileStoreSnapshotRevision,
     getSkillsVersion: getSkillsSnapshotVersion,
     getPluginRegistryVersion: getActivePluginRegistryVersion,
     buildCommands: defaultBuildCommands,

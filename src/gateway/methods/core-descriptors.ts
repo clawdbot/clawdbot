@@ -243,9 +243,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.create", "sessions-create", "dynamic", "<=2026.7", { startup: true }],
   ["sessions.send", "sessions-messaging", "operator.write", "<=2026.7", { startup: true }],
   ["sessions.abort", "sessions-abort", "operator.write", "<=2026.7", { startup: true }],
-  // Params-aware: write scope may mutate chat-organization fields
-  // (label/category/icon/pinned/archived/unread); every other patch field stays
-  // admin-only. Policy lives in shared/session-method-scopes.ts.
+  // Dynamic mutation scope policy, including write-scoped model overrides, lives
+  // in shared/session-method-scopes.ts. The admin-only sticky configured-default
+  // persistence guard lives in server-methods/sessions-mutations.ts.
   ["sessions.patch", "sessions-mutations", "dynamic", "<=2026.7"],
   ["sessions.pluginPatch", "sessions-mutations", "operator.admin", "<=2026.7"],
   ["sessions.cleanup", "sessions-read", "operator.admin", "<=2026.7"],
@@ -486,6 +486,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["tasks.dismiss", "tasks", "operator.write", "2026.7"],
   // Additive audit inspection appends so older advertised method indices stay stable.
   ["audit.run.inspect", "audit", "operator.read", "2026.7"],
+  ["sessions.patchMany", "sessions-mutations", "dynamic", "2026.8"],
+  // Update campaign mutations share update.run's admin and control-plane write policy.
+  ["update.hold", "update", "operator.admin", "2026.8", { controlPlaneWrite: true }],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

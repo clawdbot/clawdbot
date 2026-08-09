@@ -86,8 +86,8 @@ vi.mock("./chat.js", () => ({
   },
 }));
 
-vi.mock("./chat-send-handler.js", () => ({
-  handleChatSend: (...args: unknown[]) => chatSendWithAdmissionOwnedMock(...args),
+vi.mock("./chat-send-external-entry.js", () => ({
+  handleDirectExternalChatSend: (...args: unknown[]) => chatSendWithAdmissionOwnedMock(...args),
 }));
 
 vi.mock("./chat-abort-handler.js", () => ({

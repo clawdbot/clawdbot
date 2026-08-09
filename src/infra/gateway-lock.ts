@@ -44,7 +44,9 @@ const LockPayloadSchema = z.object({
   createdAt: z.string(),
   configPath: z.string(),
   port: z.number().int().min(1).max(65_535).optional(),
-  role: z.enum(["gateway", "skill-workshop-apply", "sqlite-maintenance"]).optional(),
+  role: z
+    .enum(["gateway", "agent-embedded", "skill-workshop-apply", "sqlite-maintenance"])
+    .optional(),
   stateDir: z.string().optional(),
   startTime: z.number().optional(),
 }) as z.ZodType<LockPayload>;
@@ -56,7 +58,7 @@ type GatewayLockHandle = {
   release: () => Promise<void>;
 };
 
-type GatewayLockRole = "gateway" | "skill-workshop-apply" | "sqlite-maintenance";
+type GatewayLockRole = "gateway" | "agent-embedded" | "skill-workshop-apply" | "sqlite-maintenance";
 
 export type GatewayLockIdentity = {
   pid: number;
@@ -198,10 +200,17 @@ async function resolveGatewayOwnerStatus(
   }
 
   const readFn = readCmdline ?? ((p: number) => defaultReadProcessCmdline(p, platform));
-  if (role === "sqlite-maintenance" || role === "skill-workshop-apply") {
+  if (
+    role === "agent-embedded" ||
+    role === "sqlite-maintenance" ||
+    role === "skill-workshop-apply"
+  ) {
     const args = readFn(pid);
     if (!args) {
       return "unknown";
+    }
+    if (role === "agent-embedded") {
+      return isOpenClawCommandArgv(args, "agent") && args.includes("--local") ? "alive" : "dead";
     }
     const command = role === "sqlite-maintenance" ? "doctor" : "skills";
     return isOpenClawCommandArgv(args, command) ? "alive" : "dead";
@@ -545,6 +554,12 @@ async function acquireLockFile(
     await sleep(Math.min(pollIntervalMs, remainingMs));
   }
 
-  const owner = lastPayload?.pid ? ` (pid ${lastPayload.pid})` : "";
-  throw new GatewayLockError(`gateway already running${owner}; lock timeout after ${timeoutMs}ms`);
+  const ownerPid = lastPayload?.pid ? ` (pid ${lastPayload.pid})` : "";
+  const owner =
+    lastPayload?.role === "agent-embedded"
+      ? `another openclaw agent --local run is active${ownerPid}`
+      : lastPayload?.role && lastPayload.role !== "gateway"
+        ? `state directory is locked by ${lastPayload.role}${ownerPid}`
+        : `gateway already running${ownerPid}`;
+  throw new GatewayLockError(`${owner}; lock timeout after ${timeoutMs}ms`);
 }

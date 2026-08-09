@@ -59,7 +59,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       // External delivery owns the next run after a deliberate turn handoff.
       return "handoff";
     }
-    if (!msg) {
+    if (!msg || msg.stopReason === "aborted") {
       return "settled";
     }
 
@@ -324,8 +324,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
   /**
    * Queue a steering message while the agent is running.
-   * Delivered after the current assistant turn finishes executing its tool calls,
-   * before the next LLM call.
+   * Delivered before the next unstarted tool launch or model call. Running tools
+   * continue; suppressed calls receive paired synthetic results.
    * Expands skill commands and prompt templates. Errors on extension commands.
    * @param images Optional image attachments to include with the message
    * @param userTurnTranscriptRecorder Prepared channel fields for transcript-only persistence

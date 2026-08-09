@@ -36,6 +36,7 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
+import { createCachedLazyValueGetter } from "./lazy-value.js";
 export type {
   AgentPromptGuidance,
   AgentPromptGuidanceEntry,
@@ -509,7 +510,7 @@ type DefinedChannelPluginEntry<TPlugin> = {
   id: string;
   name: string;
   description: string;
-  configSchema: ChannelEntryConfigSchema<TPlugin>;
+  configSchema: ChannelConfigSchema;
   register: (api: OpenClawPluginApi) => void;
   channelPlugin: TPlugin;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
@@ -563,9 +564,9 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
 /**
  * Canonical entry helper for channel plugins.
  *
- * This wraps `definePluginEntry(...)`, registers the channel capability, and
- * optionally exposes extra full-runtime registration such as tools or gateway
- * handlers that only make sense outside setup-only registration modes.
+ * This shares `definePluginEntry(...)`'s lazy schema primitive, registers the
+ * channel capability, and optionally exposes extra full-runtime registration
+ * such as tools or gateway handlers outside setup-only registration modes.
  */
 export function defineChannelPluginEntry<TPlugin>({
   id,
@@ -578,15 +579,14 @@ export function defineChannelPluginEntry<TPlugin>({
   registerFull,
   registerCapabilities,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
-  const resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> =
-    typeof configSchema === "function"
-      ? configSchema()
-      : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
-  const entry = {
+  const getConfigSchema = createCachedLazyValueGetter(configSchema ?? emptyChannelConfigSchema);
+  return {
     id,
     name,
     description,
-    configSchema: resolvedConfigSchema,
+    get configSchema() {
+      return getConfigSchema();
+    },
     register(api: OpenClawPluginApi) {
       if (api.registrationMode === "cli-metadata") {
         registerCliMetadata?.(api);
@@ -611,9 +611,6 @@ export function defineChannelPluginEntry<TPlugin>({
       registerFull?.(api);
       registerCapabilities?.(api);
     },
-  };
-  return {
-    ...entry,
     channelPlugin: plugin,
     ...(setRuntime ? { setChannelRuntime: setRuntime } : {}),
   };

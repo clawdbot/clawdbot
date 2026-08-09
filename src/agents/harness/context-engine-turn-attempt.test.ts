@@ -16,6 +16,7 @@ import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-tur
 import {
   drainPendingContextEngineTurnsBeforeRun,
   finalizeAcceptedContextEngineTurn,
+  type ContextEngineTurnAttemptFacts,
 } from "./context-engine-turn-attempt.js";
 import { enqueueContextEngineTurnIntent } from "./context-engine-turn-outbox.js";
 
@@ -24,6 +25,87 @@ afterEach(() => {
 });
 
 describe("accepted context-engine turn finalization", () => {
+  it("silently skips engines without durable turn ownership but rejects partial declarations", async () => {
+    const admission = {
+      agentId: "main",
+      sessionId: "accepted-turn",
+      sessionKey: "agent:main:accepted-turn",
+      storePath: "sqlite://accepted-turn",
+      generation: "generation",
+      entryId: "user-entry",
+      rawSeq: 1,
+      effectiveParentId: null,
+      activeMessagePosition: 0,
+      logicalTurnId: "logical-turn",
+      role: "user" as const,
+    };
+    const facts = {
+      boundary: {
+        admission,
+        terminal: {
+          ...admission,
+          entryId: "assistant-entry",
+          rawSeq: 2,
+          activeMessagePosition: 1,
+        },
+      },
+      sessionIdUsed: admission.sessionId,
+      sessionKey: admission.sessionKey,
+      sessionFile: admission.storePath,
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+    } satisfies ContextEngineTurnAttemptFacts;
+    const makeLease = (engine: ContextEngine): ContextEngineLogicalTurnLease => ({
+      engine,
+      effectiveEngine: engine,
+      effectiveEngineId: engine.info.id,
+      effectiveEnginePluginId: undefined,
+      degraded: false,
+      degradedReason: undefined,
+      selectForHost: vi.fn(),
+      degradeBeforeStart: vi.fn(),
+      begin: vi.fn(),
+      deferDisposalUntil: () => undefined,
+      dispose: async () => undefined,
+    });
+    const makeEngine = (declaresDurableAdvancement: boolean): ContextEngine => ({
+      info: {
+        id: declaresDurableAdvancement ? "partial" : "legacy",
+        name: declaresDurableAdvancement ? "Partial" : "Legacy",
+        ...(declaresDurableAdvancement
+          ? {
+              transcriptSemantics: {
+                turnAdvancementIdempotency: "atomic-idempotent-v1" as const,
+              },
+            }
+          : {}),
+      },
+      ingest: async () => ({ ingested: false }),
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+    });
+    const warn = vi.fn();
+
+    await finalizeAcceptedContextEngineTurn({
+      facts,
+      lease: makeLease(makeEngine(false)),
+      warn,
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+
+    await finalizeAcceptedContextEngineTurn({
+      facts,
+      lease: makeLease(makeEngine(true)),
+      warn,
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      "[context-engine] skipped accepted turn advancement: accepted context engine does not support durable turn advancement",
+    );
+  });
+
   it("advances only the admitted durable range and rejects stale admission facts", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-turn-attempt-"));
     const target = {

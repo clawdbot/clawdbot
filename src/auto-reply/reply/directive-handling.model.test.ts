@@ -356,6 +356,7 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
   ]);
   return {
     loadPreparedModelCatalog: loadModelCatalog,
+    loadProviderScopedThinkingCatalog: loadModelCatalog,
     loadPreparedModelCatalogSnapshot: async () => {
       const entries = await loadModelCatalog();
       return { entries, routeVariants: entries };

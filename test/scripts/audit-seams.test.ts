@@ -96,6 +96,20 @@ describe("audit-seams subagent seam classification", () => {
     ]);
   });
 
+  it("detects the shared delivery-context announce seam", () => {
+    const source = `
+      import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+
+      export function createBoundDeliveryRouter(context) {
+        return normalizeDeliveryContext(context);
+      }
+    `;
+
+    expect(describeSeamKinds("src/agents/subagent-announce-origin.ts", source)).toEqual([
+      "subagent-announce-delivery",
+    ]);
+  });
+
   it("detects parent-stream seams for ACP spawn relays", () => {
     const source = `
       import { onAgentEvent } from "../infra/agent-events.js";

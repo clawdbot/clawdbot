@@ -3,7 +3,11 @@
  */
 import { randomBytes } from "node:crypto";
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
-import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
+import {
+  generatePkceVerifierChallenge,
+  toFormUrlEncoded,
+  type OAuthCredential,
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   parseOAuthCallbackInput,
   waitForLocalOAuthCallback,
@@ -211,6 +215,65 @@ async function exchangeChutesCodeForTokens(params: {
     accountId: info?.sub,
     clientId: params.app.clientId,
   } as ChutesStoredOAuth;
+}
+
+/** Refreshes a stored Chutes OAuth credential through the provider token endpoint. */
+export async function refreshChutesOAuthCredential(
+  credential: OAuthCredential,
+  options: { fetchFn?: typeof fetch; now?: number } = {},
+): Promise<OAuthCredential> {
+  const refreshToken = normalizeOptionalString(credential.refresh);
+  if (!refreshToken) {
+    throw new Error("Chutes OAuth credential is missing refresh token");
+  }
+
+  const clientId = normalizeOptionalString(credential.clientId ?? process.env.CHUTES_CLIENT_ID);
+  if (!clientId) {
+    throw new Error("Missing CHUTES_CLIENT_ID for Chutes OAuth refresh (set env var or re-auth).");
+  }
+  const clientSecret = normalizeOptionalString(process.env.CHUTES_CLIENT_SECRET);
+  const body = new URLSearchParams(
+    toFormUrlEncoded({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      refresh_token: refreshToken,
+    }),
+  );
+  if (clientSecret) {
+    body.set("client_secret", clientSecret);
+  }
+
+  const response = await (options.fetchFn ?? fetch)(CHUTES_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+    signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
+  });
+  await assertOkOrThrowProviderError(response, "Chutes token refresh failed");
+
+  const data = await readProviderJsonResponse<{
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  }>(response, "Chutes token refresh");
+  const access = normalizeOptionalString(data.access_token);
+  const replacementRefresh = normalizeOptionalString(data.refresh_token);
+  const expires = resolveChutesExpiresAt(data.expires_in, options.now ?? Date.now());
+  if (!access) {
+    throw new Error("Chutes token refresh returned no access_token");
+  }
+  if (expires === undefined) {
+    throw new Error("Chutes token refresh returned invalid expires_in");
+  }
+
+  return {
+    ...credential,
+    access,
+    // RFC 6749 section 6 makes replacement refresh tokens optional.
+    refresh: replacementRefresh ?? refreshToken,
+    expires,
+    clientId,
+  };
 }
 
 /** Runs Chutes OAuth and returns refreshable stored credentials. */

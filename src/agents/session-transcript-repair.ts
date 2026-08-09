@@ -298,6 +298,9 @@ type ErroredAssistantResultPolicy = "preserve" | "drop";
 type ToolUseResultPairingOptions = {
   erroredAssistantResultPolicy?: ErroredAssistantResultPolicy;
   missingToolResultText?: string;
+  // A valid Responses checkpoint may split a call from its later output.
+  // Only that replay owner may retain results that normal repair treats as orphaned.
+  preserveUnframedToolResults?: boolean;
 };
 
 export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
@@ -586,7 +589,11 @@ type ToolUseFrame = {
   failed: boolean;
 };
 
-function buildToolUseFrames(messages: AgentMessage[], onDuplicate: () => void): ToolUseFrame[] {
+function buildToolUseFrames(
+  messages: AgentMessage[],
+  onDuplicate: () => void,
+  preserveUnframed: boolean,
+): ToolUseFrame[] {
   const frameStartIndexes: number[] = [];
   for (const [index, message] of messages.entries()) {
     if (message && typeof message === "object" && assistantHasToolCalls(message)) {
@@ -634,6 +641,9 @@ function buildToolUseFrames(messages: AgentMessage[], onDuplicate: () => void): 
       const sameIdGroup = id ? occurrencesById.get(id) : undefined;
       if (!id || !sameIdGroup) {
         unclaimedResults.push({ result: legacyNormalized, id: id ?? undefined });
+        if (preserveUnframed) {
+          remainder.push(legacyNormalized);
+        }
         continue;
       }
 
@@ -693,9 +703,8 @@ export function repairToolUseResultPairing(
   const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   let droppedDuplicateCount = 0;
   let droppedOrphanCount = 0;
-  const frames = buildToolUseFrames(messages, () => {
-    droppedDuplicateCount += 1;
-  });
+  const preserveUnframed = options?.preserveUnframedToolResults === true;
+  const frames = buildToolUseFrames(messages, () => (droppedDuplicateCount += 1), preserveUnframed);
 
   // Cross-frame recovery is intentionally conservative. A displaced result is moved only
   // when exactly one still-unresolved call occurrence can own it; repeated ids otherwise
@@ -714,30 +723,25 @@ export function repairToolUseResultPairing(
     }
 
     for (const record of frame.unclaimedResults) {
-      if (!record.id) {
-        droppedOrphanCount += 1;
-        continue;
-      }
-      const candidates = (unresolvedById.get(record.id) ?? []).filter(
-        (candidate) =>
-          !candidate.result ||
-          (isSyntheticMissingToolResult(candidate.result) &&
-            !isSyntheticMissingToolResult(record.result)),
-      );
+      const candidates = record.id
+        ? (unresolvedById.get(record.id) ?? []).filter(
+            (candidate) =>
+              !candidate.result ||
+              (isSyntheticMissingToolResult(candidate.result) &&
+                !isSyntheticMissingToolResult(record.result)),
+          )
+        : [];
       if (candidates.length !== 1) {
-        droppedOrphanCount += 1;
+        droppedOrphanCount += preserveUnframed ? 0 : 1;
         continue;
       }
 
-      const [candidate] = candidates;
-      if (!candidate) {
-        droppedOrphanCount += 1;
-        continue;
-      }
-      if (candidate.result) {
-        droppedDuplicateCount += 1;
-      }
+      const candidate = candidates[0]!;
+      droppedDuplicateCount += candidate.result ? 1 : 0;
       candidate.result = normalizeToolResultName(record.result, candidate.name);
+      if (preserveUnframed) {
+        frame.remainder = frame.remainder.filter((message) => message !== record.result);
+      }
     }
   }
 
@@ -749,7 +753,7 @@ export function repairToolUseResultPairing(
       if (!message || typeof message !== "object") {
         continue;
       }
-      if (message.role === "toolResult") {
+      if (message.role === "toolResult" && !preserveUnframed) {
         droppedOrphanCount += 1;
         continue;
       }

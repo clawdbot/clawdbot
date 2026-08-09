@@ -126,6 +126,65 @@ async function writeTempProviderConfig(value: unknown) {
   return configPath;
 }
 
+async function writePackagedGatewayFixture(root: string): Promise<string> {
+  const fixturePath = path.join(root, "packaged-gateway-fixture.mjs");
+  await writeFile(
+    fixturePath,
+    `import fs from "node:fs";
+import path from "node:path";
+
+const args = process.argv.slice(2);
+const recordPath = process.env.QA_RECORD_PATH;
+const configPath = process.env.OPENCLAW_CONFIG_PATH;
+const stateDir = process.env.OPENCLAW_STATE_DIR;
+if (!recordPath || !configPath || !stateDir) {
+  throw new Error("missing fixture environment");
+}
+const record = (value) => fs.appendFileSync(recordPath, JSON.stringify(value) + "\\n");
+if (args[0] === "models") {
+  let stdin = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) stdin += chunk;
+  const provider = args[args.indexOf("--provider") + 1];
+  record({
+    kind: "auth",
+    args,
+    stdin,
+    dbExists: fs.existsSync(path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite")),
+    env: {
+      OPENCLAW_CLI: process.env.OPENCLAW_CLI,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: stateDir,
+    },
+  });
+  if (process.env.QA_FAIL_PROVIDER === provider) {
+    process.stderr.write("Authorization: Bearer " + stdin.trim());
+    process.exit(9);
+  }
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  config.fixtureProfiles = [...(config.fixtureProfiles ?? []), provider];
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  process.exit(0);
+}
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+record({ kind: "gateway", args, fixtureProfiles: config.fixtureProfiles });
+process.stderr.write("fixture gateway exit");
+process.exit(17);
+`,
+    "utf8",
+  );
+  return fixturePath;
+}
+
+async function readJsonLines(filePath: string): Promise<Array<Record<string, unknown>>> {
+  const contents = await readFile(filePath, "utf8");
+  return contents
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 describe("runQaGatewayCliCommand", () => {
   it("runs CLI commands with the Gateway fixture environment", async () => {
     const output = await testing.runQaGatewayCliCommand({
@@ -522,7 +581,7 @@ describe("buildQaRuntimeEnv", () => {
         },
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
-    ).rejects.toThrow(/gateway failed to spawn: .*ENOENT/u);
+    ).rejects.toThrow(/installed package mock auth bootstrap failed for openai: .*ENOENT/u);
 
     await expect(readdir(preferredTempParent)).resolves.toStrictEqual([]);
     await expect(readdir(commandTempParent)).resolves.toStrictEqual([]);
@@ -1363,6 +1422,109 @@ describe("buildQaRuntimeEnv", () => {
       expect(anthropicStoreProfile.provider).toBe("anthropic");
       expect(anthropicStoreProfile.key).toBe("qa-mock-not-a-real-key");
     }
+  });
+
+  it("lets an explicit packaged command own mock auth state before gateway spawn", async () => {
+    const fixtureRoot = await tempDirs.makeTempDir("qa-packaged-auth-");
+    const tempParentDir = path.join(fixtureRoot, "gateway-temp");
+    const recordPath = path.join(fixtureRoot, "commands.jsonl");
+    const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
+    await mkdir(tempParentDir);
+
+    await expect(
+      startQaGatewayChild({
+        repoRoot: process.cwd(),
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: [fixturePath],
+          tempParentDir,
+          usePackagedPlugins: true,
+        },
+        providerMode: "mock-openai",
+        transportBaseUrl: "http://127.0.0.1:43123",
+        runtimeEnvPatch: { QA_RECORD_PATH: recordPath },
+      }),
+    ).rejects.toThrow("fixture gateway exit");
+
+    const records = await readJsonLines(recordPath);
+    const authRecords = records.filter((record) => record.kind === "auth");
+    expect(authRecords).toHaveLength(2);
+    expect(authRecords.map((record) => record.args)).toEqual([
+      [
+        "models",
+        "auth",
+        "--agent",
+        "qa",
+        "paste-api-key",
+        "--provider",
+        "openai",
+        "--profile-id",
+        "qa-mock-openai",
+      ],
+      [
+        "models",
+        "auth",
+        "--agent",
+        "qa",
+        "paste-api-key",
+        "--provider",
+        "anthropic",
+        "--profile-id",
+        "qa-mock-anthropic",
+      ],
+    ]);
+    for (const record of authRecords) {
+      expect(record.dbExists).toBe(false);
+      expect(record.stdin).toMatch(/^sk-qa-mock-[a-f0-9]{32}\n$/u);
+      expect(record.env).toMatchObject({
+        OPENCLAW_CLI: "1",
+      });
+    }
+    expect(records.at(-1)).toMatchObject({
+      kind: "gateway",
+      fixtureProfiles: ["openai", "anthropic"],
+    });
+  });
+
+  it("blocks packaged gateway spawn when candidate auth bootstrap fails", async () => {
+    const fixtureRoot = await tempDirs.makeTempDir("qa-packaged-auth-fail-");
+    const tempParentDir = path.join(fixtureRoot, "gateway-temp");
+    const recordPath = path.join(fixtureRoot, "commands.jsonl");
+    const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
+    await mkdir(tempParentDir);
+
+    const result = startQaGatewayChild({
+      repoRoot: process.cwd(),
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [fixturePath],
+        tempParentDir,
+        usePackagedPlugins: true,
+      },
+      providerMode: "mock-openai",
+      transportBaseUrl: "http://127.0.0.1:43123",
+      runtimeEnvPatch: {
+        QA_FAIL_PROVIDER: "openai",
+        QA_RECORD_PATH: recordPath,
+      },
+    });
+
+    const error = await result.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) {
+      throw new Error("expected package auth bootstrap error");
+    }
+    expect(error.message).toContain(
+      "installed package mock auth bootstrap failed for openai: OpenClaw CLI exited 9: Authorization: Bearer <redacted>",
+    );
+    const records = await readJsonLines(recordPath);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ kind: "auth", dbExists: false });
+    const submittedKey = String(records[0]?.stdin).trim();
+    expect(submittedKey).toMatch(/^sk-qa-mock-[a-f0-9]{32}$/u);
+    expect(error.message).not.toContain(submittedKey);
+    expect(String(error.cause)).not.toContain(submittedKey);
+    expect(records.some((record) => record.kind === "gateway")).toBe(false);
   });
 
   it("stages mock profiles only for the requested agents and providers when callers override the defaults", async () => {

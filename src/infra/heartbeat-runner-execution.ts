@@ -71,6 +71,7 @@ import {
   resolveHeartbeatPreflight,
   resolveHeartbeatRunPrompt,
   selectSystemEventsConsumedByHeartbeat,
+  shouldPreflightExecEventWake,
 } from "./heartbeat-runner-prompt.js";
 import {
   resolveHeartbeatSession,
@@ -82,7 +83,7 @@ import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   inferHeartbeatWakeSourceFromReason,
   isConfiguredHeartbeatAgent,
-  isTargetedImmediateSystemEventWake,
+  isTargetedImmediateUnscheduledWake,
 } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
@@ -144,6 +145,8 @@ export type HeartbeatRunOptions = {
   intent?: HeartbeatWakeIntent;
   reason?: string;
   runScope?: HeartbeatRunScope;
+  /** Persisted monitor cadence carried by a coalesced scheduled wake. */
+  scheduledEveryMs?: number;
   tasks?: readonly HeartbeatScheduledTask[];
   /** Exact cron run marker whose own activity must not block this wake. */
   owningCronJobMarker?: CronActiveJobMarker;
@@ -173,7 +176,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
       ? []
       : [...(opts.tasks ?? [])].toSorted((left, right) => left.jobId.localeCompare(right.jobId));
   const allowsUnscheduledTarget =
-    isTargetedImmediateSystemEventWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
+    isTargetedImmediateUnscheduledWake(opts) && isConfiguredHeartbeatAgent(cfg, agentId);
   if (!areHeartbeatsEnabled()) {
     return { kind: "skipped", reason: "disabled" } as const;
   }
@@ -192,6 +195,33 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     !isWithinActiveHours(cfg, heartbeat, startedAt)
   ) {
     return { kind: "skipped", reason: "quiet-hours" } as const;
+  }
+
+  const shouldInspectExecWakeBeforeBusy = shouldPreflightExecEventWake(
+    wakeSource,
+    opts.scheduledEveryMs,
+    runScope,
+    scheduledTasks.length,
+  );
+  const resolvePreflight = () =>
+    resolveHeartbeatPreflight({
+      ...opts,
+      cfg,
+      agentId,
+      heartbeat,
+      runScope,
+      source: wakeSource,
+      scheduledTasks,
+      nowMs: startedAt,
+    });
+  let preflight = shouldInspectExecWakeBeforeBusy ? await resolvePreflight() : undefined;
+  if (preflight?.skipReason) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: preflight.skipReason,
+      durationMs: Date.now() - startedAt,
+    });
+    return { kind: "skipped", reason: preflight.skipReason } as const;
   }
 
   const getSize = opts.deps?.getQueueSize ?? getQueueSize;
@@ -313,17 +343,9 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   }
 
   // Preflight centralizes trigger classification, event inspection, and monitor-scratch gating.
-  const preflight = await resolveHeartbeatPreflight({
-    cfg,
-    agentId,
-    heartbeat,
-    runScope,
-    forcedSessionKey: opts.sessionKey,
-    source: wakeSource,
-    reason: opts.reason,
-    scheduledTasks,
-    nowMs: startedAt,
-  });
+  if (!preflight) {
+    preflight = await resolvePreflight();
+  }
   if (preflight.skipReason) {
     emitHeartbeatEvent({
       status: "skipped",
