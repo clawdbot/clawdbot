@@ -513,6 +513,7 @@ type CommandPositionalsParseOptions = {
   commandPath: ReadonlyArray<string>;
   booleanFlags?: ReadonlyArray<string>;
   valueFlags?: ReadonlyArray<string>;
+  maxPositionals?: number;
 };
 
 function consumeKnownOptionToken(
@@ -586,6 +587,9 @@ export function getCommandPositionalsWithRootOptions(
     }
 
     positionals.push(arg);
+    if (positionals.length === options.maxPositionals) {
+      return positionals;
+    }
   }
 
   if (commandIndex < commandPath.length) {

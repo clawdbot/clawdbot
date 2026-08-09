@@ -42,9 +42,13 @@ function isCommandPathPrefix(commandPath: string[], pattern: readonly string[]):
 function resolveCliCatalogCommandPath(argv: string[]): string[] {
   // Gateway `run openclaw ...` argv needs catalog routing against the embedded command path.
   const startupPath = resolveCliStartupCommandPath(argv);
-  const tokens =
-    resolveGatewayCatalogCommandPath(argv) ??
-    (startupPath[0] === "agent" ? startupPath : getCommandPathWithRootOptions(argv, argv.length));
+  const gatewayPath = resolveGatewayCatalogCommandPath(argv);
+  if (!gatewayPath && (startupPath[0] === "agent" || startupPath[0] === "models")) {
+    // These parents own value-bearing options before their child command. The
+    // canonical startup path has already separated those values from children.
+    return startupPath;
+  }
+  const tokens = gatewayPath ?? getCommandPathWithRootOptions(argv, argv.length);
   if (tokens.length === 0) {
     return [];
   }
