@@ -3,6 +3,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const GENERATED_MEDIA_TASK_ACTIVITY_KEY = Symbol.for("openclaw.generatedMediaTaskActivity");
 const GENERATED_MEDIA_TASK_ADMISSIONS_KEY = Symbol.for("openclaw.generatedMediaTaskAdmissions");
+const SUPERSEDED_GENERATED_MEDIA_TASKS_KEY = Symbol.for("openclaw.supersededGeneratedMediaTasks");
 const GENERATED_MEDIA_TASK_ADMISSIONS_MAX_ENTRIES = 2_048;
 
 function getActiveGeneratedMediaTasks(): Map<string, string> {
@@ -12,6 +13,13 @@ function getActiveGeneratedMediaTasks(): Map<string, string> {
 function getLatestGeneratedMediaTaskAdmissions(): Map<string, string> {
   return resolveGlobalSingleton(
     GENERATED_MEDIA_TASK_ADMISSIONS_KEY,
+    () => new Map<string, string>(),
+  );
+}
+
+function getSupersededGeneratedMediaTasks(): Map<string, string> {
+  return resolveGlobalSingleton(
+    SUPERSEDED_GENERATED_MEDIA_TASKS_KEY,
     () => new Map<string, string>(),
   );
 }
@@ -34,6 +42,22 @@ export function registerGeneratedMediaTaskActivity(runId: string, sessionKey: st
 /** Clears in-process generated-media activity after terminal task bookkeeping. */
 export function clearGeneratedMediaTaskActivity(runId: string): void {
   getActiveGeneratedMediaTasks().delete(runId);
+  getSupersededGeneratedMediaTasks().delete(runId);
+}
+
+/** Marks an active generated-media run as replaced by a newer admitted run. */
+export function supersedeGeneratedMediaTaskActivity(runId: string, replacementRunId: string): void {
+  if (!runId || !replacementRunId || runId === replacementRunId) {
+    return;
+  }
+  if (getActiveGeneratedMediaTasks().has(runId)) {
+    getSupersededGeneratedMediaTasks().set(runId, replacementRunId);
+  }
+}
+
+/** Returns the newer run that owns delivery after this run was superseded. */
+export function getGeneratedMediaTaskSupersedingRunId(runId: string): string | undefined {
+  return getSupersededGeneratedMediaTasks().get(runId);
 }
 
 /** Lists active generated-media run ids for one exact requester session. */
@@ -62,6 +86,7 @@ export function getLatestGeneratedMediaTaskAdmissionIdForSessionKey(
 function resetGeneratedMediaTaskActivityForTests(): void {
   getActiveGeneratedMediaTasks().clear();
   getLatestGeneratedMediaTaskAdmissions().clear();
+  getSupersededGeneratedMediaTasks().clear();
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

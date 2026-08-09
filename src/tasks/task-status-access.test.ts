@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearGeneratedMediaTaskActivity,
+  getGeneratedMediaTaskSupersedingRunId,
   registerGeneratedMediaTaskActivity,
+  supersedeGeneratedMediaTaskActivity,
 } from "./generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "./task-runtime.test-helpers.js";
 import {
@@ -75,6 +77,18 @@ describe("generated media task snapshots", () => {
     clearGeneratedMediaTaskActivity("tool:image_generate:run-1");
     expect(hasNewGeneratedMediaTaskForSessionKey(sessionKey, before)).toBe(true);
     expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(false);
+  });
+
+  it("tracks supersession only while the replaced media run remains active", () => {
+    registerGeneratedMediaTaskActivity("tool:image_generate:old", sessionKey);
+    registerGeneratedMediaTaskActivity("tool:image_generate:new", sessionKey);
+    supersedeGeneratedMediaTaskActivity("tool:image_generate:old", "tool:image_generate:new");
+
+    expect(getGeneratedMediaTaskSupersedingRunId("tool:image_generate:old")).toBe(
+      "tool:image_generate:new",
+    );
+    clearGeneratedMediaTaskActivity("tool:image_generate:old");
+    expect(getGeneratedMediaTaskSupersedingRunId("tool:image_generate:old")).toBeUndefined();
   });
 });
 

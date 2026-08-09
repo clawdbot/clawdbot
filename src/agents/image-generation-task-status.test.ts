@@ -190,6 +190,52 @@ describe("image generation task status", () => {
     );
   });
 
+  it("allows a new reference request key to replace an active edit with the same prompt", () => {
+    const now = Date.now();
+    recordRecentMediaGenerationTaskStartForSession({
+      sessionKey: "agent:main",
+      taskKind: IMAGE_GENERATION_TASK_KIND,
+      sourcePrefix: "image_generate",
+      taskId: "task-old-reference",
+      runId: "run-old-reference",
+      taskLabel: "make it crisper",
+      requestKey: "image-request:old-reference",
+      providerId: "openai",
+      progressSummary: "Generating image",
+      nowMs: now,
+    });
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-old-reference",
+        runId: "run-old-reference",
+        runtime: "cli",
+        taskKind: IMAGE_GENERATION_TASK_KIND,
+        sourceId: "image_generate:openai",
+        requesterSessionKey: "agent:main",
+        ownerKey: "agent:main",
+        scopeKind: "session",
+        task: "make it crisper",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now,
+      },
+    ]);
+
+    expect(
+      findDuplicateGuardImageGenerationTaskForSession("agent:main", {
+        prompt: "make it crisper",
+        requestKey: "image-request:old-reference",
+      })?.taskId,
+    ).toBe("task-old-reference");
+    expect(
+      findDuplicateGuardImageGenerationTaskForSession("agent:main", {
+        prompt: "make it crisper",
+        requestKey: "image-request:new-reference",
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not use a delivery-blocked image task as a succeeded duplicate guard", () => {
     // If completion delivery failed, suppressing a retry would strand the
     // requester without an image even though the provider task succeeded.
