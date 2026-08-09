@@ -7,6 +7,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import {
@@ -403,6 +404,50 @@ beforeEach(() => {
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+});
+
+it("fails closed for cross-agent and resolution-derived bare keys", async () => {
+  const bareKey = "b0d79b63-0f73-4bc9-a6b5-6d8e20f42c3c";
+  const config = {
+    agents: { ownership: "explicit" as const, entries: { main: {}, other: {} } },
+    tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" as const } },
+  };
+  const send = async (retained: boolean) =>
+    requireDetails(
+      await createSessionsSendTool({
+        agentId: "main",
+        agentSessionKey: MAIN_AGENT_SESSION_KEY,
+        config: retained ? retainLegacyDefaultAgentId(config, "main") : config,
+      }).execute("authorization", {
+        sessionKey: bareKey,
+        message: "status?",
+        timeoutSeconds: 0,
+      }),
+    );
+  callGatewayMock
+    .mockReset()
+    .mockImplementation(async (request: { method?: string }) =>
+      request.method === "sessions.resolve" ? { key: "incident-42", agentId: "other" } : {},
+    );
+  expect(await send(false)).toMatchObject({
+    status: "forbidden",
+    error: expect.stringContaining("Agent-to-agent messaging is disabled"),
+  });
+  callGatewayMock
+    .mockReset()
+    .mockImplementation(async (request: { method?: string; params?: Record<string, string> }) => {
+      if (request.method !== "sessions.resolve") {
+        return {};
+      }
+      if (request.params?.key) {
+        throw new Error("not a session key");
+      }
+      return request.params?.sessionId ? { key: "incident-42" } : {};
+    });
+  expect(await send(true)).toMatchObject({
+    status: "forbidden",
+    error: expect.stringContaining("Upgrade the gateway"),
+  });
 });
 
 describe("extractStoredAssistantText", () => {

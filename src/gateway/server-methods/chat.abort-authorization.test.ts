@@ -1064,4 +1064,25 @@ describe("chat.abort queued-turn contract", () => {
     expect(foreign.signal.aborted).toBe(false);
     expect(context.chatQueuedTurns.has("queued-foreign")).toBe(true);
   });
+
+  it("rejects an ownerless global abort on an explicit fleet", async () => {
+    const active = createActiveRun("global", { agentId: "research" });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-research", active]]),
+      getRuntimeConfig: () => ({
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+        session: { scope: "global" },
+      }),
+    });
+    const respond = await invokeChatAbortHandler({
+      handler: handleChatAbortRequestWithLifecycle,
+      context,
+      request: { sessionKey: "global", runId: "run-research" },
+    });
+    expect(respond.mock.calls.at(-1)?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "agentId is required for global chat.abort when no compatibility owner exists",
+    });
+    expect(active.controller.signal.aborted).toBe(false);
+  });
 });

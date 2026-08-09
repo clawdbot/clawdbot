@@ -1,5 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -290,7 +290,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
         requestedKey: rawSessionKey,
         canonicalKey: sessionKey,
         ...(sessionKey === "global" && agentId ? { agentId } : {}),
-        defaultAgentId: resolveDefaultAgentId(cfg),
+        defaultAgentId: agentId ?? tryResolveLegacyCompatibilityAgentId(cfg),
       });
       if (hasActiveRun) {
         return;

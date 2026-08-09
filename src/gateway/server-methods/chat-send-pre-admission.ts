@@ -1,5 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -90,9 +90,11 @@ export async function runChatSendPreAdmission(params: {
       respondChatSessionRoutingChanged(respond);
       return false;
     }
-    const defaultAgentId = resolveDefaultAgentId(cfg);
+    const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
     const stopAgentId =
-      sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
+      sessionKey === "global"
+        ? (selectedAgent.agentId ?? tryResolveLegacyCompatibilityAgentId(cfg))
+        : selectedAgent.agentId;
     const res = await abortChatRunsForSessionKeyWithPartials({
       context,
       ops: createChatAbortOps(context),

@@ -68,6 +68,15 @@ describe("resolveAssistantIdentity", () => {
     expect(identity.avatar).toBe("M");
   });
 
+  it("uses the first roster entry for presentation on an explicit fleet", () => {
+    const identity = resolveAssistantIdentity({
+      cfg: { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
+      workspaceDir: "",
+    });
+
+    expect(identity).toEqual({ ...DEFAULT_ASSISTANT_IDENTITY, agentId: "ops" });
+  });
+
   it("drops sentence-like avatar placeholders", () => {
     const cfg: OpenClawConfig = {
       ui: {
