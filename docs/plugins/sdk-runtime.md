@@ -82,7 +82,7 @@ these actions with `{ modelPicker: true }`; channels without a picker
 capability continue to fail closed instead of treating the action as an opaque
 callback.
 
-Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically.
+Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically. Retryable transports should also supply a stable `eventId`; replaying an accepted event while it remains in the active window does not consume another budget slot. Suppressed events add no retained event-identity state.
 
 Channel plugins that expose this behavior to operators should prefer the shared `channels.defaults.botLoopProtection` shape for baseline budgets, then layer channel/provider-specific overrides on top. The shared config uses seconds because it is user-facing:
 
@@ -110,6 +110,7 @@ return {
     conversationId: "channel-1",
     senderId: "bot-a",
     receiverId: "bot-b",
+    eventId: providerEvent.id,
     config: channelConfig.botLoopProtection,
     defaultsConfig: runtimeConfig.channels?.defaults?.botLoopProtection,
     defaultEnabled: allowBotsMode !== "off",
