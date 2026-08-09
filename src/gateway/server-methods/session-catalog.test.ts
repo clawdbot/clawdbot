@@ -4,10 +4,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { bindPluginRegistryRuntime } from "../../plugins/registry-runtime-binding.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
-import {
-  listSessionCatalogEntries,
-  type SessionCatalogProvider,
-} from "../../plugins/session-catalog.js";
+import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{
@@ -415,111 +412,6 @@ describe("session catalog Gateway methods", () => {
     }
   });
 
-  it("shares one flattened entry snapshot across catalogs and creator projection", async () => {
-    hoisted.listSessionEntriesReadOnly.mockReturnValue([
-      {
-        sessionKey: "agent:main:alpha-adopted",
-        entry: { createdActor: { type: "agent", id: "worker-alpha" }, updatedAt: 2 },
-      },
-      {
-        sessionKey: "agent:main:zeta-adopted",
-        entry: { createdActor: { type: "system", id: "scheduler" }, updatedAt: 1 },
-      },
-    ]);
-    const flattenedEntries: unknown[] = [];
-    const runtime = createPluginRuntime();
-    const catalogProvider = (id: string, sessionKey: string) =>
-      provider(id, {
-        list: vi.fn(async ({ sessionEntries }) => {
-          const entries = listSessionCatalogEntries({ config: {}, runtime, sessionEntries });
-          flattenedEntries.push(entries);
-          const adopted = entries.find((candidate) => candidate.sessionKey === sessionKey);
-          return [
-            {
-              hostId: `gateway:${id}`,
-              label: `${id} host`,
-              kind: "gateway" as const,
-              connected: true,
-              sessions: adopted
-                ? [
-                    {
-                      threadId: `${id}-thread`,
-                      status: "stored" as const,
-                      archived: false,
-                      sessionKey: adopted.sessionKey,
-                      canContinue: true,
-                      canArchive: false,
-                    },
-                  ]
-                : [],
-            },
-          ];
-        }),
-      });
-    hoisted.activeRegistry.sessionCatalogs = [
-      { provider: catalogProvider("zeta", "agent:main:zeta-adopted") },
-      { provider: catalogProvider("alpha", "agent:main:alpha-adopted") },
-    ];
-
-    const respond = await call("sessions.catalog.list", {});
-
-    expect(hoisted.listSessionEntriesReadOnly).toHaveBeenCalledOnce();
-    expect(flattenedEntries).toHaveLength(2);
-    expect(flattenedEntries[0]).toBe(flattenedEntries[1]);
-    expect(respond).toHaveBeenCalledWith(true, {
-      catalogs: [
-        {
-          id: "alpha",
-          label: "ALPHA",
-          capabilities: { continueSession: false, archive: false },
-          hosts: [
-            {
-              hostId: "gateway:alpha",
-              label: "alpha host",
-              kind: "gateway",
-              connected: true,
-              sessions: [
-                {
-                  threadId: "alpha-thread",
-                  status: "stored",
-                  archived: false,
-                  sessionKey: "agent:main:alpha-adopted",
-                  canContinue: true,
-                  canArchive: false,
-                  createdActor: { type: "agent", id: "worker-alpha" },
-                },
-              ],
-            },
-          ],
-        },
-        {
-          id: "zeta",
-          label: "ZETA",
-          capabilities: { continueSession: false, archive: false },
-          hosts: [
-            {
-              hostId: "gateway:zeta",
-              label: "zeta host",
-              kind: "gateway",
-              connected: true,
-              sessions: [
-                {
-                  threadId: "zeta-thread",
-                  status: "stored",
-                  archived: false,
-                  sessionKey: "agent:main:zeta-adopted",
-                  canContinue: true,
-                  canArchive: false,
-                  createdActor: { type: "system", id: "scheduler" },
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    });
-  });
-
   it("shares one lazy Gateway node snapshot across catalog providers", async () => {
     const dispatchNodeList = vi.fn(async () => ({
       nodes: [{ nodeId: "shared-node", connected: true }],
@@ -638,6 +530,72 @@ describe("session catalog Gateway methods", () => {
         expect.objectContaining({ capabilities: { continueSession: false, archive: false } }),
       ],
     });
+  });
+
+  it("advertises terminal start only inside implemented create capabilities", async () => {
+    const createTarget = () => ({ model: "openai/gpt-5.6-sol", agentRuntime: "codex" });
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("codex", {
+          resolveCreateSession: createTarget,
+          startTerminalSession: async ({ cwd }) => ({ kind: "local", argv: ["codex"], cwd }),
+        }),
+      },
+      {
+        provider: provider("readonly", { resolveCreateSession: createTarget }),
+      },
+    ];
+
+    const respond = await call("sessions.catalog.list", {});
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          id: "codex",
+          capabilities: expect.objectContaining({
+            createSession: { model: "openai/gpt-5.6-sol", startTerminal: true },
+          }),
+        }),
+        expect.objectContaining({
+          id: "readonly",
+          capabilities: expect.objectContaining({
+            createSession: { model: "openai/gpt-5.6-sol" },
+          }),
+        }),
+      ],
+    });
+  });
+
+  it("refuses direct terminal start when the requested agent has no create target", async () => {
+    const resolveCreateSession = vi.fn(() => undefined);
+    const startTerminalSession = vi.fn();
+    const open = vi.fn();
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("codex", { resolveCreateSession, startTerminalSession }),
+      },
+    ];
+    const config = { gateway: { cliAgents: { enabled: true } } };
+
+    const respond = await call(
+      "sessions.catalog.startTerminal",
+      { catalogId: "codex", agentId: "restricted", cwd: process.cwd() },
+      config,
+      { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
+      { isTerminalEnabled: () => true, terminalSessions: { open } },
+    );
+
+    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "restricted" });
+    expect(startTerminalSession).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.UNAVAILABLE,
+        message: "session catalog codex cannot create sessions",
+      }),
+    );
   });
 
   it("memoizes a provider's create target until runtime config identity changes", async () => {

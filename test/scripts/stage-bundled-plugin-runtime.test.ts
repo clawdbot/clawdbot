@@ -9,8 +9,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
-} from "../../scripts/lib/static-extension-assets.mjs";
-import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+} from "../../scripts/lib/static-extension-assets.mts";
+import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mts";
 
 const execFileAsync = promisify(execFile);
 

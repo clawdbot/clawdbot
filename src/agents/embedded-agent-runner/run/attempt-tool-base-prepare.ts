@@ -139,6 +139,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     chatType: attempt.chatType,
     messageTo: attempt.messageTo,
     messageThreadId: attempt.messageThreadId,
+    conversationToolPolicy: attempt.conversationToolPolicy,
     currentChannelId: attempt.currentChannelId,
     currentMessagingTarget: attempt.currentMessagingTarget,
     currentThreadTs: attempt.currentThreadTs,

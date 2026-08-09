@@ -28,12 +28,12 @@ import {
   listTelegramLegacySentMessageCacheEntries,
   TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
   TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
-} from "./sent-message-cache.js";
+} from "./sent-message-cache.legacy-state.js";
 import {
   listTelegramLegacyStickerCacheEntries,
   TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
   TELEGRAM_STICKER_CACHE_NAMESPACE,
-} from "./sticker-cache-store.js";
+} from "./sticker-cache-store.legacy-state.js";
 import {
   listTelegramLegacyThreadBindingEntries,
   resolveTelegramThreadBindingsPath,

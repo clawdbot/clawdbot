@@ -1,4 +1,6 @@
 /** Cron service dependency, event, state, and public result types. */
+
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type {
   HeartbeatRunResult,
@@ -236,7 +238,7 @@ export type CronServiceDeps = {
   }) => void | Promise<void>;
   sendCronFailureAlert?: (params: {
     job: CronJob;
-    text: string;
+    payload: ReplyPayload;
     runAtMs?: number;
     channel: CronMessageChannel;
     to?: string;

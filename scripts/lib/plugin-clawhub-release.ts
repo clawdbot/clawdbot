@@ -117,7 +117,6 @@ const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   "package.json",
   "pnpm-lock.yaml",
   "packages/plugin-package-contract/src/index.ts",
-  "scripts/lib/bounded-response.d.mts",
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/release-version.mjs",

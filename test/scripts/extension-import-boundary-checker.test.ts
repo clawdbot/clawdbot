@@ -2,8 +2,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createExtensionImportBoundaryChecker } from "../../scripts/lib/extension-import-boundary-checker.mjs";
-import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mjs";
+import { createExtensionImportBoundaryChecker } from "../../scripts/lib/extension-import-boundary-checker.mts";
+import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

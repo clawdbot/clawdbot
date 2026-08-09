@@ -268,6 +268,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       agentAccountId: params.agentAccountId,
       messageProvider: resolvedMessageProvider,
       chatType: params.chatType,
+      conversationToolPolicy: params.conversationToolPolicy,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,

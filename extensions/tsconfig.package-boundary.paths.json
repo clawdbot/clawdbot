@@ -889,6 +889,9 @@
       "openclaw/plugin-sdk/outbound-echo-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/outbound-echo-runtime.d.ts"
       ],
+      "openclaw/plugin-sdk/secret-provider-alias": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/secret-provider-alias.d.ts"
+      ],
       "openclaw/plugin-sdk/session-store-paths": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/session-store-paths.d.ts"
       ]

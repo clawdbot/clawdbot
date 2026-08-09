@@ -489,6 +489,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.patchMany", "sessions-mutations", "dynamic", "2026.8"],
   // Update campaign mutations share update.run's admin and control-plane write policy.
   ["update.hold", "update", "operator.admin", "2026.8", { controlPlaneWrite: true }],
+  // Additive catalog terminal start appends so older advertised indices stay stable.
+  ["sessions.catalog.startTerminal", "session-catalog", "operator.admin", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

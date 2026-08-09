@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { testboxLeaseStaleReasons } from "../../scripts/testbox-lease-freshness.mjs";
+import { testboxLeaseStaleReasons } from "../../scripts/testbox-lease-freshness.mts";
 
 const fingerprint = {
   version: 1,

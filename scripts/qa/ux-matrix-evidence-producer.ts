@@ -19,7 +19,7 @@ import {
 import {
   ensurePlaywrightChromium,
   resolveSystemChromiumExecutablePath,
-} from "../ensure-playwright-chromium.mjs";
+} from "../ensure-playwright-chromium.mts";
 
 const execFileAsync = promisify(execFile);
 const SOURCE_PATH = "scripts/qa/ux-matrix-evidence-producer.ts";

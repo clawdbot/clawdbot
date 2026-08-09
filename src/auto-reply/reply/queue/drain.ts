@@ -166,6 +166,7 @@ function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
   return JSON.stringify([
     run.senderId ?? "",
     JSON.stringify(run.channelContext ?? null),
+    stableStringify(run.conversationToolPolicy ?? null),
     run.senderE164 ?? "",
     run.senderIsOwner === true,
     run.execOverrides?.host ?? "",

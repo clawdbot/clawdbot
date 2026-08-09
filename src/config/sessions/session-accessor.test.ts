@@ -1,10 +1,10 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   onInternalSessionTranscriptUpdate,
@@ -17,6 +17,10 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  isOpenClawStateDatabaseOpen,
+} from "../../state/openclaw-state-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import {
@@ -88,6 +92,7 @@ import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js"
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 const cleanupArchivedSessionTranscriptsMock = vi.hoisted(() => vi.fn(async () => {}));
+const tempDirs: string[] = [];
 
 vi.mock("../../gateway/session-archive.runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../gateway/session-archive.runtime.js")>();
@@ -127,6 +132,8 @@ describe("session accessor seam", () => {
   let tempDir: string;
   let storePath: string;
   let transcriptPath: string;
+  let cleanupProbeDatabasePath = "";
+  let cleanupProbeRoot = "";
 
   function loadMainInitializationSnapshot(sessionKey: string) {
     return loadReplySessionInitializationSnapshot({ agentId: "main", sessionKey, storePath });
@@ -134,13 +141,38 @@ describe("session accessor seam", () => {
 
   beforeEach(() => {
     cleanupArchivedSessionTranscriptsMock.mockReset();
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-accessor-"));
+    tempDir = makeTempDir(tempDirs, "openclaw-session-accessor-");
     storePath = path.join(tempDir, "sessions.json");
     transcriptPath = path.join(tempDir, "session.jsonl");
   });
 
   afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    cleanupTempDirs(tempDirs);
+  });
+
+  describe.sequential("session database teardown boundary", () => {
+    it("opens cached agent and shared-state handles", async () => {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:cleanup-probe", storePath },
+        { sessionId: "cleanup-probe", updatedAt: 1 },
+      );
+      cleanupProbeDatabasePath = expectDefined(
+        resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+        "cleanup probe database path",
+      );
+      cleanupProbeRoot = tempDir;
+
+      expect(isOpenClawAgentDatabaseOpen(cleanupProbeDatabasePath)).toBe(true);
+      expect(isOpenClawStateDatabaseOpen()).toBe(true);
+    });
+
+    it("releases both cache owners before the next test", () => {
+      expect(isOpenClawAgentDatabaseOpen(cleanupProbeDatabasePath)).toBe(false);
+      expect(isOpenClawStateDatabaseOpen()).toBe(false);
+      expect(fs.existsSync(cleanupProbeRoot)).toBe(false);
+    });
   });
 
   it("exposes the canonical SQLite session lifecycle owners", () => {

@@ -9,9 +9,18 @@ import {
   extractControlUiStartupAssetPaths,
   formatControlUiPerformanceReport,
   runControlUiPerformanceCheck,
-} from "../../scripts/check-control-ui-performance.mjs";
+} from "../../scripts/check-control-ui-performance.mts";
 
 const tempDirs: string[] = [];
+const tsxImport = import.meta.resolve("tsx");
+
+function runControlUiPerformanceCli(scriptPath: string, args: string[], cwd: string) {
+  return spawnSync(
+    process.execPath,
+    ["--import", tsxImport, fs.realpathSync(scriptPath), ...args],
+    { cwd, encoding: "utf8" },
+  );
+}
 
 function createDistFixture() {
   const distDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-performance-"));
@@ -215,7 +224,7 @@ describe("Control UI performance budgets", () => {
       ),
     ).toContain("startup JS gzip vs baseline");
     expect(formatControlUiPerformanceReport(metrics, looseBudgets, baseline)).toContain(
-      '11025 B exceeds baseline 10000 B + tolerance 1024 B (limit 11024 B); intentionally raise the baseline with node scripts/check-control-ui-performance.mjs --update-baseline --startup-js-bytes 11025 --reason "<reason>"',
+      '11025 B exceeds baseline 10000 B + tolerance 1024 B (limit 11024 B); intentionally raise the baseline with node --import tsx scripts/check-control-ui-performance.mts --update-baseline --startup-js-bytes 11025 --reason "<reason>"',
     );
   });
 
@@ -268,8 +277,8 @@ describe("Control UI performance budgets", () => {
     fs.mkdirSync(scriptsDir, { recursive: true });
     fs.mkdirSync(configDir, { recursive: true });
     fs.mkdirSync(assetsDir, { recursive: true });
-    const scriptPath = path.join(scriptsDir, "check-control-ui-performance.mjs");
-    fs.copyFileSync(path.resolve("scripts/check-control-ui-performance.mjs"), scriptPath);
+    const scriptPath = path.join(scriptsDir, "check-control-ui-performance.mts");
+    fs.copyFileSync(path.resolve("scripts/check-control-ui-performance.mts"), scriptPath);
     fs.writeFileSync(
       path.join(distDir, "index.html"),
       '<script type="module" src="./assets/index-a.js"></script>\n' +
@@ -285,10 +294,7 @@ describe("Control UI performance budgets", () => {
       fs.writeFileSync(`${assetPath}.br`, Buffer.alloc(sizes.brotliBytes));
     }
 
-    const result = spawnSync(process.execPath, [fs.realpathSync(scriptPath), "--update-baseline"], {
-      cwd: rootDir,
-      encoding: "utf8",
-    });
+    const result = runControlUiPerformanceCli(scriptPath, ["--update-baseline"], rootDir);
 
     expect(result.status, result.stderr).toBe(0);
     expect(
@@ -301,10 +307,10 @@ describe("Control UI performance budgets", () => {
       updatedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/u),
     });
 
-    const customReasonResult = spawnSync(
-      process.execPath,
-      [fs.realpathSync(scriptPath), "--update-baseline", "--reason", "fixture update"],
-      { cwd: rootDir, encoding: "utf8" },
+    const customReasonResult = runControlUiPerformanceCli(
+      scriptPath,
+      ["--update-baseline", "--reason", "fixture update"],
+      rootDir,
     );
     expect(customReasonResult.status, customReasonResult.stderr).toBe(0);
     expect(
@@ -314,17 +320,10 @@ describe("Control UI performance budgets", () => {
     ).toMatchObject({ startupJsGzipBytes: 65, reason: "fixture update" });
 
     fs.rmSync(distDir, { recursive: true });
-    const explicitBytesResult = spawnSync(
-      process.execPath,
-      [
-        fs.realpathSync(scriptPath),
-        "--update-baseline",
-        "--startup-js-bytes",
-        "321",
-        "--reason",
-        "CI measurement",
-      ],
-      { cwd: rootDir, encoding: "utf8" },
+    const explicitBytesResult = runControlUiPerformanceCli(
+      scriptPath,
+      ["--update-baseline", "--startup-js-bytes", "321", "--reason", "CI measurement"],
+      rootDir,
     );
     expect(explicitBytesResult.status, explicitBytesResult.stderr).toBe(0);
     expect(
@@ -333,10 +332,10 @@ describe("Control UI performance budgets", () => {
       ),
     ).toMatchObject({ startupJsGzipBytes: 321, reason: "CI measurement" });
 
-    const beyondRatchetResult = spawnSync(
-      process.execPath,
-      [fs.realpathSync(scriptPath), "--update-baseline", "--startup-js-bytes", "4418"],
-      { cwd: rootDir, encoding: "utf8" },
+    const beyondRatchetResult = runControlUiPerformanceCli(
+      scriptPath,
+      ["--update-baseline", "--startup-js-bytes", "4418"],
+      rootDir,
     );
     expect(beyondRatchetResult.status).toBe(1);
     expect(beyondRatchetResult.stderr).toContain(

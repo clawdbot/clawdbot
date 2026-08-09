@@ -11,16 +11,12 @@ import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
-import {
-  isAcpSessionKey,
-  isCronRunSessionKey,
-  isSubagentSessionKey,
-} from "../sessions/session-key-utils.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { isTerminalTaskStatus } from "../tasks/task-executor-policy.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
+import { markChatAbortTerminalPersistenceError } from "./chat-abort-lifecycle-internal.js";
 import {
   type ChatAbortControllerEntry,
   removeChatAbortControllerEntry,
@@ -53,24 +49,14 @@ function dispatchEventHandler<TEvent>(params: {
     });
 }
 
-function terminalTaskSessionKey(event: TaskRegistryObserverEvent): string | undefined {
+function terminalTaskId(event: TaskRegistryObserverEvent): string | undefined {
   if (event.kind !== "upserted" || !isTerminalTaskStatus(event.task.status)) {
     return undefined;
   }
   if (event.previous && isTerminalTaskStatus(event.previous.status)) {
     return undefined;
   }
-  const sessionKey = event.task.childSessionKey?.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  // Persistent conversation targets intentionally retain their terminals.
-  // Only task-run identities end when their authoritative task row terminalizes.
-  const taskRunScoped =
-    isCronRunSessionKey(sessionKey) ||
-    isSubagentSessionKey(sessionKey) ||
-    isAcpSessionKey(sessionKey);
-  return taskRunScoped ? sessionKey : undefined;
+  return event.task.taskId;
 }
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
@@ -151,6 +137,7 @@ export function startGatewayEventSubscriptions(params: {
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersisted = false;
                   entry.chatSendActiveAtTerminalObservation = false;
+                  markChatAbortTerminalPersistenceError(entry, undefined);
                   queueMicrotask(() => {
                     const current = params.chatAbortControllers.get(candidateRunId);
                     if (
@@ -177,6 +164,7 @@ export function startGatewayEventSubscriptions(params: {
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersisted = true;
                   entry.projectSessionTerminalPersistence = undefined;
+                  markChatAbortTerminalPersistenceError(entry, undefined);
                 }
               }
             },
@@ -193,6 +181,9 @@ export function startGatewayEventSubscriptions(params: {
                 if (entry) {
                   entry.projectSessionTerminalPending = false;
                   entry.projectSessionTerminalPersistence = persistence;
+                  void persistence.catch((error: unknown) => {
+                    markChatAbortTerminalPersistenceError(entry, error);
+                  });
                   if (entry.registrationCleanupRequested === true) {
                     void persistence
                       .catch(() => undefined)
@@ -429,9 +420,9 @@ export function startGatewayEventSubscriptions(params: {
           break;
       }
       params.broadcast("task", payload, { dropIfSlow: true });
-      const sessionKey = terminalTaskSessionKey(event);
-      if (sessionKey) {
-        params.terminalSessions.closeAgentSessions(sessionKey);
+      const taskId = terminalTaskId(event);
+      if (taskId) {
+        params.terminalSessions.closeAgentSessions(taskId);
       }
     },
   };

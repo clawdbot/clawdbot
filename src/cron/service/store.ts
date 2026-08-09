@@ -3,6 +3,7 @@ import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import { deleteCronJobScratch } from "../scratch-store.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
   getCronJobsStoreRevision,
@@ -315,6 +316,23 @@ export function runPostPersistCronNotifications(
       state.deps.log.warn(
         { error: err instanceof Error ? err.message : String(err) },
         "cron: post-persist notification failed",
+      );
+    }
+  }
+}
+
+/** Best-effort scratch pruning after the owning job deletions are durable. */
+export function pruneCronJobScratchAfterCommit(
+  state: CronServiceState,
+  committedJobIds: Iterable<string>,
+) {
+  for (const jobId of committedJobIds) {
+    try {
+      deleteCronJobScratch(state.deps.storePath, jobId);
+    } catch (error) {
+      state.deps.log.warn(
+        { jobId, err: String(error) },
+        "cron: post-commit scratch cleanup failed",
       );
     }
   }

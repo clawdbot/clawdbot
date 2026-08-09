@@ -862,6 +862,68 @@ describe("callGateway url resolution", () => {
     });
   });
 
+  it("uses stored device auth for the exact normalized url override origin", async () => {
+    setLocalLoopbackGatewayConfig();
+    loadOriginDeviceTokenMock.mockImplementation((...args: unknown[]) =>
+      (args[0] as { gatewayScope: string }).gatewayScope === "wss://other.example/rpc"
+        ? {
+            token: "remote-device-token",
+            role: "operator",
+            scopes: ["operator.read"],
+            updatedAtMs: 123,
+          }
+        : null,
+    );
+
+    await callGatewayCli({
+      method: "node.list",
+      url: "wss://other.example/rpc/?ignored=1",
+      useStoredDeviceAuth: true,
+    });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.deviceAuthScope).toBe("wss://other.example/rpc");
+    expect(loadOriginDeviceTokenMock).toHaveBeenCalledWith({
+      gatewayScope: "wss://other.example/rpc",
+      deviceId: deviceIdentityState.value.deviceId,
+      role: "operator",
+      env: process.env,
+    });
+  });
+
+  it("does not reuse stored device auth from a different url override origin", async () => {
+    setLocalLoopbackGatewayConfig();
+    loadOriginDeviceTokenMock.mockImplementation((...args: unknown[]) =>
+      (args[0] as { gatewayScope: string }).gatewayScope === "wss://first.example/rpc"
+        ? {
+            token: "first-origin-device-token",
+            role: "operator",
+            scopes: ["operator.read"],
+            updatedAtMs: 123,
+          }
+        : null,
+    );
+
+    await expect(
+      callGatewayCli({
+        method: "node.list",
+        url: "wss://second.example/rpc",
+        useStoredDeviceAuth: true,
+      }),
+    ).rejects.toMatchObject({
+      name: "GatewayStoredDeviceAuthUnavailableError",
+      message: expect.stringMatching(/tui --url.*Settings -> Devices.*devices approve --latest/s),
+    });
+
+    expect(loadOriginDeviceTokenMock).toHaveBeenCalledWith({
+      gatewayScope: "wss://second.example/rpc",
+      deviceId: deviceIdentityState.value.deviceId,
+      role: "operator",
+      env: process.env,
+    });
+    expect(lastClientOptions).toBeNull();
+  });
+
   it("explains how to pair when remote origin device auth is unavailable", async () => {
     getRuntimeConfig.mockReturnValue(makeRemotePasswordGatewayConfig("remote-password"));
     setGatewayNetworkDefaults();

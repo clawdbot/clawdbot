@@ -42,8 +42,8 @@ import {
 } from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 import {
-  assertCodexRingZeroHasNoManagedHooks,
-  attestCodexRingZeroThreadHasNoMcpServers,
+  assertCodexRestrictedToolSurfaceHasNoManagedHooks,
+  attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
@@ -230,8 +230,12 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
       : [];
     if (params.requireNoExternalCapabilities) {
-      await assertCodexRingZeroHasNoManagedHooks(client, abortController.signal);
+      await assertCodexRestrictedToolSurfaceHasNoManagedHooks(client, abortController.signal);
     }
+    const threadConfig = buildCodexRuntimeThreadConfig(
+      resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
+      { nativeCodeModeEnabled: false },
+    );
     const thread = assertCodexThreadStartResponse(
       await client.request<unknown>(
         "thread/start",
@@ -244,10 +248,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           serviceName: "OpenClaw",
           ...(params.requireNoExternalCapabilities ? { baseInstructions: "" } : {}),
           developerInstructions: params.developerInstructions,
-          config: buildCodexRuntimeThreadConfig(
-            resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
-            { nativeCodeModeEnabled: false },
-          ),
+          config: threadConfig,
           environments: [],
           dynamicTools: [],
           experimentalRawEvents: true,
@@ -263,9 +264,10 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     if (params.requireNoExternalCapabilities) {
       // Attest the started thread before injecting historical tool evidence.
       // Otherwise inherited MCP state could act on a finalization-only turn.
-      await attestCodexRingZeroThreadHasNoMcpServers(
+      await attestCodexRestrictedToolSurfaceMcpServersDisabled(
         client,
         thread.thread.id,
+        threadConfig,
         abortController.signal,
       );
     }

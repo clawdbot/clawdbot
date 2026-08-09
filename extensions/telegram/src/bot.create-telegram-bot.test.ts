@@ -85,6 +85,7 @@ type BuildModelsProviderDataMock = ReturnType<
   typeof vi.fn<NonNullable<typeof telegramBotDepsForTest.buildModelsProviderData>>
 >;
 const { resolveTelegramFetch } = await import("./fetch.js");
+const { defaultTelegramNativeCommandDeps } = await import("./bot-native-command-deps.runtime.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const { getTelegramSequentialConstraints } = await import("./sequential-key.js");
@@ -102,7 +103,6 @@ const { clearTelegramRuntimeForTest, resetTelegramAccountThrottlersForTest } =
 const { setTelegramRuntime } = await import("./runtime.js");
 const {
   buildTelegramGroupFrom,
-  buildTelegramThreadParams,
   buildTypingThreadParams,
   resolveTelegramForumFlag,
   resetTelegramForumFlagCacheForTest,
@@ -2080,7 +2080,10 @@ describe("createTelegramBot", () => {
     });
   });
 
-  it("terminalizes native callbacks after inline buttons are disabled", async () => {
+  it.each([
+    ["ordinary native command", "tgcmd:/fast status"],
+    ["native Codex login", "tgcmd:/login codex"],
+  ])("terminalizes %s callbacks after inline buttons are disabled", async (_name, data) => {
     const pluginHandler = vi.fn(async () => ({ handled: true }));
     registerPluginInteractiveHandler("disabled-native-collision", {
       channel: "telegram",
@@ -2101,11 +2104,11 @@ describe("createTelegramBot", () => {
     await getCallbackHandler()(
       makeCallbackRetryContext({
         id: "cbq-disabled-native",
-        data: "tgcmd:/fast status",
+        data,
         messageId: 10,
         message: {
           reply_markup: {
-            inline_keyboard: [[{ text: "Status", callback_data: "tgcmd:/fast status" }]],
+            inline_keyboard: [[{ text: "Action", callback_data: data }]],
           },
         },
       }),
@@ -2121,6 +2124,87 @@ describe("createTelegramBot", () => {
       "This action is no longer available.",
       undefined,
     );
+  });
+
+  it("keeps the login action when the callback sender is not an owner", async () => {
+    loadConfig.mockReturnValue({
+      commands: { native: true, ownerAllowFrom: ["999"] },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    await getCallbackHandler()(
+      makeCallbackRetryContext({
+        id: "cbq-login-nonowner",
+        data: "tgcmd:/login codex",
+        messageId: 10,
+        message: {
+          reply_markup: {
+            inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
+          },
+        },
+      }),
+    );
+
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      "Only a configured OpenClaw owner can start Codex login from Telegram.",
+      {},
+    );
+  });
+
+  it("lets an owner start Codex login from a pairing-policy DM callback", async () => {
+    const runModelsAuthLoginFlow = vi
+      .spyOn(defaultTelegramNativeCommandDeps, "runModelsAuthLoginFlow")
+      .mockImplementation(async (params) => {
+        await params.prompter.deviceCode?.({
+          title: "OpenAI Codex device code",
+          code: "OWNER-CODE",
+          message: "URL: https://auth.openai.com/codex/device",
+        });
+        return {
+          providerId: "openai",
+          methodId: "device-code",
+          profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
+        };
+      });
+    loadConfig.mockReturnValue({
+      commands: { native: true, ownerAllowFrom: ["9"] },
+      channels: { telegram: { dmPolicy: "pairing" } },
+      agents: { list: [{ id: "main", default: true }] },
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+      await getCallbackHandler()(
+        makeCallbackRetryContext({
+          id: "cbq-login-owner",
+          data: "tgcmd:/login codex",
+          messageId: 10,
+          message: {
+            reply_markup: {
+              inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
+            },
+          },
+        }),
+      );
+
+      expect(runModelsAuthLoginFlow).toHaveBeenCalledOnce();
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        1234,
+        expect.stringContaining("Code: <code>OWNER-CODE</code>"),
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+    } finally {
+      runModelsAuthLoginFlow.mockRestore();
+    }
   });
 
   it.each([
@@ -4496,27 +4580,6 @@ describe("createTelegramBot", () => {
     );
     expect(buildTypingThreadParams(resolvedThreadId)).toEqual({ message_thread_id: 1 });
   });
-  it("threads forum replies only when a topic id exists", () => {
-    expect(
-      buildTelegramThreadParams(
-        resolveTelegramThreadSpec({
-          isGroup: true,
-          isForum: true,
-          messageThreadId: undefined,
-        }),
-      ),
-    ).toBeUndefined();
-    expect(
-      buildTelegramThreadParams(
-        resolveTelegramThreadSpec({
-          isGroup: true,
-          isForum: true,
-          messageThreadId: 99,
-        }),
-      ),
-    ).toEqual({ message_thread_id: 99 });
-  });
-
   const allowFromEdgeCases: MessagePolicyCase[] = [
     makeMessagePolicyCase({
       name: "allows direct messages regardless of groupPolicy",

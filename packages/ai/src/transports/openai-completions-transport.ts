@@ -73,6 +73,7 @@ import {
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
   createModelStreamCooperativeScheduler,
+  createOpenAIResponseHook,
   isOpenAICompletionsThinkingEnabled,
   log,
   parseOpenAICompletionsUsage,
@@ -84,7 +85,11 @@ import {
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import { failTransportStream, finalizeTransportStream } from "./transport-stream-shared.js";
+import {
+  failTransportStream,
+  finalizeTransportStream,
+  withProviderResponseHook,
+} from "./transport-stream-shared.js";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
@@ -342,15 +347,23 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           options as OpenAICompletionsOptions | undefined,
         );
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-        const responseStream = (await client.chat.completions.create(
-          params as never,
-          buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
-            timeoutMs: options?.timeoutMs,
-            maxRetries: options?.maxRetries,
-          }),
-        )) as unknown as AsyncIterable<ChatCompletionChunk>;
-        stream.push({ type: "start", partial: output as never });
-        await processOpenAICompletionsStream(responseStream, output, model, stream, {
+        const { data: responseStream, response } = await client.chat.completions
+          .create(
+            params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
+            buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+              timeoutMs: options?.timeoutMs,
+              maxRetries: options?.maxRetries,
+            }),
+          )
+          .withResponse();
+        const hookedResponseStream = withProviderResponseHook({
+          stream: responseStream,
+          signal: firstEventAbort.signal,
+          abort: firstEventAbort.abort,
+          hook: createOpenAIResponseHook(options?.onResponse, response, model),
+          onReady: () => stream.push({ type: "start", partial: output as never }),
+        });
+        await processOpenAICompletionsStream(hookedResponseStream, output, model, stream, {
           signal: options?.signal,
           emitReasoning,
           firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),

@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -51,7 +52,7 @@ type CronFailureAlertParams = {
   webhookToken?: unknown;
   ssrfPolicy?: SsrFPolicy;
   job: CronJob;
-  text: string;
+  payload: ReplyPayload;
   runAtMs?: number;
   channel: CronMessageChannel;
   to?: string;
@@ -390,7 +391,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
         payload: {
           jobId: params.job.id,
           jobName: params.job.name,
-          message: params.text,
+          message: params.payload.text ?? "",
           runAtMs: params.runAtMs,
         },
         logContext: { jobId: params.job.id },
@@ -426,7 +427,10 @@ async function sendGatewayCronFailureAlertUnderAdmission(
         threadId: params.threadId,
         sessionKey: resolveCronDeliverySessionKey(params.job),
       },
-      message: appendCronRunStarted(params.text, params.runAtMs, runtimeConfig),
+      payload: {
+        ...params.payload,
+        text: appendCronRunStarted(params.payload.text ?? "", params.runAtMs, runtimeConfig),
+      },
       abortSignal: abortController.signal,
     }),
     CRON_WEBHOOK_TIMEOUT_MS,
@@ -589,7 +593,13 @@ function dispatchCronFailureDestinationNotifications(params: {
               // session only for context, not for reattaching the primary topic.
               inheritSessionThread: false,
             },
-            appendCronRunStarted(`⚠️ ${failurePayload.message}`, params.evt.runAtMs, runtimeConfig),
+            {
+              text: appendCronRunStarted(
+                `⚠️ ${failurePayload.message}`,
+                params.evt.runAtMs,
+                runtimeConfig,
+              ),
+            },
           ),
       });
     }
@@ -618,7 +628,13 @@ function dispatchCronFailureDestinationNotifications(params: {
           threadId: primaryPlan.threadId,
           sessionKey: deliverySessionKey,
         },
-        appendCronRunStarted(`⚠️ ${failurePayload.message}`, params.evt.runAtMs, runtimeConfig),
+        {
+          text: appendCronRunStarted(
+            `⚠️ ${failurePayload.message}`,
+            params.evt.runAtMs,
+            runtimeConfig,
+          ),
+        },
       ),
   });
 }

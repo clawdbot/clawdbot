@@ -467,6 +467,11 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
   return true;
 }
 
+/** Normalize HTTP aliases accepted by WebSocket clients to their WebSocket protocol. */
+export function normalizeWebSocketProtocol(protocol: string): string {
+  return protocol === "https:" ? "wss:" : protocol === "http:" ? "ws:" : protocol;
+}
+
 function parseHostForAddressChecks(
   host: string,
 ): { isLocalhost: boolean; unbracketedHost: string } | null {
@@ -515,8 +520,7 @@ export function isSecureWebSocketUrl(
   // Node's ws client accepts http(s) URLs and normalizes them to ws(s).
   // Treat those aliases the same way here so loopback cron announce delivery
   // and TLS-backed https endpoints follow the same security policy.
-  const protocol =
-    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  const protocol = normalizeWebSocketProtocol(parsed.protocol);
 
   if (protocol === "wss:") {
     return true;

@@ -1,11 +1,15 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { ensureMemoryIndexSchema } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
+import { CLAW_LAZY_ADDITIVE_STATE_COLUMNS } from "./openclaw-state-db-maintenance.js";
+import { ensureAdditiveStateColumns } from "./openclaw-state-db-schema-additive.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -48,6 +52,139 @@ describe("OpenClaw database maintenance schema validation", () => {
           pathname: "global.sqlite",
         }),
       ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps a newer nullable shared-state column compatible with the previous schema", () => {
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
+      "  removed_at INTEGER,\n  run_end_cleanup_json TEXT\n",
+      "  removed_at INTEGER\n",
+    );
+    const database = createGlobalDatabase();
+    try {
+      expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema, {
+          allowCompatibleAdditiveColumns: true,
+        }),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("accepts compatible future columns in shared-state and agent databases", () => {
+    const globalDatabase = createGlobalDatabase();
+    const agentDatabase = createAgentDatabase();
+    try {
+      globalDatabase.exec("ALTER TABLE worktrees ADD COLUMN future_note TEXT;");
+      agentDatabase.exec("ALTER TABLE conversations ADD COLUMN future_note TEXT;");
+
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(globalDatabase, {
+          pathname: "global.sqlite",
+        }),
+      ).not.toThrow();
+      expect(() =>
+        assertOpenClawAgentDatabaseForMaintenance(agentDatabase, {
+          agentId: "worker-1",
+          pathname: "agent.sqlite",
+        }),
+      ).not.toThrow();
+    } finally {
+      agentDatabase.close();
+      globalDatabase.close();
+    }
+  });
+
+  it("accepts the historical checked shared-host column but rejects other constraints", () => {
+    const historicalSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
+      "  shared_host INTEGER\n) STRICT;",
+      "  shared_host INTEGER CHECK (shared_host IN (0, 1))\n) STRICT;",
+    );
+    const database = createGlobalDatabase(historicalSchema);
+    try {
+      expect(historicalSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).not.toThrow();
+
+      database.exec("ALTER TABLE worktrees ADD COLUMN future_note TEXT DEFAULT NULL;");
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).toThrow("column definitions differ for worktrees");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps every registered same-version column bare, canonical, and ensured", () => {
+    expect(
+      CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+        ({ columnName, tableName }) => `${tableName}.${columnName}`,
+      ),
+    ).toEqual(CLAW_LAZY_ADDITIVE_STATE_COLUMNS);
+    expect(
+      CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
+        ({ columnName, dataType, tableName }) => `${tableName}.${columnName} ${dataType}`,
+      ),
+    ).toEqual([
+      "claw_installs.bootstrap_content_digest TEXT",
+      "claw_installs.bootstrap_source_path TEXT",
+      "claw_package_refs.extension_adapter_identity TEXT",
+      "claw_package_refs.extension_detected_format TEXT",
+      "claw_package_refs.extension_format TEXT",
+      "claw_package_refs.extension_id TEXT",
+      "claw_package_refs.extension_mapped_json TEXT",
+      "claw_package_refs.extension_unavailable_json TEXT",
+      "worker_environments.shared_host INTEGER",
+      "worktrees.run_end_cleanup_json TEXT",
+    ]);
+
+    const database = createGlobalDatabase();
+    try {
+      for (const {
+        columnName,
+        dataType,
+        tableName,
+      } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+        expect(readColumnContract(database, tableName, columnName)).toEqual({
+          dflt_value: null,
+          hidden: 0,
+          name: columnName,
+          notnull: 0,
+          pk: 0,
+          type: dataType,
+        });
+        database.exec(`ALTER TABLE "${tableName}" DROP COLUMN "${columnName}";`);
+      }
+
+      ensureAdditiveStateColumns(database);
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(database, {
+          pathname: "global.sqlite",
+        }),
+      ).not.toThrow();
+      for (const {
+        columnName,
+        dataType,
+        tableName,
+      } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+        expect(readColumnContract(database, tableName, columnName)).toEqual({
+          dflt_value: null,
+          hidden: 0,
+          name: columnName,
+          notnull: 0,
+          pk: 0,
+          type: dataType,
+        });
+      }
     } finally {
       database.close();
     }
@@ -365,4 +502,24 @@ function createAgentDatabase(): DatabaseSync {
     )
     .run(OPENCLAW_AGENT_SCHEMA_VERSION);
   return database;
+}
+
+function readColumnContract(
+  database: DatabaseSync,
+  tableName: string,
+  columnName: string,
+): Record<string, unknown> | undefined {
+  const column = (
+    database.prepare(`PRAGMA table_xinfo("${tableName}")`).all() as Array<Record<string, unknown>>
+  ).find((candidate) => candidate.name === columnName);
+  return column
+    ? {
+        dflt_value: column.dflt_value,
+        hidden: column.hidden,
+        name: column.name,
+        notnull: column.notnull,
+        pk: column.pk,
+        type: column.type,
+      }
+    : undefined;
 }

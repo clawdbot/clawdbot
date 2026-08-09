@@ -58,6 +58,29 @@ function createDrainRecorder(expectedCalls = 1) {
   return { calls, done, runFollowup };
 }
 
+function createQueueCase(key: string, overrides: Partial<QueueSettings> = {}, expectedCalls = 1) {
+  return { key, ...createDrainRecorder(expectedCalls), settings: createQueueSettings(overrides) };
+}
+
+function enqueueTestRuns(
+  key: string,
+  settings: QueueSettings,
+  ...runs: Parameters<typeof createRun>[0][]
+) {
+  for (const run of runs) {
+    enqueueTestRun(key, run, settings);
+  }
+}
+
+async function drainRecordedQueue(
+  key: string,
+  runFollowup: ReturnType<typeof createDrainRecorder>["runFollowup"],
+  done: ReturnType<typeof createDrainRecorder>["done"],
+) {
+  scheduleFollowupDrain(key, runFollowup);
+  await done.promise;
+}
+
 describe("followup queue collect routing", () => {
   it("carries queued local cron-authority unavailability through a followup drain", async () => {
     const key = `test-followup-cron-authority-${Date.now()}`;
@@ -221,42 +244,40 @@ describe("followup queue collect routing", () => {
   });
 
   it("does not collect when destinations differ", async () => {
-    const key = `test-collect-diff-to-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-diff-to-${Date.now()}`,
+      {},
+      2,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "one",
         originatingChannel: "slack",
         originatingTo: "channel:A",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "two",
         originatingChannel: "slack",
         originatingTo: "channel:B",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
     expect(calls[0]?.prompt).toBe("one");
     expect(calls[1]?.prompt).toBe("two");
   });
 
   it("collects when channel+destination match", async () => {
-    const key = `test-collect-same-to-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-same-to-${Date.now()}`,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "one",
         originatingChannel: "slack",
@@ -264,10 +285,6 @@ describe("followup queue collect routing", () => {
         originatingChatType: "channel",
         currentInboundEventTimestampMs: 1_000,
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "two",
         originatingChannel: "slack",
@@ -275,11 +292,9 @@ describe("followup queue collect routing", () => {
         originatingChatType: "channel",
         currentInboundEventTimestampMs: 2_000,
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
@@ -288,9 +303,9 @@ describe("followup queue collect routing", () => {
   });
 
   it("collects Slack top-level messages when reply anchors are disabled", async () => {
-    const key = `test-collect-slack-reply-off-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-slack-reply-off-${Date.now()}`,
+    );
 
     for (const [prompt, replyToId] of [
       ["one", "101.001"],
@@ -311,8 +326,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("Queued #1\none");
@@ -320,9 +334,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("splits collect batches when enabled reply anchors differ", async () => {
-    const key = `test-collect-slack-reply-all-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-slack-reply-all-${Date.now()}`,
+      {},
+      2,
+    );
 
     for (const [prompt, replyToId] of [
       ["one", "101.001"],
@@ -343,8 +359,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls.map((call) => call.prompt)).toEqual(["one", "two"]);
     expect(calls.map((call) => call.messageId)).toEqual(["101.001", "101.002"]);
@@ -356,9 +371,9 @@ describe("followup queue collect routing", () => {
   ] as const)(
     "splits standalone Slack collect batches by message id in %s reply mode",
     async (replyToMode, originatingChannel) => {
-      const key = `test-collect-slack-standalone-${replyToMode}-${Date.now()}`;
-      const { calls, done } = createDrainRecorder();
-      const settings = createQueueSettings();
+      const { key, calls, done, settings } = createQueueCase(
+        `test-collect-slack-standalone-${replyToMode}-${Date.now()}`,
+      );
 
       for (const [prompt, messageId] of [
         ["one", "101.001"],
@@ -392,9 +407,9 @@ describe("followup queue collect routing", () => {
   );
 
   it("collects distinct messages inside the same routed thread", async () => {
-    const key = `test-collect-shared-thread-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-shared-thread-${Date.now()}`,
+    );
 
     for (const [prompt, messageId] of [
       ["one", "message-1"],
@@ -415,8 +430,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("Queued #1\none");
@@ -424,9 +438,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("does not collect when captured reply modes differ on the same anchor", async () => {
-    const key = `test-collect-slack-reply-mode-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-slack-reply-mode-${Date.now()}`,
+      {},
+      2,
+    );
 
     for (const [prompt, messageId, replyToMode] of [
       ["first", "message-1", "first"],
@@ -447,50 +463,48 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls.map((call) => call.prompt)).toEqual(["first", "all"]);
     expect(calls.map((call) => call.originatingReplyToMode)).toEqual(["first", "all"]);
   });
 
   it("does not collect when chat types differ on the same destination", async () => {
-    const key = `test-collect-diff-chat-type-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-diff-chat-type-${Date.now()}`,
+      {},
+      2,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "direct",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "direct",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "channel",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "channel",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls.map((call) => call.prompt)).toEqual(["direct", "channel"]);
     expect(calls.map((call) => call.originatingChatType)).toEqual(["direct", "channel"]);
   });
 
   it("does not collect when source delivery policy differs", async () => {
-    const key = `test-collect-diff-delivery-policy-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-diff-delivery-policy-${Date.now()}`,
+      {},
+      2,
+    );
     const createPolicyRun = (
       prompt: string,
       sourceReplyDeliveryMode: NonNullable<FollowupRun["run"]["sourceReplyDeliveryMode"]>,
@@ -512,8 +526,7 @@ describe("followup queue collect routing", () => {
 
     enqueueFollowupRun(key, createPolicyRun("automatic", "automatic"), settings);
     enqueueFollowupRun(key, createPolicyRun("private", "message_tool_only"), settings);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls.map((call) => call.prompt)).toEqual([
       "[Queued messages while agent was busy]\n\n---\nQueued #1\nautomatic",
@@ -526,9 +539,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("does not collect when task suggestion delivery differs", async () => {
-    const key = `test-collect-diff-task-suggestion-delivery-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-diff-task-suggestion-delivery-${Date.now()}`,
+      {},
+      2,
+    );
     const createTaskRun = (prompt: string, taskSuggestionDeliveryMode?: "gateway") => {
       const base = createRun({
         prompt,
@@ -547,8 +562,7 @@ describe("followup queue collect routing", () => {
 
     enqueueFollowupRun(key, createTaskRun("legacy client"), settings);
     enqueueFollowupRun(key, createTaskRun("actionable client", "gateway"), settings);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls.map((call) => call.run.taskSuggestionDeliveryMode)).toEqual([
       undefined,
@@ -557,33 +571,30 @@ describe("followup queue collect routing", () => {
   });
 
   it("keeps overflow summaries on the dropped source chat type", async () => {
-    const key = `test-collect-overflow-chat-type-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings({ cap: 1 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-overflow-chat-type-${Date.now()}`,
+      { cap: 1 },
+      2,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "private direct content",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "direct",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "public channel content",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "channel",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[0]?.prompt).toContain("- private direct content");
@@ -593,33 +604,30 @@ describe("followup queue collect routing", () => {
   });
 
   it("keeps overflow summaries on the dropped source route", async () => {
-    const key = `test-collect-overflow-route-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings({ cap: 1 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-overflow-route-${Date.now()}`,
+      { cap: 1 },
+      2,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "channel A content",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingChatType: "channel",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "channel B content",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls[0]?.prompt).toContain("- channel A content");
     expect(calls[0]?.originatingTo).toBe("channel:A");
@@ -629,43 +637,36 @@ describe("followup queue collect routing", () => {
   });
 
   it("does not attribute elided private drops to a public summary", async () => {
-    const key = `test-collect-overflow-elided-context-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings = createQueueSettings({ cap: 1 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-overflow-elided-context-${Date.now()}`,
+      { cap: 1 },
+      3,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "private direct content",
         originatingChannel: "slack",
         originatingTo: "direct:A",
         originatingChatType: "direct",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "older public content",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "newer public content",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[0]?.prompt).not.toContain("older public content");
@@ -826,9 +827,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("keeps retained excess contexts isolated after evicting the oldest metadata", async () => {
-    const key = `test-collect-overflow-evicted-context-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings = createQueueSettings({ cap: 1 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-overflow-evicted-context-${Date.now()}`,
+      { cap: 1 },
+      3,
+    );
 
     const accepted = ["A", "B", "C", "D"].map((target) =>
       enqueueFollowupRun(
@@ -844,8 +847,7 @@ describe("followup queue collect routing", () => {
     );
     expect(accepted).toEqual([true, true, true, true]);
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(3);
     expect(calls.map((call) => call.originatingTo)).toEqual([
@@ -861,9 +863,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("keeps overflow summaries under the dropped sender authorization", async () => {
-    const key = `test-collect-overflow-auth-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings({ cap: 1 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-overflow-auth-${Date.now()}`,
+      { cap: 1 },
+      2,
+    );
     const dropped = createRun({
       prompt: "guest content",
       originatingChannel: "slack",
@@ -902,8 +906,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls[0]?.prompt).toContain("- guest content");
     expect(calls[0]?.run.senderId).toBe("guest");
@@ -915,9 +918,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("uses the head item authorization for non-collect overflow delivery", async () => {
-    const key = `test-followup-overflow-auth-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings = createQueueSettings({ mode: "followup", cap: 2 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-followup-overflow-auth-${Date.now()}`,
+      { mode: "followup", cap: 2 },
+      3,
+    );
     const guestRun = (prompt: string) => {
       const base = createRun({
         prompt,
@@ -956,8 +961,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(3);
     expect(calls[0]?.prompt).toContain("- dropped guest");
@@ -972,9 +976,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("batches compatible overflow sources into one summary run", async () => {
-    const key = `test-collect-overflow-group-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings({ cap: 3 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-overflow-group-${Date.now()}`,
+      { cap: 3 },
+      2,
+    );
 
     for (const [prompt, model] of [
       ["direct A", "model-a"],
@@ -1012,8 +1018,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 3 messages due to cap.");
@@ -1085,9 +1090,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("uses the newest run for a fully elided overflow segment", async () => {
-    const key = `test-collect-overflow-elided-latest-run-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings = createQueueSettings({ cap: 1 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-overflow-elided-latest-run-${Date.now()}`,
+      { cap: 1 },
+      3,
+    );
 
     for (const [prompt, model, authProfileId, chatType] of [
       ["first", "model-a", "auth-a", "direct"],
@@ -1127,9 +1134,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("splits overflow groups when source delivery policy changes", async () => {
-    const key = `test-collect-overflow-delivery-policy-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings = createQueueSettings({ cap: 2 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-overflow-delivery-policy-${Date.now()}`,
+      { cap: 2 },
+      3,
+    );
     const createSource = (
       prompt: string,
       sourceReplyDeliveryMode: NonNullable<FollowupRun["run"]["sourceReplyDeliveryMode"]>,
@@ -1164,8 +1173,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(3);
     expect(calls[0]?.prompt).toContain("- automatic source");
@@ -1177,9 +1185,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("splits overflow groups when runtime policy identity changes", async () => {
-    const key = `test-collect-overflow-runtime-policy-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings = createQueueSettings({ cap: 2 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-overflow-runtime-policy-${Date.now()}`,
+      { cap: 2 },
+      3,
+    );
     const createSource = (prompt: string, runtimePolicySessionKey: string) => {
       const base = createRun({
         prompt,
@@ -1211,8 +1221,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(3);
     expect(calls[0]?.prompt).toContain("- policy one");
@@ -1224,12 +1233,15 @@ describe("followup queue collect routing", () => {
   });
 
   it("preserves the source message id for standalone overflow summaries", async () => {
-    const key = `test-collect-overflow-message-id-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings({ cap: 1 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-overflow-message-id-${Date.now()}`,
+      { cap: 1 },
+      2,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "dropped source",
         messageId: "message-42",
@@ -1237,21 +1249,15 @@ describe("followup queue collect routing", () => {
         originatingTo: "channel:A",
         originatingChatType: "channel",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "survivor",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls[0]?.prompt).toContain("- dropped source");
     expect(calls[0]?.messageId).toBe("message-42");
@@ -1264,33 +1270,30 @@ describe("followup queue collect routing", () => {
   ] as const)(
     "separates overflow when the %s chat type is missing",
     async (_missingSide, droppedChatType, survivingChatType) => {
-      const key = `test-collect-overflow-missing-chat-${_missingSide}-${Date.now()}`;
-      const { calls, done, runFollowup } = createDrainRecorder(2);
-      const settings = createQueueSettings({ cap: 1 });
+      const { key, calls, done, runFollowup, settings } = createQueueCase(
+        `test-collect-overflow-missing-chat-${_missingSide}-${Date.now()}`,
+        { cap: 1 },
+        2,
+      );
 
-      enqueueTestRun(
+      enqueueTestRuns(
         key,
+        settings,
         {
           prompt: "dropped content",
           originatingChannel: "slack",
           originatingTo: "same-target",
           originatingChatType: droppedChatType,
         },
-        settings,
-      );
-      enqueueTestRun(
-        key,
         {
           prompt: "surviving content",
           originatingChannel: "slack",
           originatingTo: "same-target",
           originatingChatType: survivingChatType,
         },
-        settings,
       );
 
-      scheduleFollowupDrain(key, runFollowup);
-      await done.promise;
+      await drainRecordedQueue(key, runFollowup, done);
 
       expect(calls[0]?.prompt).toContain("- dropped content");
       expect(calls[0]?.originatingChatType).toBe(droppedChatType);
@@ -1351,8 +1354,7 @@ describe("followup queue collect routing", () => {
       nextModel: "current-model",
     });
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.run.model).toBe("current-model");
@@ -1517,29 +1519,26 @@ describe("followup queue collect routing", () => {
   });
 
   it("keeps deferred overflow summary text paired with its source route", async () => {
-    const key = `test-collect-overflow-deferred-pairs-${Date.now()}`;
-    const { calls, done } = createDrainRecorder();
-    const settings = createQueueSettings({ cap: 1 });
+    const { key, calls, done, settings } = createQueueCase(
+      `test-collect-overflow-deferred-pairs-${Date.now()}`,
+      { cap: 1 },
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "source A",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "direct",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "source B",
         originatingChannel: "slack",
         originatingTo: "same-target",
         originatingChatType: "direct",
       },
-      settings,
     );
 
     scheduleFollowupDrain(key, async (run) => {
@@ -1573,40 +1572,33 @@ describe("followup queue collect routing", () => {
   });
 
   it("collects compatible items after one cross-channel drain", async () => {
-    const key = `test-collect-after-cross-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-after-cross-${Date.now()}`,
+      {},
+      2,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "first route",
         originatingChannel: "slack",
         originatingTo: "channel:A",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "second route one",
         originatingChannel: "slack",
         originatingTo: "channel:B",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "second route two",
         originatingChannel: "slack",
         originatingTo: "channel:B",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toBe("first route");
@@ -1618,34 +1610,31 @@ describe("followup queue collect routing", () => {
   });
 
   it("drains unresolved-origin items separately from a routed batch", async () => {
-    const key = `test-collect-unresolved-origin-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-unresolved-origin-${Date.now()}`,
+      {},
+      2,
+    );
 
     enqueueFollowupRun(key, createRun({ prompt: "unresolved origin" }), settings);
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "keyed one",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "keyed two",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
@@ -1660,41 +1649,34 @@ describe("followup queue collect routing", () => {
   });
 
   it("does not collect known route-less chat types into another destination", async () => {
-    const key = `test-collect-known-chat-without-route-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-known-chat-without-route-${Date.now()}`,
+      {},
+      2,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "unresolved direct",
         originatingChatType: "direct",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "channel one",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "channel two",
         originatingChannel: "slack",
         originatingTo: "channel:B",
         originatingChatType: "channel",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls[0]?.prompt).toBe("unresolved direct");
     expect(calls[0]?.originatingChatType).toBe("direct");
@@ -1705,33 +1687,28 @@ describe("followup queue collect routing", () => {
   });
 
   it("collects ordinary user-request followups with current turn kind", async () => {
-    const key = `test-collect-user-request-kind-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-user-request-kind-${Date.now()}`,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "one",
         currentInboundEventKind: "user_request",
         originatingChannel: "slack",
         originatingTo: "channel:A",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "two",
         currentInboundEventKind: "user_request",
         originatingChannel: "slack",
         originatingTo: "channel:A",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
@@ -1740,9 +1717,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("drains runtime-context followups individually instead of collecting them", async () => {
-    const key = `test-collect-runtime-context-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-runtime-context-${Date.now()}`,
+      {},
+      2,
+    );
     const controller = new AbortController();
     const begin = () => () => undefined;
     const lifecycle = { onAdopted: async () => {}, onSettled: () => undefined };
@@ -1777,8 +1756,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toBe("[OpenClaw room event]");
@@ -1794,9 +1772,11 @@ describe("followup queue collect routing", () => {
 
   it("drains a disableCollectBatching retry individually instead of collecting it", async () => {
     const strandedReplyRetryMarker = "stranded-reply-retry";
-    const key = `test-collect-disable-batching-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-disable-batching-${Date.now()}`,
+      {},
+      3,
+    );
 
     const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
     const retryPrompt = "[System] Please deliver this reply now by calling message(action=send).";
@@ -1813,8 +1793,7 @@ describe("followup queue collect routing", () => {
     );
     enqueueFollowupRun(key, createRun({ prompt: "normal two", ...route }), settings);
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(3);
     const retryCall = calls.find((call) => call.prompt === retryPrompt);
@@ -1978,9 +1957,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("drains protected priority followups before overflow summaries", async () => {
-    const key = `test-priority-followup-before-summary-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings({ mode: "followup", cap: 1 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-priority-followup-before-summary-${Date.now()}`,
+      { mode: "followup", cap: 1 },
+      2,
+    );
 
     enqueueFollowupRun(key, createRun({ prompt: "overflowed normal" }), settings);
     enqueueFollowupRun(
@@ -1993,8 +1974,7 @@ describe("followup queue collect routing", () => {
       { position: "front" },
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toBe("priority retry");
@@ -2003,9 +1983,9 @@ describe("followup queue collect routing", () => {
   });
 
   it("carries image payloads across collected batches", async () => {
-    const key = `test-collect-images-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-images-${Date.now()}`,
+    );
     const firstImage = { type: "image" as const, data: "first", mimeType: "image/png" };
     const secondImage = { type: "image" as const, data: "second", mimeType: "image/png" };
 
@@ -2036,17 +2016,18 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls[0]?.images).toEqual([firstImage, secondImage]);
     expect(calls[0]?.imageOrder).toEqual(["inline", "inline"]);
   });
 
   it("splits collect batches when sender authorization changes", async () => {
-    const key = `test-collect-auth-split-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-auth-split-${Date.now()}`,
+      {},
+      2,
+    );
 
     const nonOwner = createRun({
       prompt: "use the gateway tool",
@@ -2085,8 +2066,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls.map((call) => call.run.senderIsOwner)).toEqual([false, true]);
     expect(calls[0]?.prompt).toContain("use the gateway tool");
@@ -2118,8 +2098,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toContain("first");
@@ -2129,9 +2108,9 @@ describe("followup queue collect routing", () => {
   });
 
   it("keeps one collect batch when authorization context matches", async () => {
-    const key = `test-collect-auth-match-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-auth-match-${Date.now()}`,
+    );
 
     const first = createRun({
       prompt: "first",
@@ -2173,8 +2152,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("first");
@@ -2184,9 +2162,9 @@ describe("followup queue collect routing", () => {
   });
 
   it("keeps one collect batch when only sender display fields drift", async () => {
-    const key = `test-collect-auth-display-drift-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-auth-display-drift-${Date.now()}`,
+    );
 
     const first = createRun({
       prompt: "first",
@@ -2228,8 +2206,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("first");
@@ -2239,9 +2216,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("splits collect batches when exec context changes", async () => {
-    const key = `test-collect-exec-split-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-exec-split-${Date.now()}`,
+      {},
+      2,
+    );
 
     const base = createRun({
       prompt: "first",
@@ -2281,8 +2260,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls[0]?.prompt).toContain("first");
     expect(calls[0]?.prompt).not.toContain("second");
@@ -2292,9 +2270,9 @@ describe("followup queue collect routing", () => {
   });
 
   it("uses the newest run within a matching authorization batch", async () => {
-    const key = `test-collect-latest-run-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-latest-run-${Date.now()}`,
+    );
 
     const first = createRun({ prompt: "first", originatingChannel: "slack", originatingTo: "A" });
     const second = createRun({
@@ -2334,8 +2312,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.run.provider).toBe("anthropic");
@@ -2343,40 +2320,33 @@ describe("followup queue collect routing", () => {
   });
 
   it("delivers summary-only collect work under its source route", async () => {
-    const key = `test-collect-summary-only-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings = createQueueSettings({ cap: 2 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-summary-only-${Date.now()}`,
+      { cap: 2 },
+      3,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "first",
         originatingChannel: "slack",
         originatingTo: "channel:A",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "second",
         originatingChannel: "slack",
         originatingTo: "channel:B",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "third",
         originatingChannel: "slack",
         originatingTo: "channel:C",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(3);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
@@ -2387,9 +2357,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("preserves collect order when authorization changes more than once", async () => {
-    const key = `test-collect-auth-order-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-auth-order-${Date.now()}`,
+      {},
+      3,
+    );
 
     const first = createRun({ prompt: "first", originatingChannel: "slack", originatingTo: "A" });
     const second = createRun({ prompt: "second", originatingChannel: "slack", originatingTo: "A" });
@@ -2420,8 +2392,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls.map((call) => call.prompt)).toEqual([
       "[Queued messages while agent was busy]\n\n---\nQueued #1 (from A)\nfirst",
@@ -2431,65 +2402,55 @@ describe("followup queue collect routing", () => {
   });
 
   it("collects Slack messages in same thread and preserves string thread id", async () => {
-    const key = `test-collect-slack-thread-same-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-slack-thread-same-${Date.now()}`,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "one",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingThreadId: "1706000000.000001",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "two",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingThreadId: "1706000000.000001",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
   });
 
   it("collects messages when numeric and string thread ids share the route key", async () => {
-    const key = `test-collect-thread-normalized-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-thread-normalized-${Date.now()}`,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "one",
         originatingChannel: "telegram",
         originatingTo: "-100123",
         originatingThreadId: 42.9,
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "two",
         originatingChannel: "telegram",
         originatingTo: "-100123",
         originatingThreadId: "42",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.prompt).toContain("one");
@@ -2501,28 +2462,23 @@ describe("followup queue collect routing", () => {
     const { calls, done, runFollowup } = createDrainRecorder();
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "one",
         messageId: "webchat-message-1",
         originatingChannel: "webchat",
         originatingReplyToMode: "all",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "two",
         messageId: "webchat-message-2",
         originatingChannel: "webchat",
         originatingReplyToMode: "all",
       },
-      settings,
     );
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("one");
@@ -2530,33 +2486,30 @@ describe("followup queue collect routing", () => {
   });
 
   it("does not collect Slack messages when thread ids differ", async () => {
-    const key = `test-collect-slack-thread-diff-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings();
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-slack-thread-diff-${Date.now()}`,
+      {},
+      2,
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "one",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingThreadId: "1706000000.000001",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "two",
         originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingThreadId: "1706000000.000002",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
     expect(calls[0]?.prompt).toBe("one");
     expect(calls[1]?.prompt).toBe("two");
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
@@ -2580,8 +2533,7 @@ describe("followup queue collect routing", () => {
     enqueueFollowupRun(key, createRun({ prompt: "one" }), settings);
     enqueueFollowupRun(key, createRun({ prompt: "two" }), settings);
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
     expect(calls[0]?.prompt).toContain("Queued #1\none");
     expect(calls[0]?.prompt).toContain("Queued #2\ntwo");
   });
@@ -2643,8 +2595,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     const guestAttempts = attempts.filter((call) => call.prompt.includes("guest message"));
     const ownerAttempts = attempts.filter((call) => call.prompt.includes("owner message"));
@@ -2675,8 +2626,7 @@ describe("followup queue collect routing", () => {
     enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
     enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[0]?.prompt).toContain("- first");
   });
@@ -2685,9 +2635,10 @@ describe("followup queue collect routing", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-overflow-session-"));
     const storePath = path.join(tempDir, "sessions.json");
     const oldTranscriptPath = path.join(tempDir, "old-session.jsonl");
-    const key = `test-overflow-summary-session-rotation-${Date.now()}`;
-    const { calls, done } = createDrainRecorder();
-    const settings = createQueueSettings({ mode: "followup", cap: 1 });
+    const { key, calls, done, settings } = createQueueCase(
+      `test-overflow-summary-session-rotation-${Date.now()}`,
+      { mode: "followup", cap: 1 },
+    );
 
     try {
       await replaceSessionEntry(
@@ -2778,9 +2729,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("delivers the overflow summary before split auth groups", async () => {
-    const key = `test-collect-overflow-summary-once-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings = createQueueSettings({ cap: 2 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-collect-overflow-summary-once-${Date.now()}`,
+      { cap: 2 },
+      3,
+    );
 
     const droppedGuest = createRun({
       prompt: "dropped guest message",
@@ -2838,8 +2791,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(3);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
@@ -2924,8 +2876,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(3);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
@@ -2938,12 +2889,14 @@ describe("followup queue collect routing", () => {
   });
 
   it("preserves routing metadata on overflow summary followups", async () => {
-    const key = `test-overflow-summary-routing-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder();
-    const settings = createQueueSettings({ mode: "followup", cap: 1 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-overflow-summary-routing-${Date.now()}`,
+      { mode: "followup", cap: 1 },
+    );
 
-    enqueueTestRun(
+    enqueueTestRuns(
       key,
+      settings,
       {
         prompt: "first",
         originatingChannel: "discord",
@@ -2951,10 +2904,6 @@ describe("followup queue collect routing", () => {
         originatingAccountId: "work",
         originatingThreadId: "1739142736.000100",
       },
-      settings,
-    );
-    enqueueTestRun(
-      key,
       {
         prompt: "second",
         originatingChannel: "discord",
@@ -2962,11 +2911,9 @@ describe("followup queue collect routing", () => {
         originatingAccountId: "work",
         originatingThreadId: "1739142736.000100",
       },
-      settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls[0]?.originatingChannel).toBe("discord");
     expect(calls[0]?.originatingTo).toBe("channel:C1");
@@ -3012,8 +2959,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
@@ -3030,9 +2976,11 @@ describe("followup queue collect routing", () => {
   });
 
   it("keeps mixed overflow summaries as normal followups", async () => {
-    const key = `test-overflow-summary-mixed-kind-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(2);
-    const settings = createQueueSettings({ mode: "followup", cap: 1 });
+    const { key, calls, done, runFollowup, settings } = createQueueCase(
+      `test-overflow-summary-mixed-kind-${Date.now()}`,
+      { mode: "followup", cap: 1 },
+      2,
+    );
 
     enqueueFollowupRun(
       key,
@@ -3052,8 +3000,7 @@ describe("followup queue collect routing", () => {
     );
     enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
@@ -3088,8 +3035,7 @@ describe("followup queue collect routing", () => {
 
     expect(onComplete).not.toHaveBeenCalled();
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("live followup");
@@ -3281,8 +3227,7 @@ describe("followup queue collect routing", () => {
       settings,
     );
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("first");
@@ -3392,8 +3337,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("first");
@@ -3441,8 +3385,7 @@ describe("followup queue collect routing", () => {
       );
     }
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("first");
@@ -3621,8 +3564,7 @@ describe("followup queue collect routing", () => {
     );
     aborted.abort();
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("owner A summary");
@@ -3661,8 +3603,7 @@ describe("followup queue collect routing", () => {
     enqueueFollowupRun(key, createRun({ prompt: "live item" }), settings);
     elided.abort();
 
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
+    await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls.map((call) => call.prompt).join("\n")).not.toContain("elided and cancelled");
     expect(calls[0]?.prompt).toContain("retained summary");

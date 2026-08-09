@@ -8,7 +8,7 @@ import {
   shouldEnsureFfmpegFromArgv,
   shouldInstallPlaywrightSystemDependencies,
   shouldRequirePlaywrightChromiumFromArgv,
-} from "../../scripts/ensure-playwright-chromium.mjs";
+} from "../../scripts/ensure-playwright-chromium.mts";
 
 const noPnpmPath = "/openclaw-test-no-pnpm";
 
@@ -614,13 +614,13 @@ describe("ensurePlaywrightChromium", () => {
   });
 
   it("allows QA scenario runners to skip optional Playwright ffmpeg", () => {
-    expect(shouldEnsureFfmpegFromArgv(["node", "scripts/ensure-playwright-chromium.mjs"])).toBe(
+    expect(shouldEnsureFfmpegFromArgv(["node", "scripts/ensure-playwright-chromium.mts"])).toBe(
       true,
     );
     expect(
       shouldEnsureFfmpegFromArgv([
         "node",
-        "scripts/ensure-playwright-chromium.mjs",
+        "scripts/ensure-playwright-chromium.mts",
         "--skip-ffmpeg",
       ]),
     ).toBe(false);
@@ -630,12 +630,12 @@ describe("ensurePlaywrightChromium", () => {
     expect(
       shouldRequirePlaywrightChromiumFromArgv([
         "node",
-        "scripts/ensure-playwright-chromium.mjs",
+        "scripts/ensure-playwright-chromium.mts",
         "--require-playwright-chromium",
       ]),
     ).toBe(true);
     expect(
-      shouldRequirePlaywrightChromiumFromArgv(["node", "scripts/ensure-playwright-chromium.mjs"]),
+      shouldRequirePlaywrightChromiumFromArgv(["node", "scripts/ensure-playwright-chromium.mts"]),
     ).toBe(false);
   });
 });

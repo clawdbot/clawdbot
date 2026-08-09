@@ -7,7 +7,7 @@ import {
   hasBuildArtifactAffectingChange,
   hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
-} from "../../scripts/lib/ci-changed-node-test-plan.mjs";
+} from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 
 describe("CI changed Node test plan", () => {
@@ -57,7 +57,7 @@ describe("CI changed Node test plan", () => {
     expect(hasBuildArtifactAffectingChange(["src/agents/foo.ts"])).toBe(true);
     // Build-input classification: only sources and the build pipeline can
     // change dist bytes; repo scripts, workflows, and qa scenarios cannot.
-    expect(hasBuildArtifactAffectingChange(["scripts/build-all.mjs"])).toBe(true);
+    expect(hasBuildArtifactAffectingChange(["scripts/build-all.mts"])).toBe(true);
     expect(hasBuildArtifactAffectingChange(["tsconfig.json"])).toBe(true);
     expect(hasBuildArtifactAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
     expect(hasBuildArtifactAffectingChange([".github/workflows/ci.yml"])).toBe(false);
@@ -75,7 +75,7 @@ describe("CI changed Node test plan", () => {
     // The QA lane's own orchestration must not be able to skip the lane.
     expect(hasQaSmokeAffectingChange([".github/workflows/ci.yml"])).toBe(true);
     expect(hasQaSmokeAffectingChange([".github/actions/setup-node-env/action.yml"])).toBe(true);
-    expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mjs"])).toBe(true);
+    expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
     expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
     // Deleted source files cannot be graphed; fail safe to running QA smoke.
     expect(hasQaSmokeAffectingChange(["src/infra/definitely-deleted-module.ts"])).toBe(true);
@@ -98,7 +98,7 @@ describe("CI changed Node test plan", () => {
     expect(hasPromptSnapshotAffectingChange(["packages/llm-core/src/index.ts"])).toBe(true);
     // The gate's own orchestration must not be able to skip the gated lane.
     expect(hasPromptSnapshotAffectingChange([".github/workflows/ci.yml"])).toBe(true);
-    expect(hasPromptSnapshotAffectingChange(["scripts/lib/ci-changed-node-test-plan.mjs"])).toBe(
+    expect(hasPromptSnapshotAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(
       true,
     );
     // Outside the surface and the generator graph -> the lane may skip.

@@ -10,10 +10,10 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
-const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
+const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mts";
 const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
 const DOCKER_E2E_IMAGE_HELPER_PATH = "scripts/lib/docker-e2e-image.sh";
-const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mjs";
+const DOCKER_E2E_SCENARIOS_PATH = "scripts/lib/docker-e2e-scenarios.mts";
 const COMPOSE_SETUP_E2E_PATH = "scripts/e2e/compose-setup.sh";
 const CLI_INSTALLER_DISTRIBUTION_E2E_PATH = "scripts/e2e/cli-installer-distribution-docker.sh";
 const DOCKER_PACKAGE_INSTALL_E2E_PATH = "scripts/e2e/docker-package-install.sh";
@@ -4008,7 +4008,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
   it("forwards every kitchen-sink RPC runtime env knob into Docker", () => {
     const runner = readFileSync(KITCHEN_SINK_RPC_DOCKER_E2E_PATH, "utf8");
-    const walk = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mjs", "utf8");
+    const walk = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mts", "utf8");
     const consumed = new Set(
       [...walk.matchAll(/\b(?:env|process\.env)\.(OPENCLAW_KITCHEN_SINK_[A-Z0-9_]+)/gu)]
         .map((match) => match[1])
@@ -4261,8 +4261,13 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     expect(scheduler).toContain("env.npm_execpath ? path.dirname(env.npm_execpath)");
     expect(scheduler).toContain("path.dirname(process.execPath)");
     expect(scheduler).toContain("env.PATH = [...new Set(pathEntries)].join(path.delimiter)");
-    expect(scheduler).toContain("withResolvedPnpmCommand");
-    expect(scheduler).toContain("OPENCLAW_DOCKER_ALL_PNPM_COMMAND");
+    expect(scheduler).toContain(
+      "const pnpmCommand = env.OPENCLAW_DOCKER_ALL_PNPM_COMMAND?.trim();",
+    );
+    expect(scheduler).toContain("lane.command.replace(/(^|\\s)pnpm(?=\\s)/g");
+    expect(scheduler).toContain(
+      'env.push(["OPENCLAW_DOCKER_ALL_PNPM_COMMAND", baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND]);',
+    );
   });
 
   it("runs release installer E2E against the npm beta tag", () => {

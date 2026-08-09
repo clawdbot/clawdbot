@@ -2296,7 +2296,7 @@ jobs:
           )
           # Frozen targets that predate the opt-in flag still strict-pack against their versioned changelog.
           if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]] && \
-            grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mjs; then
+            grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mts; then
             package_args+=(--allow-unreleased-changelog)
           fi
           node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
@@ -2341,12 +2341,12 @@ jobs:
             cp "${tgzs[0]}" "$target"
           fi
           echo "Validating Docker E2E package tarball: $target"
-          validator="scripts/check-openclaw-package-tarball.mjs"
+          validator=(node scripts/check-openclaw-package-tarball.mjs)
           if [[ -n "${EXPECTED_PACKAGE_FILE_NAME// }" ]]; then
-            validator=".release-harness/scripts/check-openclaw-package-tarball.mjs"
+            validator=(pnpm --dir .release-harness exec node scripts/check-openclaw-package-tarball.mjs)
           fi
           started_at="$(date +%s)"
-          timeout --foreground 5m node "$validator" "$target"
+          timeout --foreground 5m "${validator[@]}" "$GITHUB_WORKSPACE/$target"
           finished_at="$(date +%s)"
           echo "Docker E2E package tarball validation finished in $((finished_at - started_at))s."
           digest="$(sha256sum "$target" | awk '{print $1}')"

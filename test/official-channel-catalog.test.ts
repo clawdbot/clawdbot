@@ -18,7 +18,7 @@ import {
   writeOfficialChannelCatalog,
   writeOfficialChannelDocsIndex,
   writeOfficialChannelCatalogSource,
-} from "../scripts/write-official-channel-catalog.mjs";
+} from "../scripts/write-official-channel-catalog.mts";
 import { describePluginInstallSource } from "../src/plugins/install-source-info.js";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 

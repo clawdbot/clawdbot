@@ -73,6 +73,8 @@ function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
     list: async (query) => await (await loadCatalogRuntime()).list(query),
     read: async (request) => await (await loadCatalogRuntime()).read(request),
     continueSession: async (request) => await (await loadCatalogRuntime()).continueSession(request),
+    startTerminalSession: async (request) =>
+      await (await loadCatalogRuntime()).startTerminalSession(request),
     openTerminal: async (request) => await (await loadCatalogRuntime()).openTerminal(request),
     checkUpstreamActivity: async (probes) =>
       await (await loadCatalogRuntime()).checkUpstreamActivity(probes),

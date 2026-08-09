@@ -43,7 +43,7 @@ function readBoundedResponseText(
   maxBytes = FETCH_HTML_MAX_BYTES,
 ): Promise<string> {
   return readBoundedResponseTextWithLimit(response, label, maxBytes, {
-    createTooLargeError: (message) => new Error(message),
+    createTooLargeError: (message: string) => new Error(message),
     signal,
   });
 }

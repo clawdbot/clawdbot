@@ -658,6 +658,13 @@ process.kill = function(pid, signal) {
     const deadPid = 2_147_483_647;
     const token = "9".repeat(32);
     await fs.mkdir(lock);
+    const invalidOwner = ["apply", nonce, deadPid, deadPid - 1, token].join(".");
+    const invalidEntry = path.join(lock, `owner.${invalidOwner}`);
+    await fs.writeFile(invalidEntry, "");
+    const rejected = await runTransaction("settle");
+    expect(rejected.code).not.toBe(0);
+    expect(rejected.stderr).toContain("invalid workspace mutation lock owner");
+    await fs.unlink(invalidEntry);
     const ownerIdentity = ["apply", nonce, deadPid, deadPid, token].join(".");
     const reclaimToken = "a".repeat(32);
     const reclaimerIdentity = ["settle", nonce, deadPid, deadPid, reclaimToken].join(".");

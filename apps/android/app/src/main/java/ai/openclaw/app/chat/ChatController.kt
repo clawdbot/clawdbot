@@ -134,6 +134,7 @@ class ChatController internal constructor(
   private val recordModelRecent: (String) -> Unit = {},
   private val onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   private val onOfflineDefaultAgentRestored: (String) -> Unit = {},
+  private val onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
 ) {
   internal constructor(
     scope: CoroutineScope,
@@ -147,6 +148,7 @@ class ChatController internal constructor(
     recordModelRecent: (String) -> Unit = {},
     onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
     onOfflineDefaultAgentRestored: (String) -> Unit = {},
+    onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
   ) : this(
     scope = scope,
     json = json,
@@ -171,6 +173,7 @@ class ChatController internal constructor(
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
+    onAssistantReplyFinalized = onAssistantReplyFinalized,
   )
 
   suspend fun loadImageArtifact(artifactId: String): GatewayLoadedImage? {
@@ -5324,20 +5327,27 @@ class ChatController internal constructor(
   private fun handleChatEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
     val sessionKey = payload["sessionKey"].asStringOrNull()?.trim()
+    val runId = payload["runId"].asStringOrNull()
+    val state = payload["state"].asStringOrNull()
+    val projection = runId?.let(pendingRunProjectionsByRunId::get)
     if (!sessionKey.isNullOrEmpty() && sessionKey != _sessionKey.value) {
-      val state = payload["state"].asStringOrNull()
       if (state == "final" || state == "aborted" || state == "error") {
-        payload["runId"].asStringOrNull()?.let(::clearPendingRun)
+        handleInactiveChatTerminal(
+          payload = payload,
+          runId = runId,
+          owner = resolveChatEventRoutingOwner(sessionKey, projection),
+        )
       }
       return
     }
 
-    val runId = payload["runId"].asStringOrNull()
-    val state = payload["state"].asStringOrNull()
-    val projection = runId?.let(pendingRunProjectionsByRunId::get)
     if (projection != null && projection.owner != currentChatComposerRoutingOwner()) {
       if (state == "final" || state == "aborted" || state == "error") {
-        clearPendingRun(runId)
+        handleInactiveChatTerminal(
+          payload = payload,
+          runId = runId,
+          owner = resolveChatEventRoutingOwner(sessionKey, projection),
+        )
       }
       return
     }
@@ -5367,6 +5377,11 @@ class ChatController internal constructor(
             // Another client or chat.inject can finish the open session. Refresh
             // idle history without allowing its terminal state to own local UI.
             lastHandledTerminalRunId = runId
+            publishAssistantReplyFinalized(
+              payload = payload,
+              runId = runId,
+              owner = currentChatComposerRoutingOwner(),
+            )
             refreshCurrentHistoryBestEffort(updateSessionInfo = true)
           }
           return
@@ -5375,6 +5390,11 @@ class ChatController internal constructor(
           lastHandledTerminalRunId = runId
           retireRunTelemetry(runId)
         }
+        publishAssistantReplyFinalized(
+          payload = payload,
+          runId = runId,
+          owner = currentChatComposerRoutingOwner(),
+        )
         if (wasTimedOut) {
           val hasNewerRun =
             synchronized(pendingRuns) { pendingRuns.isNotEmpty() } || unresolvedRepliesByRunId.isNotEmpty()
@@ -5720,6 +5740,63 @@ class ChatController internal constructor(
         _streamingAssistantText.value = null
       }
     }
+  }
+
+  private fun handleInactiveChatTerminal(
+    payload: JsonObject,
+    runId: String?,
+    owner: ChatComposerOwner?,
+  ) {
+    val normalizedRunId = runId?.trim()?.takeIf(String::isNotEmpty)
+    if (normalizedRunId != null && normalizedRunId != lastHandledTerminalRunId) {
+      lastHandledTerminalRunId = normalizedRunId
+      retireRunTelemetry(normalizedRunId)
+      publishAssistantReplyFinalized(
+        payload = payload,
+        runId = normalizedRunId,
+        owner = owner,
+      )
+    }
+    normalizedRunId?.let(::clearPendingRun)
+  }
+
+  private fun resolveChatEventRoutingOwner(
+    sessionKey: String?,
+    projection: PendingRunProjection?,
+  ): ChatComposerOwner? {
+    val gatewayStableId = currentCacheScope()?.gatewayId
+    val normalizedSessionKey = sessionKey?.trim()?.takeIf(String::isNotEmpty)
+    if (projection != null) {
+      return projection.owner.takeIf { owner ->
+        owner.gatewayStableId == gatewayStableId &&
+          (normalizedSessionKey == null || owner.sessionKey == normalizedSessionKey)
+      }
+    }
+
+    val eventSessionKey =
+      when (normalizedSessionKey) {
+        null -> return null
+        "main" -> appliedMainSessionKey.trim().takeIf(String::isNotEmpty) ?: return null
+        else -> normalizedSessionKey
+      }
+    return resolveChatComposerRoutingOwner(
+      gatewayStableId = gatewayStableId,
+      gatewayDefaultAgentId = effectiveDefaultAgentId(),
+      sessionKey = eventSessionKey,
+      mainSessionKey = appliedMainSessionKey,
+    )
+  }
+
+  private fun publishAssistantReplyFinalized(
+    payload: JsonObject,
+    runId: String?,
+    owner: ChatComposerOwner?,
+  ) {
+    if (payload["state"].asStringOrNull() != "final") return
+    val normalizedRunId = runId?.trim()?.takeIf(String::isNotEmpty) ?: return
+    val verifiedOwner = owner?.takeIf { it.routingVerified } ?: return
+    val text = parseAssistantDeltaText(payload)?.trim()?.takeIf(String::isNotEmpty) ?: return
+    runCatching { onAssistantReplyFinalized(verifiedOwner, normalizedRunId, text) }
   }
 
   private fun parseAssistantDeltaText(payload: JsonObject): String? {

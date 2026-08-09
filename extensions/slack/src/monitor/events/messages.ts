@@ -237,7 +237,7 @@ export function registerSlackMessageEvents(params: {
     client,
   }: {
     event: unknown;
-    body: unknown;
+    body: SlackEventMiddlewareArgs<"message">["body"];
     context: AllMiddlewareArgs["context"];
     client: AllMiddlewareArgs["client"];
   }) => {
@@ -306,7 +306,7 @@ export function registerSlackMessageEvents(params: {
         }
         enqueueSystemEvent(subtypeHandler.describe(ingressContext.channelLabel), {
           sessionKey: ingressContext.sessionKey,
-          contextKey: subtypeHandler.contextKey(message),
+          contextKey: `${subtypeHandler.contextKey(message)}:${body.event_id}`,
         });
         return;
       }

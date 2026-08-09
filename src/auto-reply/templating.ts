@@ -1,6 +1,7 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
+import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -276,6 +277,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   Prompt?: string;
   MaxChars?: number;
   ChatType?: string;
+  /** Trusted channel-configured policy for this admitted conversation turn. */
+  ConversationToolPolicy?: GroupToolPolicyConfig;
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;
   GroupSubject?: string;
