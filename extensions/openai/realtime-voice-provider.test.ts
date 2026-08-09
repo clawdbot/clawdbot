@@ -1263,7 +1263,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       tool_choice: "auto",
       audio: {
         input: {
-          format: { type: "audio/pcmu" },
+          format: { type: "audio/pcm", rate: 24000 },
           noise_reduction: { type: "near_field" },
           turn_detection: {
             type: "server_vad",
@@ -1274,7 +1274,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
             interrupt_response: true,
           },
         },
-        output: { format: { type: "audio/pcmu" }, voice: "marin" },
+        output: { format: { type: "audio/pcm", rate: 24000 }, voice: "marin" },
       },
     });
     const createBridge = gaSideband.createBridge as (params: {

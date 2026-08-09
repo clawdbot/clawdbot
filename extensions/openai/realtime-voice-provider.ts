@@ -2144,7 +2144,7 @@ async function createOpenAIRealtimeBrowserSession(
     });
     const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
     const sessionConfig = buildOpenAIRealtimeGaSessionPolicy({
-      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       instructions: req.instructions,
       interruptResponseOnInputAudio: config.interruptResponseOnInputAudio,
       model,
