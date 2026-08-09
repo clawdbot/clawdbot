@@ -5,8 +5,8 @@
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { showConfirmDialog } from "../components/confirm-dialog.ts";
 import { t } from "../i18n/index.ts";
-import type { ConfirmAndStartUpdateParams } from "./update-confirmation.ts";
 import { postNativeUpdate } from "./native-link-routing.ts";
+import type { ConfirmAndStartUpdateParams } from "./update-confirmation.ts";
 import { formatUpdateTargetLabel } from "./update-overlay-helpers.ts";
 
 function formatInstalledAndAvailable(
