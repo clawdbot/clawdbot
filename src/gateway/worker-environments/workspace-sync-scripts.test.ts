@@ -605,9 +605,9 @@ process.kill = function(pid, signal) {
     const deadPid = 2_147_483_647;
     const token = "9".repeat(32);
     await fs.mkdir(lock);
-    const ownerIdentity = ["apply", nonce, deadPid, token].join(".");
+    const ownerIdentity = ["apply", nonce, deadPid, deadPid, token].join(".");
     const reclaimToken = "a".repeat(32);
-    const reclaimerIdentity = ["settle", nonce, deadPid, reclaimToken].join(".");
+    const reclaimerIdentity = ["settle", nonce, deadPid, deadPid, reclaimToken].join(".");
     await fs.writeFile(path.join(lock, `reclaim.${ownerIdentity}.${reclaimerIdentity}`), "");
 
     const settled = await runTransaction("settle");

@@ -3,33 +3,49 @@ export const REMOTE_WORKSPACE_MUTATION_LOCK_JS = String.raw`const lockRoot = pat
   ".openclaw-accepted-lock-" + workspaceKey,
 );
 const lockToken = crypto.randomBytes(16).toString("hex");
-const lockOwner = { action, nonce, pid: lockOwnerPid, token: lockToken };
+const lockOwner = {
+  action,
+  nonce,
+  pid: lockOwnerPid,
+  controllerPid: process.pid,
+  token: lockToken,
+};
 const lockWait = new Int32Array(new SharedArrayBuffer(4));
 const lockDeadlineMs = Date.now() + 9 * 60 * 1000;
 let acquiredLock;
 function encodeLockIdentity(identity) {
-  return [identity.action, identity.nonce, identity.pid, identity.token].join(".");
+  return [
+    identity.action,
+    identity.nonce,
+    identity.pid,
+    identity.controllerPid,
+    identity.token,
+  ].join(".");
 }
 function parseLockIdentity(parts) {
-  if (parts.length !== 4) return null;
-  const [entryAction, entryNonce, rawPid, token] = parts;
+  if (parts.length !== 5) return null;
+  const [entryAction, entryNonce, rawPid, rawControllerPid, token] = parts;
   const pid = Number(rawPid);
+  const controllerPid = Number(rawControllerPid);
   if (
     !mutationActions.includes(entryAction) ||
     !/^[a-f0-9]{32}$/.test(entryNonce || "") ||
     !/^[1-9][0-9]*$/.test(rawPid || "") ||
     !Number.isSafeInteger(pid) ||
+    !/^[1-9][0-9]*$/.test(rawControllerPid || "") ||
+    !Number.isSafeInteger(controllerPid) ||
     !/^[a-f0-9]{32}$/.test(token || "")
   ) {
     return null;
   }
-  return { action: entryAction, nonce: entryNonce, pid, token };
+  return { action: entryAction, nonce: entryNonce, pid, controllerPid, token };
 }
 function sameLockIdentity(left, right) {
   return (
     left.action === right.action &&
     left.nonce === right.nonce &&
     left.pid === right.pid &&
+    left.controllerPid === right.controllerPid &&
     left.token === right.token
   );
 }
@@ -54,7 +70,7 @@ function processGroupIsAlive(pid) {
   }
 }
 function lockIdentityIsAlive(identity) {
-  return processIsAlive(identity.pid) ||
+  return processIsAlive(identity.controllerPid) ||
     (identity.action === "receiver" && processGroupIsAlive(identity.pid));
 }
 function ownerEntryName(owner) {
@@ -65,13 +81,13 @@ function reclaimEntryName(owner, reclaimer) {
 }
 function parseLockEntry(name) {
   const parts = name.split(".");
-  if (parts[0] === "owner" && parts.length === 5) {
+  if (parts[0] === "owner" && parts.length === 6) {
     const owner = parseLockIdentity(parts.slice(1));
     return owner ? { kind: "owner", owner } : null;
   }
-  if (parts[0] === "reclaim" && parts.length === 9) {
-    const owner = parseLockIdentity(parts.slice(1, 5));
-    const reclaimer = parseLockIdentity(parts.slice(5));
+  if (parts[0] === "reclaim" && parts.length === 11) {
+    const owner = parseLockIdentity(parts.slice(1, 6));
+    const reclaimer = parseLockIdentity(parts.slice(6));
     return owner && reclaimer ? { kind: "reclaim", owner, reclaimer } : null;
   }
   return null;

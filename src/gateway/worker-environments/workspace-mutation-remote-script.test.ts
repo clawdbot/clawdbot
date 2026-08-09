@@ -25,7 +25,7 @@ function spawnTransaction(argv: string[], env: NodeJS.ProcessEnv) {
     signal,
     stderr,
   }));
-  return { exited };
+  return { pid: child.pid, exited };
 }
 
 describe("remote workspace mutation receiver script", () => {
@@ -60,7 +60,7 @@ describe("remote workspace mutation receiver script", () => {
         String.raw`const fs = require("node:fs");
 const kill = process.kill.bind(process);
 process.kill = function(pid, signal) {
-  if (signal === 0 && pid < 0 && process.argv[4] === process.env.OPENCLAW_TEST_RESET_NONCE) {
+  if (signal === 0 && pid > 0 && process.argv[4] === process.env.OPENCLAW_TEST_RESET_NONCE) {
     fs.writeFileSync(process.env.OPENCLAW_TEST_CONTENDER_MARKER, "");
   }
   return kill(pid, signal);
@@ -100,10 +100,16 @@ process.kill = function(pid, signal) {
         const workspaceKey = createHash("sha256").update(workspace).digest("hex");
         const lock = path.join(path.dirname(workspace), `.openclaw-accepted-lock-${workspaceKey}`);
         const [ownerName] = await fs.readdir(lock);
-        const receiverPid = Number(
-          /^owner\.receiver\.[a-f0-9]{32}\.([1-9][0-9]*)\./u.exec(ownerName!)?.[1],
-        );
+        const owner =
+          /^owner\.receiver\.[a-f0-9]{32}\.([1-9][0-9]*)\.([1-9][0-9]*)\.[a-f0-9]{32}$/u.exec(
+            ownerName!,
+          );
+        const receiverPid = Number(owner?.[1]);
+        const controllerPid = Number(owner?.[2]);
         expect(Number.isSafeInteger(receiverPid)).toBe(true);
+        expect(Number.isSafeInteger(controllerPid)).toBe(true);
+        expect(controllerPid).toBe(receiver.pid);
+        expect(controllerPid).not.toBe(receiverPid);
         await waitForDead(receiverPid, 10_000);
 
         const reset = runCommandWithTimeout(
