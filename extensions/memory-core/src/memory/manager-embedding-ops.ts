@@ -108,8 +108,11 @@ type IndexedMemoryChunk = MemoryChunk & {
 type PreparedMemoryIndexEntry = {
   entry: MemoryIndexEntry;
   source: MemorySource;
+  /** Chunks that still need embedding and insertion; only new chunks for a session delta. */
   chunks: IndexedMemoryChunk[];
   structuredInputBytes?: number;
+  /** Unchanged session rows to retain while the writer derives stale rows transactionally. */
+  sessionKeepIds?: string[];
 };
 
 function resolveChunkRecallMetadata(params: {
@@ -972,16 +975,50 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     chunks: IndexedMemoryChunk[],
     embeddings: number[][],
     vectorReady: boolean,
+    sessionKeepIds?: string[],
   ): void {
     const now = Date.now();
     const needsVectorRebuild = !vectorReady && embeddings.some((embedding) => embedding.length > 0);
+    let keepRowsMissing = false;
+    let staleCount = 0;
     runSqliteImmediateTransactionSync(this.db, () => {
-      this.clearIndexedFileData(entry.path, source);
+      if (sessionKeepIds) {
+        // Resolve staleness from live rows under the write lock. A writer that
+        // commits after planning cannot leave an unknown row behind.
+        const insertIds = chunks.map((chunk) => this.chunkRowId(source, entry.path, chunk, model));
+        const desiredIds = new Set([...sessionKeepIds, ...insertIds]);
+        const liveIds = new Set(
+          (
+            this.db
+              .prepare(`SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?`)
+              .all(entry.path, source) as Array<{ id: string }>
+          ).map((row) => row.id),
+        );
+        const staleIds = [...liveIds].filter((id) => !desiredIds.has(id));
+        staleCount = staleIds.length;
+        this.deleteChunkRowsByIds(staleIds);
+        // FTS5 cannot upsert. Remove rows for chunks this delta will insert so
+        // concurrent managers cannot leave duplicate derived rows.
+        if (this.fts.enabled && this.fts.available && insertIds.length > 0) {
+          try {
+            deleteMemoryFtsRows({ db: this.db, tableName: FTS_TABLE, ids: insertIds });
+          } catch {}
+        }
+        keepRowsMissing =
+          sessionKeepIds.some((id) => !liveIds.has(id)) ||
+          !this.hasSessionKeepDerivedRows({
+            path: entry.path,
+            source,
+            keepIds: sessionKeepIds,
+            requireVectors: model !== "fts-only",
+            requireExactFts: true,
+          });
+      } else {
+        this.clearIndexedFileData(entry.path, source);
+      }
       for (const [i, chunk] of chunks.entries()) {
         const embedding = embeddings[i] ?? [];
-        const id = hashText(
-          `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
-        );
+        const id = this.chunkRowId(source, entry.path, chunk, model);
         this.db
           .prepare(
             `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
@@ -1056,7 +1093,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
         }
       }
-      this.upsertFileRecord(entry, source);
+      if (keepRowsMissing) {
+        // Missing retained rows cannot be reconstructed without embeddings.
+        // Keep the old source hash so the next sync replans and heals them.
+        log.debug("memory sync: session delta keep rows missing; deferring file record", {
+          path: entry.path,
+        });
+      } else {
+        this.upsertFileRecord(entry, source);
+      }
       if (needsVectorRebuild) {
         this.markVectorRebuildRequired();
       }
@@ -1069,6 +1114,171 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       loadError: this.vector.loadError,
       warn: (message) => log.warn(message),
     });
+    if (sessionKeepIds) {
+      log.debug("memory sync: incremental session chunk delta", {
+        path: entry.path,
+        new: chunks.length,
+        stale: staleCount,
+        kept: sessionKeepIds.length,
+      });
+    }
+  }
+
+  private chunkRowId(
+    source: MemorySource,
+    pathname: string,
+    chunk: MemoryChunk,
+    model: string,
+  ): string {
+    return hashText(
+      `${source}:${pathname}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
+    );
+  }
+
+  /**
+   * Diff append-mostly session content by its content-addressed chunk ids.
+   * Null selects the healing full rewrite whenever derived rows are incomplete.
+   */
+  private planSessionChunkDelta(
+    entry: MemoryIndexEntry,
+    source: MemorySource,
+    model: string,
+    hasProvider: boolean,
+    chunks: IndexedMemoryChunk[],
+  ): { newChunks: IndexedMemoryChunk[]; keepIds: string[] } | null {
+    const existing = this.db
+      .prepare(
+        `SELECT id, embedding = '[]' AS empty_embedding
+         FROM memory_index_chunks WHERE path = ? AND source = ?`,
+      )
+      .all(entry.path, source) as Array<{ id: string; empty_embedding: number }>;
+    if (existing.length === 0) {
+      return null;
+    }
+
+    const desired = new Map<string, IndexedMemoryChunk>();
+    for (const chunk of chunks) {
+      const id = this.chunkRowId(source, entry.path, chunk, model);
+      if (desired.has(id)) {
+        return null;
+      }
+      desired.set(id, chunk);
+    }
+
+    const existingById = new Map(existing.map((row) => [row.id, row]));
+    const newChunks: IndexedMemoryChunk[] = [];
+    const keepIds: string[] = [];
+    for (const [id, chunk] of desired) {
+      const row = existingById.get(id);
+      if (!row) {
+        newChunks.push(chunk);
+      } else if (hasProvider && row.empty_embedding) {
+        newChunks.push(chunk);
+      } else {
+        keepIds.push(id);
+      }
+    }
+
+    // Managers in the gateway and CLI share this SQLite index. These probes
+    // must run for every plan; process-local cache state cannot prove parity.
+    if (this.fts.enabled && this.fts.available) {
+      const ftsRows = this.db
+        .prepare(`SELECT id FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+        .all(entry.path, source) as Array<{ id: string }>;
+      const ftsIds = new Set(ftsRows.map((row) => row.id));
+      if (
+        ftsRows.length !== existing.length ||
+        ftsIds.size !== existing.length ||
+        existing.some((row) => !ftsIds.has(row.id))
+      ) {
+        return null;
+      }
+    }
+    if (
+      !this.hasSessionKeepDerivedRows({
+        path: entry.path,
+        source,
+        keepIds,
+        requireVectors: hasProvider,
+        requireExactFts: false,
+      })
+    ) {
+      return null;
+    }
+    return { newChunks, keepIds };
+  }
+
+  private hasSessionKeepDerivedRows(params: {
+    path: string;
+    source: MemorySource;
+    keepIds: string[];
+    requireVectors: boolean;
+    requireExactFts: boolean;
+  }): boolean {
+    if (params.requireExactFts && this.fts.enabled && this.fts.available) {
+      const ftsRows = this.db
+        .prepare(`SELECT id FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+        .all(params.path, params.source) as Array<{ id: string }>;
+      const ftsIds = new Set(ftsRows.map((row) => row.id));
+      if (
+        ftsRows.length !== params.keepIds.length ||
+        ftsIds.size !== params.keepIds.length ||
+        params.keepIds.some((id) => !ftsIds.has(id))
+      ) {
+        return false;
+      }
+    }
+    if (params.keepIds.length === 0) {
+      return true;
+    }
+    if (
+      params.requireVectors &&
+      this.vector.enabled &&
+      this.vector.available !== false &&
+      !this.hasDerivedRows(VECTOR_TABLE, "id", params.keepIds)
+    ) {
+      return false;
+    }
+    return (
+      this.hasDerivedRows(MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE, "chunk_id", params.keepIds) &&
+      this.hasDerivedRows(MEMORY_INDEX_CHUNK_PROVENANCE_TABLE, "chunk_id", params.keepIds)
+    );
+  }
+
+  private hasDerivedRows(tableName: string, idColumn: string, ids: string[]): boolean {
+    try {
+      const row = this.db
+        .prepare(
+          `SELECT COUNT(*) AS c FROM ${tableName}
+           WHERE ${idColumn} IN (SELECT value FROM json_each(?))`,
+        )
+        .get(JSON.stringify(ids)) as { c: number } | undefined;
+      return (row?.c ?? 0) === ids.length;
+    } catch {
+      return false;
+    }
+  }
+
+  private deleteChunkRowsByIds(ids: string[]): void {
+    if (ids.length === 0) {
+      return;
+    }
+    const idsJson = JSON.stringify(ids);
+    if (this.vector.enabled) {
+      try {
+        this.db
+          .prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT value FROM json_each(?))`)
+          .run(idsJson);
+      } catch {}
+    }
+    if (this.fts.enabled && this.fts.available) {
+      try {
+        deleteMemoryFtsRows({ db: this.db, tableName: FTS_TABLE, ids });
+      } catch {}
+    }
+    this.db
+      .prepare(`DELETE FROM memory_index_chunks WHERE id IN (SELECT value FROM json_each(?))`)
+      .run(idsJson);
   }
 
   private async prepareIndexEntry(
@@ -1158,6 +1368,21 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     );
     if (options.source === "sessions" && "lineMap" in entry) {
       remapChunkLines(chunks, entry.lineMap);
+      const delta = this.planSessionChunkDelta(
+        entry,
+        options.source,
+        generation?.kind === "semantic" ? generation.provider.model : "fts-only",
+        generation?.kind === "semantic",
+        chunks,
+      );
+      if (delta) {
+        return {
+          entry,
+          source: options.source,
+          chunks: delta.newChunks,
+          sessionKeepIds: delta.keepIds,
+        };
+      }
     }
     return { entry, source: options.source, chunks };
   }
@@ -1299,6 +1524,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           item.chunks,
           fileEmbeddings,
           vectorReady,
+          item.sessionKeepIds,
         );
       }
       prepared = [];
@@ -1362,7 +1588,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         return;
       }
       const prepared = await this.prepareIndexEntry(entry, options, null);
-      this.writeChunks(entry, options.source, "fts-only", prepared?.chunks ?? [], [], false);
+      this.writeChunks(
+        entry,
+        options.source,
+        "fts-only",
+        prepared?.chunks ?? [],
+        [],
+        false,
+        prepared?.sessionKeepIds,
+      );
       return;
     }
 
@@ -1407,6 +1641,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       prepared.chunks,
       embeddings,
       vectorReady,
+      prepared.sessionKeepIds,
     );
   }
 }

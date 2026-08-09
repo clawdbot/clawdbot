@@ -594,6 +594,7 @@ describe("test-projects args", () => {
           "extensions/memory-core/src/memory/manager.legacy-migration-cleanup.test.ts",
           "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
           "extensions/memory-core/src/memory/manager.self-heal-missing-identity.test.ts",
+          "extensions/memory-core/src/memory/manager.session-chunk-delta.test.ts",
         ],
         watchMode: false,
       },
