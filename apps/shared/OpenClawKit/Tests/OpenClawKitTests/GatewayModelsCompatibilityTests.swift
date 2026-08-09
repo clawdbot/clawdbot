@@ -281,6 +281,25 @@ struct GatewayModelsCompatibilityTests {
     }
 
     @Test
+    func `agent update keeps mixed modelvalue plus String emoji avatar call sites`() throws {
+        let mixedParams = AgentsUpdateParams(
+            agentid: "work",
+            modelvalue: AnyCodable(NSNull()),
+            emoji: "🦞",
+            avatar: "https://example.com/a.png")
+        let mixedJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(mixedParams))
+                as? [String: Any])
+
+        #expect(mixedParams.modelvalue?.value is NSNull)
+        #expect(mixedParams.emoji == "🦞")
+        #expect(mixedParams.avatar == "https://example.com/a.png")
+        #expect(mixedJSON["model"] is NSNull)
+        #expect(mixedJSON["emoji"] as? String == "🦞")
+        #expect(mixedJSON["avatar"] as? String == "https://example.com/a.png")
+    }
+
+    @Test
     func `agent update emoji and avatar keep String call sites and nullable clears`() throws {
         let legacyParams = AgentsUpdateParams(agentid: "work", emoji: "🐢", avatar: "https://example.com/a.png")
         let omittedParams = AgentsUpdateParams(agentid: "work")

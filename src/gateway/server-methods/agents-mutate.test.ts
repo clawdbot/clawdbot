@@ -1028,13 +1028,10 @@ describe("agents.update", () => {
     expect(agent).not.toHaveProperty("model");
   });
 
-  it.each([
-    { label: "empty string", emoji: "" },
-    { label: "null", emoji: null },
-  ])("clears an existing emoji with $label instead of silently keeping it", async ({ emoji }) => {
+  it("clears an existing emoji with null instead of silently keeping it", async () => {
     const { respond, promise } = makeCall("agents.update", {
       agentId: "test-agent",
-      emoji,
+      emoji: null,
     });
     await promise;
 
@@ -1050,6 +1047,30 @@ describe("agents.update", () => {
     );
     expect(agent.identity).toEqual({ name: "Current Agent", theme: "steady" });
     expect(agent.identity).not.toHaveProperty("emoji");
+  });
+
+  it("preserves an existing emoji when agents.update receives an empty string", async () => {
+    mocks.loadConfigReturn = {
+      agents: {
+        list: [
+          {
+            id: "test-agent",
+            workspace: "/workspace/test-agent",
+            identity: { name: "Current Agent", theme: "steady", emoji: "🦞" },
+          },
+        ],
+      },
+    };
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      emoji: "",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    const update = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {});
+    expect(update).not.toHaveProperty("identity");
   });
 
   it("preserves an existing emoji when agents.update receives whitespace-only input", async () => {

@@ -974,9 +974,10 @@ export const agentsHandlers: GatewayRequestHandlers = {
         ? sanitizeAgentIdentityLine(params.name.trim())
         : undefined;
 
-    // Identity fields are tri-state like model: omit preserves, null/"" clears,
-    // non-empty sets. createAgentIdentityConfig compacting empties would omit the
-    // patch entirely and silently keep the previous emoji/avatar.
+    // Identity fields are tri-state like model: omit preserves, null clears,
+    // non-empty sets. Literal empty / whitespace strings stay non-destructive so
+    // existing clients that send "" keep stored identity; Control UI already
+    // converts Remove-avatar drafts to an explicit null tombstone.
     const identityPatch: {
       name?: string;
       emoji?: string | null;
@@ -987,10 +988,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       identityPatch.name = safeName;
     }
     if ("emoji" in params) {
-      // Clear contract: null or literal "" tombstones. Whitespace-only must not
-      // destroy stored identity (resolveOptionalStringParam would otherwise
-      // treat it as absent and fall into the clear branch).
-      if (params.emoji === null || params.emoji === "") {
+      if (params.emoji === null) {
         identityPatch.emoji = null;
         clearedIdentityFields.push("emoji");
       } else if (typeof params.emoji === "string") {
@@ -1001,7 +999,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       }
     }
     if ("avatar" in params) {
-      if (params.avatar === null || params.avatar === "") {
+      if (params.avatar === null) {
         identityPatch.avatar = null;
         clearedIdentityFields.push("avatar");
       } else if (typeof params.avatar === "string") {

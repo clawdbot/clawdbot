@@ -523,6 +523,31 @@ function emitStructCompatibilityInitializer(
       }
       return `            ${propName}: ${propName}`;
     });
+    const mixedInitializerParams = Object.entries(props).map(([key, prop]) => {
+      const propName = swiftStoredPropertyName(name, key);
+      if (key === "model") {
+        return `        ${propName}: AnyCodable?`;
+      }
+      if (agentsUpdateNullableStringKeys.has(key)) {
+        return `        ${safeName(key)}: String? = nil`;
+      }
+      return `        ${swiftInitializerParam({
+        name: propName,
+        schema: prop,
+        required: required.has(key),
+      })}`;
+    });
+    const mixedDelegatedArgs = Object.keys(props).map((key) => {
+      const propName = swiftStoredPropertyName(name, key);
+      if (key === "model") {
+        return `            ${propName}: ${propName}`;
+      }
+      if (agentsUpdateNullableStringKeys.has(key)) {
+        const publicName = safeName(key);
+        return `            ${propName}: ${publicName}.map { AnyCodable($0) }`;
+      }
+      return `            ${propName}: ${propName}`;
+    });
     return (
       "\n\n    public init(\n" +
       initializerParams.join(",\n") +
@@ -530,6 +555,15 @@ function emitStructCompatibilityInitializer(
       "    {\n" +
       "        self.init(\n" +
       delegatedArgs.join(",\n") +
+      ")\n" +
+      "    }" +
+      "\n\n    /// Shipped mixed call shape: raw modelvalue plus String emoji/avatar labels.\n" +
+      "    public init(\n" +
+      mixedInitializerParams.join(",\n") +
+      ")\n" +
+      "    {\n" +
+      "        self.init(\n" +
+      mixedDelegatedArgs.join(",\n") +
       ")\n" +
       "    }"
     );

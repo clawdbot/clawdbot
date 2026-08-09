@@ -1,5 +1,6 @@
-// Exact-head Gateway proof: agents.update null/empty clears emoji/avatar in
-// config and removes parser-accepted unbulleted IDENTITY.md labels.
+// Exact-head Gateway proof: agents.update null clears emoji/avatar in config
+// and removes parser-accepted unbulleted IDENTITY.md labels. Empty strings stay
+// non-destructive (preserve stored identity).
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -108,6 +109,50 @@ describe("agents.update clear identity gateway", () => {
     expect(identityAfter).not.toMatch(/Avatar\s*:/);
     console.log(
       ["----- identity-md-readback -----", identityAfter.trim(), "----- end -----"].join("\n"),
+    );
+  }, 120_000);
+
+  test("empty-string emoji/avatar preserve stored identity (null is the clear tombstone)", async () => {
+    expect(started).toBeDefined();
+    const ws = started!.ws;
+    const agentWorkspace = path.join(workspaceDir, "preserve-empty-agent");
+    await fs.mkdir(agentWorkspace, { recursive: true });
+
+    const created = await rpcReq<{ ok: boolean; agentId: string }>(ws, "agents.create", {
+      name: "Preserve Empty Agent",
+      workspace: agentWorkspace,
+      emoji: "🦞",
+      avatar: "https://example.com/keep.png",
+    });
+    expect(created.ok).toBe(true);
+    const agentId = created.payload?.agentId;
+    expect(agentId).toBeTruthy();
+
+    const preserved = await rpcReq<{ ok: boolean; agentId: string }>(ws, "agents.update", {
+      agentId,
+      emoji: "",
+      avatar: "",
+    });
+    expect(preserved.ok).toBe(true);
+    console.log(
+      [
+        "----- rpc-agents-update-empty-preserve -----",
+        JSON.stringify({ ok: preserved.ok, agentId, emoji: "", avatar: "" }, null, 2),
+      ].join("\n"),
+    );
+
+    const listed = await rpcReq<{
+      agents: Array<{ id: string; identity?: { emoji?: string; avatar?: string } }>;
+    }>(ws, "agents.list", {});
+    expect(listed.ok).toBe(true);
+    const agent = listed.payload?.agents.find((entry) => entry.id === agentId);
+    expect(agent?.identity?.emoji).toBe("🦞");
+    expect(agent?.identity?.avatar).toBe("https://example.com/keep.png");
+    console.log(
+      [
+        "----- rpc-agents-list-empty-preserve-readback -----",
+        JSON.stringify({ agentId, identity: agent?.identity ?? null }, null, 2),
+      ].join("\n"),
     );
   }, 120_000);
 });

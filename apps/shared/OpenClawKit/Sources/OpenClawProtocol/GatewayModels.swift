@@ -13871,6 +13871,24 @@ public struct AgentsUpdateParams: Codable, Sendable {
             avatarvalue: avatar.map { AnyCodable($0) })
     }
 
+    /// Shipped mixed call shape: raw modelvalue plus String emoji/avatar labels.
+    public init(
+        agentid: String,
+        name: String? = nil,
+        workspace: String? = nil,
+        modelvalue: AnyCodable?,
+        emoji: String? = nil,
+        avatar: String? = nil)
+    {
+        self.init(
+            agentid: agentid,
+            name: name,
+            workspace: workspace,
+            modelvalue: modelvalue,
+            emojivalue: emoji.map { AnyCodable($0) },
+            avatarvalue: avatar.map { AnyCodable($0) })
+    }
+
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
         case name
