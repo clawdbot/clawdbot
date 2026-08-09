@@ -29,7 +29,10 @@ import {
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isBrowserCopilotClient } from "../../../utils/message-channel.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
-import { normalizeNodeHostCompatibilityMetadata } from "../../node-legacy-protocol-filter.js";
+import {
+  normalizeNodeHostCompatibilityMetadata,
+  resolveNodeHostPairingMetadata,
+} from "../../node-legacy-protocol-filter.js";
 import { shouldAutoApproveNodePairingFromTrustedCidrs } from "../../node-pairing-auto-approve.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { formatForLog } from "../../ws-log.js";
@@ -123,21 +126,15 @@ export async function authorizeGatewayConnectDevice(
     skipLocalBackendSelfPairing,
     skipControlUiPairingForDevice,
     allowControlUiDeviceAuthMigration,
-    usesLegacyNodeProtocol,
   } = state;
   let hasServerApprovedDeviceTokenBaseline = false;
   let connectionAdmittedForControlUiDeviceAuthMigration = false;
   let allowControlUiDeviceAuthMigrationForUnpairedInstall = false;
   let pairedClientId: string | undefined;
   let pairedBrowserOrigin: string | undefined;
-  // Device proof binds the raw metadata. Keep the exact v3 tuple for a fresh
-  // pairing so rolling the Gateway back does not invalidate the same node.
-  const legacyPairingMetadata = usesLegacyNodeProtocol
-    ? {
-        platform: connectParams.client.platform,
-        deviceFamily: connectParams.client.deviceFamily,
-      }
-    : undefined;
+  // Persist the tuple a released v3 node host will reproduce after rollback.
+  // The active v4 session remains canonical below.
+  const pairingMetadata = resolveNodeHostPairingMetadata(connectParams.client);
   // Canonicalize the active v4 session before comparing existing pairings.
   connectParams.client = normalizeNodeHostCompatibilityMetadata(connectParams.client);
   const browserCopilotOrigin = isBrowserCopilotClient(connectParams.client)
@@ -219,12 +216,8 @@ export async function authorizeGatewayConnectDevice(
     };
     const clientPairingMetadata = {
       displayName: connectParams.client.displayName,
-      platform: legacyPairingMetadata
-        ? legacyPairingMetadata.platform
-        : connectParams.client.platform,
-      deviceFamily: legacyPairingMetadata
-        ? legacyPairingMetadata.deviceFamily
-        : connectParams.client.deviceFamily,
+      platform: pairingMetadata.platform,
+      deviceFamily: pairingMetadata.deviceFamily,
       clientId: connectParams.client.id,
       clientMode: connectParams.client.mode,
       ...(browserCopilotOrigin ? { browserOrigin: browserCopilotOrigin } : {}),

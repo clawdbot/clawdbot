@@ -370,7 +370,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
               // value is never skipped against an uncertain remote state.
               state.hasPublishedParams = false;
               state.publishedParams = undefined;
-              if (!state.hasPending) {
+              if (!state.hasPending || isDeepStrictEqual(state.pendingParams, nextParams)) {
                 state.pendingParams = nextParams;
                 state.hasPending = true;
                 state.retryPending = true;
@@ -391,8 +391,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
           connectionIsCurrent()
         ) {
           const pendingParams = state.pendingParams;
-          state.pendingParams = undefined;
-          state.hasPending = false;
           const retryPending = state.retryPending;
           state.retryPending = false;
           if (retryPending) {
@@ -400,12 +398,21 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
             state.retryDelayMs = Math.min(retryDelayMs * 2, NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS);
             state.retryTimer = setTimeout(() => {
               state.retryTimer = undefined;
-              if (gatewayHelloReceived && connectionIsCurrent()) {
+              if (
+                state.hasPending &&
+                isDeepStrictEqual(state.pendingParams, pendingParams) &&
+                gatewayHelloReceived &&
+                connectionIsCurrent()
+              ) {
+                state.pendingParams = undefined;
+                state.hasPending = false;
                 queueOptionalPublication(method, pendingParams, label, true);
               }
             }, retryDelayMs);
             state.retryTimer.unref?.();
           } else {
+            state.pendingParams = undefined;
+            state.hasPending = false;
             queueOptionalPublication(method, pendingParams, label);
           }
         }

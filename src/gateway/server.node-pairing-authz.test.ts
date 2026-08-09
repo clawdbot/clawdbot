@@ -725,6 +725,47 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("paired node reconnects", (getStarted) => {
+    test("preserves a fresh v4 node pairing tuple for Gateway rollback", async () => {
+      const node = loadDeviceIdentity("node-v4-pairing-rollback");
+      const connectNode = (protocol: "current" | "legacy") =>
+        connectGatewayClient({
+          url: `ws://127.0.0.1:${getStarted().port}`,
+          token: "secret",
+          role: "node",
+          clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          clientDisplayName: "rolling-node-host",
+          clientVersion: protocol === "current" ? "2026.8.1" : "2026.5.7",
+          platform: protocol === "current" ? "macos" : "darwin",
+          deviceFamily: protocol === "current" ? "Mac" : undefined,
+          mode: GATEWAY_CLIENT_MODES.NODE,
+          minProtocol: protocol === "current" ? undefined : MIN_NODE_PROTOCOL_VERSION,
+          maxProtocol: protocol === "current" ? undefined : MIN_NODE_PROTOCOL_VERSION,
+          scopes: [],
+          commands: [],
+          deviceIdentity: node.identity,
+        });
+
+      const current = await connectNode("current");
+      await current.stopAndWait();
+      expect(await getPairedDevice(node.identity.deviceId)).toMatchObject({
+        platform: "darwin",
+        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
+      expect((await getPairedDevice(node.identity.deviceId))?.deviceFamily).toBeUndefined();
+
+      const legacy = await connectNode("legacy");
+      try {
+        expect(
+          (await listDevicePairing()).pending.find(
+            (entry) => entry.deviceId === node.identity.deviceId,
+          ),
+        ).toBeUndefined();
+      } finally {
+        await legacy.stopAndWait();
+      }
+    });
+
     test("preserves a fresh v3 node pairing tuple for Gateway rollback", async () => {
       const legacyNode = loadDeviceIdentity("node-v3-pairing-rollback");
       const connectLegacyNode = () =>

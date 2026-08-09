@@ -883,9 +883,8 @@ export class GatewayClient {
       return false;
     }
     return (
-      (this.opts.minProtocol === undefined && this.opts.maxProtocol === undefined) ||
-      (this.opts.minProtocol === MIN_NODE_PROTOCOL_VERSION &&
-        this.opts.maxProtocol === PROTOCOL_VERSION)
+      (this.opts.minProtocol ?? MIN_NODE_PROTOCOL_VERSION) === MIN_NODE_PROTOCOL_VERSION &&
+      (this.opts.maxProtocol ?? PROTOCOL_VERSION) === PROTOCOL_VERSION
     );
   }
 

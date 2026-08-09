@@ -423,9 +423,11 @@ describe("runNodeHost optional publications", () => {
 
       vi.useFakeTimers();
       try {
+        mocks.availabilityChanged?.();
         rejectInitialPublication?.(new Error("temporary publish failure"));
         await Promise.resolve();
         await Promise.resolve();
+        mocks.availabilityChanged?.();
         expect(pluginPublicationCount).toBe(1);
 
         await vi.advanceTimersByTimeAsync(249);

@@ -1251,6 +1251,28 @@ describe("GatewayClient connect auth payload", () => {
       expectedMaxProtocol: PROTOCOL_VERSION,
     },
     {
+      name: "built-in node hosts with only the legacy minimum",
+      options: {
+        role: "node",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        minProtocol: MIN_NODE_PROTOCOL_VERSION,
+      },
+      expectedMinProtocol: PROTOCOL_VERSION,
+      expectedMaxProtocol: PROTOCOL_VERSION,
+    },
+    {
+      name: "built-in node hosts with only the current maximum",
+      options: {
+        role: "node",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        maxProtocol: PROTOCOL_VERSION,
+      },
+      expectedMinProtocol: PROTOCOL_VERSION,
+      expectedMaxProtocol: PROTOCOL_VERSION,
+    },
+    {
       name: "node role without node mode",
       options: { role: "node" },
       expectedMinProtocol: MIN_CLIENT_PROTOCOL_VERSION,
@@ -1329,11 +1351,20 @@ describe("GatewayClient connect auth payload", () => {
   });
 
   it.each([
-    { canonical: "macos", legacy: "darwin" },
-    { canonical: "windows", legacy: "win32" },
+    { canonical: "macos", legacy: "darwin", protocolBounds: {} },
+    {
+      canonical: "macos",
+      legacy: "darwin",
+      protocolBounds: { minProtocol: MIN_NODE_PROTOCOL_VERSION },
+    },
+    {
+      canonical: "windows",
+      legacy: "win32",
+      protocolBounds: { maxProtocol: PROTOCOL_VERSION },
+    },
   ])(
     "retries a released-v3 Gateway with the shipped $legacy metadata envelope",
-    async ({ canonical, legacy }) => {
+    async ({ canonical, legacy, protocolBounds }) => {
       const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
       const deviceFamily = canonical === "macos" ? "Mac" : "Windows";
       const client = createClientWithIdentity(`device-${legacy}`, vi.fn(), {
@@ -1343,6 +1374,7 @@ describe("GatewayClient connect auth payload", () => {
         platform: canonical,
         deviceFamily,
         hostDeps: { signDevicePayload },
+        ...protocolBounds,
       });
 
       const { ws: currentWs, connect: currentConnect } = startClientAndConnect({ client });
