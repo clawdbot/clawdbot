@@ -28,7 +28,7 @@ export function registerPreparedRuntimeAuthMaterializationPublisher(
   });
 }
 
-export function publishPreparedRuntimeAuthMaterializations(params: {
+function publishPreparedRuntimeAuthMaterializations(params: {
   event: MaterializationMutationEvent;
   owners: ReadonlyMap<string, PreparedModelRuntimeOwner>;
   onInvalidated: () => void;
