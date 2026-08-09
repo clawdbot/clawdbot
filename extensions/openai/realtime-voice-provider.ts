@@ -98,6 +98,7 @@ type OpenAIRealtimeVoiceProviderConfig = {
 type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   apiKey?: string;
   callId?: string;
+  gaSessionPolicy?: RealtimeGaSessionPolicy;
   model?: string;
   voice?: OpenAIRealtimeVoice;
   temperature?: number;
@@ -210,29 +211,31 @@ type RealtimeTurnDetectionConfig = {
   interrupt_response?: boolean;
 };
 
+type RealtimeGaSessionPolicy = {
+  type: "realtime";
+  model: string;
+  instructions?: string;
+  output_modalities: string[];
+  audio: {
+    input: {
+      format: OpenAIRealtimeAudioFormatConfig;
+      turn_detection: RealtimeTurnDetectionConfig;
+      noise_reduction: { type: "near_field" } | null;
+      transcription: { model: string; language?: string };
+    };
+    output: {
+      format: OpenAIRealtimeAudioFormatConfig;
+      voice: OpenAIRealtimeVoice;
+    };
+  };
+  reasoning?: { effort: string };
+  tools?: RealtimeVoiceTool[];
+  tool_choice?: string;
+};
+
 type RealtimeGaSessionUpdate = {
   type: "session.update";
-  session: {
-    type: "realtime";
-    model?: string;
-    instructions?: string;
-    output_modalities: string[];
-    audio: {
-      input: {
-        format: OpenAIRealtimeAudioFormatConfig;
-        turn_detection: RealtimeTurnDetectionConfig;
-        noise_reduction?: { type: "near_field" } | null;
-        transcription?: { model: string; language?: string };
-      };
-      output: {
-        format: OpenAIRealtimeAudioFormatConfig;
-        voice: OpenAIRealtimeVoice;
-      };
-    };
-    reasoning?: { effort: string };
-    tools?: RealtimeVoiceTool[];
-    tool_choice?: string;
-  };
+  session: RealtimeGaSessionPolicy;
 };
 
 type RealtimeAzureDeploymentSessionUpdate = {
@@ -460,6 +463,86 @@ function normalizeOpenAIRealtimeTools(
     warn(`openai realtime: omitted ${omitted} tool definition(s) with unsupported names`);
   }
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function resolveOpenAIRealtimeAudioFormat(
+  audioFormat: RealtimeVoiceAudioFormat = REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+): OpenAIRealtimeAudioFormatConfig {
+  return audioFormat.encoding === "pcm16"
+    ? { type: "audio/pcm", rate: 24000 }
+    : { type: "audio/pcmu" };
+}
+
+function buildOpenAIRealtimeTurnDetectionConfig(params: {
+  autoRespondToAudio?: boolean;
+  createResponse?: boolean;
+  includeInterruptResponse?: boolean;
+  interruptResponseOnInputAudio?: boolean;
+  prefixPaddingMs?: number;
+  silenceDurationMs?: number;
+  vadThreshold?: number;
+}): RealtimeTurnDetectionConfig {
+  const configuredAutoResponse = params.autoRespondToAudio ?? true;
+  return {
+    type: "server_vad",
+    threshold: params.vadThreshold ?? 0.5,
+    prefix_padding_ms: params.prefixPaddingMs ?? 300,
+    silence_duration_ms: params.silenceDurationMs ?? 500,
+    create_response: params.createResponse ?? configuredAutoResponse,
+    ...(params.includeInterruptResponse
+      ? {
+          interrupt_response: params.interruptResponseOnInputAudio ?? configuredAutoResponse,
+        }
+      : {}),
+  };
+}
+
+function buildOpenAIRealtimeGaSessionPolicy(params: {
+  audioFormat?: RealtimeVoiceAudioFormat;
+  autoRespondToAudio?: boolean;
+  instructions?: string;
+  interruptResponseOnInputAudio?: boolean;
+  language?: string;
+  model: string;
+  noiseReduction: { type: "near_field" } | null;
+  prefixPaddingMs?: number;
+  reasoningEffort?: string;
+  silenceDurationMs?: number;
+  tools?: RealtimeVoiceTool[];
+  vadThreshold?: number;
+  voice: OpenAIRealtimeVoice;
+}): RealtimeGaSessionPolicy {
+  const format = resolveOpenAIRealtimeAudioFormat(params.audioFormat);
+  return {
+    type: "realtime",
+    model: params.model,
+    ...(params.instructions !== undefined ? { instructions: params.instructions } : {}),
+    output_modalities: ["audio"],
+    audio: {
+      input: {
+        format,
+        noise_reduction: params.noiseReduction,
+        transcription: {
+          model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
+          ...(params.language ? { language: params.language } : {}),
+        },
+        turn_detection: buildOpenAIRealtimeTurnDetectionConfig({
+          autoRespondToAudio: params.autoRespondToAudio,
+          includeInterruptResponse: true,
+          interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
+          prefixPaddingMs: params.prefixPaddingMs,
+          silenceDurationMs: params.silenceDurationMs,
+          vadThreshold: params.vadThreshold,
+        }),
+      },
+      output: {
+        format,
+        voice: params.voice,
+      },
+    },
+    ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
+    ...(params.tools ? { tools: params.tools, tool_choice: "auto" } : {}),
+  };
 }
 
 async function resolveOpenAIRealtimePlatformAuth(params: {
@@ -859,9 +942,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             capability: "realtime-voice",
           },
         });
-        if (!this.config.callId) {
-          this.sendSessionUpdate();
-        }
+        this.sendSessionUpdate();
       });
 
       ws.on("message", (data: Buffer) => {
@@ -907,10 +988,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             );
             return;
           }
-          if (
-            event.type === "session.updated" ||
-            (this.config.callId && event.type === "session.created")
-          ) {
+          if (event.type === "session.updated") {
             try {
               this.handleEvent(event, lifecycleConnection);
             } catch (error) {
@@ -1212,37 +1290,25 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   private buildGaSessionUpdate(): RealtimeGaSessionUpdate {
     const cfg = this.config;
-    const tools = normalizeOpenAIRealtimeTools(cfg.tools);
     return {
       type: "session.update",
-      session: {
-        type: "realtime",
-        model: cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL,
-        instructions: cfg.instructions,
-        output_modalities: ["audio"],
-        audio: {
-          input: {
-            format: this.resolveRealtimeAudioFormat(),
-            noise_reduction: null,
-            transcription: {
-              model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
-              ...(cfg.language ? { language: cfg.language } : {}),
-            },
-            turn_detection: this.buildTurnDetectionConfig({ includeInterruptResponse: true }),
-          },
-          output: {
-            format: this.resolveRealtimeAudioFormat(),
-            voice: cfg.voice ?? "alloy",
-          },
-        },
-        ...(cfg.reasoningEffort ? { reasoning: { effort: cfg.reasoningEffort } } : {}),
-        ...(tools
-          ? {
-              tools,
-              tool_choice: "auto",
-            }
-          : {}),
-      },
+      session:
+        cfg.gaSessionPolicy ??
+        buildOpenAIRealtimeGaSessionPolicy({
+          audioFormat: this.audioFormat,
+          autoRespondToAudio: cfg.autoRespondToAudio,
+          instructions: cfg.instructions,
+          interruptResponseOnInputAudio: cfg.interruptResponseOnInputAudio,
+          language: cfg.language,
+          model: cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL,
+          noiseReduction: null,
+          prefixPaddingMs: cfg.prefixPaddingMs,
+          reasoningEffort: cfg.reasoningEffort,
+          silenceDurationMs: cfg.silenceDurationMs,
+          tools: normalizeOpenAIRealtimeTools(cfg.tools),
+          vadThreshold: cfg.vadThreshold,
+          voice: cfg.voice ?? "alloy",
+        }),
     };
   }
 
@@ -1285,19 +1351,15 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     createResponse?: boolean;
     includeInterruptResponse?: boolean;
   }): RealtimeTurnDetectionConfig {
-    const configuredAutoResponse = this.config.autoRespondToAudio ?? true;
-    return {
-      type: "server_vad",
-      threshold: this.config.vadThreshold ?? 0.5,
-      prefix_padding_ms: this.config.prefixPaddingMs ?? 300,
-      silence_duration_ms: this.config.silenceDurationMs ?? 500,
-      create_response: options?.createResponse ?? configuredAutoResponse,
-      ...(options?.includeInterruptResponse
-        ? {
-            interrupt_response: this.config.interruptResponseOnInputAudio ?? configuredAutoResponse,
-          }
-        : {}),
-    };
+    return buildOpenAIRealtimeTurnDetectionConfig({
+      autoRespondToAudio: this.config.autoRespondToAudio,
+      createResponse: options?.createResponse,
+      includeInterruptResponse: options?.includeInterruptResponse,
+      interruptResponseOnInputAudio: this.config.interruptResponseOnInputAudio,
+      prefixPaddingMs: this.config.prefixPaddingMs,
+      silenceDurationMs: this.config.silenceDurationMs,
+      vadThreshold: this.config.vadThreshold,
+    });
   }
 
   private sendAutoResponseSessionUpdate(createResponse: boolean): void {
@@ -1314,12 +1376,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       type: "session.update",
       session: { type: "realtime", audio: { input: { turn_detection: turnDetection } } },
     });
-  }
-
-  private resolveRealtimeAudioFormat(): OpenAIRealtimeAudioFormatConfig {
-    return this.audioFormat.encoding === "pcm16"
-      ? { type: "audio/pcm", rate: 24000 }
-      : { type: "audio/pcmu" };
   }
 
   private resolveLegacyRealtimeAudioFormat(): "g711_ulaw" | "pcm16" {
@@ -1375,9 +1431,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     emitServerEvent();
     switch (event.type) {
       case "session.created":
-        if (this.config.callId) {
-          this.markSessionReady(connection);
-        }
         return;
 
       case "session.updated": {
@@ -2086,11 +2139,20 @@ async function createOpenAIRealtimeBrowserSession(
       configuredApiKey: config.apiKey,
       cfg: req.cfg,
     });
-    const { session: sessionConfig, voice } = buildOpenAIRealtimeBrowserSessionConfig(
-      req,
-      config,
+    const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
+    const sessionConfig = buildOpenAIRealtimeGaSessionPolicy({
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+      instructions: req.instructions,
+      interruptResponseOnInputAudio: config.interruptResponseOnInputAudio,
       model,
-    );
+      noiseReduction: { type: "near_field" },
+      prefixPaddingMs: req.prefixPaddingMs ?? config.prefixPaddingMs,
+      reasoningEffort: trimToUndefined(req.reasoningEffort) ?? config.reasoningEffort,
+      silenceDurationMs: req.silenceDurationMs ?? config.silenceDurationMs,
+      tools: normalizeOpenAIRealtimeTools(req.tools),
+      vadThreshold: req.vadThreshold ?? config.vadThreshold,
+      voice,
+    });
     const gatewayControl = req.gatewayControl;
     return await quicksilverBroker.createBrowserSession(
       {
@@ -2105,10 +2167,12 @@ async function createOpenAIRealtimeBrowserSession(
               providerConfig: req.providerConfig,
               apiKey,
               callId,
+              gaSessionPolicy: sessionConfig,
               model,
               voice,
               instructions: req.instructions,
               tools: req.tools,
+              interruptResponseOnInputAudio: config.interruptResponseOnInputAudio,
               reasoningEffort: req.reasoningEffort ?? config.reasoningEffort,
               vadThreshold: req.vadThreshold ?? config.vadThreshold,
               silenceDurationMs: req.silenceDurationMs ?? config.silenceDurationMs,

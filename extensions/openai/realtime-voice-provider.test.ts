@@ -1201,7 +1201,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
   });
 
-  it("reserves GA Gateway control only with Platform auth and binds an attached sideband", async () => {
+  it("sends one shared GA policy and waits for session.updated on an attached sideband", async () => {
     const createBrowserSession = vi.fn(
       async (_request: unknown, _auth: unknown) =>
         ({
@@ -1220,6 +1220,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
     const bindBridge = vi.fn();
     const onEvent = vi.fn();
+    const onReady = vi.fn();
     const cfg = {} as never;
 
     expect(
@@ -1233,9 +1234,15 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       provider.createBrowserSession?.({
         cfg,
         providerConfig: { apiKey: "sk-platform" }, // pragma: allowlist secret
+        instructions: "Stay concise.",
         model: "gpt-realtime-2.1",
+        prefixPaddingMs: 420,
+        reasoningEffort: "medium",
+        silenceDurationMs: 650,
         tools: [createRealtimeTool("openclaw_agent_consult")],
-        gatewayControl: { bindBridge, onEvent },
+        vadThreshold: 0.7,
+        voice: "marin",
+        gatewayControl: { bindBridge, onEvent, onReady },
       }),
     ).resolves.toMatchObject({
       clientSecret: "gateway-token",
@@ -1249,9 +1256,26 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const gaSideband = requireRecord(brokerRequest.gaSideband, "GA sideband request");
     expect(gaSideband.session).toMatchObject({
       type: "realtime",
+      instructions: "Stay concise.",
       model: "gpt-realtime-2.1",
+      output_modalities: ["audio"],
+      reasoning: { effort: "medium" },
       tool_choice: "auto",
-      audio: { input: { noise_reduction: { type: "near_field" } } },
+      audio: {
+        input: {
+          format: { type: "audio/pcmu" },
+          noise_reduction: { type: "near_field" },
+          turn_detection: {
+            type: "server_vad",
+            threshold: 0.7,
+            prefix_padding_ms: 420,
+            silence_duration_ms: 650,
+            create_response: true,
+            interrupt_response: true,
+          },
+        },
+        output: { format: { type: "audio/pcmu" }, voice: "marin" },
+      },
     });
     const createBridge = gaSideband.createBridge as (params: {
       apiKey: string;
@@ -1265,14 +1289,28 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
     expect(bindBridge).toHaveBeenCalledWith(bridge);
     const { connecting, socket } = beginBridgeConnection(bridge);
+    let connectResolved = false;
+    void connecting.then(() => {
+      connectResolved = true;
+    });
     expect(socket.args[0]).toBe("wss://api.openai.com/v1/realtime?call_id=rtc_gateway");
     openSocket(socket);
+    await Promise.resolve();
+    const sessionUpdates = parseSent(socket).filter((event) => event.type === "session.update");
+    expect(sessionUpdates).toHaveLength(1);
+    expect(sessionUpdates[0]?.session).toEqual(gaSideband.session);
     emitServerEvent(socket, {
       type: "session.created",
       session: { type: "realtime", tools: [{ type: "function" }], tool_choice: "auto" },
     });
+    await Promise.resolve();
+    expect(connectResolved).toBe(false);
+    expect(onReady).not.toHaveBeenCalled();
+    expect(parseSent(socket).filter((event) => event.type === "session.update")).toHaveLength(1);
+    emitSessionUpdated(socket);
     await connecting;
-    expect(parseSent(socket).filter((event) => event.type === "session.update")).toEqual([]);
+    expect(connectResolved).toBe(true);
+    expect(onReady).toHaveBeenCalledOnce();
     expect(onEvent).toHaveBeenCalledWith({
       direction: "server",
       type: "session.created",
@@ -3659,23 +3697,23 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       expectedFunctionOutput("call_1", { status: "working" }),
     ]);
     expect(hasSentEventType(socket, "response.create")).toBe(false);
-    acknowledgeFunctionOutput(socket, "call_1");
-    await working;
-    expect(onEvent).toHaveBeenCalledWith({
-      direction: "server",
-      type: "conversation.item.created",
-      detail: "itemType=function_call_output",
-    });
+    expect(working).toBeUndefined();
 
     const done = bridge.submitToolResult("call_1", { text: "done" });
-    acknowledgeFunctionOutput(socket, "call_1");
-    await done;
+    expect(done).toBeUndefined();
 
     expect(parseSent(socket).slice(-3)).toEqual([
       expectedFunctionOutput("call_1", { text: "done" }),
       expect.objectContaining({ type: "session.update" }),
       expectedResponseCreateEvent(),
     ]);
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+    acknowledgeFunctionOutput(socket, "call_1");
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "conversation.item.created",
+      detail: "itemType=function_call_output",
+    });
     socket.emit(
       "message",
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_2" } })),

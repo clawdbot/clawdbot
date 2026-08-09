@@ -336,7 +336,7 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
               }
               if (
                 event.direction === "server" &&
-                (event.type === "session.created" || event.type === "session.updated") &&
+                event.type === "session.updated" &&
                 event.detail === "tools=1 toolChoice=auto"
               ) {
                 sessionPolicyReady = true;

@@ -213,10 +213,13 @@ describe("GPT-Live offer broker", () => {
     }
   });
 
-  it("hangs up a GA call when sideband startup fails", async () => {
+  it.each([
+    ["error", "sideband unavailable"],
+    ["timeout", "OpenAI realtime connection timeout"],
+  ])("hangs up a GA call when sideband startup ends in %s", async (failure, message) => {
     const bridge = {
       connect: vi.fn(async () => {
-        throw new Error("sideband unavailable");
+        throw new Error(message);
       }),
       close: vi.fn(),
       sendAudio: vi.fn(),
@@ -230,7 +233,7 @@ describe("GPT-Live offer broker", () => {
         ? new Response(null, { status: 204 })
         : new Response("v=answer\r\n", {
             status: 201,
-            headers: { Location: "/v1/realtime/calls/rtc_failed" },
+            headers: { Location: `/v1/realtime/calls/rtc_${failure}` },
           }),
     );
     const fetchImpl = fetchMock as unknown as typeof fetch;
@@ -256,10 +259,12 @@ describe("GPT-Live offer broker", () => {
         response.res,
       );
       expect(response.res.statusCode).toBe(502);
-      expect(response.readBody()).toContain("sideband unavailable");
+      expect(response.readBody()).toContain(message);
       expect(bridge.close).toHaveBeenCalledOnce();
       expect(
-        fetchMock.mock.calls.filter(([url]) => requestTarget(url).endsWith("/rtc_failed/hangup")),
+        fetchMock.mock.calls.filter(([url]) =>
+          requestTarget(url).endsWith(`/rtc_${failure}/hangup`),
+        ),
       ).toHaveLength(1);
     } finally {
       await realtime.cleanup();
