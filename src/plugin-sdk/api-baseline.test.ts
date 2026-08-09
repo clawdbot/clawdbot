@@ -1,10 +1,12 @@
 /**
  * Tests the plugin SDK public API baseline.
  */
+import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   computePluginSdkApiBaselineHashFileContent,
   formatPluginSdkApiTypeAlias,
@@ -22,6 +24,7 @@ const TEST_ENTRYPOINTS = [
   "channel-policy",
   "core",
   "infra-runtime",
+  "plugin-entry",
   "provider-auth",
   "provider-catalog-live-runtime",
   "provider-oauth-runtime",
@@ -31,6 +34,67 @@ const TEST_ENTRYPOINTS = [
   "session-catalog",
   "sqlite-runtime-testing",
 ] as const;
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function renderPrivateDeclarationFixture(params?: {
+  optionalOption?: boolean;
+  optionalResult?: boolean;
+}) {
+  const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-");
+  const sourceDir = path.join(repoRoot, "src", "plugin-sdk");
+  const externalDir = path.join(repoRoot, "node_modules", "fixture-external");
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.mkdirSync(externalDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(repoRoot, "tsconfig.json"),
+    `${JSON.stringify({
+      compilerOptions: {
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        target: "ESNext",
+      },
+    })}\n`,
+  );
+  fs.writeFileSync(
+    path.join(sourceDir, "fixture.ts"),
+    [
+      'import type { FixtureOptionLeaf } from "./fixture-option.js";',
+      'import type { FixtureResultLeaf } from "./fixture-result.js";',
+      "type FixtureOptions = { nested: FixtureOptionLeaf };",
+      "type FixtureResult = { nested: FixtureResultLeaf };",
+      "export declare function createFixture(options: FixtureOptions): FixtureResult;",
+    ].join("\n"),
+  );
+  fs.writeFileSync(
+    path.join(sourceDir, "fixture-option.ts"),
+    [
+      'import type { FixtureResultLeaf } from "./fixture-result.js";',
+      'import type { FixtureExternal } from "fixture-external";',
+      `export type FixtureOptionLeaf = { required${params?.optionalOption ? "?" : ""}: string; result?: FixtureResultLeaf; external?: FixtureExternal };`,
+    ].join("\n"),
+  );
+  fs.writeFileSync(
+    path.join(sourceDir, "fixture-result.ts"),
+    'export type { FixtureResultLeaf } from "./fixture-result-shape.js";\n',
+  );
+  fs.writeFileSync(
+    path.join(sourceDir, "fixture-result-shape.ts"),
+    [
+      'import type { FixtureOptionLeaf } from "./fixture-option.js";',
+      `export type FixtureResultLeaf = { value${params?.optionalResult ? "?" : ""}: string; option?: FixtureOptionLeaf };`,
+    ].join("\n"),
+  );
+  fs.writeFileSync(
+    path.join(externalDir, "package.json"),
+    `${JSON.stringify({ name: "fixture-external", types: "index.d.ts" })}\n`,
+  );
+  fs.writeFileSync(
+    path.join(externalDir, "index.d.ts"),
+    "export type FixtureExternal = { externalOnly: string };\n",
+  );
+  return renderPluginSdkApiBaseline({ repoRoot, entrypoints: ["fixture"] });
+}
 
 function createTupleAliasFixture(tuple: string, warmup: string, prewarm: boolean) {
   const fileName = "/plugin-sdk-tuple-fixture.ts";
@@ -192,6 +256,11 @@ describe("Plugin SDK API baseline", () => {
     expect(findDeclaration("SqliteTrajectoryRuntimeEventForTest")).toContain(
       "export type SqliteTrajectoryRuntimeEventForTest =",
     );
+    expect(findDeclaration("definePluginEntry")).toMatch(
+      /^\/\/ declaration closure: [a-f0-9]{64}/u,
+    );
+    expect(findDeclaration("definePluginEntry")).toContain("DefinePluginEntryOptions");
+    expect(findDeclaration("definePluginEntry")).toContain("DefinedPluginEntry");
     expect(findDeclaration("ProviderSelection")).toContain(
       "export type ProviderSelection<TProvider> =",
     );
@@ -232,5 +301,41 @@ describe("Plugin SDK API baseline", () => {
 
     expect(after[0]).not.toBe(before[0]);
     expect(after.slice(1)).toEqual(before.slice(1));
+  });
+
+  it("captures transitive private declaration changes deterministically", async () => {
+    const baseline = await renderPrivateDeclarationFixture();
+    const unchanged = await renderPrivateDeclarationFixture();
+    const optionChanged = await renderPrivateDeclarationFixture({ optionalOption: true });
+    const resultChanged = await renderPrivateDeclarationFixture({ optionalResult: true });
+    const declaration = baseline.baseline.modules[0]?.exports[0];
+
+    expect(declaration).toEqual(
+      expect.objectContaining({
+        exportName: "createFixture",
+        kind: "function",
+        source: { path: "src/plugin-sdk/fixture.ts" },
+      }),
+    );
+    expect(declaration?.declaration).toMatch(/^\/\/ declaration closure: [a-f0-9]{64}/u);
+    expect(declaration?.declaration).toContain("FixtureOptions");
+    expect(declaration?.declaration).toContain("FixtureResult");
+    expect(declaration?.declaration).not.toContain("required: string;");
+    expect(declaration?.declaration).not.toContain("value: string;");
+    expect(declaration?.declaration).not.toContain("externalOnly: string;");
+    expect(unchanged.json).toBe(baseline.json);
+    expect(unchanged.jsonl).toBe(baseline.jsonl);
+    expect(computePluginSdkApiBaselineHashFileContent(unchanged)).toBe(
+      computePluginSdkApiBaselineHashFileContent(baseline),
+    );
+
+    for (const changed of [optionChanged, resultChanged]) {
+      expect(changed.baseline.modules[0]?.exports[0]?.declaration).not.toBe(
+        declaration?.declaration,
+      );
+      expect(computePluginSdkApiBaselineHashFileContent(changed)).not.toBe(
+        computePluginSdkApiBaselineHashFileContent(baseline),
+      );
+    }
   });
 });
