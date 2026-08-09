@@ -52,6 +52,9 @@ export function createModelsListAuthResolver(params: {
     loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
       allowKeychainPrompt: false,
     });
+  // A prepared projection must hydrate from its own auth-store generation. Reading the global
+  // snapshot can mix generations; treating this store as persisted loses resolved SecretRefs.
+  const preparedRuntimeAuthStore = params.preparedAuthStore;
   return createModelAuthAvailabilityResolver({
     cfg: params.cfg,
     authStore,
@@ -64,7 +67,7 @@ export function createModelsListAuthResolver(params: {
     syntheticAuthProviderRefs: listEnabledSyntheticAuthProviderRefs(params),
     externalCliProviderIds:
       !params.preparedAuthStore && params.includeOpenAIExternalProfiles ? ["openai"] : [],
-    ...(params.preparedAuthStore ? { allowPreparedRuntimeAuth: false } : {}),
+    ...(preparedRuntimeAuthStore ? { preparedRuntimeAuthStore } : {}),
     routeResolverFactory: params.routeResolverFactory,
   });
 }

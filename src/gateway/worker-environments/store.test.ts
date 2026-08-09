@@ -4,7 +4,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
+import type {
+  WorkerDesktopEndpoint,
+  WorkerProfile,
+  WorkerSshEndpoint,
+} from "../../plugins/types.js";
+import { ensureAdditiveStateColumns } from "../../state/openclaw-state-db-schema-additive.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   closeOpenClawStateDatabaseForTest,
@@ -35,6 +40,11 @@ const SSH_ENDPOINT: WorkerEnvironmentSshEndpoint = {
     provider: "worker-keys",
     id: "/static-development-key",
   },
+};
+const DESKTOP: WorkerDesktopEndpoint = {
+  protocol: "rfb",
+  port: 5900,
+  passwordFilePath: "/var/lib/crabbox/vnc.password",
 };
 const BOOTSTRAP_RECEIPT: WorkerEnvironmentBootstrapReceipt = {
   bundleHash: "a".repeat(64),
@@ -359,6 +369,58 @@ describe("worker environment store", () => {
         fallbackPorts,
       } as unknown as WorkerEnvironmentSshEndpoint),
     ).toThrow("SSH fallback ports");
+  });
+
+  it("round-trips desktop metadata and clears it with the provider lease", () => {
+    createIntent("worker-desktop");
+    store.transition({
+      environmentId: "worker-desktop",
+      from: "requested",
+      to: "provisioning",
+    });
+    store.transition({
+      environmentId: "worker-desktop",
+      from: "provisioning",
+      to: "bootstrapping",
+      patch: { leaseId: "lease-desktop", sshEndpoint: SSH_ENDPOINT, desktop: DESKTOP },
+    });
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    expect(store.get("worker-desktop")?.desktop).toEqual(DESKTOP);
+
+    const requested = store.requestDestroy({
+      environmentId: "worker-desktop",
+      state: "bootstrapping",
+      terminalState: "failed",
+    });
+    const draining = store.transition({
+      environmentId: requested.environmentId,
+      from: requested.state,
+      to: "draining",
+    });
+    const destroying = store.transition({
+      environmentId: draining.environmentId,
+      from: draining.state,
+      to: "destroying",
+    });
+    expect(
+      store.transition({
+        environmentId: destroying.environmentId,
+        from: destroying.state,
+        to: "failed",
+        patch: { leaseId: null, sshEndpoint: null, lastError: "teardown complete" },
+      }),
+    ).toMatchObject({ leaseId: null, sshEndpoint: null, desktop: null });
+  });
+
+  it("idempotently ensures desktop_json on an existing state database", () => {
+    ensureAdditiveStateColumns(database.db);
+    ensureAdditiveStateColumns(database.db);
+    const columns = database.db.prepare("PRAGMA table_info(worker_environments)").all() as Array<{
+      name: string;
+    }>;
+    expect(columns.filter((column) => column.name === "desktop_json")).toHaveLength(1);
   });
 
   it("keeps renewal on one owner epoch and fences session replacement", () => {

@@ -38,6 +38,7 @@ const sendSingleTextMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (..._args: unknown[]) => ({ messageId: "$draft1", roomId: "!room" })),
 );
 const editMessageMatrixMock = vi.hoisted(() => vi.fn(async () => "$edited"));
+const sendTypingMatrixMock = vi.hoisted(() => vi.fn(async () => {}));
 const prepareMatrixSingleTextMock = vi.hoisted(() =>
   vi.fn((text: string) => {
     const trimmedText = text.trim();
@@ -76,7 +77,7 @@ vi.mock("../send.js", () => ({
   sendMessageMatrix: sendMessageMatrixMock,
   sendSingleTextMessageMatrix: sendSingleTextMessageMatrixMock,
   sendReadReceiptMatrix: vi.fn(async () => {}),
-  sendTypingMatrix: vi.fn(async () => {}),
+  sendTypingMatrix: sendTypingMatrixMock,
 }));
 
 const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn());
@@ -142,6 +143,7 @@ beforeEach(() => {
     };
   });
   resolveMatrixMentionsForBodyMock.mockClear();
+  sendTypingMatrixMock.mockReset().mockResolvedValue(undefined);
   deliverMatrixRepliesMock.mockReset().mockResolvedValue(createMockMatrixDeliveryResult());
 });
 
@@ -2978,6 +2980,7 @@ describe("matrix monitor handler draft streaming", () => {
     deliverMatrixRepliesMock.mockReset().mockResolvedValue(createMockMatrixDeliveryResult());
 
     const redactEventMock = vi.fn(async () => "$redacted");
+    const logVerboseMessage = vi.fn();
 
     const { handler } = createMatrixHandlerTestHarness({
       streaming: opts?.streaming ?? "quiet",
@@ -2986,6 +2989,7 @@ describe("matrix monitor handler draft streaming", () => {
       blockStreamingEnabled: opts?.blockStreamingEnabled ?? false,
       replyToMode: opts?.replyToMode ?? "off",
       client: { redactEvent: redactEventMock },
+      logVerboseMessage,
       createReplyDispatcherWithTyping: (params: Record<string, unknown> | undefined) => {
         capturedDeliver = params?.deliver as DeliverFn | undefined;
         notifyCaptured();
@@ -3027,8 +3031,37 @@ describe("matrix monitor handler draft streaming", () => {
       };
     };
 
-    return { dispatch, redactEventMock };
+    return { dispatch, redactEventMock, logVerboseMessage };
   }
+
+  it("records a failed block typing restart without replaying the accepted delivery", async () => {
+    const acceptedDelivery = createMockMatrixDeliveryResult("$accepted", "Already delivered block");
+    const { dispatch, logVerboseMessage } = createStreamingHarness({ streaming: "off" });
+    deliverMatrixRepliesMock.mockResolvedValueOnce(acceptedDelivery);
+    sendTypingMatrixMock.mockRejectedValueOnce(new Error("typing unavailable"));
+    const { deliver, finish } = await dispatch();
+
+    await expect(deliver({ text: "Already delivered block" }, { kind: "block" })).resolves.toBe(
+      acceptedDelivery,
+    );
+
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledOnce();
+    expect(sendTypingMatrixMock).toHaveBeenCalledExactlyOnceWith(
+      "!room:example.org",
+      true,
+      undefined,
+      expect.anything(),
+    );
+    const expectedDiagnostic =
+      "matrix typing action=start failed target=!room:example.org: Error: typing unavailable";
+    await waitForMatrixState(() =>
+      expect(
+        logVerboseMessage.mock.calls.filter(([message]) => message === expectedDiagnostic),
+      ).toHaveLength(1),
+    );
+
+    await finish();
+  });
 
   it("shares first-reply state between tool and final Matrix deliveries", async () => {
     const { dispatch } = createStreamingHarness({ replyToMode: "first", streaming: "off" });

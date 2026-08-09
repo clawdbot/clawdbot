@@ -696,11 +696,12 @@ export type CronRunLogEntry = {
 
 export type CronJobsListResult = {
   jobs: CronJob[];
-  total?: number;
-  limit?: number;
-  offset?: number;
-  nextOffset?: number | null;
-  hasMore?: boolean;
+  snapshotRevision: string;
+  total: number;
+  limit: number;
+  offset: number;
+  nextOffset: number | null;
+  hasMore: boolean;
 };
 
 export type CronRunsResult = {

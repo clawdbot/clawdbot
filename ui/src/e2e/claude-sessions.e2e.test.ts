@@ -198,6 +198,36 @@ function hostGroupedNativeCatalogs() {
   return { catalogs: [catalog("claude", "Claude Code"), catalog("codex", "Codex")] };
 }
 
+async function catalogHeaderAffordances(header: Locator) {
+  return header.evaluate((element) => {
+    const toggle = element.querySelector<HTMLElement>(".sidebar-session-group-toggle");
+    const providerIcon = element.querySelector<HTMLElement>(
+      ".sidebar-session-catalog-provider-icon",
+    );
+    const chevron = element.querySelector<HTMLElement>(".sidebar-session-group-toggle__icon");
+    const grip = element.querySelector<HTMLElement>(".sidebar-session-group-drag-handle");
+    const actions = element.querySelector<HTMLElement>(".sidebar-session-group-actions");
+    if (!toggle || !providerIcon || !chevron || !grip || !actions) {
+      throw new Error("expected complete branded catalog header affordances");
+    }
+    return {
+      actionFocusVisible: actions.matches(":focus-visible"),
+      actionFocused: document.activeElement === actions,
+      actionsOpacity: getComputedStyle(actions).opacity,
+      actionsPointerEvents: getComputedStyle(actions).pointerEvents,
+      chevronOpacity: getComputedStyle(chevron).opacity,
+      finePointer: matchMedia("(pointer: fine)").matches,
+      focusWithin: element.matches(":focus-within"),
+      gripOpacity: getComputedStyle(grip).opacity,
+      hoverCapable: matchMedia("(hover: hover)").matches,
+      hovered: element.matches(":hover"),
+      providerOpacity: getComputedStyle(providerIcon).opacity,
+      toggleFocusVisible: toggle.matches(":focus-visible"),
+      toggleFocused: document.activeElement === toggle,
+    };
+  });
+}
+
 async function expandCodingSection(page: Page) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
   await page.waitForFunction(() =>
@@ -225,6 +255,104 @@ async function openClaudeCatalogTerminal(page: Page) {
 }
 
 suite.define(() => {
+  it("shows catalog header affordances only for hover or keyboard-visible focus", async () => {
+    await suite.withPage(
+      { hasTouch: false, viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "sessions.catalog.list",
+            "sessions.groups.put",
+          ],
+          methodResponses: { "sessions.catalog.list": hostGroupedNativeCatalogs() },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await expandCodingSection(page);
+
+        const header = page.locator(
+          '[data-session-section="catalog:claude"] .sidebar-recent-sessions__head',
+        );
+        const toggle = header.locator(".sidebar-session-group-toggle");
+        await header.hover();
+        await expect
+          .poll(() => catalogHeaderAffordances(header))
+          .toMatchObject({
+            actionsOpacity: "1",
+            actionsPointerEvents: "auto",
+            chevronOpacity: "0.75",
+            finePointer: true,
+            gripOpacity: "0.55",
+            hoverCapable: true,
+            hovered: true,
+            providerOpacity: "0",
+          });
+
+        await toggle.click();
+        await page.locator(".chat-main__conversation").hover({ position: { x: 40, y: 40 } });
+        await expect
+          .poll(() =>
+            header.evaluate((element) => {
+              const focusedToggle = element.querySelector<HTMLElement>(
+                ".sidebar-session-group-toggle",
+              );
+              return {
+                focusWithin: element.matches(":focus-within"),
+                hovered: element.matches(":hover"),
+                toggleFocusVisible: focusedToggle?.matches(":focus-visible") ?? false,
+                toggleFocused: document.activeElement === focusedToggle,
+              };
+            }),
+          )
+          .toEqual({
+            focusWithin: true,
+            hovered: false,
+            toggleFocusVisible: false,
+            toggleFocused: true,
+          });
+
+        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        if (artifactDir) {
+          await fs.mkdir(artifactDir, { recursive: true });
+          await header.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "catalog-header-pointer-away.png"),
+          });
+        }
+
+        await expect
+          .poll(() => catalogHeaderAffordances(header))
+          .toMatchObject({
+            actionsOpacity: "0",
+            actionsPointerEvents: "none",
+            chevronOpacity: "0",
+            focusWithin: true,
+            gripOpacity: "0",
+            hovered: false,
+            providerOpacity: "1",
+            toggleFocusVisible: false,
+            toggleFocused: true,
+          });
+
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() => catalogHeaderAffordances(header))
+          .toMatchObject({
+            actionFocusVisible: true,
+            actionFocused: true,
+            actionsOpacity: "1",
+            actionsPointerEvents: "auto",
+            chevronOpacity: "0.75",
+            focusWithin: true,
+            gripOpacity: "0.55",
+            hovered: false,
+            providerOpacity: "0",
+          });
+      },
+    );
+  });
+
   it("groups Claude and Codex sessions by Gateway and paired-node host", async () => {
     const page = await suite.browser.newPage({
       hasTouch: true,

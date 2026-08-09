@@ -2,7 +2,7 @@ import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveNpmRunner } from "../../../scripts/npm-runner.mjs";
+import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 

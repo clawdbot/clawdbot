@@ -21,6 +21,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   PLUGIN_INSTALLS_CONFIG_PATH,
@@ -32,6 +33,7 @@ import {
   restorePersistedInstalledPluginIndexIfCurrent,
   type InstalledPluginIndexWriteReceipt,
 } from "./installed-plugin-index-store.js";
+import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
 import {
   clearRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
@@ -131,9 +133,26 @@ function mergeAfterWrite(
   };
 }
 
+function isMissingInstallPathError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function resolveExistingInstallPath(installPath: string): string {
+  const resolvedPath = path.resolve(installPath);
+  try {
+    return fs.realpathSync(resolvedPath);
+  } catch (error) {
+    if (isMissingInstallPathError(error)) {
+      return resolvedPath;
+    }
+    throw error;
+  }
+}
+
 function installPathsOverlap(left: string, right: string): boolean {
-  const resolvedLeft = path.resolve(left);
-  const resolvedRight = path.resolve(right);
+  const resolvedLeft = resolveExistingInstallPath(left);
+  const resolvedRight = resolveExistingInstallPath(right);
   return (
     resolvedLeft === resolvedRight ||
     isPathInside(resolvedLeft, resolvedRight) ||
@@ -146,18 +165,52 @@ function resolveRetainedManagedNpmInstallMarkerTarget(params: {
   previousRecord?: PluginInstallRecord;
   nextRecord?: PluginInstallRecord;
 }): string | null {
-  if (params.previousRecord?.source !== "npm" || params.nextRecord?.source !== "npm") {
+  if (params.previousRecord?.source !== "npm") {
     return null;
   }
   const previousInstallPath = params.previousRecord.installPath?.trim();
-  const nextInstallPath = params.nextRecord.installPath?.trim();
-  if (!previousInstallPath || !nextInstallPath) {
+  const nextInstallPath = params.nextRecord?.installPath?.trim();
+  if (!previousInstallPath) {
     return null;
   }
-  if (installPathsOverlap(previousInstallPath, nextInstallPath)) {
+  if (
+    params.nextRecord &&
+    (!nextInstallPath || installPathsOverlap(previousInstallPath, nextInstallPath))
+  ) {
     return null;
   }
 
+  if (params.nextRecord?.source !== "npm") {
+    const packageInfo = resolveRetainedManagedNpmInstallPackageInfo(previousInstallPath);
+    if (!packageInfo) {
+      return null;
+    }
+    try {
+      const configuredNpmRoot = path.resolve(resolveDefaultPluginNpmDir());
+      const npmRoot = fs.realpathSync(configuredNpmRoot);
+      const configuredProjectRoot = path.resolve(packageInfo.projectRoot);
+      const projectRoot = fs.realpathSync(configuredProjectRoot);
+      const packageDir = fs.realpathSync(previousInstallPath);
+      if (
+        path.relative(configuredNpmRoot, configuredProjectRoot) !==
+          path.relative(npmRoot, projectRoot) ||
+        path.relative(configuredProjectRoot, path.resolve(previousInstallPath)) !==
+          path.relative(projectRoot, packageDir)
+      ) {
+        return null;
+      }
+      if (projectRoot === npmRoot) {
+        return previousInstallPath;
+      }
+      const projectsRoot = fs.realpathSync(resolvePluginNpmProjectsDir(npmRoot));
+      return path.dirname(projectRoot) === projectsRoot ? previousInstallPath : null;
+    } catch (error) {
+      if (isMissingInstallPathError(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
   const installs = createPluginInstallRecordMap<PluginInstallRecord>();
   setPluginInstallRecordMapEntry(installs, params.pluginId, params.previousRecord);
   const plan = planPluginUninstall({
@@ -177,7 +230,7 @@ function resolveRetainedManagedNpmInstallMarkerTarget(params: {
   ) {
     return null;
   }
-  if (installPathsOverlap(plan.directoryRemoval.target, nextInstallPath)) {
+  if (nextInstallPath && installPathsOverlap(plan.directoryRemoval.target, nextInstallPath)) {
     return null;
   }
   return plan.directoryRemoval.target;
@@ -206,17 +259,30 @@ function findReplacementNpmRecordForRemovedRecord(params: {
   return null;
 }
 
-async function markRetainedReplacedManagedNpmInstallRecords(params: {
+async function markRetiredManagedNpmInstallRecords(params: {
   previousInstallRecords: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
   createdMarkerPaths: string[];
 }): Promise<void> {
   const markedPreviousPluginIds = new Set<string>();
-  const markReplacement = async (
+  const activeInstallPaths = Object.values(params.nextInstallRecords).flatMap((record) => {
+    const installPath = record.installPath?.trim();
+    return installPath ? [installPath] : [];
+  });
+  const markRetiredInstall = async (
     pluginId: string,
     previousRecord: PluginInstallRecord | undefined,
     nextRecord: PluginInstallRecord | undefined,
   ) => {
+    const previousInstallPath = previousRecord?.installPath?.trim();
+    if (
+      previousInstallPath &&
+      activeInstallPaths.some((installPath) =>
+        installPathsOverlap(previousInstallPath, installPath),
+      )
+    ) {
+      return;
+    }
     const packageDir = resolveRetainedManagedNpmInstallMarkerTarget({
       pluginId,
       previousRecord,
@@ -230,7 +296,12 @@ async function markRetainedReplacedManagedNpmInstallRecords(params: {
     const marked = await markRetainedManagedNpmInstall({
       packageDir,
       pluginId,
-      reason: "replaced-by-managed-npm-generation-update",
+      reason:
+        nextRecord?.source === "npm"
+          ? "replaced-by-managed-npm-generation-update"
+          : nextRecord
+            ? "replaced-by-plugin-source-change"
+            : RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
     });
     if (marked && !markerAlreadyExisted) {
       // Record each marker immediately so a later filesystem failure can roll it back.
@@ -240,7 +311,7 @@ async function markRetainedReplacedManagedNpmInstallRecords(params: {
   };
 
   for (const [pluginId, nextRecord] of Object.entries(params.nextInstallRecords)) {
-    await markReplacement(
+    await markRetiredInstall(
       pluginId,
       getPluginInstallRecordMapEntry(params.previousInstallRecords, pluginId),
       nextRecord,
@@ -253,7 +324,7 @@ async function markRetainedReplacedManagedNpmInstallRecords(params: {
     ) {
       continue;
     }
-    await markReplacement(
+    await markRetiredInstall(
       pluginId,
       previousRecord,
       findReplacementNpmRecordForRemovedRecord({
@@ -272,8 +343,8 @@ async function removeCreatedRetainedManagedNpmInstallMarkers(markerPaths: string
 
 async function clearActiveRetainedManagedNpmInstallMarkers(
   nextInstallRecords: Record<string, PluginInstallRecord>,
-): Promise<Array<{ markerPath: string; contents: string }>> {
-  const clearedMarkers: Array<{ markerPath: string; contents: string }> = [];
+  clearedMarkers: Array<{ markerPath: string; contents: string }>,
+): Promise<void> {
   for (const record of Object.values(nextInstallRecords)) {
     if (record.source !== "npm" || !record.installPath?.trim()) {
       continue;
@@ -295,10 +366,10 @@ async function clearActiveRetainedManagedNpmInstallMarkers(
     }
     const cleared = await clearRetainedManagedNpmInstallMarker(record.installPath);
     if (cleared) {
+      // Record each cleared marker immediately so a later filesystem failure can roll it back.
       clearedMarkers.push({ markerPath, contents });
     }
   }
-  return clearedMarkers;
 }
 
 async function restoreClearedRetainedManagedNpmInstallMarkers(
@@ -337,14 +408,15 @@ async function commitPluginInstallRecordsWithWriter(params: {
           lease,
         },
       );
-      await markRetainedReplacedManagedNpmInstallRecords({
+      await markRetiredManagedNpmInstallRecords({
         previousInstallRecords: prepared.previousInstallRecords,
         nextInstallRecords: prepared.nextInstallRecords,
         // Keep partial progress visible to the rollback path.
         createdMarkerPaths: retainedMarkerPaths,
       });
-      clearedMarkerSnapshots.push(
-        ...(await clearActiveRetainedManagedNpmInstallMarkers(prepared.nextInstallRecords)),
+      await clearActiveRetainedManagedNpmInstallMarkers(
+        prepared.nextInstallRecords,
+        clearedMarkerSnapshots,
       );
       const installRecordsChanged = !pluginInstallRecordMapsEqual(
         prepared.previousInstallRecords,

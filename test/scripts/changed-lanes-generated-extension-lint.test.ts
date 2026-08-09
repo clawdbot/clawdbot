@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { detectChangedLanes } from "../../scripts/changed-lanes.mjs";
-import { createChangedCheckPlan } from "../../scripts/check-changed.mjs";
+import { detectChangedLanes } from "../../scripts/changed-lanes.mts";
+import { createChangedCheckPlan } from "../../scripts/check-changed.mts";
 
 describe("generated extension asset lint planning", () => {
   it("still lints extension tests alongside a generated browser asset", () => {

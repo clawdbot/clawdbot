@@ -216,7 +216,7 @@ npm_prefix_host="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-pref
 harness_root="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-harness.XXXXXX")"
 harness_package_json="$harness_root/package.json"
 cp "$ROOT_DIR/package.json" "$harness_package_json"
-node "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.mjs" "$harness_package_json"
+node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.mts" "$harness_package_json"
 cleanup() {
   local rc=$?
   trap - EXIT

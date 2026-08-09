@@ -656,6 +656,52 @@ describe("Crabbox worker provider", () => {
     );
   });
 
+  it("rejects a non-boolean desktop profile setting", async () => {
+    const provider = providerWithRunner(async () => commandResult());
+    await expect(
+      provider.provision({ ...PROFILE, desktop: "yes" }, "provision:desktop-invalid"),
+    ).rejects.toThrow("Crabbox profile desktop must be a boolean");
+  });
+
+  it("adds --desktop only for desktop warmups and returns the endpoint", async () => {
+    const calls: string[][] = [];
+    let warmed = false;
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "warmup") {
+        warmed = true;
+        return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
+      }
+      return warmed || argv.includes(LEASE_ID)
+        ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+        : commandResult({ code: 4, stderr: `lease/server not found: ${argv.at(-2)}` });
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, desktop: true }, "provision:desktop-fresh"),
+    ).resolves.toMatchObject({
+      desktop: {
+        protocol: "rfb",
+        port: 5900,
+        passwordFilePath: "/var/lib/crabbox/vnc.password",
+      },
+    });
+    expect(calls.find((argv) => argv[1] === "warmup")).toContain("--desktop");
+  });
+
+  it("adopts desktop metadata on replay without another warmup", async () => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, desktop: true }, "provision:desktop-replay"),
+    ).resolves.toMatchObject({ desktop: { protocol: "rfb", port: 5900 } });
+    expect(calls.some((argv) => argv[1] === "warmup")).toBe(false);
+  });
+
   it("stops a newly provisioned lease when inspect cannot supply a host key", async () => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
     const runCommand: CrabboxCommandRunner = async (argv, options) => {

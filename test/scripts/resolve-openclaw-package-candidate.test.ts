@@ -22,7 +22,7 @@ import {
   runCommandForTest,
   signalChildProcessTree,
   validateOpenClawPackageSpec,
-} from "../../scripts/resolve-openclaw-package-candidate.mjs";
+} from "../../scripts/resolve-openclaw-package-candidate.mts";
 
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
@@ -110,7 +110,7 @@ afterEach(async () => {
 
 describe("resolve-openclaw-package-candidate", () => {
   it("allows Unreleased notes when packaging an exact ref candidate", () => {
-    const script = readFileSync("scripts/resolve-openclaw-package-candidate.mjs", "utf8");
+    const script = readFileSync("scripts/resolve-openclaw-package-candidate.mts", "utf8");
     const refPackageBuild = script.slice(
       script.indexOf('if (options.source === "ref")'),
       script.indexOf('} else if (options.source === "npm")'),
@@ -642,7 +642,7 @@ describe("resolve-openclaw-package-candidate", () => {
     tempDirs.push(dir);
     const childPidPath = path.join(dir, "child.pid");
     const scriptUrl = pathToFileURL(
-      path.resolve("scripts/resolve-openclaw-package-candidate.mjs"),
+      path.resolve("scripts/resolve-openclaw-package-candidate.mts"),
     ).href;
     let childPid: number | undefined;
     let runnerPid: number | undefined;

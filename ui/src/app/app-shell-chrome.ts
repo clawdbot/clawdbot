@@ -13,6 +13,7 @@ import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
+  DESKTOP_PANEL_TOGGLE_EVENT,
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
   type PanelToggleElement,
@@ -52,6 +53,16 @@ export function isBrowserPanelAvailable(
   );
 }
 
+export function isDesktopPanelAvailable(
+  snapshot: ApplicationContext["gateway"]["snapshot"],
+): boolean {
+  return (
+    snapshot.phase === "connected" &&
+    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+    isGatewayMethodAdvertised(snapshot, "worker.desktop.observe") === true
+  );
+}
+
 export interface ShellChromeHost extends HTMLElement {
   readonly context: ApplicationContext<RouteId> | undefined;
   readonly onboardingMode: boolean;
@@ -59,6 +70,7 @@ export interface ShellChromeHost extends HTMLElement {
   readonly commandPaletteElement: OptionalCustomElement;
   readonly terminalPanelElement: OptionalCustomElement;
   readonly browserPanelElement: OptionalCustomElement;
+  readonly desktopPanelElement: OptionalCustomElement;
   readonly custodianPanelElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly commandPalette: CommandPaletteElement | undefined;
@@ -103,6 +115,7 @@ export class ShellChromeOwner {
     window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate);
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
+    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
   }
 
@@ -123,6 +136,7 @@ export class ShellChromeOwner {
     window.removeEventListener("openclaw:native-navigate", this.handleNativeNavigate);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
+    window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
     window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
   }
 
@@ -482,6 +496,17 @@ export class ShellChromeOwner {
     const snapshot = host.context?.gateway?.snapshot;
     if (snapshot && isBrowserPanelAvailable(snapshot)) {
       this.deliverPanelEventAfterLoad(host.browserPanelElement, event);
+    }
+  };
+
+  readonly handleDeferredDesktopToggle = (event: Event): void => {
+    const host = this.host;
+    if (isOptionalElementDefined(host.desktopPanelElement)) {
+      return;
+    }
+    const snapshot = host.context?.gateway?.snapshot;
+    if (snapshot && isDesktopPanelAvailable(snapshot)) {
+      this.deliverPanelEventAfterLoad(host.desktopPanelElement, event);
     }
   };
 

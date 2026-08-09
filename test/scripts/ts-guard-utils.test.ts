@@ -23,7 +23,7 @@ describe("resolveRepoRoot", () => {
   });
 
   it("resolves correctly from a scripts/*.mjs path (one level below root)", () => {
-    const fakeUrl = pathToFileURL(path.resolve("scripts", "check-no-raw-channel-fetch.mjs")).href;
+    const fakeUrl = pathToFileURL(path.resolve("scripts", "check-no-raw-channel-fetch.mts")).href;
     const root = resolveRepoRoot(fakeUrl);
 
     expect(existsSync(path.join(root, ".git"))).toBe(true);

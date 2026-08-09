@@ -29,7 +29,6 @@ vi.mock("../subagent-registry-state.js", () => ({
 
 import { isToolResultError } from "../tool-result-error.js";
 import { createAgentsWaitTool, waitForCollectorCompletion } from "./agents-wait-tool.js";
-import { testing } from "./agents-wait-tool.test-support.js";
 
 function collectorRun(
   runId: string,
@@ -118,11 +117,6 @@ describe("agents_wait", () => {
       }),
     ).rejects.toThrow("agents.run wait aborted");
     expect(registryEvents.listeners.size).toBe(0);
-  });
-
-  it("exposes ownership helpers through test support", () => {
-    const entry = collectorRun("owned", "agent:main:main");
-    expect(testing.ownsRun(entry, new Set(["agent:main:main"]))).toBe(true);
   });
 
   it("returns the first completed child and leaves siblings pending", async () => {

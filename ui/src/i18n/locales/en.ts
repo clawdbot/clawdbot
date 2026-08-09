@@ -1906,6 +1906,35 @@ export const en: TranslationMap = {
       outro: "Please look at the marked area and tell me what you make of it.",
     },
   },
+  desktop: {
+    title: "Desktop",
+    toggle: "Toggle desktop panel",
+    hide: "Hide desktop panel",
+    resize: "Resize desktop panel",
+    dockBottom: "Dock to bottom",
+    dockRight: "Dock to right",
+    pickerTitle: "Cloud worker desktops",
+    refresh: "Refresh",
+    refreshing: "Refreshing…",
+    loading: "Loading worker environments…",
+    empty:
+      "No desktop-capable worker environments exist. Enable one with desktop: true in a crabbox cloud-worker profile.",
+    connect: "Connect",
+    connecting: "Connecting to desktop…",
+    viewOnly: "View only",
+    takeControl: "Take control",
+    controlling: "Controlling · view-only for others",
+    disconnect: "Disconnect",
+    reconnect: "Reconnect",
+    controlTaken: "Another operator took control",
+    disconnected: "Desktop disconnected: {reason}",
+    closeCode: "connection closed with code {code}",
+    unknownReason: "unknown reason",
+    errors: {
+      listFailed: "Could not load worker environments: {error}",
+      securityFailed: "Desktop security negotiation failed: {reason}",
+    },
+  },
   routeTitles: {
     modelProviders: "Models",
     notifications: "Notifications",
@@ -2769,6 +2798,11 @@ export const en: TranslationMap = {
       description:
         "Record content-free metadata for direct conversations in the audit ledger. Message content is never stored.",
     },
+    workerDesktop: {
+      title: "Cloud Worker Desktop",
+      description:
+        "Watch and control desktop-capable cloud worker environments live from a Desktop panel; requires crabbox profiles with desktop: true.",
+    },
   },
   aboutPage: {
     productName: "OpenClaw",
@@ -3616,6 +3650,7 @@ export const en: TranslationMap = {
       plugins: "Plugins",
       settings: "Settings",
       agents: "Agents",
+      desktop: "Desktop",
     },
     descriptions: {
       verboseMode: "Toggle verbose mode.",

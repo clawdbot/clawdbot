@@ -160,7 +160,9 @@ describe("OpenClaw database schema preflight", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const agent = new DatabaseSync(agentPath);
     try {
-      agent.exec("ALTER TABLE schema_meta ADD COLUMN unexpected TEXT;");
+      agent.exec(
+        "ALTER TABLE schema_meta ADD COLUMN unexpected TEXT CHECK (length(unexpected) > 0);",
+      );
     } finally {
       agent.close();
     }

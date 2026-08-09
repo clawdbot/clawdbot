@@ -8,7 +8,7 @@ import {
   listPluginSdkDeclarationOutputs,
   pluginSdkEntrypoints,
   productionPluginSdkEntrypoints,
-} from "./lib/plugin-sdk-entries.mjs";
+} from "./lib/plugin-sdk-entries.mts";
 
 const USE_CANONICAL_DECLARATIONS = process.env.OPENCLAW_PLUGIN_SDK_CANONICAL_DTS === "1";
 

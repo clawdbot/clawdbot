@@ -11,6 +11,7 @@ import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/pro
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
 import {
+  buildCrabboxWarmupArgs,
   identityRefId,
   nonEmptyString,
   operationSlug,
@@ -53,6 +54,7 @@ const LEASE_ID_PATTERN = /^(?:cbx_|tbx_)[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const LEASE_TOKEN_IN_OUTPUT_PATTERN = /^leased\s+(\S{1,128})(?=\s|$)/mu;
 
 type CrabboxCommandRunner = typeof runCommandWithTimeout;
+type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
 type LeaseCommandContext = {
   binary: string;
@@ -64,6 +66,7 @@ type ProvisionInspectContext = {
   binary: string;
   deadline: number;
   inspect: ParsedInspect;
+  profile: CrabboxProfile;
   provider: string;
   runCommand: CrabboxCommandRunner;
 };
@@ -336,7 +339,7 @@ function statusFromInspect(inspect: ParsedInspect): WorkerLeaseStatus {
   return { status: "active" };
 }
 
-function leaseFromInspect(inspect: ParsedInspect): WorkerLease {
+function leaseFromInspect(inspect: ParsedInspect, profile: CrabboxProfile): WorkerLease {
   if (isTerminalState(inspect.state)) {
     throw new Error("Crabbox operation lease is no longer active");
   }
@@ -367,13 +370,24 @@ function leaseFromInspect(inspect: ParsedInspect): WorkerLease {
         id: identityRefId(inspect.id),
       },
     },
+    // Crabbox's Linux desktop contract is TigerVNC on worker loopback with a per-lease
+    // password file. This warm-time capability cannot be retrofitted onto an existing lease.
+    ...(profile.desktop
+      ? {
+          desktop: {
+            protocol: "rfb" as const,
+            port: 5900,
+            passwordFilePath: "/var/lib/crabbox/vnc.password",
+          },
+        }
+      : {}),
   };
 }
 
 async function leaseFromProvisionInspect(params: ProvisionInspectContext): Promise<WorkerLease> {
   try {
     assertProvisionSecurityPolicy(params);
-    return leaseFromInspect(params.inspect);
+    return leaseFromInspect(params.inspect, params.profile);
   } catch (error) {
     await stopProvisionInspect(params);
     throw error;
@@ -589,6 +603,7 @@ export function createCrabboxWorkerProvider(
               binary,
               deadline,
               inspect: existing.inspect,
+              profile: parsed,
               provider: parsed.provider,
               runCommand,
             });
@@ -601,6 +616,7 @@ export function createCrabboxWorkerProvider(
           binary,
           deadline,
           inspect: existing.inspect,
+          profile: parsed,
           provider: parsed.provider,
           runCommand,
         };
@@ -628,23 +644,7 @@ export function createCrabboxWorkerProvider(
 
       const warmup = await runCrabboxCommand({
         action: "warmup",
-        args: [
-          "warmup",
-          "--provider",
-          parsed.provider,
-          "--network",
-          "public",
-          "--tailscale=false",
-          "--class",
-          parsed.class,
-          "--ttl",
-          parsed.ttl,
-          "--idle-timeout",
-          parsed.idleTimeout,
-          "--slug",
-          slug,
-          "--keep=true",
-        ],
+        args: buildCrabboxWarmupArgs(parsed, slug),
         binary,
         runCommand,
         timeoutMs: remainingProvisionTimeout(deadline, WARMUP_TIMEOUT_MS),
@@ -695,6 +695,7 @@ export function createCrabboxWorkerProvider(
         binary,
         deadline,
         inspect: inspected.inspect,
+        profile: parsed,
         provider: parsed.provider,
         runCommand,
       };

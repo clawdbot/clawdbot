@@ -623,39 +623,25 @@ describe("resolveSlackMedia", () => {
     expectFetchCalledWithUrl(mockFetch, "https://files.slack.com/fresh.jpg");
   });
 
-  it("skips id-only files when files.info returns no private URL", async () => {
+  it.each([
+    { name: "skips id-only files when files.info returns no private URL", fails: false },
+    { name: "skips id-only files when files.info fails", fails: true },
+  ])("$name", async ({ fails }) => {
+    const info = vi.fn();
+    if (fails) {
+      info.mockRejectedValue(new Error("files.info failed"));
+    } else {
+      info.mockResolvedValue({ file: { id: "F123" } });
+    }
     const mockClient = {
-      files: {
-        info: vi.fn().mockResolvedValue({ file: { id: "F123" } }),
-      },
+      files: { info },
     } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
-
     const result = await resolveSlackMedia({
       files: [{ id: "F123", name: "test.jpg" }],
       client: mockClient,
       token: "xoxb-test-token",
       maxBytes: 1024 * 1024,
     });
-
-    expect(result).toBeNull();
-    expect(mockClient.files.info).toHaveBeenCalledWith({ file: "F123" });
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it("skips id-only files when files.info fails", async () => {
-    const mockClient = {
-      files: {
-        info: vi.fn().mockRejectedValue(new Error("files.info failed")),
-      },
-    } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
-
-    const result = await resolveSlackMedia({
-      files: [{ id: "F123", name: "test.jpg" }],
-      client: mockClient,
-      token: "xoxb-test-token",
-      maxBytes: 1024 * 1024,
-    });
-
     expect(result).toBeNull();
     expect(mockClient.files.info).toHaveBeenCalledWith({ file: "F123" });
     expect(mockFetch).not.toHaveBeenCalled();
