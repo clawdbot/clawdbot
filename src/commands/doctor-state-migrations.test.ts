@@ -3002,11 +3002,13 @@ describe("doctor legacy state migrations", () => {
         spec: { raw: "demo@beta" },
         version: "1.0.0",
       } as unknown as InstalledPluginInstallRecordInfo,
+      invalidLegacy: true,
     },
   ] satisfies Array<{
     label: string;
     current: InstalledPluginInstallRecordInfo;
     legacy: InstalledPluginInstallRecordInfo;
+    invalidLegacy?: true;
   }>) {
     it(`keeps SQLite plugin metadata when legacy npm records ${fixture.label}`, async () => {
       const root = await makeTempRoot();
@@ -3015,6 +3017,15 @@ describe("doctor legacy state migrations", () => {
 
       const result = await runLegacyStateMigrationsForRoot(root);
 
+      if (fixture.invalidLegacy) {
+        expect(result.warnings).toStrictEqual([
+          `Left plugin install index in place because ${sourcePath} is invalid`,
+        ]);
+        expect(result.notices).toBeUndefined();
+        expect(fs.existsSync(sourcePath)).toBe(true);
+        expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+        return;
+      }
       expect(result.warnings).toStrictEqual([]);
       expect(result.notices).toStrictEqual([
         "Kept canonical shared SQLite plugin install metadata despite differing legacy records for: demo",
