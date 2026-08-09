@@ -47,6 +47,7 @@ async function waitForCronIsolatedRuns(count: number): Promise<void> {
 
 function startAbortableHookRequest(
   port: number,
+  path: string,
   body: Record<string, unknown>,
   idempotencyKey: string,
 ) {
@@ -57,7 +58,7 @@ function startAbortableHookRequest(
       {
         host: "127.0.0.1",
         port,
-        path: "/hooks/agent",
+        path,
         method: "POST",
         headers: {
           Authorization: `Bearer ${HOOK_TOKEN}`,
@@ -159,7 +160,7 @@ describe("gateway hook admission", () => {
         await waitForCronIsolatedRuns(1);
         expect((await blocker).status).toBe(200);
 
-        abandoned = startAbortableHookRequest(port, body, "proof-stable-id");
+        abandoned = startAbortableHookRequest(port, "/hooks/agent", body, "proof-stable-id");
         await targetQueued.promise;
         abandoned.abort();
         await expect(abandoned.response).rejects.toThrow();
@@ -171,7 +172,7 @@ describe("gateway hook admission", () => {
         await waitForCronIsolatedRuns(2);
         expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
 
-        surviving = startAbortableHookRequest(port, body, "proof-accepted-id");
+        surviving = startAbortableHookRequest(port, "/hooks/agent", body, "proof-accepted-id");
         void surviving.response.catch(() => undefined);
         await accepted.promise;
         surviving.abort();
@@ -197,6 +198,81 @@ describe("gateway hook admission", () => {
         surviving?.abort();
         occupied.resolve();
         acceptedCompletion.resolve();
+      }
+    });
+  });
+
+  test.each([
+    {
+      name: "direct",
+      path: "/hooks/agent",
+      body: { message: "Dispatch" },
+      hooksConfig: { enabled: true, token: HOOK_TOKEN },
+    },
+    {
+      name: "mapped",
+      path: "/hooks/mapped-overlap",
+      body: { subject: "Email" },
+      hooksConfig: {
+        enabled: true,
+        token: HOOK_TOKEN,
+        mappings: [
+          {
+            match: { path: "mapped-overlap" },
+            action: "agent" as const,
+            messageTemplate: "Mapped: {{payload.subject}}",
+          },
+        ],
+      },
+    },
+  ])("keeps one $name pending replay alive when its creator disconnects", async (testCase) => {
+    testState.hooksConfig = testCase.hooksConfig;
+    await withGatewayServer(async ({ port }) => {
+      const runnerAdmission = createDeferred();
+      const duplicateFoundPending = createDeferred();
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
+        await runnerAdmission.promise;
+        (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+        return { status: "ok", summary: "done" };
+      });
+
+      let creator: ReturnType<typeof startAbortableHookRequest> | undefined;
+      try {
+        creator = startAbortableHookRequest(
+          port,
+          testCase.path,
+          testCase.body,
+          `overlap-${testCase.name}`,
+        );
+        await waitForCronIsolatedRuns(1);
+        const mapGet = Map.prototype.get;
+        vi.spyOn(Map.prototype, "get").mockImplementation(
+          function (this: Map<unknown, unknown>, key) {
+            const value = mapGet.call(this, key);
+            if (
+              typeof value === "object" &&
+              value !== null &&
+              "waiters" in value &&
+              value.waiters === 1
+            ) {
+              duplicateFoundPending.resolve();
+            }
+            return value;
+          },
+        );
+
+        const duplicate = postHook(port, testCase.path, testCase.body, `overlap-${testCase.name}`);
+        await duplicateFoundPending.promise;
+        creator.abort();
+        await expect(creator.response).rejects.toThrow();
+        runnerAdmission.resolve();
+
+        expect((await duplicate).status).toBe(200);
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      } finally {
+        creator?.abort();
+        runnerAdmission.resolve();
       }
     });
   });

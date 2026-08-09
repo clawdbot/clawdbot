@@ -206,12 +206,13 @@ export function createHooksHandler(
         dispatchWakeHook?: HooksHandlerDeps["dispatchWakeHook"];
         dispatchAgentHook?: HooksHandlerDeps["dispatchAgentHook"];
         bindHost?: string;
+        getHooksConfig?: HooksHandlerDeps["getHooksConfig"];
         getClientIpConfig?: HooksHandlerDeps["getClientIpConfig"];
       },
 ) {
   const options = typeof params === "string" ? { bindHost: params } : params;
   return createHooksRequestHandler({
-    getHooksConfig: () => createHooksConfig(),
+    getHooksConfig: options.getHooksConfig ?? (() => createHooksConfig()),
     bindHost: options.bindHost ?? "127.0.0.1",
     port: 18789,
     logHooks: {
