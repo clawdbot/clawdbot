@@ -11,9 +11,6 @@
       "openclaw/plugin-sdk/sandbox": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/sandbox.d.ts"
       ],
-      "openclaw/plugin-sdk/runtime-doctor": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor.d.ts"
-      ],
       "openclaw/plugin-sdk/runtime-doctor-migrations": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor-migrations.d.ts"
       ],
@@ -879,6 +876,12 @@
       ],
       "@openclaw/plugin-sdk/*": [
         "../dist/plugin-sdk/*.d.ts"
+      ],
+      "openclaw/plugin-sdk/doctor-repair-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/doctor-repair-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/plugin-state-store-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/plugin-state-store-runtime.d.ts"
       ]
     }
   }

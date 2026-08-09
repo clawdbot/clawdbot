@@ -26,12 +26,21 @@ const FORBIDDEN_SPECIFIER_RULES = new Map<string, { reason: string; kinds: Set<C
     },
   ],
   [
-    "openclaw/plugin-sdk/runtime-doctor",
+    "openclaw/plugin-sdk/doctor-repair-runtime",
     {
       reason:
-        "the heavy doctor barrel makes doctor enumeration cold-load the state-db/kysely graph; " +
-        "use openclaw/plugin-sdk/runtime-doctor-migrations, or defer heavy helpers behind a dynamic import",
+        "install-path, uninstall, and state-db schema repair cold-load the state-db/kysely graph; " +
+        "use openclaw/plugin-sdk/runtime-doctor-migrations, or defer the repair behind a dynamic import",
       kinds: new Set(["doctor-contract", "legacy-setup"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/plugin-state-store-runtime",
+    {
+      reason:
+        "opening a keyed plugin-state store cold-loads the state-db/kysely graph; " +
+        "keep the store behind the migration context or a dynamic import inside async bodies",
+      kinds: new Set(["doctor-contract"]),
     },
   ],
   [

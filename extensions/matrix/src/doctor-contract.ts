@@ -14,7 +14,7 @@ import {
 import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   migrateLegacyFlatAllowPrivateNetworkAlias,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+} from "openclaw/plugin-sdk/ssrf-policy";
 import { isRecord } from "./record-shared.js";
 import type { MatrixStreamingMode } from "./types.js";
 

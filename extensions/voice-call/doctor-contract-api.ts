@@ -2,11 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Doctor enumeration cold-loads this closure; the state-DB helpers stay behind a
+// lazy doctor-repair-runtime import so enumeration never pulls the kysely/state-db graph.
+import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-// Doctor enumeration cold-loads this closure; the state-DB helpers stay behind a
-// lazy runtime-doctor import so enumeration never pulls the kysely/state-db graph.
-import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/runtime-doctor";
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
@@ -304,7 +304,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     label: "Voice Call call log",
     async detectLegacyState(params) {
       const { detectOpenClawStateDatabaseSchemaMigrations } =
-        await import("openclaw/plugin-sdk/runtime-doctor");
+        await import("openclaw/plugin-sdk/doctor-repair-runtime");
       const storePath = resolveVoiceCallStorePath(params);
       const filePath = resolveVoiceCallLegacyCallLogPath(storePath);
       const { entries } = await readLegacyCallRecords(filePath);
@@ -330,7 +330,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     },
     async migrateLegacyState(params) {
       const { detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema } =
-        await import("openclaw/plugin-sdk/runtime-doctor");
+        await import("openclaw/plugin-sdk/doctor-repair-runtime");
       const changes: string[] = [];
       const warnings: string[] = [];
       const storePath = resolveVoiceCallStorePath(params);
