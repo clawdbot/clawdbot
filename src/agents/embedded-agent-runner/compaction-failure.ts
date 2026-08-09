@@ -6,6 +6,8 @@ import type {
   TerminalCompactionFailureReason,
 } from "../../context-engine/types.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
+import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
+import type { EmbeddedAgentCompactResult } from "./types.js";
 
 const RETRYABLE_REASONS = new Set<RetryableCompactionFailureReason>([
   "empty_response",
@@ -162,4 +164,30 @@ export function failoverReasonFromCompactionFailure(failure: CompactionFailure):
     TERMINAL_FAILOVER_REASONS.has(failure.reason as TerminalCompactionFailureReason)
     ? (failure.reason as FailoverReason)
     : "unknown";
+}
+
+/** Classifies one compaction result for the generic model-fallback loop. */
+export function classifyCompactionResultForModelFallback(
+  result: EmbeddedAgentCompactResult,
+): ModelFallbackResultClassification {
+  if (result.ok) {
+    return null;
+  }
+  const failure = isStructuredCompactionFailure(result.failure)
+    ? result.failure
+    : terminalCompactionFailure("unknown");
+  if (failure.disposition === "fallback") {
+    // A binding fallback selects the synchronous context-engine owner. Returning
+    // null preserves the original failed result without trying another model.
+    return null;
+  }
+  return {
+    message: `Compaction failed (${failure.reason})`,
+    reason: failoverReasonFromCompactionFailure(failure),
+    status: failure.status,
+    preserveResultOnExhaustion: true,
+    // Terminal identities win over a later transient model failure if all
+    // configured compaction candidates are exhausted.
+    preserveResultPriority: failure.disposition === "retryable" ? 0 : 1,
+  };
 }

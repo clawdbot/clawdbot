@@ -38,9 +38,8 @@ import {
   resolveCompactionProviderStream,
 } from "./compaction-diagnostics.js";
 import {
+  classifyCompactionResultForModelFallback,
   compactionFailureFromFailoverReason,
-  failoverReasonFromCompactionFailure,
-  isStructuredCompactionFailure,
   terminalCompactionFailure,
 } from "./compaction-failure.js";
 import {
@@ -87,24 +86,6 @@ function hasCompactionModelFallbackCandidates(params: CompactEmbeddedAgentSessio
   const fallbacksOverride = resolveCompactionFallbacksOverride(params);
   const defaultFallbacks = resolveAgentModelFallbackValues(params.config?.agents?.defaults?.model);
   return (fallbacksOverride ?? defaultFallbacks).length > 0;
-}
-
-function classifyCompactionFallbackResult(result: EmbeddedAgentCompactResult) {
-  if (result.ok) {
-    return null;
-  }
-  const failure = isStructuredCompactionFailure(result.failure)
-    ? result.failure
-    : terminalCompactionFailure("unknown");
-  return {
-    message: `Compaction failed (${failure.reason})`,
-    reason: failoverReasonFromCompactionFailure(failure),
-    status: failure.status,
-    preserveResultOnExhaustion: true,
-    // Owner-fallback and terminal identities win over a later transient model
-    // failure if all configured compaction candidates are exhausted.
-    preserveResultPriority: failure.disposition === "retryable" ? 0 : 1,
-  };
 }
 
 function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactResult {
@@ -318,7 +299,7 @@ export async function compactEmbeddedAgentSessionDirect(
           });
         },
         fallbacksOverride,
-        classifyResult: ({ result }) => classifyCompactionFallbackResult(result),
+        classifyResult: ({ result }) => classifyCompactionResultForModelFallback(result),
         run: async (provider, model) => {
           const isPrimaryCandidate =
             provider === resolvedPrimaryCandidate?.provider &&
