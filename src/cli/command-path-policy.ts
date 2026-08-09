@@ -44,8 +44,7 @@ function resolveCliCatalogCommandPath(argv: string[]): string[] {
   const startupPath = resolveCliStartupCommandPath(argv);
   const gatewayPath = resolveGatewayCatalogCommandPath(argv);
   if (!gatewayPath && (startupPath[0] === "agent" || startupPath[0] === "models")) {
-    // These parents own value-bearing options before their child command. The
-    // canonical startup path has already separated those values from children.
+    // Parent option values are already separated from child commands here.
     return startupPath;
   }
   const tokens = gatewayPath ?? getCommandPathWithRootOptions(argv, argv.length);

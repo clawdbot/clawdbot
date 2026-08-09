@@ -3,11 +3,9 @@ import { hasMachineOutputOption } from "./machine-output-argv.js";
 
 /** Resolve the parent-command alias for `models status --json`. */
 export function isModelsStatusJsonOutput(argv: readonly string[]): boolean {
-  if (hasMachineOutputOption(argv, "--json")) {
-    return true;
-  }
   return (
-    resolveCliStartupCommandPath([...argv]).length === 1 &&
-    hasMachineOutputOption(argv, "--status-json")
+    hasMachineOutputOption(argv, "--json") ||
+    (resolveCliStartupCommandPath([...argv]).length === 1 &&
+      hasMachineOutputOption(argv, "--status-json"))
   );
 }

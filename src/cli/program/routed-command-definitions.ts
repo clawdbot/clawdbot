@@ -76,13 +76,6 @@ function loadModelsStatusCommand(): Promise<ModelsStatusCommandModule> {
   return modelsStatusCommandLoader.load();
 }
 
-async function runModelsStatusCommand(
-  args: Parameters<ModelsStatusCommandModule["modelsStatusCommand"]>[0],
-): Promise<void> {
-  const { modelsStatusCommand } = await loadModelsStatusCommand();
-  await modelsStatusCommand(args, defaultRuntime);
-}
-
 function loadTasksJsonCommand(): Promise<TasksJsonCommandModule> {
   return tasksJsonCommandLoader.load();
 }
@@ -167,7 +160,10 @@ export const routedCommandDefinitions = {
   }),
   "models-status": defineRoutedCommand({
     parseArgs: parseModelsStatusRouteArgs,
-    runParsedArgs: runModelsStatusCommand,
+    runParsedArgs: async (args) => {
+      const { modelsStatusCommand } = await loadModelsStatusCommand();
+      await modelsStatusCommand(args, defaultRuntime);
+    },
   }),
   "tasks-list": defineRoutedCommand({
     parseArgs: parseTasksListRouteArgs,
