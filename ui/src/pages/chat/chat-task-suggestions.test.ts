@@ -105,6 +105,27 @@ describe("chat task suggestions", () => {
     ]);
   });
 
+  it("copies the raw prompt from the menu without accepting", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    try {
+      const { container, onAccept } = renderSuggestion();
+      const copy = container.querySelector('wa-dropdown-item[value="copy-prompt"]');
+      expect(copy).not.toBeNull();
+      selectMenuItem(container, copy!);
+      await Promise.resolve();
+      expect(writeText).toHaveBeenCalledWith(suggestion.prompt);
+      expect(onAccept).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("renders no card icon column", () => {
+    const { container } = renderSuggestion();
+    expect(container.querySelector(".task-suggestion__icon")).toBeNull();
+  });
+
   it("renders a worktree-only action when acceptance modes are not advertised", () => {
     const { container, onAccept } = renderSuggestion({ canAcceptModes: false });
 

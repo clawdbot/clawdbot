@@ -4,6 +4,7 @@ import type { TaskSuggestion } from "../../../../../packages/gateway-protocol/sr
 import { icons } from "../../../components/icons.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { repoName } from "../../../lib/session-display.ts";
 import type { TaskSuggestionAcceptMode } from "../../../lib/task-suggestion-acceptance.ts";
 
@@ -52,7 +53,6 @@ export function renderChatTaskSuggestions(props: {
         };
         return html`
           <article class="task-suggestion" data-task-id=${suggestion.id}>
-            <div class="task-suggestion__icon" aria-hidden="true">${icons.spark}</div>
             <div class="task-suggestion__body">
               <div class="task-suggestion__eyebrow" title=${cwd}>
                 ${t("chat.taskSuggestions.eyebrow", { repo })}
@@ -69,6 +69,19 @@ export function renderChatTaskSuggestions(props: {
                 </div>
               </details>
             </div>
+            ${props.canDismiss
+              ? html`
+                  <button
+                    class="btn btn--ghost btn--icon task-suggestion__dismiss"
+                    type="button"
+                    ?disabled=${busy}
+                    aria-label=${t("chat.taskSuggestions.dismiss", { title })}
+                    @click=${() => props.onDismiss(suggestion)}
+                  >
+                    ${icons.x}
+                  </button>
+                `
+              : nothing}
             <div class="task-suggestion__actions">
               <div class="task-suggestion__split">
                 <button
@@ -101,6 +114,10 @@ export function renderChatTaskSuggestions(props: {
                             if (profileId) {
                               accept("cloud", profileId);
                             }
+                          } else if (item.value === "copy-prompt") {
+                            // Copies the raw prompt: fidelity matters at the paste
+                            // target; sanitizing is a display-only concern.
+                            void copyToClipboard(suggestion.prompt);
                           }
                         }}
                       >
@@ -147,24 +164,14 @@ export function renderChatTaskSuggestions(props: {
                         <wa-dropdown-item value="session" ?disabled=${busy || !props.canAccept}>
                           ${t("chat.taskSuggestions.fixInSession")}
                         </wa-dropdown-item>
+                        <wa-dropdown-item value="copy-prompt">
+                          ${t("chat.taskSuggestions.copyPrompt")}
+                        </wa-dropdown-item>
                       </wa-dropdown>
                     `
                   : nothing}
               </div>
             </div>
-            ${props.canDismiss
-              ? html`
-                  <button
-                    class="btn btn--ghost btn--icon task-suggestion__dismiss"
-                    type="button"
-                    ?disabled=${busy}
-                    aria-label=${t("chat.taskSuggestions.dismiss", { title })}
-                    @click=${() => props.onDismiss(suggestion)}
-                  >
-                    ${icons.x}
-                  </button>
-                `
-              : nothing}
           </article>
         `;
       })}

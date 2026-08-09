@@ -4620,6 +4620,7 @@ export const en: TranslationMap = {
       startLocal: "Start locally",
       startCloud: "Send to cloud · {profile}",
       startCloudGeneric: "Send to cloud",
+      copyPrompt: "Copy prompt",
       fixInSession: "Fix in this session",
       noCloudConfigured: "No cloud environment configured",
       showInstructions: "Show instructions",

@@ -1493,13 +1493,19 @@ openclaw-chat-video-player {
   margin: 8px auto 14px;
 }
 
+/* Floating tray pinned to the conversation's top-right (the positioned
+   ancestor is .chat-main__conversation); content scrolls underneath it. */
 .task-suggestions {
+  position: absolute;
+  z-index: 24;
+  top: 10px;
+  right: 14px;
   display: grid;
   gap: 8px;
-  max-height: min(40vh, 24rem);
+  width: min(400px, calc(100% - 28px));
+  max-height: min(48vh, 26rem);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 0 14px 10px;
 }
 
 .session-suggestions {
@@ -1586,29 +1592,14 @@ openclaw-chat-video-player {
 .task-suggestion {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
-  gap: 12px;
-  padding: 12px;
+  gap: 6px 10px;
+  padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
   border-radius: 12px;
   background: color-mix(in srgb, var(--accent) 7%, var(--panel));
-}
-
-.task-suggestion__icon {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border-radius: 10px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-.task-suggestion__icon svg,
-.task-suggestion__start svg {
-  width: 16px;
-  height: 16px;
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--bg) 45%, transparent);
 }
 
 .task-suggestion__body {
@@ -1667,9 +1658,9 @@ openclaw-chat-video-player {
 }
 
 .task-suggestion__actions {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
-  align-self: start;
   justify-self: end;
 }
 
@@ -1738,27 +1729,6 @@ openclaw-chat-video-player {
   min-width: 28px;
   height: 28px;
   padding: 5px;
-}
-
-@media (max-width: 640px) {
-  .task-suggestion {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .task-suggestion__actions {
-    grid-column: 1 / -1;
-    justify-content: flex-end;
-  }
-
-  .task-suggestion__dismiss {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-  }
-
-  .task-suggestion:has(.task-suggestion__dismiss) .task-suggestion__body {
-    padding-right: 28px;
-  }
 }
 
 .chat-swarm {
