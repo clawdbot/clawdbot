@@ -426,8 +426,24 @@ function scanJsonStringSpan(text: string, start: number): number | null {
 }
 
 /**
- * Finds the top-level object key whose string *value* is currently open
- * (streaming, not yet closed) at the very end of `text`, restricted to the
+ * The top-level object key whose string *value* is currently open
+ * (streaming, not yet closed), together with that value's *authoritative*
+ * content decoded directly from the repaired buffer - not from
+ * `partial-json`, which deliberately trims trailing whitespace off an
+ * unterminated string (it can't tell whether that whitespace is meaningful
+ * content or an artifact of the cut ending mid-stream). Recomputing the
+ * value this way after every full reparse is what makes the hot path in
+ * `pushStreamingJsonPreview` safe to build on: its baseline is always the
+ * true accumulated content, so appending further decoded deltas can never
+ * silently drop whitespace `partial-json` chose to withhold.
+ */
+interface OpenTopLevelStringValue {
+  key: string;
+  value: string;
+}
+
+/**
+ * Finds the top-level object key/value described above, restricted to the
  * common flat-object shape this fast path targets: a single top-level
  * `{ ... }` whose members are strings/numbers/booleans/null (the shape of
  * essentially every real tool-call-arguments schema, including the
@@ -443,7 +459,7 @@ function scanJsonStringSpan(text: string, start: number): number | null {
  * `text` must already be repaired JSON text (see `repairJson`), so any
  * escape sequences within it are well-formed pairs.
  */
-function computeOpenTopLevelStringValueKey(text: string): string | null {
+function computeOpenTopLevelStringValue(text: string): OpenTopLevelStringValue | null {
   let index = 0;
   const skipWhitespace = () => {
     while (index < text.length && JSON_WHITESPACE.test(text.charAt(index))) {
@@ -489,9 +505,13 @@ function computeOpenTopLevelStringValueKey(text: string): string | null {
     }
 
     if (text.charAt(index) === '"') {
+      const valueStart = index + 1;
       const valueEnd = scanJsonStringSpan(text, index);
       if (valueEnd === null) {
-        return key; // <- the open, truncated string value
+        // The open, truncated string value: everything after the opening
+        // quote to the end of the (repaired) buffer is its raw content so
+        // far, since it hasn't closed yet.
+        return { key, value: decodeRepairedStringFragment(text.slice(valueStart)) };
       }
       index = valueEnd;
     } else if (text.charAt(index) === "{" || text.charAt(index) === "[") {
@@ -615,9 +635,38 @@ function runFullReparse(state: StreamingJsonPreviewState, previewRepaired: strin
   state.lastParsedLength = previewRepaired.length;
   state.lastParsedValue = parseStreamingJsonFromParts(state.raw, previewRepaired);
   state.fullReparseCount += 1;
-  state.openStringKey = state.repairState.inString
-    ? computeOpenTopLevelStringValueKey(previewRepaired)
+
+  // Deliberately read from `state.repairedSoFar` (only ever committed,
+  // fully-resolved characters - see `repairJsonChunkCore`'s contract) and
+  // never from `previewRepaired`, which may additionally include a
+  // *speculative* "as if the stream ended right now" resolution of a still
+  // -pending, ambiguous escape sequence held in `state.repairState.pendingRaw`
+  // (e.g. a lone trailing `\` that might become `\n`, `\uXXXX`, etc. once
+  // the next character(s) arrive). Baking that speculative guess into
+  // `lastParsedValue` would make it the hot path's baseline; when the
+  // pending escape later resolves for real via `repairJsonChunkCore`'s own
+  // carryover, the hot path would append the correctly-decoded character on
+  // top of the earlier speculative one instead of replacing it, duplicating
+  // content. Using only the committed buffer avoids this class of bug
+  // entirely, since it can never contain an unresolved escape by construction.
+  const open = state.repairState.inString
+    ? computeOpenTopLevelStringValue(state.repairedSoFar)
     : null;
+  if (open === null) {
+    state.openStringKey = null;
+    return;
+  }
+  state.openStringKey = open.key;
+  // `parseStreamingJsonFromParts` above may have gone through `partial-json`
+  // (needed for the rest of the object - fields other than the open string
+  // aren't handled by this fast path), which deliberately trims trailing
+  // whitespace off an unterminated string. Overwrite that with the
+  // authoritative value derived directly from the repaired buffer we own,
+  // so both the value returned right now and the hot path's baseline for
+  // subsequent deltas are always the true accumulated content - never
+  // silently missing whitespace/content partial-json's incomplete-string
+  // heuristics withheld.
+  state.lastParsedValue = { ...state.lastParsedValue, [open.key]: open.value };
 }
 
 /**

@@ -305,6 +305,67 @@ describe("streaming JSON preview (incremental repair + growth-gated reparse)", (
     expect(fourth).toEqual({ a: "123" });
   });
 
+  it("preserves whitespace `partial-json` withheld on an open string once the hot path resumes after a full reparse", () => {
+    // Regression for a real bug: a full reparse (forced here for a
+    // deterministic repro; the growth gate triggers the same reparse path
+    // for a large real payload) that lands with an open string ending in
+    // whitespace used to cache partial-json's *trimmed* view of that value.
+    // The next hot-path delta then appended its decoded content onto that
+    // stale, shortened cache instead of the true accumulated text, silently
+    // dropping the whitespace - e.g. "hi " + "x" became "hix" instead of
+    // "hi x" in the value exposed via `toolcall_delta.partial.arguments`.
+    const state = createStreamingJsonPreviewState();
+
+    const afterForcedReparse = pushStreamingJsonPreview(state, '{"a":"hi ', { force: true });
+    // The forced full reparse above goes through partial-json, which would
+    // trim the trailing space off this still-open string; the fix
+    // overwrites that with the authoritative value derived directly from
+    // the repaired buffer, so the space must already be present here too.
+    expect(afterForcedReparse).toEqual({ a: "hi " });
+
+    // Pure interior string content for the same still-open field: must hit
+    // the hot path and append onto the *true* value above, not a trimmed
+    // one, or the space between "hi" and "x" is lost.
+    const afterHotPathAppend = pushStreamingJsonPreview(state, "x");
+    expect(afterHotPathAppend).toEqual({ a: "hi x" });
+
+    pushStreamingJsonPreview(state, '"}');
+    const finalValue = finalizeStreamingJsonPreview(state);
+    expect(finalValue).toEqual({ a: "hi x" });
+  });
+
+  it("does not duplicate a character when a pending escape sequence resolves right after a full reparse", () => {
+    // Regression for a bug introduced while fixing the whitespace-trim
+    // issue above: the open-string value used to be read from a buffer that
+    // included a *speculative* "as if the stream ended now" resolution of
+    // a still-pending, ambiguous escape (state.repairState.pendingRaw) -
+    // e.g. a lone trailing "\" that might turn into "\uXXXX" once the next
+    // characters arrive. Baking that guess into the hot path's baseline
+    // meant the backslash got counted once speculatively and then again
+    // for real once repairJsonChunkCore's own carryover resolved the escape
+    // properly, producing e.g. "\A" instead of "A" for a "\u0041" split
+    // exactly after the backslash.
+    const state = createStreamingJsonPreviewState();
+
+    // Force a full reparse landing with field1's value containing exactly
+    // one unresolved trailing backslash - the start of a \u escape whose
+    // remaining hex digits haven't arrived yet.
+    const afterForcedReparse = pushStreamingJsonPreview(state, '{"field0":"x","field1":"\\', {
+      force: true,
+    });
+    expect(afterForcedReparse).toEqual({ field0: "x", field1: "" });
+
+    // The rest of the \u0041 escape arrives as pure interior content for
+    // the same still-open field: must resolve to "A" via the pending-raw
+    // carryover, not "\A".
+    const afterEscapeResolves = pushStreamingJsonPreview(state, "u0041");
+    expect(afterEscapeResolves).toEqual({ field0: "x", field1: "A" });
+
+    pushStreamingJsonPreview(state, '"}');
+    const finalValue = finalizeStreamingJsonPreview(state);
+    expect(finalValue).toEqual({ field0: "x", field1: "A" });
+  });
+
   it("falls back to the growth-gated path (not the hot path) for a nested object/array value", () => {
     // Nested containers are explicitly out of scope for the flat-object hot
     // path (see computeOpenTopLevelStringValueKey); this must still resolve

@@ -523,6 +523,17 @@ function processProxyEvent(
       if (content?.type === "toolCall") {
         const streamingContent = content as StreamingToolCall;
         streamingContent.partialJson = `${streamingContent.partialJson ?? ""}${proxyEvent.delta}`;
+        // NOTE: re-parses the *entire* accumulated partialJson on every
+        // delta - the same O(n^2)-total-cost pattern fixed for the Bedrock
+        // provider and Worker inference adapter via the incremental
+        // pushStreamingJsonPreview/finalizeStreamingJsonPreview helpers in
+        // json-parse.ts (see that module for the full writeup). Left as-is
+        // here deliberately: this reassembler sits on a different owner
+        // boundary (client-side reconstruction of an already-proxied
+        // stream, not a direct provider integration), so migrating it was
+        // scoped out of that fix to avoid changing behavior on a third,
+        // unrelated code path under the same change. Tracked as a
+        // follow-up, not forgotten.
         content.arguments = parseStreamingJson(streamingContent.partialJson) || {};
         partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
         return {
