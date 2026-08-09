@@ -33250,22 +33250,6 @@
       "id": "native.apple.a861b3a0aafb24cc"
     },
     {
-      "kind": "conditional-branch",
-      "line": 92,
-      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Automatically start OpenClaw after you sign in.",
-      "surface": "apple",
-      "id": "native.apple.405e74c96498b7c0"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 93,
-      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Move OpenClaw to Applications before enabling launch at login.",
-      "surface": "apple",
-      "id": "native.apple.8b74758a60f78642"
-    },
-    {
       "kind": "ui-named-argument",
       "line": 98,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
@@ -33955,15 +33939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 795,
-      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Launch at login is unavailable while an app profile is active.",
-      "surface": "apple",
-      "id": "native.apple.39f0173209fd7e74"
-    },
-    {
-      "kind": "ui-call",
-      "line": 848,
+      "line": 843,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Retry now",
       "surface": "apple",
@@ -33971,11 +33947,35 @@
     },
     {
       "kind": "ui-call",
-      "line": 853,
+      "line": 848,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Open logs",
       "surface": "apple",
       "id": "native.apple.6393591d17837eb0"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 914,
+      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
+      "source": "Launch at login is unavailable while an app profile is active.",
+      "surface": "apple",
+      "id": "native.apple.39f0173209fd7e74"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 919,
+      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
+      "source": "Automatically start OpenClaw after you sign in.",
+      "surface": "apple",
+      "id": "native.apple.405e74c96498b7c0"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 920,
+      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
+      "source": "Move OpenClaw to Applications before enabling launch at login.",
+      "surface": "apple",
+      "id": "native.apple.8b74758a60f78642"
     },
     {
       "kind": "conditional-branch",
@@ -34243,7 +34243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 131,
+      "line": 133,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "New Gateway Window…",
       "surface": "apple",
@@ -34251,7 +34251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 136,
+      "line": 138,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "New Thread",
       "surface": "apple",
@@ -34259,7 +34259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 142,
+      "line": 144,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Settings...",
       "surface": "apple",
@@ -34267,7 +34267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 150,
+      "line": 152,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Back",
       "surface": "apple",
@@ -34275,7 +34275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 155,
+      "line": 157,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Forward",
       "surface": "apple",
@@ -34283,7 +34283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 162,
+      "line": 164,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Command Palette…",
       "surface": "apple",
@@ -34291,7 +34291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 176,
+      "line": 178,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw - Voice Wake live meter active",
       "surface": "apple",
@@ -34299,7 +34299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 177,
+      "line": 179,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -34307,7 +34307,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 435,
+      "line": 484,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Close Canvas",
       "surface": "apple",
@@ -34315,7 +34315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 435,
+      "line": 484,
       "path": "apps/macos/Sources/OpenClaw/MenuBar.swift",
       "source": "Open Canvas",
       "surface": "apple",

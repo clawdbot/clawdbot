@@ -31,7 +31,9 @@ struct OpenClawApp: App {
     @State private var statusItemMouseRouter = StatusItemMouseRouter()
     @State private var isMenuPresented = false
     @State private var isChatWindowVisible = false
-    @State private var tailscaleService = TailscaleService.shared
+    private var tailscaleService: TailscaleService {
+        .shared
+    }
 
     @MainActor
     private func updateStatusHighlight() {
@@ -414,7 +416,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     var openDashboardAction: @MainActor () -> Void = { AppNavigationActions.openDashboard() }
-    let updaterController: UpdaterProviding = makeUpdaterController()
+    let updaterController: UpdaterProviding
+
+    override init() {
+        let environment = ProcessInfo.processInfo.environment
+        let hasReplacementMetadata = ApplicationRelocator.hasReplacementHandoffMetadata(
+            environment: environment)
+        let isReplacementHandoff = hasReplacementMetadata &&
+            ApplicationRelocator.acceptReplacementHandoff(environment: environment)
+        if hasReplacementMetadata, !isReplacementHandoff {
+            fputs("OpenClaw replacement handoff authentication failed.\n", stderr)
+            Darwin.exit(2)
+        }
+        let ownership = AppInstanceLock.acquire(
+            url: AppProfile.current.instanceLockURL(),
+            waitMilliseconds: isReplacementHandoff ? 5000 : 0)
+        if let exitCode = Self.processExitCode(for: ownership) {
+            fputs("OpenClaw profile is already running.\n", stderr)
+            Darwin.exit(exitCode)
+        }
+        var profileInstanceLock: AppInstanceLock?
+        var instanceOwnershipFailure: String?
+        switch ownership {
+        case let .acquired(lock):
+            profileInstanceLock = lock
+        case .busy:
+            break
+        case let .failed(message):
+            instanceOwnershipFailure = message
+        }
+        self.profileInstanceLock = profileInstanceLock
+        self.updaterController = instanceOwnershipFailure == nil
+            ? makeUpdaterController()
+            : DisabledUpdaterController()
+        super.init()
+        if let instanceOwnershipFailure {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "OpenClaw could not claim its instance lock"
+            alert.informativeText = instanceOwnershipFailure
+            alert.runModal()
+            Darwin.exit(2)
+        }
+    }
+
+    static func processExitCode(for ownership: AppInstanceLockAcquisition) -> Int32? {
+        if case .busy = ownership { return 0 }
+        return nil
+    }
 
     func applicationWillFinishLaunching(_: Notification) {
         // URL/reopen callbacks can create the dashboard before didFinishLaunching.
@@ -499,20 +548,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         #endif
-        let environment = ProcessInfo.processInfo.environment
         let launchPolicy = AppLaunchPresentationPolicy.current
-        let hasReplacementHandoff = !AppProfile.current.isActive &&
-            ApplicationRelocator.hasReplacementHandoffMetadata(environment: environment)
-        let isReplacementHandoff = !AppProfile.current.isActive &&
-            ApplicationRelocator.acceptReplacementHandoff(environment: environment)
-        if hasReplacementHandoff, !isReplacementHandoff {
-            NSApp.terminate(nil)
-            return
-        }
-        guard self.acquireInstanceOwnership(
-            isReplacementHandoff: isReplacementHandoff,
-            allowsAutomaticPresentation: launchPolicy.allowsAutomaticPresentation)
-        else { return }
         if !AppProfile.current.isActive {
             switch ApplicationRelocator.handleLaunch() {
             case .terminating:
@@ -603,43 +639,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if launchPolicy.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
             self.openDashboardAction()
-        }
-    }
-
-    private func acquireInstanceOwnership(
-        isReplacementHandoff: Bool,
-        allowsAutomaticPresentation: Bool) -> Bool
-    {
-        // The authenticated replacement has already signalled READY, so its parent can
-        // terminate while this child waits for the same profile lock to transfer.
-        let result = AppInstanceLock.acquire(
-            url: AppProfile.current.instanceLockURL(),
-            waitMilliseconds: isReplacementHandoff ? 5000 : 0)
-        if case let .acquired(lock) = result {
-            self.profileInstanceLock = lock
-            return true
-        }
-        if allowsAutomaticPresentation {
-            self.presentInstanceOwnershipFailure(result)
-        }
-        NSApp.terminate(nil)
-        return false
-    }
-
-    private func presentInstanceOwnershipFailure(_ result: AppInstanceLockAcquisition) {
-        if case let .failed(message) = result {
-            let alert = NSAlert()
-            alert.alertStyle = .critical
-            alert.messageText = "OpenClaw could not claim its instance lock"
-            alert.informativeText = message
-            alert.runModal()
-        } else if AppProfile.current.isActive {
-            let alert = NSAlert()
-            alert.messageText = "This OpenClaw profile is already running"
-            alert.informativeText = "Quit the existing \(AppProfile.current.name ?? "named") profile first."
-            alert.runModal()
-        } else {
-            NSWorkspace.shared.open(Self.dashboardURL)
         }
     }
 

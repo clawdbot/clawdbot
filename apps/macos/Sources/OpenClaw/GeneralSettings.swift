@@ -88,11 +88,11 @@ struct GeneralSettings: View {
             SettingsCardGroup("App") {
                 SettingsCardToggleRow(
                     title: "Launch at login",
-                    subtitle: self.state.bundleLocationAllowsPersistentIntegration
-                        ? "Automatically start OpenClaw after you sign in."
-                        : "Move OpenClaw to Applications before enabling launch at login.",
+                    subtitle: .verbatim(
+                        self
+                            .launchAtLoginPresentation.subtitle),
                     binding: self.$state.launchAtLogin)
-                    .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state.launchAtLogin)
+                    .disabled(self.launchAtLoginPresentation.isDisabled)
 
                 SettingsCardToggleRow(
                     title: "Show Dock icon",
@@ -791,11 +791,6 @@ struct GeneralSettings: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
-            if AppProfile.current.isActive {
-                Text("Launch at login is unavailable while an app profile is active.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
         .padding(12)
         .background(Color.gray.opacity(0.08))
@@ -892,9 +887,38 @@ extension GeneralSettings {
         alert.runModal()
     }
 
+    private var launchAtLoginPresentation: LaunchAtLoginPresentation {
+        .resolve(
+            profile: .current,
+            bundleLocationAllowsPersistentIntegration: self.state.bundleLocationAllowsPersistentIntegration,
+            isEnabled: self.state.launchAtLogin)
+    }
+
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
         GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
         MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: self.state)
+    }
+}
+
+struct LaunchAtLoginPresentation: Equatable {
+    let subtitle: String
+    let isDisabled: Bool
+
+    static func resolve(
+        profile: AppProfile,
+        bundleLocationAllowsPersistentIntegration: Bool,
+        isEnabled: Bool) -> Self
+    {
+        if profile.isActive {
+            return Self(
+                subtitle: String(localized: "Launch at login is unavailable while an app profile is active."),
+                isDisabled: true)
+        }
+        return Self(
+            subtitle: bundleLocationAllowsPersistentIntegration
+                ? String(localized: "Automatically start OpenClaw after you sign in.")
+                : String(localized: "Move OpenClaw to Applications before enabling launch at login."),
+            isDisabled: !bundleLocationAllowsPersistentIntegration && !isEnabled)
     }
 }
 

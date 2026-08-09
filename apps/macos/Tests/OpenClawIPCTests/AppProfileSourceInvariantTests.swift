@@ -40,5 +40,20 @@ struct AppProfileSourceInvariantTests {
             contentsOf: sourceRoot.appendingPathComponent("SettingsRootView.swift"),
             encoding: .utf8)
         #expect(settingsRoot.contains(".defaultAppStorage(AppDefaults.standard)"))
+
+        let menuBar = try String(
+            contentsOf: sourceRoot.appendingPathComponent("MenuBar.swift"),
+            encoding: .utf8)
+        let delegateInit = try #require(menuBar.range(of: "override init()"))
+        let ownershipGate = try #require(menuBar.range(
+            of: "AppInstanceLock.acquire",
+            range: delegateInit.lowerBound..<menuBar.endIndex))
+        let updaterConstruction = try #require(menuBar.range(
+            of: "? makeUpdaterController()",
+            range: ownershipGate.lowerBound..<menuBar.endIndex))
+        #expect(ownershipGate.lowerBound < updaterConstruction.lowerBound)
+        #expect(menuBar.contains("if let exitCode = Self.processExitCode(for: ownership)"))
+        #expect(menuBar.contains("Darwin.exit(exitCode)"))
+        #expect(!menuBar.contains("@State private var tailscaleService = TailscaleService.shared"))
     }
 }
