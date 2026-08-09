@@ -628,7 +628,6 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const usageByProvider = readProviderUsageStaleWhileRevalidate({
         agentId,
         agentDir,
-        configRef: cfg,
         credentialKey: fingerprintProviderUsageCredentials({
           cfg,
           directApiKeys: apiKeys,

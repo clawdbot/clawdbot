@@ -65,7 +65,7 @@ function createStore(access = "access-one") {
   };
 }
 
-async function runUsageStatus(client?: unknown) {
+async function runUsageStatus(client?: unknown, getRuntimeConfig = () => config) {
   const respond = vi.fn();
   await expectDefined(
     usageHandlers["usage.status"],
@@ -73,7 +73,7 @@ async function runUsageStatus(client?: unknown) {
   )({
     respond,
     params: {},
-    context: { getRuntimeConfig: () => config },
+    context: { getRuntimeConfig },
     client: client === undefined ? refreshingCapableClient : client,
   } as unknown as Parameters<(typeof usageHandlers)["usage.status"]>[0]);
   expect(respond).toHaveBeenCalledTimes(1);
@@ -262,6 +262,40 @@ describe("usage.status provider usage cache", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
   });
 
+  it("converges for a capable client when each request resolves its own config object", async () => {
+    // The gateway hands every request its own runtime config value, so a cache
+    // keyed on that object's identity never matches and the capable read answers
+    // the cold marker forever: the panel stays empty and the client keeps
+    // refetching. Credential and provider identity already key the entry.
+    const perRequestConfig = () => ({ ...config }) as OpenClawConfig;
+
+    expect(await runUsageStatus(refreshingCapableClient, perRequestConfig)).toEqual({
+      updatedAt: now,
+      providers: [],
+      refreshing: true,
+    });
+
+    const loaded = await vi.waitFor(async () => {
+      const result = (await runUsageStatus(refreshingCapableClient, perRequestConfig)) as {
+        providers: Array<{ plan?: string }>;
+        refreshing?: boolean;
+      };
+      expect(result.providers).toHaveLength(1);
+      return result;
+    });
+    expect(loaded.refreshing).toBeUndefined();
+    expect(loaded.providers[0]?.plan).toBe("Plus");
+
+    // One load answers every later read; a second marker here is the poller.
+    const repeat = (await runUsageStatus(refreshingCapableClient, perRequestConfig)) as {
+      providers: unknown[];
+      refreshing?: boolean;
+    };
+    expect(repeat.providers).toHaveLength(1);
+    expect(repeat.refreshing).toBeUndefined();
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(1);
+  });
+
   it("shares the raw snapshot with models.authStatus and invalidates on credential rotation", async () => {
     expect(await runUsageStatus()).toEqual({ updatedAt: now, providers: [], refreshing: true });
     const agentId = resolveDefaultAgentId(config);
@@ -270,7 +304,6 @@ describe("usage.status provider usage cache", () => {
       readProviderUsageStaleWhileRevalidate({
         agentId,
         agentDir,
-        configRef: config,
         credentialKey: fingerprintProviderUsageCredentials({
           cfg: config,
           directApiKeys: new Map(),
