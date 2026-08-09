@@ -111,6 +111,7 @@ describe("drainFormattedSystemEvents trace context", () => {
 
     await drainFormattedSystemEvents({
       cfg: {},
+      agentId: "main",
       sessionKey: "main",
       isMainSession: false,
       isNewSession: false,
@@ -132,6 +133,7 @@ describe("drainFormattedSystemEvents trace context", () => {
 
     await drainFormattedSystemEvents({
       cfg: {},
+      agentId: "main",
       sessionKey: "main",
       isMainSession: false,
       isNewSession: false,
@@ -186,6 +188,7 @@ describe("drainFormattedSystemEvents trace context", () => {
 
     await drainFormattedSystemEvents({
       cfg: {},
+      agentId: "main",
       sessionKey: "main",
       isMainSession: false,
       isNewSession: false,
@@ -244,6 +247,7 @@ describe("drainFormattedSystemEvents trace context", () => {
 
     await drainFormattedSystemEvents({
       cfg: {},
+      agentId: "main",
       sessionKey: "main",
       isMainSession: false,
       isNewSession: false,
@@ -305,6 +309,7 @@ describe("drainFormattedSystemEvents trace context", () => {
 
     const prompt = await drainFormattedSystemEvents({
       cfg: {},
+      agentId: "main",
       sessionKey: "main",
       isMainSession: false,
       isNewSession: false,
@@ -369,12 +374,14 @@ describe("drainFormattedSystemEvents trace context", () => {
 
     const first = await prepareFormattedSystemEvents({
       cfg: {},
+      agentId: "main",
       sessionKey: "main",
       isMainSession: false,
       isNewSession: false,
     });
     const replay = await prepareFormattedSystemEvents({
       cfg: {},
+      agentId: "main",
       sessionKey: "main",
       isMainSession: false,
       isNewSession: false,
@@ -518,6 +525,7 @@ describe("drainFormattedSystemEvents trace context", () => {
 
     const replay = await prepareFormattedSystemEvents({
       cfg: {},
+      agentId: "main",
       sessionKey: "main",
       isMainSession: false,
       isNewSession: false,
@@ -581,6 +589,7 @@ describe("drainFormattedSystemEvents trace context", () => {
 
     const prompt = await drainFormattedSystemEvents({
       cfg: {},
+      agentId: "main",
       sessionKey: "main",
       isMainSession: false,
       isNewSession: false,

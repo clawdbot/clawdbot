@@ -50,6 +50,7 @@ describe("runHeartbeatOnce delegate-return wakes", () => {
         expect(opts?.parentRunId).toBe("run-targeted-return");
         const context = await drainFormattedSystemEvents({
           cfg,
+          agentId: "main",
           sessionKey: targetSessionKey,
           isMainSession: false,
           isNewSession: false,

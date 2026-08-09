@@ -322,6 +322,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
     expect(peekSystemEventEntries("agent:main:never-existed")).toHaveLength(1);
     const context = await drainFormattedSystemEvents({
       cfg: {},
+      agentId: "main",
       sessionKey: "agent:main:never-existed",
       isMainSession: false,
       isNewSession: false,

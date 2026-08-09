@@ -78,6 +78,7 @@ function realDeps(stateDir: string) {
 async function preparePrompt(stateDir: string) {
   return await prepareFormattedSystemEvents({
     cfg: { session: { store: stateDir } } as never,
+    agentId: "main",
     sessionKey: SESSION_KEY,
     isMainSession: true,
     isNewSession: false,

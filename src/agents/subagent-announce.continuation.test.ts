@@ -409,6 +409,7 @@ describe("subagent announce continuation chaining", () => {
 
     const targetTurnContext = await drainFormattedSystemEvents({
       cfg: {},
+      agentId: "main",
       sessionKey: targetSessionKey,
       isMainSession: false,
       isNewSession: false,

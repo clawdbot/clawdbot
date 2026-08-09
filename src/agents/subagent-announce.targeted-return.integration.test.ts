@@ -189,6 +189,7 @@ describe("subagent announce targeted continuation return integration", () => {
       expect(peekSystemEventEntries(targetSessionKey)).toHaveLength(1);
       const promptContext = await drainFormattedSystemEvents({
         cfg: mockConfig,
+        agentId: "main",
         sessionKey: targetSessionKey,
         isMainSession: false,
         isNewSession: false,

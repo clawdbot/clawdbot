@@ -7,7 +7,6 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
-import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { OpenClawContinuationToolOptions } from "./openclaw-tools.continuation.js";
@@ -27,7 +26,7 @@ export type CreateOpenClawToolsOptions = {
    * sandbox/policy session key used to construct the tool set.
    */
   runSessionKey?: string;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   runId?: string;
   agentAccountId?: string;
   /** Delivery target for topic/thread routing. */

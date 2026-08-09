@@ -244,6 +244,7 @@ describe("continuation cross-session targeting", () => {
       expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
       const context = await drainFormattedSystemEvents({
         cfg: {},
+        agentId: "main",
         sessionKey,
         isMainSession: false,
         isNewSession: false,
@@ -481,6 +482,7 @@ describe("continuation cross-session targeting", () => {
 
       const drained = await drainFormattedSystemEvents({
         cfg: {},
+        agentId: "main",
         sessionKey,
         isMainSession: false,
         isNewSession: false,
