@@ -30,6 +30,19 @@ const { cleanupOpenClawOwnedAcpxProcessTreeMock } = vi.hoisted(() => ({
     }),
   ),
 }));
+const { cleanupOpenClawOwnedAcpxPendingLeaseMock } = vi.hoisted(() => ({
+  cleanupOpenClawOwnedAcpxPendingLeaseMock: vi.fn(
+    async (): Promise<{
+      inspectedPids: number[];
+      terminatedPids: number[];
+      skippedReason?: string;
+    }> => ({
+      inspectedPids: [],
+      terminatedPids: [],
+      skippedReason: "missing-root",
+    }),
+  ),
+}));
 const { reapStaleOpenClawOwnedAcpxOrphansMock } = vi.hoisted(() => ({
   reapStaleOpenClawOwnedAcpxOrphansMock: vi.fn(
     async (): Promise<{
@@ -85,13 +98,18 @@ vi.mock("./codex-auth-bridge.js", () => ({
 }));
 
 vi.mock("./process-reaper.js", () => ({
+  cleanupOpenClawOwnedAcpxPendingLease: cleanupOpenClawOwnedAcpxPendingLeaseMock,
   cleanupOpenClawOwnedAcpxProcessTree: cleanupOpenClawOwnedAcpxProcessTreeMock,
   reapStaleOpenClawOwnedAcpxOrphans: reapStaleOpenClawOwnedAcpxOrphansMock,
 }));
 
 import { getAcpRuntimeBackend } from "../runtime-api.js";
 import type { OpenClawPluginServiceContext } from "../runtime-api.js";
-import { openAcpxProcessLeaseStateStore, type AcpxProcessLease } from "./process-lease.js";
+import {
+  ACPX_PROBE_LEASE_SESSION_KEY,
+  openAcpxProcessLeaseStateStore,
+  type AcpxProcessLease,
+} from "./process-lease.js";
 import {
   createAcpxRuntimeService as createRealAcpxRuntimeService,
   resolveAcpxTimerTimeoutMs,
@@ -130,6 +148,7 @@ afterEach(async () => {
   runtimeRegistry.clear();
   prepareAcpxCodexAuthConfigMock.mockClear();
   cleanupOpenClawOwnedAcpxProcessTreeMock.mockClear();
+  cleanupOpenClawOwnedAcpxPendingLeaseMock.mockClear();
   reapStaleOpenClawOwnedAcpxOrphansMock.mockClear();
   acpxRuntimeConstructorMock.mockClear();
   createAgentRegistryMock.mockClear();
@@ -519,7 +538,7 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
-  it("runs wrapper-root orphan cleanup before dropping pending ACPX leases", async () => {
+  it("recovers a pending ACPX lease from exact wrapper identity before retiring it", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
     const runtime = createMockRuntime();
@@ -542,7 +561,7 @@ describe("createAcpxRuntimeService", () => {
       state: "open",
     };
     await openProcessLeaseStore(ctx).register(lease.leaseId, lease);
-    reapStaleOpenClawOwnedAcpxOrphansMock.mockResolvedValueOnce({
+    cleanupOpenClawOwnedAcpxPendingLeaseMock.mockResolvedValueOnce({
       inspectedPids: [201, 202],
       terminatedPids: [201, 202],
     });
@@ -553,7 +572,13 @@ describe("createAcpxRuntimeService", () => {
 
     await service.start(ctx);
 
-    expect(cleanupOpenClawOwnedAcpxProcessTreeMock).not.toHaveBeenCalled();
+    expect(cleanupOpenClawOwnedAcpxPendingLeaseMock).toHaveBeenCalledWith({
+      leaseId: "lease-pending",
+      gatewayInstanceId: "gw-test",
+      wrapperRoot,
+      wrapperPath: path.join(wrapperRoot, "codex-acp-wrapper.mjs"),
+      deps: processCleanupDeps,
+    });
     expect(reapStaleOpenClawOwnedAcpxOrphansMock).toHaveBeenCalledWith({
       wrapperRoot,
       deps: processCleanupDeps,
@@ -561,6 +586,85 @@ describe("createAcpxRuntimeService", () => {
     expect(ctx.logger.info).toHaveBeenCalledWith("reaped 2 stale OpenClaw-owned ACPX processes");
     await expect(openProcessLeaseStore(ctx).lookup("lease-pending")).resolves.toBeUndefined();
 
+    await service.stop?.(ctx);
+  });
+
+  it("keeps pending leases open when exact process evidence is ambiguous", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = createMockRuntime();
+    const wrapperRoot = path.join(ctx.stateDir, "acpx");
+    await openGatewayInstanceStore(ctx).register(ACPX_GATEWAY_INSTANCE_KEY, {
+      instanceId: "gw-test",
+      createdAt: 1,
+    });
+    const lease: AcpxProcessLease = {
+      leaseId: "lease-ambiguous",
+      gatewayInstanceId: "gw-test",
+      sessionKey: "agent:codex:acp:test",
+      wrapperRoot,
+      wrapperPath: path.join(wrapperRoot, "codex-acp-wrapper.mjs"),
+      rootPid: 0,
+      commandHash: "hash",
+      startedAt: 1,
+      state: "open",
+    };
+    await openProcessLeaseStore(ctx).register(lease.leaseId, lease);
+    cleanupOpenClawOwnedAcpxPendingLeaseMock.mockResolvedValueOnce({
+      inspectedPids: [201, 202],
+      terminatedPids: [],
+      skippedReason: "ambiguous-root",
+    });
+    reapStaleOpenClawOwnedAcpxOrphansMock.mockResolvedValueOnce({
+      inspectedPids: [301],
+      terminatedPids: [301],
+    });
+    const service = createAcpxRuntimeService(ctx, {
+      runtimeFactory: () => runtime as never,
+    });
+
+    await service.start(ctx);
+
+    await expect(openProcessLeaseStore(ctx).lookup(lease.leaseId)).resolves.toMatchObject({
+      leaseId: lease.leaseId,
+      rootPid: 0,
+      state: "open",
+    });
+    await service.stop?.(ctx);
+  });
+
+  it("keeps an absent pending probe lease open for unidentifiable descendants", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = createMockRuntime();
+    const wrapperRoot = path.join(ctx.stateDir, "acpx");
+    await openGatewayInstanceStore(ctx).register(ACPX_GATEWAY_INSTANCE_KEY, {
+      instanceId: "gw-test",
+      createdAt: 1,
+    });
+    const lease: AcpxProcessLease = {
+      leaseId: "lease-probe-missing",
+      gatewayInstanceId: "gw-test",
+      sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
+      wrapperRoot,
+      wrapperPath: path.join(wrapperRoot, "codex-acp-wrapper.mjs"),
+      rootPid: 0,
+      commandHash: "hash",
+      startedAt: 1,
+      state: "open",
+    };
+    await openProcessLeaseStore(ctx).register(lease.leaseId, lease);
+    const service = createAcpxRuntimeService(ctx, {
+      runtimeFactory: () => runtime as never,
+    });
+
+    await service.start(ctx);
+
+    await expect(openProcessLeaseStore(ctx).lookup(lease.leaseId)).resolves.toMatchObject({
+      leaseId: lease.leaseId,
+      rootPid: 0,
+      state: "open",
+    });
     await service.stop?.(ctx);
   });
 
