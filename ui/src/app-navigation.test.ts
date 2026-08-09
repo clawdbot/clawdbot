@@ -380,7 +380,7 @@ describe("subtitleForRoute", () => {
       lobsterdex: "Every lobster palette that has visited this browser.",
       automation: "Commands, hooks, automations, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
-      memory: "Memory engine, backend, search, and dreaming.",
+      memory: "Memory engine, search, and dreaming.",
       talk: "Realtime voice: provider, model, and speaker voice.",
       infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
       labs: "Experimental agent and tool capabilities.",
