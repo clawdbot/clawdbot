@@ -188,7 +188,7 @@ describe("loadSkills", () => {
     expect(request).toHaveBeenNthCalledWith(1, "skills.status", {});
     expect(request).toHaveBeenNthCalledWith(2, "skills.securityVerdicts", {});
     expect(state.clawhubVerdicts).toEqual({
-      "https://clawhub.ai\u0000agentreceipt\u00001.2.3": expect.objectContaining({
+      "https://clawhub.ai\u0000\u0000agentreceipt\u00001.2.3": expect.objectContaining({
         ok: true,
         decision: "pass",
         securityStatus: "clean",
@@ -252,7 +252,68 @@ describe("loadSkills", () => {
     // The map must be keyed by the canonical slug so verdictForSkill's
     // link.slug lookup hits instead of falling back to "Unavailable".
     expect(state.clawhubVerdicts).toEqual({
-      "https://clawhub.ai\u0000agentreceipt\u00001.2.3": expect.objectContaining({
+      "https://clawhub.ai\u0000\u0000agentreceipt\u00001.2.3": expect.objectContaining({
+        ok: true,
+        decision: "pass",
+        securityStatus: "clean",
+      }),
+    });
+  });
+
+  it("keeps owner-qualified verdict keys when the requested alias differs (#108647)", async () => {
+    const { state, request } = createState();
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.status") {
+        return {
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          skills: [
+            {
+              name: "AgentReceipt",
+              skillKey: "agentreceipt",
+              source: "workspace",
+              clawhub: {
+                status: "linked",
+                valid: true,
+                registry: "https://clawhub.ai",
+                slug: "agentreceipt",
+                ownerHandle: "acme",
+                installedVersion: "1.2.3",
+                installedAt: 123,
+              },
+            },
+          ],
+        };
+      }
+      if (method === "skills.securityVerdicts") {
+        return {
+          schema: "openclaw.skills.security-verdicts.v1",
+          items: [
+            {
+              registry: "https://clawhub.ai",
+              ok: true,
+              decision: "pass",
+              reasons: [],
+              requestedSlug: "agentreceipt@1.2.3",
+              requestedOwnerHandle: "acme",
+              requestedVersion: "1.2.3",
+              slug: "agentreceipt",
+              version: "1.2.3",
+              securityStatus: "clean",
+              securityPassed: true,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    await loadSkills(state);
+
+    // The owner component must be part of the key so owner-qualified links
+    // match and distinct owners sharing a slug/version cannot collide.
+    expect(state.clawhubVerdicts).toEqual({
+      "https://clawhub.ai\u0000acme\u0000agentreceipt\u00001.2.3": expect.objectContaining({
         ok: true,
         decision: "pass",
         securityStatus: "clean",

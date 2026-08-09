@@ -160,7 +160,7 @@ describe("skills page route-loaded reports", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledWith("skills.securityVerdicts", {}));
     expect(page.clawhubVerdicts).toEqual({
-      "https://clawhub.ai\u0000agentreceipt\u00001.2.3": expect.objectContaining({
+      "https://clawhub.ai\u0000\u0000agentreceipt\u00001.2.3": expect.objectContaining({
         ok: true,
         decision: "pass",
         securityStatus: "clean",

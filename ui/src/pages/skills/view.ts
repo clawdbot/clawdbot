@@ -156,6 +156,7 @@ function verdictForSkill(skill: SkillStatusEntry, verdicts: SkillsProps["clawhub
       clawhubVerdictKey({
         registry: link.registry,
         slug: link.slug,
+        ownerHandle: link.ownerHandle,
         version: link.installedVersion,
       })
     ] ?? null

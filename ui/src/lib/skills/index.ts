@@ -65,6 +65,7 @@ export type ClawHubSkillSecurityVerdict = {
   decision: string;
   reasons: string[];
   requestedSlug: string;
+  requestedOwnerHandle?: string;
   requestedVersion: string;
   slug?: string | null;
   version?: string | null;
@@ -177,9 +178,10 @@ function formatClawHubAcknowledgementMessage(warning?: string): string {
 export function clawhubVerdictKey(target: {
   registry: string;
   slug: string;
+  ownerHandle?: string;
   version: string;
 }): string {
-  return `${target.registry}\0${target.slug}\0${target.version}`;
+  return `${target.registry}\0${target.ownerHandle ?? ""}\0${target.slug}\0${target.version}`;
 }
 
 function isValidClawHubLink(
@@ -493,6 +495,7 @@ export async function loadClawHubSecurityVerdicts(state: SkillsState, report: Sk
           // the canonical identity so verdictForSkill's link.slug lookup hits
           // (#108647).
           slug: item.slug ?? item.requestedSlug,
+          ownerHandle: item.requestedOwnerHandle,
           version: item.version ?? item.requestedVersion,
         }),
         item,

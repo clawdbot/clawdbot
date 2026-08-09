@@ -825,7 +825,7 @@ describe("renderSkills", () => {
       managedSkillsDir: "/tmp/skills",
       skills: [linkedSkill],
     };
-    const verdictKey = "https://clawhub.ai\u0000agentreceipt\u00001.2.3";
+    const verdictKey = "https://clawhub.ai\u0000\u0000agentreceipt\u00001.2.3";
     const onDetailTabChange = vi.fn();
 
     render(
@@ -928,7 +928,7 @@ describe("renderSkills", () => {
       managedSkillsDir: "/tmp/skills",
       skills: [linkedSkill],
     };
-    const verdictKey = "https://clawhub.ai\u0000agentreceipt\u00001.2.3";
+    const verdictKey = "https://clawhub.ai\u0000\u0000agentreceipt\u00001.2.3";
 
     render(
       renderSkills(
