@@ -2,19 +2,13 @@ import type {
   PluginHookSkillContext,
   PluginHookSkillProposalChangedEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunner } from "../../../src/plugins/hooks.js";
-import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
-import {
-  buildSkillProposalFollowupIdempotencyKey,
-  captureSkillProposalFollowup,
-  registerWorkboardSkillProposalObserver,
-} from "./skill-proposal-observer.js";
+import type { WorkboardKeyedStore } from "./persistence-types.js";
+import { createWorkboardSkillProposalHandler } from "./skill-proposal-observer.js";
 import { WorkboardStore } from "./store.js";
 
-function createMemoryStore(): WorkboardKeyedStore<PersistedWorkboardCard> {
-  const entries = new Map<string, PersistedWorkboardCard>();
+function createMemoryStore(): WorkboardKeyedStore {
+  const entries = new Map<string, Parameters<WorkboardKeyedStore["register"]>[1]>();
   return {
     async register(key, value) {
       entries.set(key, value);
@@ -59,17 +53,14 @@ const ctx: PluginHookSkillContext = { workspaceDir: "/workspace", agentId: "main
 describe("Workboard Skill Workshop proposal observer", () => {
   it("creates one idempotent follow-up from committed pending proposal events", async () => {
     const store = new WorkboardStore(createMemoryStore());
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const handler = createWorkboardSkillProposalHandler({ api: { logger }, store });
 
-    await expect(
-      captureSkillProposalFollowup({ event: proposalEvent(), ctx, store }),
-    ).resolves.toEqual({ cardId: expect.any(String) });
-    await expect(
-      captureSkillProposalFollowup({
-        event: proposalEvent({ eventId: "event-2", sequence: 2, action: "revised" }),
-        ctx,
-        store,
-      }),
-    ).resolves.toEqual({ cardId: expect.any(String) });
+    const actions = ["created", "revised", "evaluation_completed"] as const;
+    for (const [index, action] of actions.entries()) {
+      const sequence = index + 1;
+      await handler(proposalEvent({ eventId: `event-${sequence}`, sequence, action }), ctx);
+    }
 
     await expect(store.list()).resolves.toEqual([
       expect.objectContaining({
@@ -81,65 +72,39 @@ describe("Workboard Skill Workshop proposal observer", () => {
         notes: expect.stringContaining("Proposal: proposal-1"),
         metadata: {
           automation: {
-            idempotencyKey: buildSkillProposalFollowupIdempotencyKey("proposal-1"),
+            idempotencyKey: expect.stringMatching(/^skill-workshop-proposal-v1:[a-f0-9]{32}$/),
           },
         },
       }),
     ]);
+    expect(logger.info).toHaveBeenCalledTimes(3);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("ignores terminal proposal events", async () => {
     const store = new WorkboardStore(createMemoryStore());
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const handler = createWorkboardSkillProposalHandler({ api: { logger }, store });
     const event = proposalEvent({
       action: "applied",
       proposal: { ...proposalEvent().proposal, status: "applied" },
     });
 
-    await expect(captureSkillProposalFollowup({ event, ctx, store })).resolves.toBeUndefined();
+    await expect(handler(event, ctx)).resolves.toBeUndefined();
     await expect(store.list()).resolves.toEqual([]);
-  });
-
-  it("captures through the canonical immutable proposal-hook runner", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const on = vi.fn();
-    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-    registerWorkboardSkillProposalObserver({ api: { on, logger } as never, store });
-    const handler = on.mock.calls[0]?.[1] as (...args: unknown[]) => unknown;
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        { hookName: "skill_proposal_changed", pluginId: "workboard", handler },
-      ]),
-    );
-    const event = proposalEvent();
-
-    await runner.runSkillProposalChanged(event, ctx);
-    await runner.runSkillProposalChanged(
-      proposalEvent({ eventId: "event-2", sequence: 2, action: "evaluation_completed" }),
-      ctx,
-    );
-
-    await expect(store.list()).resolves.toHaveLength(1);
-    expect(event.proposal.skillName).toBe("github-pr-workflow");
-    expect(logger.info).toHaveBeenCalledTimes(2);
+    expect(logger.info).not.toHaveBeenCalled();
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("uses only the committed proposal hook and reports sanitized capture failures", async () => {
-    const on = vi.fn();
+  it("reports sanitized capture failures", async () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-    registerWorkboardSkillProposalObserver({
-      api: { on, logger } as never,
+    const handler = createWorkboardSkillProposalHandler({
+      api: { logger },
       store: {
         create: vi.fn().mockRejectedValue(new Error("provider echoed secret proposal content")),
       },
     });
 
-    expect(on).toHaveBeenCalledOnce();
-    expect(on.mock.calls[0]?.[0]).toBe("skill_proposal_changed");
-    const handler = on.mock.calls[0]?.[1] as (
-      event: PluginHookSkillProposalChangedEvent,
-      context: PluginHookSkillContext,
-    ) => Promise<void>;
     await expect(
       handler(
         proposalEvent({

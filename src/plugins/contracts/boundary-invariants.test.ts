@@ -46,7 +46,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
   "extensions/onepassword/index.ts": ["before_tool_call", "tool_result_persist"],
   "extensions/thread-ownership/index.ts": ["message_received", "message_sending"],
-  "extensions/workboard/index.ts": ["subagent_ended"],
+  "extensions/workboard/index.ts": ["skill_proposal_changed", "subagent_ended"],
 } as const satisfies Record<
   (typeof BUNDLED_TYPED_HOOK_REGISTRATION_FILES)[number],
   readonly string[]

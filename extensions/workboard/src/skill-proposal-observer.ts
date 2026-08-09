@@ -14,8 +14,12 @@ const OBSERVED_PENDING_ACTIONS = new Set<PluginHookSkillProposalChangedEvent["ac
 ]);
 
 type SkillProposalObserverStore = Pick<WorkboardStore, "create">;
+type SkillProposalChangedHandler = (
+  event: PluginHookSkillProposalChangedEvent,
+  ctx: PluginHookSkillContext,
+) => Promise<void>;
 
-export function buildSkillProposalFollowupIdempotencyKey(proposalId: string): string {
+function buildSkillProposalFollowupIdempotencyKey(proposalId: string): string {
   const digest = createHash("sha256").update(proposalId).digest("hex").slice(0, 32);
   return `${SKILL_PROPOSAL_FOLLOWUP_PREFIX}:${digest}`;
 }
@@ -32,7 +36,7 @@ function buildSkillProposalFollowupNotes(event: PluginHookSkillProposalChangedEv
   ].join("\n");
 }
 
-export async function captureSkillProposalFollowup(params: {
+async function captureSkillProposalFollowup(params: {
   event: PluginHookSkillProposalChangedEvent;
   ctx: PluginHookSkillContext;
   store: SkillProposalObserverStore;
@@ -55,11 +59,11 @@ export async function captureSkillProposalFollowup(params: {
   return { cardId: card.id };
 }
 
-export function registerWorkboardSkillProposalObserver(params: {
-  api: OpenClawPluginApi;
+export function createWorkboardSkillProposalHandler(params: {
+  api: Pick<OpenClawPluginApi, "logger">;
   store: SkillProposalObserverStore;
-}): void {
-  params.api.on("skill_proposal_changed", async (event, ctx) => {
+}): SkillProposalChangedHandler {
+  return async (event, ctx) => {
     try {
       const captured = await captureSkillProposalFollowup({ event, ctx, store: params.store });
       if (captured) {
@@ -73,5 +77,5 @@ export function registerWorkboardSkillProposalObserver(params: {
         `workboard: skill proposal follow-up failed event=${event.eventId} proposal=${event.proposal.id} error=${errorKind}`,
       );
     }
-  });
+  };
 }
