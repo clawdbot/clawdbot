@@ -4092,6 +4092,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(capturedReplyOptions?.commentaryProgressEnabled).toBe(true);
+    expect(capturedReplyOptions?.commentaryPayloadsEnabled).toBeUndefined();
     expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
     expectLastDraftUpdateText(draftStream, "_Preparing the smallest fix_");
     expect(draftUpdateTexts(draftStream).join("\n")).not.toContain("pnpm test");
