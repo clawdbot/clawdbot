@@ -12,9 +12,13 @@ import {
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
+  createProviderOperationTimeoutResolver,
   normalizeBaseUrl,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
+  waitProviderOperationPollInterval,
+  type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
@@ -322,29 +326,87 @@ function isSingleLabelServiceHostname(hostname: string): boolean {
   return /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/u.test(hostname);
 }
 
-async function readJsonResponse<T>(params: {
+type ComfyGuardedRequest = {
   url: string;
   init?: RequestInit;
   timeoutMs?: number;
+  deadline?: ProviderOperationDeadline;
   policy?: SsrFPolicy;
   dispatcherPolicy?: ComfyDispatcherPolicy;
   auditContext: string;
   errorPrefix: string;
-}): Promise<T> {
-  const { response, release } = await comfyFetchGuard({
-    url: params.url,
-    init: params.init,
-    timeoutMs: params.timeoutMs,
-    policy: params.policy,
-    dispatcherPolicy: params.dispatcherPolicy,
-    auditContext: params.auditContext,
-  });
-  try {
-    await assertOkOrThrowHttpError(response, params.errorPrefix);
-    return (await readProviderJsonResponse(response, params.errorPrefix)) as T;
-  } finally {
-    await release();
+};
+
+function createComfyWorkflowTimeoutError(
+  deadline: ProviderOperationDeadline,
+  cause?: unknown,
+): Error {
+  return new Error(
+    `Comfy workflow did not finish within ${Math.ceil((deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS) / 1000)}s`,
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+function normalizeComfyWorkflowError(error: unknown, deadline: ProviderOperationDeadline): unknown {
+  if (typeof deadline.deadlineAtMs === "number" && Date.now() >= deadline.deadlineAtMs) {
+    return createComfyWorkflowTimeoutError(deadline, error);
   }
+  return error;
+}
+
+async function withComfyGuardedResponse<T>(
+  params: ComfyGuardedRequest,
+  read: (
+    response: Response,
+    resolveTimeoutMs: () => number,
+    deadline: ProviderOperationDeadline,
+  ) => Promise<T>,
+): Promise<T> {
+  const deadline =
+    params.deadline ??
+    createProviderOperationDeadline({
+      timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      label: "Comfy workflow",
+    });
+  const resolveTimeoutMs = createProviderOperationTimeoutResolver({
+    deadline,
+    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+  });
+  let release: (() => Promise<void>) | undefined;
+
+  // Keep guarded acquisition, body consumption, timeout normalization, and
+  // dispatcher release under one owner so connection failures cannot bypass it.
+  try {
+    const guarded = await comfyFetchGuard({
+      url: params.url,
+      init: params.init,
+      timeoutMs: resolveTimeoutMs(),
+      policy: params.policy,
+      dispatcherPolicy: params.dispatcherPolicy,
+      auditContext: params.auditContext,
+    });
+    release = guarded.release;
+    await assertOkOrThrowHttpError(guarded.response, params.errorPrefix, {
+      bodyTimeoutMs: resolveTimeoutMs,
+      onBodyTimeout: () => createComfyWorkflowTimeoutError(deadline),
+    });
+    return await read(guarded.response, resolveTimeoutMs, deadline);
+  } catch (error) {
+    throw normalizeComfyWorkflowError(error, deadline);
+  } finally {
+    await release?.();
+  }
+}
+
+async function readJsonResponse<T>(params: ComfyGuardedRequest): Promise<T> {
+  return await withComfyGuardedResponse(
+    params,
+    async (response, resolveTimeoutMs, deadline) =>
+      await readProviderJsonResponse<T>(response, params.errorPrefix, {
+        timeoutMs: resolveTimeoutMs,
+        onTimeout: () => createComfyWorkflowTimeoutError(deadline),
+      }),
+  );
 }
 
 /** @internal Test-only export. */
@@ -375,7 +437,7 @@ function toBlobBytes(buffer: Buffer): ArrayBuffer {
 async function uploadInputImage(params: {
   baseUrl: string;
   headers: Headers;
-  timeoutMs: number;
+  deadline: ProviderOperationDeadline;
   policy?: SsrFPolicy;
   dispatcherPolicy?: ComfyDispatcherPolicy;
   image: ComfySourceImage;
@@ -402,7 +464,7 @@ async function uploadInputImage(params: {
       headers,
       body: form,
     },
-    timeoutMs: params.timeoutMs,
+    deadline: params.deadline,
     policy: params.policy,
     dispatcherPolicy: params.dispatcherPolicy,
     auditContext: `comfy-${params.capability}-upload`,
@@ -436,21 +498,19 @@ async function waitForLocalHistory(params: {
   baseUrl: string;
   promptId: string;
   headers: Headers;
-  timeoutMs: number;
+  deadline: ProviderOperationDeadline;
   pollIntervalMs: number;
   policy?: SsrFPolicy;
   dispatcherPolicy?: ComfyDispatcherPolicy;
 }): Promise<ComfyHistoryEntry> {
-  const deadline = Date.now() + params.timeoutMs;
   for (;;) {
-    const requestTimeoutMs = resolveComfyRemainingMs(deadline, params.timeoutMs);
     const history = await readJsonResponse<unknown>({
       url: `${params.baseUrl}/history/${params.promptId}`,
       init: {
         method: "GET",
         headers: params.headers,
       },
-      timeoutMs: requestTimeoutMs,
+      deadline: params.deadline,
       policy: params.policy,
       dispatcherPolicy: params.dispatcherPolicy,
       auditContext: "comfy-history",
@@ -462,10 +522,7 @@ async function waitForLocalHistory(params: {
       return entry;
     }
 
-    const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
-    await new Promise((resolve) => {
-      setTimeout(resolve, pollDelayMs);
-    });
+    await waitForComfyPollInterval(params.deadline, params.pollIntervalMs);
   }
 }
 
@@ -473,21 +530,19 @@ async function waitForCloudCompletion(params: {
   baseUrl: string;
   promptId: string;
   headers: Headers;
-  timeoutMs: number;
+  deadline: ProviderOperationDeadline;
   pollIntervalMs: number;
   policy?: SsrFPolicy;
   dispatcherPolicy?: ComfyDispatcherPolicy;
 }): Promise<void> {
-  const deadline = Date.now() + params.timeoutMs;
   for (;;) {
-    const requestTimeoutMs = resolveComfyRemainingMs(deadline, params.timeoutMs);
     const status = await readJsonResponse<ComfyStatusResponse>({
       url: `${params.baseUrl}/api/job/${params.promptId}/status`,
       init: {
         method: "GET",
         headers: params.headers,
       },
-      timeoutMs: requestTimeoutMs,
+      deadline: params.deadline,
       policy: params.policy,
       dispatcherPolicy: params.dispatcherPolicy,
       auditContext: "comfy-status",
@@ -503,24 +558,19 @@ async function waitForCloudCompletion(params: {
       );
     }
 
-    const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
-    await new Promise((resolve) => {
-      setTimeout(resolve, pollDelayMs);
-    });
+    await waitForComfyPollInterval(params.deadline, params.pollIntervalMs);
   }
 }
 
-function resolveComfyRemainingMs(
-  deadline: number,
-  timeoutMs: number,
-  defaultTimeoutMs = timeoutMs,
-) {
-  const defaultMs = resolvePositiveTimerTimeoutMs(defaultTimeoutMs, 1);
-  const remainingMs = deadline - Date.now();
-  if (remainingMs <= 0) {
-    throw new Error(`Comfy workflow did not finish within ${Math.ceil(timeoutMs / 1000)}s`);
+async function waitForComfyPollInterval(
+  deadline: ProviderOperationDeadline,
+  pollIntervalMs: number,
+): Promise<void> {
+  try {
+    await waitProviderOperationPollInterval({ deadline, pollIntervalMs });
+  } catch (error) {
+    throw normalizeComfyWorkflowError(error, deadline);
   }
-  return Math.max(1, Math.min(defaultMs, remainingMs));
 }
 
 function collectOutputFiles(params: {
@@ -566,7 +616,7 @@ function collectOutputFiles(params: {
 async function downloadOutputFile(params: {
   baseUrl: string;
   headers: Headers;
-  timeoutMs: number;
+  deadline: ProviderOperationDeadline;
   policy?: SsrFPolicy;
   dispatcherPolicy?: ComfyDispatcherPolicy;
   file: ComfyOutputFile;
@@ -588,36 +638,33 @@ async function downloadOutputFile(params: {
   const viewPath = params.mode === "cloud" ? "/api/view" : "/view";
   const auditContext = `comfy-${params.capability}-download`;
 
-  const firstResponse = await comfyFetchGuard({
-    url: `${params.baseUrl}${viewPath}?${query.toString()}`,
-    init: {
-      method: "GET",
-      headers: params.headers,
+  return await withComfyGuardedResponse(
+    {
+      url: `${params.baseUrl}${viewPath}?${query.toString()}`,
+      init: {
+        method: "GET",
+        headers: params.headers,
+      },
+      deadline: params.deadline,
+      policy: params.policy,
+      dispatcherPolicy: params.dispatcherPolicy,
+      auditContext,
+      errorPrefix: "Comfy output download failed",
     },
-    timeoutMs: params.timeoutMs,
-    policy: params.policy,
-    dispatcherPolicy: params.dispatcherPolicy,
-    auditContext,
-  });
-
-  try {
-    await assertOkOrThrowHttpError(firstResponse.response, "Comfy output download failed");
-    const mimeType =
-      normalizeOptionalString(firstResponse.response.headers.get("content-type")) ||
-      "application/octet-stream";
-    return {
-      buffer: await readResponseWithLimit(firstResponse.response, params.maxBytes, {
-        chunkTimeoutMs: params.timeoutMs,
+    async (response, resolveTimeoutMs, deadline) => ({
+      buffer: await readResponseWithLimit(response, params.maxBytes, {
+        chunkTimeoutMs: resolveTimeoutMs(),
+        timeoutMs: resolveTimeoutMs,
+        onTimeout: () => createComfyWorkflowTimeoutError(deadline),
         onOverflow: ({ maxBytes }) =>
           new Error(`Comfy ${params.capability} output download exceeds ${maxBytes} bytes`),
         onIdleTimeout: ({ chunkTimeoutMs }) =>
           new Error(`Comfy ${params.capability} output download stalled after ${chunkTimeoutMs}ms`),
       }),
-      mimeType,
-    };
-  } finally {
-    await firstResponse.release();
-  }
+      mimeType:
+        normalizeOptionalString(response.headers.get("content-type")) || "application/octet-stream",
+    }),
+  );
 }
 
 export function isComfyCapabilityConfigured(params: {
@@ -679,7 +726,7 @@ export async function runComfyWorkflow(params: {
     DEFAULT_POLL_INTERVAL_MS,
   );
   const timeoutMs = resolvePositiveTimerTimeoutMs(
-    readConfigInteger(capabilityConfig, "timeoutMs") ?? params.timeoutMs,
+    params.timeoutMs ?? readConfigInteger(capabilityConfig, "timeoutMs"),
     DEFAULT_TIMEOUT_MS,
   );
   const providerModel = normalizeOptionalString(params.model) || DEFAULT_COMFY_MODEL;
@@ -744,16 +791,24 @@ export async function runComfyWorkflow(params: {
     mode,
   });
 
+  if (params.inputImage && !inputImageNodeId) {
+    throw new Error(
+      "Comfy edit requests require plugins.entries.comfy.config.<capability>.inputImageNodeId to be configured",
+    );
+  }
+
+  // Configuration, workflow filesystem access, and auth resolution are setup;
+  // one absolute budget starts immediately before the first guarded network call.
+  const deadline = createProviderOperationDeadline({
+    timeoutMs,
+    label: "Comfy workflow",
+  });
+
   if (params.inputImage) {
-    if (!inputImageNodeId) {
-      throw new Error(
-        "Comfy edit requests require plugins.entries.comfy.config.<capability>.inputImageNodeId to be configured",
-      );
-    }
     const uploadedName = await uploadInputImage({
       baseUrl: normalizedBaseUrl,
       headers: new Headers(headers),
-      timeoutMs,
+      deadline,
       policy: networkPolicy.apiPolicy,
       dispatcherPolicy,
       image: params.inputImage,
@@ -782,7 +837,7 @@ export async function runComfyWorkflow(params: {
       headers,
       body: JSON.stringify(submitPayload),
     },
-    timeoutMs,
+    deadline,
     policy: networkPolicy.apiPolicy,
     dispatcherPolicy,
     auditContext: `comfy-${params.capability}-generate`,
@@ -801,7 +856,7 @@ export async function runComfyWorkflow(params: {
             baseUrl: normalizedBaseUrl,
             promptId,
             headers: new Headers(headers),
-            timeoutMs,
+            deadline,
             pollIntervalMs,
             policy: networkPolicy.apiPolicy,
             dispatcherPolicy,
@@ -812,7 +867,7 @@ export async function runComfyWorkflow(params: {
               method: "GET",
               headers: new Headers(headers),
             },
-            timeoutMs,
+            deadline,
             policy: networkPolicy.apiPolicy,
             dispatcherPolicy,
             auditContext: "comfy-history",
@@ -823,7 +878,7 @@ export async function runComfyWorkflow(params: {
           baseUrl: normalizedBaseUrl,
           promptId,
           headers: new Headers(headers),
-          timeoutMs,
+          deadline,
           pollIntervalMs,
           policy: networkPolicy.apiPolicy,
           dispatcherPolicy,
@@ -852,7 +907,7 @@ export async function runComfyWorkflow(params: {
     const downloaded = await downloadOutputFile({
       baseUrl: normalizedBaseUrl,
       headers: new Headers(headers),
-      timeoutMs,
+      deadline,
       policy: networkPolicy.apiPolicy,
       dispatcherPolicy,
       file: output.file,

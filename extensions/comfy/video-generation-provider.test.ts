@@ -18,12 +18,16 @@ function parseJsonBody(call: number): Record<string, unknown> {
   return parseComfyJsonBody(fetchWithSsrFGuardMock, call);
 }
 
-function fetchGuardParams(call: number): { url?: unknown; auditContext?: unknown } {
+function fetchGuardParams(call: number): {
+  url?: unknown;
+  auditContext?: unknown;
+  timeoutMs?: unknown;
+} {
   const params = fetchWithSsrFGuardMock.mock.calls[call]?.[0];
   if (!params || typeof params !== "object") {
     throw new Error(`expected Comfy fetch guard call ${call}`);
   }
-  return params as { url?: unknown; auditContext?: unknown };
+  return params as { url?: unknown; auditContext?: unknown; timeoutMs?: unknown };
 }
 
 function mockLocalVideoResponses(params: {
@@ -412,5 +416,46 @@ describe("comfy video-generation provider", () => {
       promptId: "cloud-video-1",
       outputNodeIds: ["9"],
     });
+  });
+
+  it("prefers explicit cloud video request budgets over capability configuration", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    try {
+      mockComfyProviderApiKey();
+      setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+      mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
+        body: Buffer.from("cloud-video-data"),
+        contentType: "video/mp4",
+        filename: "cloud.mp4",
+        outputKind: "gifs",
+        promptId: "cloud-video-budget-1",
+      });
+
+      await buildComfyVideoGenerationProvider().generateVideo({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "cloud video with an explicit deadline",
+        timeoutMs: 1_250,
+        cfg: buildComfyConfig({
+          mode: "cloud",
+          video: {
+            workflow: {
+              "6": { inputs: { text: "" } },
+              "9": { inputs: {} },
+            },
+            promptNodeId: "6",
+            outputNodeId: "9",
+            timeoutMs: 9_000,
+          },
+        }),
+      });
+
+      expect(
+        fetchWithSsrFGuardMock.mock.calls.map((_, index) => fetchGuardParams(index).timeoutMs),
+      ).toEqual([1_250, 1_250, 1_250, 1_250]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

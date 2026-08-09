@@ -788,11 +788,7 @@ describe("comfy image-generation provider", () => {
 
   it("caps oversized local workflow timeouts", async () => {
     setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(0)
-      .mockReturnValueOnce(MAX_TIMER_TIMEOUT_MS + 1);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(0);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(JSON.stringify({ prompt_id: "local-prompt-1" }), {
@@ -801,12 +797,15 @@ describe("comfy image-generation provider", () => {
         }),
         release: vi.fn(async () => {}),
       })
-      .mockResolvedValueOnce({
-        response: new Response(JSON.stringify({ "local-prompt-1": { outputs: {} } }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-        release: vi.fn(async () => {}),
+      .mockImplementationOnce(async () => {
+        nowSpy.mockReturnValue(MAX_TIMER_TIMEOUT_MS + 1);
+        return {
+          response: new Response(JSON.stringify({ "local-prompt-1": { outputs: {} } }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+          release: vi.fn(async () => {}),
+        };
       });
 
     try {
