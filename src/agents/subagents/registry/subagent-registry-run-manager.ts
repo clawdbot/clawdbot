@@ -252,6 +252,7 @@ export type RegisterSubagentRunParams = {
   attachmentsSandboxSessionKey?: string;
   attachmentsSandboxAgentId?: string;
   attachmentsSandboxWorkspaceDir?: string;
+  attachmentsSandboxDir?: string;
   retainAttachmentsOnKeep?: boolean;
   collect?: boolean;
   swarmRequesterSessionKey?: string;
@@ -1260,6 +1261,7 @@ export function createSubagentRunManager(params: {
       attachmentsSandboxSessionKey: registerParams.attachmentsSandboxSessionKey,
       attachmentsSandboxAgentId: registerParams.attachmentsSandboxAgentId,
       attachmentsSandboxWorkspaceDir: registerParams.attachmentsSandboxWorkspaceDir,
+      attachmentsSandboxDir: registerParams.attachmentsSandboxDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
     params.runs.set(runId, entry);

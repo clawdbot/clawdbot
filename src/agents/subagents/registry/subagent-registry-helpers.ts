@@ -194,7 +194,7 @@ export async function safeRemoveAttachmentsDir(
   }
   let sandboxFsBridge;
   if (entry.attachmentsSandboxSessionKey) {
-    if (!entry.attachmentsSandboxWorkspaceDir) {
+    if (!entry.attachmentsSandboxWorkspaceDir || !entry.attachmentsSandboxDir) {
       return false;
     }
     try {
@@ -216,6 +216,7 @@ export async function safeRemoveAttachmentsDir(
     rootDir: entry.attachmentsRootDir,
     absDir: entry.attachmentsDir,
     sandboxFsBridge,
+    sandboxDir: entry.attachmentsSandboxDir,
   });
 }
 

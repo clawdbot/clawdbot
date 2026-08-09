@@ -170,7 +170,7 @@ export async function spawnSubagentDirect(
       incognito,
       childSessionKey,
       childRuntimeSandboxed,
-      requesterSandboxMutationWorkspaceDir,
+      requesterSandboxAttachmentBoundary,
       targetAgentDir,
       modelPlan: plan,
       launchAuthorization,
@@ -306,8 +306,10 @@ export async function spawnSubagentDirect(
       | undefined;
     let attachmentAbsDir: string | undefined;
     let attachmentRootDir: string | undefined;
+    let attachmentSandboxDir: string | undefined;
     let attachmentSandboxFsBridge: SandboxFsBridge | undefined;
-    if (params.attachments?.length && requesterSandboxMutationWorkspaceDir) {
+    let attachmentSandboxWorkspaceDir: string | undefined;
+    if (params.attachments?.length && requesterSandboxAttachmentBoundary) {
       try {
         const requesterSandbox = await getSubagentSpawnDeps().resolveSandboxContext({
           config: cfg,
@@ -315,9 +317,12 @@ export async function spawnSubagentDirect(
           sessionKey: requesterInternalKey,
           // Re-enter the requester's actual writable mount. The target workspace
           // may be a nested cross-agent workspace addressed through that bridge.
-          workspaceDir: requesterSandboxMutationWorkspaceDir,
+          workspaceDir: requesterSandboxAttachmentBoundary.workspaceDir,
         });
         attachmentSandboxFsBridge = requesterSandbox?.fsBridge;
+        attachmentSandboxWorkspaceDir = attachmentSandboxFsBridge?.resolvePath({
+          filePath: requesterSandboxAttachmentBoundary.targetWorkspaceDir,
+        }).containerPath;
       } catch (error) {
         await cleanupCreatedSession(threadBindingReady);
         return {
@@ -343,6 +348,7 @@ export async function spawnSubagentDirect(
       attachments: params.attachments,
       mountPathHint,
       sandboxFsBridge: attachmentSandboxFsBridge,
+      sandboxWorkspaceDir: attachmentSandboxWorkspaceDir,
     });
     if (materializedAttachments && materializedAttachments.status !== "ok") {
       await cleanupCreatedSession(threadBindingReady);
@@ -356,6 +362,7 @@ export async function spawnSubagentDirect(
       attachmentsReceipt = materializedAttachments.receipt;
       attachmentAbsDir = materializedAttachments.absDir;
       attachmentRootDir = materializedAttachments.rootDir;
+      attachmentSandboxDir = materializedAttachments.sandboxDir;
       childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
     }
 
@@ -431,6 +438,7 @@ export async function spawnSubagentDirect(
         attachmentAbsDir,
         attachmentRootDir,
         attachmentSandboxFsBridge,
+        attachmentSandboxDir,
         emitLifecycleHooks: threadBindingReady,
         deleteTranscript: true,
         ...provisionalSessionIdentity,
@@ -472,6 +480,7 @@ export async function spawnSubagentDirect(
             rootDir: attachmentRootDir,
             absDir: attachmentAbsDir,
             sandboxFsBridge: attachmentSandboxFsBridge,
+            sandboxDir: attachmentSandboxDir,
           });
         }
         let emitLifecycleHooks = threadBindingReady;
@@ -559,8 +568,9 @@ export async function spawnSubagentDirect(
             : undefined,
           attachmentsSandboxAgentId: attachmentSandboxFsBridge ? requesterAgentId : undefined,
           attachmentsSandboxWorkspaceDir: attachmentSandboxFsBridge
-            ? requesterSandboxMutationWorkspaceDir
+            ? requesterSandboxAttachmentBoundary?.workspaceDir
             : undefined,
+          attachmentsSandboxDir: attachmentSandboxFsBridge ? attachmentSandboxDir : undefined,
           retainAttachmentsOnKeep: retainOnSessionKeep,
         };
       },

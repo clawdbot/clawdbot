@@ -1,8 +1,6 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isPathInside } from "../../../infra/fs-safe.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agent-scope-config.js";
@@ -10,6 +8,8 @@ import { findModelCatalogEntry } from "../../model-catalog-lookup.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { resolveSandboxConfigForAgent } from "../../sandbox/config.js";
+import { resolveWritableSandboxBindHostRoots } from "../../sandbox/fs-paths.js";
+import { resolveSandboxHostPathViaExistingAncestor } from "../../sandbox/host-paths.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
@@ -94,7 +94,10 @@ type ResolvedSubagentChildPlan = {
   incognito: boolean;
   childSessionKey: string;
   childRuntimeSandboxed: boolean;
-  requesterSandboxMutationWorkspaceDir?: string;
+  requesterSandboxAttachmentBoundary?: {
+    workspaceDir: string;
+    targetWorkspaceDir: string;
+  };
   targetAgentDir: string;
   modelPlan: Extract<ReturnType<typeof resolveSubagentModelAndThinkingPlan>, { status: "ok" }>;
   launchAuthorization?: SubagentLaunchAuthorization;
@@ -105,24 +108,33 @@ type ResolveSubagentChildPlanResult =
   | { ok: false; result: SpawnSubagentResult }
   | { ok: true; resolved: ResolvedSubagentChildPlan };
 
-async function isWorkspaceWithinRequesterMutationRoot(params: {
-  requesterWorkspaceDir: string;
+function resolveRelativeDescendant(rootDir: string, targetDir: string): string | undefined {
+  const relativePath = path.relative(rootDir, targetDir);
+  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
+    ? relativePath
+    : undefined;
+}
+
+function resolveTargetThroughMutationRoot(params: {
+  mutationRootDir: string;
   targetWorkspaceDir: string;
-}): Promise<boolean> {
-  const requesterWorkspaceDir = path.resolve(params.requesterWorkspaceDir);
+}): string | undefined {
+  const mutationRootDir = path.resolve(params.mutationRootDir);
   const targetWorkspaceDir = path.resolve(params.targetWorkspaceDir);
-  if (isPathInside(requesterWorkspaceDir, targetWorkspaceDir)) {
-    return true;
+  const lexicalRelative = resolveRelativeDescendant(mutationRootDir, targetWorkspaceDir);
+  if (lexicalRelative !== undefined) {
+    return path.join(mutationRootDir, lexicalRelative);
   }
-  try {
-    const [requesterReal, targetReal] = await Promise.all([
-      fs.realpath(requesterWorkspaceDir),
-      fs.realpath(targetWorkspaceDir),
-    ]);
-    return isPathInside(requesterReal, targetReal);
-  } catch {
-    return false;
-  }
+
+  // The mounted root may be a symlink while the configured target names its
+  // canonical descendant. Resolve only existing ancestors so a new child
+  // workspace is still re-addressed through the mount the requester can mutate.
+  const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(mutationRootDir);
+  const canonicalTarget = resolveSandboxHostPathViaExistingAncestor(targetWorkspaceDir);
+  const canonicalRelative = resolveRelativeDescendant(canonicalRoot, canonicalTarget);
+  return canonicalRelative === undefined
+    ? undefined
+    : path.join(mutationRootDir, canonicalRelative);
 }
 
 export async function resolveSubagentChildPlan(params: {
@@ -189,15 +201,24 @@ export async function resolveSubagentChildPlan(params: {
   const targetWorkspaceDir = resolveUserPath(
     spawnedCwd ?? spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(params.cfg, params.targetAgentId),
   );
-  const requesterSandboxMutationWorkspaceDir =
-    requesterRuntime.sandboxed &&
-    requesterSandboxConfig.workspaceAccess === "rw" &&
-    (await isWorkspaceWithinRequesterMutationRoot({
-      requesterWorkspaceDir,
-      targetWorkspaceDir,
-    }))
-      ? requesterWorkspaceDir
+  const requesterMutationRoots = [
+    requesterWorkspaceDir,
+    ...resolveWritableSandboxBindHostRoots(requesterSandboxConfig.docker.binds),
+  ];
+  const sandboxTargetWorkspaceDir =
+    requesterRuntime.sandboxed && requesterSandboxConfig.workspaceAccess === "rw"
+      ? requesterMutationRoots
+          .map((mutationRootDir) =>
+            resolveTargetThroughMutationRoot({ mutationRootDir, targetWorkspaceDir }),
+          )
+          .find((candidate): candidate is string => candidate !== undefined)
       : undefined;
+  const requesterSandboxAttachmentBoundary = sandboxTargetWorkspaceDir
+    ? {
+        workspaceDir: requesterWorkspaceDir,
+        targetWorkspaceDir: sandboxTargetWorkspaceDir,
+      }
+    : undefined;
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: childSessionKey,
@@ -296,7 +317,7 @@ export async function resolveSubagentChildPlan(params: {
       incognito,
       childSessionKey,
       childRuntimeSandboxed: childRuntime.sandboxed,
-      requesterSandboxMutationWorkspaceDir,
+      requesterSandboxAttachmentBoundary,
       targetAgentDir,
       modelPlan,
       launchAuthorization,

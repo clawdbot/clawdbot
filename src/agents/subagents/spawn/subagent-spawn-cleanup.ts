@@ -88,6 +88,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   attachmentAbsDir?: string;
   attachmentRootDir?: string;
   attachmentSandboxFsBridge?: SandboxFsBridge;
+  attachmentSandboxDir?: string;
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
   waitForSessionDeletion?: boolean;
@@ -99,6 +100,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
     attachmentAbsDir,
     attachmentRootDir,
     attachmentSandboxFsBridge,
+    attachmentSandboxDir,
     waitForSessionDeletion,
     ...sessionCleanupOptions
   } = params;
@@ -108,6 +110,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
       rootDir: attachmentRootDir,
       absDir: attachmentAbsDir,
       sandboxFsBridge: attachmentSandboxFsBridge,
+      sandboxDir: attachmentSandboxDir,
     });
   }
   return {

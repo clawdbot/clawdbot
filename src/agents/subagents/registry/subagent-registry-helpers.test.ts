@@ -276,6 +276,7 @@ describe("safeRemoveAttachmentsDir", () => {
     );
     const targetWorkspaceDir = path.join(sandboxWorkspaceDir, "worker");
     const attachmentsDir = path.join(targetWorkspaceDir, ".openclaw", "attachments", ATTACHMENT_ID);
+    const sandboxAttachmentsDir = `/workspace/worker/.openclaw/attachments/${ATTACHMENT_ID}`;
     await fs.mkdir(attachmentsDir, { recursive: true });
     const remove = vi.fn(async () => {
       await fs.rm(attachmentsDir, { recursive: true, force: true });
@@ -290,6 +291,7 @@ describe("safeRemoveAttachmentsDir", () => {
             attachmentsSandboxSessionKey: "agent:main:main",
             attachmentsSandboxAgentId: "main",
             attachmentsSandboxWorkspaceDir: sandboxWorkspaceDir,
+            attachmentsSandboxDir: sandboxAttachmentsDir,
           }),
           {
             config: {},
@@ -301,7 +303,7 @@ describe("safeRemoveAttachmentsDir", () => {
         expect.objectContaining({ workspaceDir: sandboxWorkspaceDir }),
       );
       expect(remove).toHaveBeenCalledWith({
-        filePath: attachmentsDir,
+        filePath: sandboxAttachmentsDir,
         recursive: true,
         force: true,
       });
@@ -330,6 +332,58 @@ describe("safeRemoveAttachmentsDir", () => {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
   });
+
+  it("refuses sandbox cleanup without its persisted bridge target", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-target-"));
+    const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
+    await fs.mkdir(attachmentsDir, { recursive: true });
+    try {
+      await expect(
+        safeRemoveAttachmentsDir(
+          createRunEntry({
+            attachmentsDir,
+            attachmentsRootDir: rootDir,
+            attachmentsSandboxSessionKey: "agent:main:main",
+            attachmentsSandboxAgentId: "main",
+            attachmentsSandboxWorkspaceDir: rootDir,
+          }),
+        ),
+      ).resolves.toBe(false);
+      await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "refuses legacy cleanup through a symlinked attachment root",
+    async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-root-"));
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-outside-"));
+      const legacyRootDir = path.join(workspaceDir, ".openclaw", "attachments");
+      const outsideAttachmentDir = path.join(outsideDir, ATTACHMENT_ID);
+      await fs.mkdir(path.dirname(legacyRootDir), { recursive: true });
+      await fs.mkdir(outsideAttachmentDir);
+      await fs.writeFile(path.join(outsideAttachmentDir, "sentinel.txt"), "unchanged");
+      await fs.symlink(outsideDir, legacyRootDir, "dir");
+      try {
+        await expect(
+          safeRemoveAttachmentsDir(
+            createRunEntry({
+              attachmentsDir: path.join(legacyRootDir, ATTACHMENT_ID),
+              attachmentsRootDir: legacyRootDir,
+            }),
+          ),
+        ).resolves.toBe(false);
+        await expect(
+          fs.readFile(path.join(outsideAttachmentDir, "sentinel.txt"), "utf8"),
+        ).resolves.toBe("unchanged");
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("refuses a recorded directory outside its attachment root", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-cleanup-"));

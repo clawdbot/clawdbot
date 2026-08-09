@@ -281,6 +281,8 @@ export type SubagentRunRecord = {
   attachmentsSandboxSessionKey?: string;
   attachmentsSandboxAgentId?: string;
   attachmentsSandboxWorkspaceDir?: string;
+  /** Exact container path used for bridge-owned attachment cleanup. */
+  attachmentsSandboxDir?: string;
   retainAttachmentsOnKeep?: boolean;
   /** Collector-mode runs remain waitable and never announce to the requester. */
   collect?: boolean;
