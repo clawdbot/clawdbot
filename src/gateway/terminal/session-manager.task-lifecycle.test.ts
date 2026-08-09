@@ -36,7 +36,7 @@ describe("TerminalSessionManager task lifecycle", () => {
     manager.attach("viewer-2", second.sessionId);
     emit.mockClear();
 
-    expect(manager.closeTaskSessions(runOwner.taskId)).toBe(2);
+    expect(manager.closeAgentSessions(runOwner.taskId)).toBe(2);
     expect(runPtys.every((pty) => pty.killed)).toBe(true);
     expect(persistentPty.killed).toBe(false);
     expect(connectionPty.killed).toBe(false);

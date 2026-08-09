@@ -159,7 +159,7 @@ describe("terminal tool", () => {
     await tool.execute("open", { action: "open", show: false });
 
     expect(resolveTaskOwnerId).toHaveBeenCalledWith("agent:main:task-run");
-    expect(manager.closeTaskSessions("task-1")).toBe(1);
+    expect(manager.closeAgentSessions("task-1")).toBe(1);
     expect(backend.killed).toBe(true);
   });
 

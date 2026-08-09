@@ -39,8 +39,11 @@ const log = createSubsystemLogger("gateway/terminal");
 // conversation-scoped while lifecycle cleanup can target the exact producer.
 type TaskBoundAgentOwner = Extract<TerminalOwner, { kind: "agent" }> & { taskId?: string };
 
-function terminalOwnerTaskId(owner: TerminalOwner | null): string | undefined {
-  return owner?.kind === "agent" ? (owner as TaskBoundAgentOwner).taskId : undefined;
+function terminalOwnerMatches(owner: TerminalOwner | null, ownerKey: string): boolean {
+  if (owner?.kind !== "agent") {
+    return false;
+  }
+  return owner.agentSessionKey === ownerKey || (owner as TaskBoundAgentOwner).taskId === ownerKey;
 }
 
 /**
@@ -389,10 +392,10 @@ export class TerminalSessionManager {
     return true;
   }
 
-  /** Closes every PTY whose agent owner was bound to one exact task. */
-  closeTaskSessions(taskId: string): number {
+  /** Closes every PTY owned by one exact agent session. */
+  closeAgentSessions(agentSessionKey: string): number {
     const owned = [...this.sessions.values()].filter(
-      (session) => !session.closed && terminalOwnerTaskId(session.owner) === taskId,
+      (session) => !session.closed && terminalOwnerMatches(session.owner, agentSessionKey),
     );
     for (const session of owned) {
       this.finalize(session, "closed", {});

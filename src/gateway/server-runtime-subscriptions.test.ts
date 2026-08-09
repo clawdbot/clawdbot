@@ -142,7 +142,7 @@ function createParams(): SubscriptionParams {
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
     chatAbortControllers: new Map(),
     restartRecoveryCandidates: new Map(),
-    terminalSessions: { closeTaskSessions: vi.fn() },
+    terminalSessions: { closeAgentSessions: vi.fn() },
   };
 }
 
@@ -402,7 +402,7 @@ describe("startGatewayEventSubscriptions", () => {
 
   it("closes task-run terminals only after the authoritative task becomes terminal", async () => {
     const events: string[] = [];
-    const closeTaskSessions = vi.fn((taskId: string) => {
+    const closeAgentSessions = vi.fn((taskId: string) => {
       events.push(`terminal:${taskId}`);
       return 1;
     });
@@ -415,7 +415,7 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs = startGatewayEventSubscriptions({
       ...createParams(),
       broadcast,
-      terminalSessions: { closeTaskSessions },
+      terminalSessions: { closeAgentSessions },
     });
     await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
 
@@ -434,17 +434,17 @@ describe("startGatewayEventSubscriptions", () => {
     if (!task) {
       throw new Error("expected task record");
     }
-    expect(closeTaskSessions).not.toHaveBeenCalled();
+    expect(closeAgentSessions).not.toHaveBeenCalled();
     expect(events).toEqual(["task:running"]);
 
     markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_000 });
-    expect(closeTaskSessions).toHaveBeenCalledOnce();
-    expect(closeTaskSessions).toHaveBeenCalledWith(task.taskId);
+    expect(closeAgentSessions).toHaveBeenCalledOnce();
+    expect(closeAgentSessions).toHaveBeenCalledWith(task.taskId);
     expect(events).toEqual(["task:running", "task:completed", `terminal:${task.taskId}`]);
 
     // Later terminal-row updates cannot close terminals opened by a newer owner.
     markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_001 });
-    expect(closeTaskSessions).toHaveBeenCalledOnce();
+    expect(closeAgentSessions).toHaveBeenCalledOnce();
   });
 
   it("keeps a replacement gateway's task observer when a stale unsub runs late", async () => {
