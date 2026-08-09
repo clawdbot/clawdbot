@@ -144,7 +144,12 @@ export function createPlacementFailureActions(deps: {
       return;
     }
     const environment = environments.get(placement.environmentId);
-    if (!environment || isUnavailableEnvironment(environment)) {
+    if (
+      !environment ||
+      environment.state === "destroyed" ||
+      environment.state === "failed" ||
+      environment.state === "orphaned"
+    ) {
       return;
     }
     const teardownErrors = await cleanupEnvironment({

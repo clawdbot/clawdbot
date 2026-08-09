@@ -364,7 +364,5 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "worker_environments",
     "teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed'))",
   );
-  ensureColumn(db, "worker_session_placements", "terminal_reason TEXT");
-  ensureColumn(db, "worker_session_placements", "terminal_at_ms INTEGER");
   ensureOperatorApprovalResolutionRefs(db);
 }
