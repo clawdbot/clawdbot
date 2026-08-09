@@ -1,6 +1,6 @@
 // Agent Core module implements kill tree behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 const DEFAULT_GRACE_MS = 3000;
 const MAX_GRACE_MS = 60_000;
@@ -53,9 +53,10 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
   const graceMs = normalizeGraceMs(opts?.graceMs);
   signalProcessTreeUnix(pid, "SIGTERM", useGroupKill);
   setTimeout(() => {
+    const pids = useGroupKill ? [pid] : getUnixProcessTreePids(pid);
     const stillAlive = useGroupKill
       ? isProcessAlive(-pid) || isProcessAlive(pid)
-      : isProcessAlive(pid);
+      : pids.some((p) => isProcessAlive(p));
     if (!stillAlive) {
       return;
     }
@@ -149,6 +150,100 @@ function isProcessGroupLeader(pid: number): boolean {
   return pgid === pid;
 }
 
+function getUnixProcessTreePids(rootPid: number): number[] {
+  if (!Number.isFinite(rootPid) || rootPid <= 1) {
+    return [];
+  }
+
+  const childrenMap = new Map<number, number[]>();
+
+  if (process.platform === "linux") {
+    try {
+      const entries = readdirSync("/proc");
+      for (const entry of entries) {
+        if (!/^\d+$/.test(entry)) {
+          continue;
+        }
+        try {
+          const stat = readFileSync(`/proc/${entry}/stat`, "utf8");
+          const commEnd = stat.lastIndexOf(")");
+          if (commEnd < 0) {
+            continue;
+          }
+          const fields = stat
+            .slice(commEnd + 1)
+            .trim()
+            .split(/\s+/);
+          const ppid = Number(fields[1]);
+          const pid = Number(entry);
+          if (Number.isInteger(ppid) && Number.isInteger(pid) && ppid > 0 && pid > 1) {
+            let list = childrenMap.get(ppid);
+            if (!list) {
+              list = [];
+              childrenMap.set(ppid, list);
+            }
+            list.push(pid);
+          }
+        } catch {
+          // Ignore process that disappeared mid-scan
+        }
+      }
+    } catch {
+      // Procfs unavailable or failed
+    }
+  }
+
+  if (childrenMap.size === 0) {
+    try {
+      const res = spawnSync("ps", ["-ax", "-o", "pid=,ppid="], {
+        encoding: "utf8",
+        timeout: 1000,
+      });
+      if (!res.error && res.status === 0 && res.stdout) {
+        const lines = res.stdout.split("\n");
+        for (const line of lines) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 2) {
+            const pid = Number(parts[0]);
+            const ppid = Number(parts[1]);
+            if (Number.isInteger(ppid) && Number.isInteger(pid) && ppid > 0 && pid > 1) {
+              let list = childrenMap.get(ppid);
+              if (!list) {
+                list = [];
+                childrenMap.set(ppid, list);
+              }
+              list.push(pid);
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore ps failure
+    }
+  }
+
+  const result: number[] = [];
+  const visited = new Set<number>();
+
+  function traverse(currentPid: number) {
+    if (visited.has(currentPid)) {
+      return;
+    }
+    visited.add(currentPid);
+
+    const children = childrenMap.get(currentPid) ?? [];
+    for (const childPid of children) {
+      if (childPid > 1 && childPid !== currentPid) {
+        traverse(childPid);
+      }
+    }
+    result.push(currentPid);
+  }
+
+  traverse(rootPid);
+  return result;
+}
+
 function signalProcessTreeUnix(
   pid: number,
   signal: "SIGTERM" | "SIGKILL",
@@ -159,14 +254,17 @@ function signalProcessTreeUnix(
       process.kill(-pid, signal);
       return;
     } catch {
-      // Process group does not exist or we lack permission; try direct pid.
+      // Process group does not exist or we lack permission; try direct pid tree.
     }
   }
 
-  try {
-    process.kill(pid, signal);
-  } catch {
-    // Already gone.
+  const pidsToSignal = getUnixProcessTreePids(pid);
+  for (const p of pidsToSignal) {
+    try {
+      process.kill(p, signal);
+    } catch {
+      // Already gone.
+    }
   }
 }
 

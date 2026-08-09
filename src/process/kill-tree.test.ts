@@ -3,13 +3,15 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
-const { readFileSyncMock, spawnMock, spawnSyncMock } = vi.hoisted(() => ({
+const { readdirSyncMock, readFileSyncMock, spawnMock, spawnSyncMock } = vi.hoisted(() => ({
+  readdirSyncMock: vi.fn(),
   readFileSyncMock: vi.fn(),
   spawnMock: vi.fn(),
   spawnSyncMock: vi.fn(),
 }));
 
 vi.mock("node:fs", () => ({
+  readdirSync: (...args: unknown[]) => readdirSyncMock(...args),
   readFileSync: (...args: unknown[]) => readFileSyncMock(...args),
 }));
 
@@ -59,6 +61,8 @@ describe("killProcessTree", () => {
   });
 
   beforeEach(() => {
+    readdirSyncMock.mockReset();
+    readdirSyncMock.mockImplementation(() => []);
     readFileSyncMock.mockReset();
     readFileSyncMock.mockImplementation(() => {
       throw new Error("proc unavailable");
@@ -296,6 +300,39 @@ describe("killProcessTree", () => {
       expect(killSpy).toHaveBeenCalledWith(5555, "SIGTERM");
       expect(killSpy).not.toHaveBeenCalledWith(-5555, "SIGTERM");
       expect(killSpy).not.toHaveBeenCalledWith(-5555, "SIGKILL");
+    });
+  });
+
+  it("on Unix enumerates and signals descendant PIDs when detached:false (#121049)", async () => {
+    readdirSyncMock.mockReturnValue(["5555", "5556", "5557"]);
+    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      if ((pid === 5555 || pid === 5556 || pid === 5557) && signal === 0) {
+        return true;
+      }
+      return true;
+    }) as typeof process.kill);
+
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      if (filePath === "/proc/5555/stat") {
+        return "5555 (root) S 1 5555 5555 0";
+      }
+      if (filePath === "/proc/5556/stat") {
+        return "5556 (subshell) S 5555 5555 5555 0";
+      }
+      if (filePath === "/proc/5557/stat") {
+        return "5557 (grandchild) S 5556 5555 5555 0";
+      }
+      throw new Error("ENOENT");
+    });
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(5555, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(killSpy).toHaveBeenCalledWith(5557, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(5556, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(5555, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(-5555, "SIGTERM");
     });
   });
 
