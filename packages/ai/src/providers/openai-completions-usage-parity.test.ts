@@ -24,13 +24,36 @@ const context = {
 
 type UsageScenario = {
   name: string;
-  usage: Record<string, unknown>;
+  usage?: Record<string, unknown>;
   expectedUsage: Record<string, unknown>;
   expectedCost?: number;
   inChoice?: boolean;
 };
 
 const scenarios: UsageScenario[] = [
+  {
+    name: "successful stream without usage",
+    expectedUsage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      contextUsage: { state: "unavailable" },
+    },
+  },
+  {
+    name: "terminal stream with unusable prompt usage",
+    usage: { prompt_tokens: 0, completion_tokens: 5, total_tokens: 5 },
+    expectedUsage: {
+      input: 0,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 5,
+      contextUsage: { state: "unavailable" },
+    },
+  },
   {
     name: "documented reasoning tokens and cache buckets",
     usage: {
@@ -121,7 +144,7 @@ function installUsageChunk(scenario: UsageScenario): void {
     index: 0,
     delta: { role: "assistant", content: "Usage preserved." },
     finish_reason: "stop",
-    ...(scenario.inChoice ? { usage: scenario.usage } : {}),
+    ...(scenario.inChoice && scenario.usage ? { usage: scenario.usage } : {}),
   };
   const chunk = {
     id: `chatcmpl-${scenario.name.replaceAll(" ", "-")}`,
@@ -129,7 +152,7 @@ function installUsageChunk(scenario: UsageScenario): void {
     created: 1,
     model: model.id,
     choices: [choice],
-    ...(scenario.inChoice ? {} : { usage: scenario.usage }),
+    ...(!scenario.inChoice && scenario.usage ? { usage: scenario.usage } : {}),
   } as ChatCompletionChunk;
   const body = `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`;
   configureAiTransportHost({
@@ -187,6 +210,10 @@ describe.each([
 
     expect(result.stopReason).toBe("stop");
     expect(result.usage).toMatchObject(expectedUsage);
+    const promptTokens = scenario.usage?.prompt_tokens;
+    if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
+      expect(result.usage).not.toHaveProperty("contextUsage");
+    }
     if (scenario.expectedCost !== undefined) {
       expect(result.usage.cost.total).toBeCloseTo(scenario.expectedCost, 10);
     }

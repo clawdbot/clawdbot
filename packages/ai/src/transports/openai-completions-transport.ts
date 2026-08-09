@@ -73,6 +73,7 @@ import {
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
   createModelStreamCooperativeScheduler,
+  finalizeOpenAICompletionsContextUsage,
   isOpenAICompletionsThinkingEnabled,
   log,
   parseOpenAICompletionsUsage,
@@ -427,6 +428,7 @@ async function processOpenAICompletionsStream(
   const normalizeToolCallDeltas = createOpenAICompletionsToolCallDeltaNormalizer();
   let sawStopFinishReason = false;
   let sawNativeToolCallDelta = false;
+  let terminalUsage: ChatCompletionChunk["usage"];
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   let chunkPushedEvent = false;
@@ -661,6 +663,7 @@ async function processOpenAICompletionsStream(
     let hasReasoningUsageActivity = false;
     if (chunk.usage) {
       output.usage = parseOpenAICompletionsUsage(chunk.usage, model);
+      terminalUsage = chunk.usage;
       hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(chunk.usage);
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
@@ -672,6 +675,7 @@ async function processOpenAICompletionsStream(
     const choiceUsage = (choice as unknown as { usage?: ChatCompletionChunk["usage"] }).usage;
     if (!chunk.usage && choiceUsage) {
       output.usage = parseOpenAICompletionsUsage(choiceUsage, model);
+      terminalUsage = choiceUsage;
       hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
     if (choice.finish_reason) {
@@ -857,6 +861,13 @@ async function processOpenAICompletionsStream(
   }
   if (output.stopReason === "toolUse") {
     tagPendingCommentaryText(output.content);
+  }
+  if (
+    !options?.signal?.aborted &&
+    output.stopReason !== "error" &&
+    output.stopReason !== "aborted"
+  ) {
+    finalizeOpenAICompletionsContextUsage(output.usage, terminalUsage);
   }
 }
 

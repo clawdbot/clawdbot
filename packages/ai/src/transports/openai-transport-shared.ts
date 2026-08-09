@@ -55,6 +55,7 @@ export type MutableAssistantOutput = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    contextUsage?: NonNullable<Usage["contextUsage"]>;
     reasoningTokens?: number;
     totalTokens: number;
     cost: Usage["cost"];
@@ -68,11 +69,13 @@ export type MutableAssistantOutput = {
   errorBody?: string;
 };
 
+type OpenAICompletionsUsagePayload = NonNullable<ChatCompletionChunk["usage"]> & {
+  cost?: unknown;
+  prompt_cache_hit_tokens?: number;
+};
+
 export function parseOpenAICompletionsUsage(
-  rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
-    cost?: unknown;
-    prompt_cache_hit_tokens?: number;
-  },
+  rawUsage: OpenAICompletionsUsagePayload,
   model: Model,
   options?: { includeReasoningTokens?: boolean },
 ): MutableAssistantOutput["usage"] {
@@ -99,6 +102,17 @@ export function parseOpenAICompletionsUsage(
   calculateCost(model, usage);
   applyProviderReportedUsageCost(usage, rawUsage.cost);
   return usage;
+}
+
+/** Mark a clean stream with no usable terminal usage as unknown rather than empty. */
+export function finalizeOpenAICompletionsContextUsage(
+  usage: MutableAssistantOutput["usage"],
+  terminalUsage: OpenAICompletionsUsagePayload | null | undefined,
+): void {
+  const promptTokens = terminalUsage?.prompt_tokens;
+  if (!(typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0)) {
+    usage.contextUsage = { state: "unavailable" };
+  }
 }
 
 type ModelStreamCooperativeScheduler = {

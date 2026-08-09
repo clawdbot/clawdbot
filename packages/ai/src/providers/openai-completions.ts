@@ -19,6 +19,7 @@ import {
 } from "../transports/openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 import {
+  finalizeOpenAICompletionsContextUsage,
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
@@ -205,6 +206,7 @@ export const streamOpenAICompletions: StreamFunction<
       let textBlock: TextContent | null = null;
       let thinkingBlock: ThinkingContent | null = null;
       let hasFinishReason = false;
+      let terminalUsage: ChatCompletionChunk["usage"];
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
       const toolCallBlocksByFirstId = new Map<string, StreamingToolCallBlock>();
@@ -409,6 +411,7 @@ export const streamOpenAICompletions: StreamFunction<
           output.usage = parseOpenAICompletionsUsage(chunk.usage, model, {
             includeReasoningTokens: false,
           });
+          terminalUsage = chunk.usage;
         }
 
         const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
@@ -425,6 +428,7 @@ export const streamOpenAICompletions: StreamFunction<
           output.usage = parseOpenAICompletionsUsage(choiceUsage, model, {
             includeReasoningTokens: false,
           });
+          terminalUsage = choiceUsage;
         }
 
         if (choice.finish_reason) {
@@ -602,6 +606,7 @@ export const streamOpenAICompletions: StreamFunction<
         tagPendingCommentaryText(output.content);
       }
 
+      finalizeOpenAICompletionsContextUsage(output.usage, terminalUsage);
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {

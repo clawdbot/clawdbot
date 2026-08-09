@@ -1162,6 +1162,23 @@ describe("openai transport stream", () => {
     expect(output.content).toEqual([{ type: "text", text: "Hi" }]);
   });
 
+  it("does not finalize context usage for an already-aborted empty completions stream", async () => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const abort = new AbortController();
+    abort.abort();
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([]),
+      output,
+      model,
+      { push() {} },
+      { signal: abort.signal },
+    );
+
+    expect(output.usage).not.toHaveProperty("contextUsage");
+  });
+
   it("yields to aborts during bursty OpenAI-compatible streams", async () => {
     const model = makeCompletionsModel({
       id: "deepseek-v4-flash",
