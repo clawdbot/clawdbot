@@ -57,6 +57,11 @@
   opacity: 0.5;
 }
 
+.wizard-step__form > .input:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .wizard-step__option small {
   display: block;
   margin-top: 2px;

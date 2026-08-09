@@ -284,10 +284,6 @@ openclaw-custodian-page {
   min-height: 44px;
 }
 
-.custodian__wizard-step .btn:not(:disabled) {
-  cursor: pointer;
-}
-
 .custodian__wizard-step .btn:disabled:hover {
   border-color: var(--border);
   background: var(--bg-elevated);
