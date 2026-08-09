@@ -488,7 +488,7 @@ vi.mock("@slack/bolt", () => {
       });
     }
     command() {
-      /* no-op */
+      slackTestState.interactionRegistrations.push("command");
     }
     action() {
       slackTestState.interactionRegistrations.push("action");

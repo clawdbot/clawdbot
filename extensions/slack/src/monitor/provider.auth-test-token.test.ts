@@ -314,6 +314,7 @@ describe("auth.test boot call", () => {
           enterpriseOrgInstall: true,
           dmPolicy: "disabled",
           groupPolicy: "open",
+          slashCommand: { enabled: true, name: "openclaw" },
         },
       },
     });
@@ -327,6 +328,7 @@ describe("auth.test boot call", () => {
     });
     await vi.waitFor(() => expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1));
     expect(getSlackTestState().interactionRegistrations).toEqual([
+      "command",
       "action",
       "shortcut",
       "view",

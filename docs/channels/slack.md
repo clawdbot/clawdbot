@@ -74,7 +74,8 @@ Enterprise Grid org-wide installation. Choose direct Socket Mode or HTTP
 Request URLs; relay mode is not supported for enterprise accounts. Both
 least-privilege manifests below enable the V1 message, mention, membership,
 reaction, and pin event paths, immediate replies, listener-owned status
-reactions, and Slack interactivity for Block Kit actions and modal submissions.
+reactions, Slack interactivity for Block Kit actions and modal submissions, and
+the single `/openclaw` slash command.
 
 #### Socket Mode
 
@@ -85,7 +86,14 @@ reactions, and Slack interactivity for Block Kit actions and modal submissions.
     "description": "Slack connector for OpenClaw"
   },
   "features": {
-    "bot_user": { "display_name": "OpenClaw", "always_online": true }
+    "bot_user": { "display_name": "OpenClaw", "always_online": true },
+    "slash_commands": [
+      {
+        "command": "/openclaw",
+        "description": "Send a message to OpenClaw",
+        "should_escape": false
+      }
+    ]
   },
   "oauth_config": {
     "scopes": {
@@ -94,6 +102,7 @@ reactions, and Slack interactivity for Block Kit actions and modal submissions.
         "channels:history",
         "channels:read",
         "chat:write",
+        "commands",
         "files:read",
         "files:write",
         "groups:history",
@@ -148,6 +157,7 @@ uses the org-installed bot token:
       enterpriseOrgInstall: true,
       appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
       botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      slashCommand: { enabled: true, name: "openclaw" },
       dmPolicy: "open",
       allowFrom: ["*"],
       groupPolicy: "allowlist",
@@ -172,7 +182,15 @@ Socket Mode connection. Replace the example URL with the Gateway's public
     "description": "Slack connector for OpenClaw"
   },
   "features": {
-    "bot_user": { "display_name": "OpenClaw", "always_online": true }
+    "bot_user": { "display_name": "OpenClaw", "always_online": true },
+    "slash_commands": [
+      {
+        "command": "/openclaw",
+        "description": "Send a message to OpenClaw",
+        "should_escape": false,
+        "url": "https://gateway-host.example.com/slack/events"
+      }
+    ]
   },
   "oauth_config": {
     "scopes": {
@@ -181,6 +199,7 @@ Socket Mode connection. Replace the example URL with the Gateway's public
         "channels:history",
         "channels:read",
         "chat:write",
+        "commands",
         "files:read",
         "files:write",
         "groups:history",
@@ -241,6 +260,7 @@ the enterprise account with the same Request URL path:
         provider: "default",
         id: "SLACK_SIGNING_SECRET",
       },
+      slashCommand: { enabled: true, name: "openclaw" },
       webhookPath: "/slack/events",
       dmPolicy: "open",
       allowFrom: ["*"],
@@ -264,9 +284,11 @@ bot identity for loop prevention.
 
 Enterprise support accepts direct Socket Mode or HTTP message, mention,
 membership, reaction, pin, Block Kit action, modal, and configured shortcut
-payloads plus workspace-qualified outbound messages. Add any shortcuts to the
-app manifest's `features.shortcuts` list; OpenClaw accepts their callback IDs
-through the same interaction path. Relay mode, slash commands, channel
+and slash-command payloads plus workspace-qualified outbound messages. Add any
+shortcuts to the app manifest's `features.shortcuts` list; OpenClaw accepts
+their callback IDs through the same interaction path. The manifest examples
+register the single `/openclaw` command; native command mode still requires the
+administrator-managed command entries described below. Relay mode, channel
 lifecycle events, App Home, Agent and Assistant lifecycle events, Slack-native
 approvals, and bindings remain unavailable for an enterprise account. Slack
 action tools remain unavailable except for file uploads and adding or removing

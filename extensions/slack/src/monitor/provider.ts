@@ -692,10 +692,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 
   // Resolve command registration first so App Home never advertises an inactive single command.
-  const commandRegistration =
-    installationIdentity.kind === "enterprise"
-      ? ({ mode: "disabled" } as const)
-      : await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
+  const commandRegistration = await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
   const appHomeSlashCommandName =
     commandRegistration.mode === "single" ? commandRegistration.name : undefined;
   registerSlackMonitorEvents({
