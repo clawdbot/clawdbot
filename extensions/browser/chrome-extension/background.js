@@ -1,33 +1,28 @@
 import { createCopilotController } from "./modules/copilot-background.js";
-import {
-  buildPageSharePayload,
-  capturePageShare,
-  waitForCondition,
-} from "./modules/page-share-core.js";
+import { createPageShareController } from "./modules/page-share-background.js";
+import { waitForCondition } from "./modules/page-share-core.js";
 import { createPageShareRelay } from "./modules/page-share-relay.js";
+import { createPopupMessageHandler } from "./modules/popup-background.js";
 import { createRelayCommandHandler } from "./modules/relay-command-handler.js";
 import { openAuthenticatedRelaySocket } from "./modules/relay-connection.js";
 // OpenClaw extension service worker.
 //
 // Thin transport between the OpenClaw extension relay (loopback WebSocket) and
 // chrome.debugger. All CDP target synthesis lives server-side in the relay
-// bridge; this worker only attaches tabs, forwards frames, and keeps the
-// OpenClaw tab group in sync. Membership in that group is the user-visible
-// consent boundary: only grouped tabs are reported to (and driven by) OpenClaw.
+// bridge; this worker owns tab eligibility/access and forwards allowed frames.
+// The OpenClaw tab group is the ACL in selected mode and an ownership marker
+// in all-tabs mode.
 import {
+  ACCESS_MODE_ALL,
+  ACCESS_MODE_SELECTED,
   OPENCLAW_TAB_GROUP_TITLE,
   createPairingConfigStore,
-  nearestGroupColor,
-  parsePairingString,
   reconnectDelayMs,
   toRelayTabInfo,
 } from "./modules/relay-core.js";
-import {
-  findOpenClawGroups,
-  isOpenClawGroupId,
-  listSharedTabs,
-  requireSharedTab,
-} from "./modules/relay-tab-groups.js";
+import { findOpenClawGroups, isTabSelected } from "./modules/relay-tab-groups.js";
+import { registerTabAccessEvents } from "./modules/tab-access-events.js";
+import { createTabAccessPolicy } from "./modules/tab-access.js";
 
 const BADGE = {
   off: { text: "", color: "#000000" },
@@ -56,21 +51,28 @@ let relayOpeningDeadlineTimer = null;
 let relayAuthenticatedSocket = null;
 let relayStatusHint = "";
 let reconciledPairingInvalidationRevision = 0;
+let relayConnectionGeneration = 0;
+let relayConnectionsSuspended = false;
 /** Tab ids with an active chrome.debugger attachment. */
 const attachedTabs = new Set();
+/** Access epoch proven for each attachment; debugger events use this synchronously. */
+const attachedAccessEpochs = new Map();
 /** Tabs denied to every relay attach while copilot run cleanup is pending. */
 const copilotDeniedTabs = new Set();
-/** Monotonic revocation epochs invalidate debugger attaches already in flight. */
-const tabAccessRevisions = new Map();
 /** In-flight attach promises per tab id (coalesces concurrent attaches). */
 const attachingTabs = new Map();
 /** Latest revocation task per tab; restoration waits for its exact epoch. */
 const copilotRevocations = new Map();
 /** Debounce handle for tab-list refreshes. */
 let tabsSyncTimer = null;
-let pageShareBadgeTimer = null;
+let accessMutationChain = Promise.resolve();
 const pageShareRelay = createPageShareRelay();
 const pairingConfigStore = createPairingConfigStore(chrome.storage.local);
+const tabAccessPolicy = createTabAccessPolicy({ isSelectedTab: isTabSelected });
+const tabAccessReady = (async () => {
+  const config = await pairingConfigStore.read();
+  await tabAccessPolicy.initialize(config.accessMode, Boolean(config.relayUrl));
+})();
 
 function closeRelaySocket() {
   const socket = relayWs;
@@ -87,14 +89,26 @@ function closeRelaySocket() {
   socket.close();
 }
 
+function suspendRelayConnections() {
+  relayConnectionsSuspended = true;
+  relayConnectionGeneration += 1;
+}
+
+function resumeRelayConnections() {
+  relayConnectionsSuspended = false;
+  relayConnectionGeneration += 1;
+}
+
 async function reconcilePairingInvalidation() {
   if (reconciledPairingInvalidationRevision === pairingConfigStore.invalidationRevision) {
     return;
   }
   reconciledPairingInvalidationRevision = pairingConfigStore.invalidationRevision;
   clearRelayOpeningDeadline();
+  await syncTabsToRelay();
   closeRelaySocket();
   setBadge("off");
+  await detachAllDebuggerSessions();
   await copilot?.refreshConfig();
 }
 
@@ -109,31 +123,26 @@ function setBadge(kind) {
   });
 }
 
-function flashPageShareBadge(ok) {
-  if (pageShareBadgeTimer) {
-    clearTimeout(pageShareBadgeTimer);
-  }
-  void chrome.action.setBadgeText({ text: ok ? "✓" : "!" });
-  void chrome.action.setBadgeBackgroundColor({ color: ok ? "#0F9D58" : "#B91C1C" });
-  pageShareBadgeTimer = setTimeout(
-    () => {
-      pageShareBadgeTimer = null;
-      setBadge(relayState);
-    },
-    ok ? 2_000 : 3_000,
-  );
-}
-
 async function getConfig() {
   const config = await pairingConfigStore.read();
+  await tabAccessReady;
+  if (!config.relayUrl) {
+    tabAccessPolicy.setEnabled(false);
+  }
   if (config.pairingStatusHint) {
     relayStatusHint = config.pairingStatusHint;
   }
   return config;
 }
 
+function runAccessMutation(task) {
+  const pending = accessMutationChain.then(task, task);
+  accessMutationChain = pending.catch(() => undefined);
+  return pending;
+}
+
 // ---------------------------------------------------------------------------
-// Tab group management (the consent boundary)
+// Tab group management (selected-mode ACL; all-mode ownership marker)
 // ---------------------------------------------------------------------------
 
 async function addTabToOpenClawGroup(tabId) {
@@ -166,9 +175,9 @@ async function removeTabFromOpenClawGroup(tabId) {
   }
 }
 
-async function isTabShared(tabId) {
-  const shared = await listSharedTabs();
-  return shared.some((tab) => tab.id === tabId);
+async function isTabAccessible(tabId) {
+  await tabAccessReady;
+  return (await tabAccessPolicy.inspectTab(tabId)).accessible;
 }
 
 function scheduleTabsSync() {
@@ -185,16 +194,14 @@ async function syncTabsToRelay() {
   if (!relayWs || relayWs.readyState !== WebSocket.OPEN || relayAuthenticatedSocket !== relayWs) {
     return;
   }
-  const shared = await listSharedTabs();
-  // Detach tabs the user pulled out of the group; leaving the group revokes
-  // agent access immediately (and clears the per-tab debugger state).
-  const sharedIds = new Set(shared.map((tab) => tab.id));
+  const accessible = await tabAccessPolicy.listAccessibleTabs();
+  const accessibleIds = new Set(accessible.map((tab) => tab.id));
   for (const tabId of attachedTabs) {
-    if (!sharedIds.has(tabId)) {
+    if (!accessibleIds.has(tabId)) {
       void detachDebugger(tabId);
     }
   }
-  send({ type: "tabs", tabs: shared.map(toRelayTabInfo) });
+  send({ type: "tabs", tabs: accessible.map(toRelayTabInfo) });
 }
 
 // ---------------------------------------------------------------------------
@@ -203,20 +210,15 @@ async function syncTabsToRelay() {
 
 async function attachDebugger(tabId) {
   await copilotCustodyReady;
-  const accessRevision = tabAccessRevisions.get(tabId) ?? 0;
+  await tabAccessReady;
+  const accessEpoch = tabAccessPolicy.capture(tabId);
   const assertAccess = async () => {
     if (copilotDeniedTabs.has(tabId)) {
       throw new Error(`tab ${tabId} is blocked until its copilot run stops`);
     }
-    if ((tabAccessRevisions.get(tabId) ?? 0) !== accessRevision) {
-      throw new Error(`tab ${tabId} access was revoked`);
-    }
-    await requireSharedTab(tabId);
+    await tabAccessPolicy.requireTab(tabId, accessEpoch);
     if (copilotDeniedTabs.has(tabId)) {
       throw new Error(`tab ${tabId} is blocked until its copilot run stops`);
-    }
-    if ((tabAccessRevisions.get(tabId) ?? 0) !== accessRevision) {
-      throw new Error(`tab ${tabId} access was revoked`);
     }
   };
   await assertAccess();
@@ -262,6 +264,14 @@ async function attachDebugger(tabId) {
       throw error;
     }
     const target = targets.find((candidate) => candidate.tabId === tabId && candidate.attached);
+    // The attachment is authorized only by the epoch proven across the whole
+    // attach. Never replace it with a fresh post-await capture: that would let
+    // a revocation during async unwind authorize later debugger events.
+    if (copilotDeniedTabs.has(tabId) || !tabAccessPolicy.epochIsCurrent(tabId, accessEpoch)) {
+      await detachDebugger(tabId);
+      throw new Error(`tab ${tabId} access was revoked`);
+    }
+    attachedAccessEpochs.set(tabId, accessEpoch);
     return { targetId: target?.id ?? `tab-${tabId}` };
   })();
   attachingTabs.set(tabId, attach);
@@ -276,6 +286,7 @@ async function detachDebugger(tabId) {
   // Always call Chrome: an attach can complete before attachedTabs records it.
   // The unconditional detach closes that revocation race.
   attachedTabs.delete(tabId);
+  attachedAccessEpochs.delete(tabId);
   try {
     await chrome.debugger.detach({ tabId });
   } catch {
@@ -283,8 +294,94 @@ async function detachDebugger(tabId) {
   }
 }
 
+async function detachAllDebuggerSessions() {
+  const targets = await chrome.debugger.getTargets().catch(() => []);
+  const tabIds = new Set(attachedTabs);
+  for (const target of targets) {
+    if (target.attached && typeof target.tabId === "number") {
+      tabIds.add(target.tabId);
+    }
+  }
+  await Promise.allSettled(attachingTabs.values());
+  for (const tabId of attachedTabs) {
+    tabIds.add(tabId);
+  }
+  await Promise.allSettled([...tabIds].map((tabId) => detachDebugger(tabId)));
+}
+
+async function reconcileAccessMode(nextMode, { transitioning = false } = {}) {
+  await tabAccessReady;
+  const previousMode = tabAccessPolicy.mode;
+  const mode = tabAccessPolicy.setMode(nextMode);
+  if (mode === previousMode) {
+    if (transitioning) {
+      tabAccessPolicy.endTransition();
+    }
+    return mode;
+  }
+  await Promise.allSettled(attachingTabs.values());
+  if (mode === ACCESS_MODE_SELECTED) {
+    const selectedIds = new Set(
+      (
+        await tabAccessPolicy.listAccessibleTabs({
+          allowDuringTransition: transitioning,
+        })
+      ).map((tab) => tab.id),
+    );
+    await Promise.allSettled(
+      [...attachedTabs]
+        .filter((tabId) => !selectedIds.has(tabId))
+        .map((tabId) => detachDebugger(tabId)),
+    );
+  }
+  if (transitioning) {
+    tabAccessPolicy.endTransition();
+  }
+  for (const tabId of attachedTabs) {
+    const epoch = tabAccessPolicy.capture(tabId);
+    const state = await tabAccessPolicy.inspectTab(tabId, epoch);
+    if (!tabAccessPolicy.epochIsCurrent(tabId, epoch)) {
+      // A post-transition tab event owns the newer revision. Keep this
+      // attachment fail-closed until that handler reconciles it.
+      continue;
+    }
+    if (!state.accessible) {
+      await detachDebugger(tabId);
+    } else if (attachedTabs.has(tabId)) {
+      attachedAccessEpochs.set(tabId, epoch);
+    }
+  }
+  await syncTabsToRelay();
+  await copilot?.onConsentChanged();
+  return mode;
+}
+
+async function pauseTab(tabId) {
+  let storageError = null;
+  try {
+    await tabAccessPolicy.pause(tabId);
+  } catch (error) {
+    storageError = error;
+  }
+  await Promise.allSettled([attachingTabs.get(tabId)]);
+  await detachDebugger(tabId);
+  await syncTabsToRelay();
+  await copilot?.onConsentChanged(tabId, { revoked: true });
+  if (storageError) {
+    throw storageError instanceof Error
+      ? storageError
+      : new Error("Could not persist the tab pause.");
+  }
+}
+
+async function allowTab(tabId) {
+  await tabAccessPolicy.allow(tabId);
+  await syncTabsToRelay();
+  await copilot?.onConsentChanged(tabId);
+}
+
 async function revokeCopilotDebugger(tabId) {
-  tabAccessRevisions.set(tabId, (tabAccessRevisions.get(tabId) ?? 0) + 1);
+  tabAccessPolicy.invalidateTab(tabId);
   copilotDeniedTabs.add(tabId);
   const previous = copilotRevocations.get(tabId) ?? Promise.resolve();
   const revocation = previous
@@ -304,39 +401,12 @@ async function revokeCopilotDebugger(tabId) {
 }
 
 async function restoreCopilotDebugger(tabId) {
-  const accessRevision = tabAccessRevisions.get(tabId) ?? 0;
+  const accessEpoch = tabAccessPolicy.capture(tabId);
   await copilotRevocations.get(tabId);
-  if ((tabAccessRevisions.get(tabId) ?? 0) === accessRevision) {
+  if (tabAccessPolicy.epochIsCurrent(tabId, accessEpoch)) {
     copilotDeniedTabs.delete(tabId);
   }
 }
-
-chrome.debugger.onEvent.addListener((source, method, params) => {
-  if (typeof source.tabId !== "number") {
-    return;
-  }
-  send({
-    type: "cdpEvent",
-    tabId: source.tabId,
-    ...(source.sessionId ? { sessionId: source.sessionId } : {}),
-    method,
-    params,
-  });
-});
-
-chrome.debugger.onDetach.addListener((source, reason) => {
-  if (typeof source.tabId !== "number") {
-    return;
-  }
-  attachedTabs.delete(source.tabId);
-  send({ type: "detached", tabId: source.tabId, reason });
-  if (reason === "canceled_by_user") {
-    // The user hit "Cancel" on Chrome's debugging infobar: treat it as a
-    // revocation and pull the tab out of the shared group so the agent does
-    // not immediately re-attach.
-    void removeTabFromOpenClawGroup(source.tabId).then(scheduleTabsSync);
-  }
-});
 
 // ---------------------------------------------------------------------------
 // Relay connection
@@ -386,23 +456,36 @@ const handleRelayCommand = createRelayCommandHandler({
   addTabToOpenClawGroup,
   focusWindowForTab,
   scheduleTabsSync,
+  captureAccess: (tabId) => tabAccessPolicy.capture(tabId),
+  requireAccessibleTab: (tabId, epoch) => tabAccessPolicy.requireTab(tabId, epoch),
 });
 
 async function sendHello() {
-  const shared = await listSharedTabs();
+  const accessible = await tabAccessPolicy.listAccessibleTabs();
   const uaMatch = /Chrom(?:e|ium)\/[\d.]+/.exec(navigator.userAgent);
   send({
     type: "hello",
     userAgent: navigator.userAgent,
     browserVersion: uaMatch ? uaMatch[0] : "Chrome/unknown",
     extensionVersion: chrome.runtime.getManifest().version,
-    tabs: shared.map(toRelayTabInfo),
+    tabs: accessible.map(toRelayTabInfo),
   });
 }
 
-async function connectRelay() {
+async function connectRelay(isConnectionAllowed = () => true) {
+  const connectionGeneration = relayConnectionGeneration;
+  const connectionIsCurrent = () =>
+    !relayConnectionsSuspended &&
+    connectionGeneration === relayConnectionGeneration &&
+    isConnectionAllowed();
   const { relayUrl, token } = await getConfig();
+  if (!connectionIsCurrent()) {
+    return;
+  }
   await reconcilePairingInvalidation();
+  if (!connectionIsCurrent()) {
+    return;
+  }
   if (!relayUrl || !token) {
     clearRelayOpeningDeadline();
     setBadge("off");
@@ -412,6 +495,11 @@ async function connectRelay() {
     relayWs &&
     (relayWs.readyState === WebSocket.OPEN || relayWs.readyState === WebSocket.CONNECTING)
   ) {
+    return;
+  }
+  // Pair revocation can race either awaited config step above. Keep the final
+  // cancellation check adjacent to socket creation so a stale pair cannot reconnect.
+  if (!connectionIsCurrent()) {
     return;
   }
   setBadge("connecting");
@@ -492,56 +580,23 @@ async function ensureRelayReady() {
   }
 }
 
-async function sendPageToOpenClaw(tabId, note) {
-  await ensureRelayReady();
-  const tab = await chrome.tabs.get(tabId);
-  const capture = await capturePageShare(tab);
-  const payload = buildPageSharePayload({ ...capture, note });
-  if (!payload.content && !payload.selection) {
-    throw new Error("Nothing to send on this page.");
-  }
-  await sendPageShareRequest(payload);
-}
-
-// Context-menu selections bind to the click-time document: the relay-connect
-// delay can outlive a navigation, and recapture cannot see iframe selections,
-// so the payload is built from the click snapshot without touching the tab.
-async function sendSelectionSnapshot(tab, selection) {
-  await ensureRelayReady();
-  const payload = buildPageSharePayload({
-    url: tab.url ?? "",
-    title: tab.title ?? "",
-    content: "",
-    selection,
-    note: "",
-  });
-  await sendPageShareRequest(payload);
-}
-
-function withShareBadge(promise) {
-  return promise.then(
-    () => flashPageShareBadge(true),
-    () => flashPageShareBadge(false),
-  );
-}
-
-function sendPageFromChromeEntry(tabId) {
-  return withShareBadge(sendPageToOpenClaw(tabId, ""));
-}
-
-async function installPageShareContextMenu() {
-  await chrome.contextMenus.removeAll();
-  chrome.contextMenus.create({
-    id: "openclaw-send-page",
-    title: "Send page to OpenClaw",
-    contexts: ["page", "selection"],
-  });
-}
+const pageShare = createPageShareController({
+  ensureRelayReady,
+  sendPageShareRequest,
+  restoreBadge: () => setBadge(relayState),
+});
 
 copilot = createCopilotController({
   getConfig,
-  isTabShared,
-  addTabToOpenClawGroup,
+  isTabAccessible,
+  grantTabAccess: async (tabId) => {
+    if (tabAccessPolicy.mode === ACCESS_MODE_ALL) {
+      await allowTab(tabId);
+    } else {
+      await addTabToOpenClawGroup(tabId);
+      scheduleTabsSync();
+    }
+  },
   attachDebugger,
   detachDebugger,
   revokeDebugger: revokeCopilotDebugger,
@@ -603,161 +658,53 @@ function scheduleReconnect() {
 // Popup messaging + lifecycle
 // ---------------------------------------------------------------------------
 
-function sendErrorResponse(sendResponse, error) {
-  sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
-}
+const handlePopupMessage = createPopupMessageHandler({
+  pairingConfigStore,
+  policy: tabAccessPolicy,
+  accessReady: tabAccessReady,
+  getConfig,
+  getRelayState: () => relayState,
+  getRelayStatusHint: () => relayStatusHint,
+  resetRelayState: () => {
+    relayStatusHint = "";
+    reconnectAttempt = 0;
+  },
+  suspendRelayConnections,
+  resumeRelayConnections,
+  reconcilePairingInvalidation,
+  reconcileAccessMode,
+  runAccessMutation,
+  detachAllDebuggerSessions,
+  syncTabsToRelay,
+  clearRelayOpeningDeadline,
+  closeRelaySocket,
+  connectRelay,
+  setBadge,
+  getCopilot: () => copilot,
+  attachingTabs,
+  detachDebugger,
+  removeTabFromOpenClawGroup,
+  addTabToOpenClawGroup,
+  scheduleTabsSync,
+  pauseTab,
+  pageShare,
+});
+chrome.runtime.onMessage.addListener((msg, _sender, reply) => handlePopupMessage(msg, reply));
 
-chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
-  let settled = false;
-  const sendResponse = (response) => {
-    if (settled) {
-      return;
-    }
-    settled = true;
-    reply(response);
-  };
-  void (async () => {
-    switch (msg?.type) {
-      case "getStatus": {
-        const { relayUrl } = await getConfig();
-        await reconcilePairingInvalidation();
-        const shared = await listSharedTabs();
-        sendResponse({
-          paired: Boolean(relayUrl),
-          state: relayState,
-          sharedTabCount: shared.length,
-          relayUrl: relayUrl ?? "",
-          ...(relayStatusHint ? { hint: relayStatusHint } : {}),
-        });
-        return;
-      }
-      case "pair": {
-        const parsed = parsePairingString(msg.pairingString);
-        if (!parsed) {
-          sendResponse({ ok: false, error: "Invalid pairing string." });
-          return;
-        }
-        await pairingConfigStore.save(parsed, nearestGroupColor(msg.groupColor));
-        relayStatusHint = "";
-        reconnectAttempt = 0;
-        clearRelayOpeningDeadline();
-        closeRelaySocket();
-        await connectRelay();
-        await copilot.refreshConfig();
-        sendResponse({ ok: true });
-        return;
-      }
-      case "unpair": {
-        await pairingConfigStore.clear();
-        relayStatusHint = "";
-        clearRelayOpeningDeadline();
-        closeRelaySocket();
-        setBadge("off");
-        await copilot.refreshConfig();
-        sendResponse({ ok: true });
-        return;
-      }
-      case "toggleShareTab": {
-        const tabId = msg.tabId;
-        if (typeof tabId !== "number") {
-          sendResponse({ ok: false, error: "No tab." });
-          return;
-        }
-        const wasShared = await isTabShared(tabId);
-        if (wasShared) {
-          await detachDebugger(tabId);
-          await removeTabFromOpenClawGroup(tabId);
-        } else {
-          await addTabToOpenClawGroup(tabId);
-        }
-        scheduleTabsSync();
-        await copilot.onConsentChanged();
-        sendResponse({ ok: true, shared: !wasShared });
-        return;
-      }
-      case "isTabShared": {
-        sendResponse({ shared: await isTabShared(msg.tabId) });
-        return;
-      }
-      case "sendPageToOpenClaw": {
-        if (typeof msg.tabId !== "number") {
-          sendResponse({ ok: false, error: "No tab." });
-          return;
-        }
-        try {
-          await sendPageToOpenClaw(msg.tabId, msg.note);
-          sendResponse({ ok: true });
-        } catch (error) {
-          sendErrorResponse(sendResponse, error);
-        }
-        return;
-      }
-      case "prepareCopilotPanel": {
-        try {
-          const options = await copilot.preparePanel(msg.tabId);
-          sendResponse({ ok: true, ...options });
-        } catch (error) {
-          sendErrorResponse(sendResponse, error);
-        }
-        return;
-      }
-      default:
-        sendResponse({ ok: false, error: "unknown message" });
-    }
-  })().catch(sendErrorResponse.bind(null, sendResponse));
-  return true; // keep sendResponse alive for the async path
-});
-
-chrome.tabs.onRemoved.addListener((tabId) => {
-  tabAccessRevisions.set(tabId, (tabAccessRevisions.get(tabId) ?? 0) + 1);
-  attachedTabs.delete(tabId);
-  copilotDeniedTabs.delete(tabId);
-  scheduleTabsSync();
-  void copilot.onTabRemoved(tabId);
-});
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  scheduleTabsSync();
-  if (typeof changeInfo.groupId !== "number") {
-    void copilot.onConsentChanged(tabId);
-    return;
-  }
-  // changeInfo.groupId is the event-time membership snapshot. Preserve a
-  // revocation even if a later event re-shares the tab before async cleanup.
-  void isOpenClawGroupId(changeInfo.groupId).then(async (shared) => {
-    if (!shared) {
-      tabAccessRevisions.set(tabId, (tabAccessRevisions.get(tabId) ?? 0) + 1);
-      await detachDebugger(tabId);
-    }
-    await copilot.onConsentChanged(tabId, { revoked: !shared });
-  });
-});
-chrome.tabGroups.onUpdated.addListener(() => {
-  scheduleTabsSync();
-  void copilot.onConsentChanged();
-});
-chrome.tabGroups.onRemoved.addListener(() => {
-  scheduleTabsSync();
-  void copilot.onConsentChanged();
-});
-
-chrome.commands.onCommand.addListener((command) => {
-  if (command !== "send-page") {
-    return;
-  }
-  void chrome.tabs
-    .query({ active: true, lastFocusedWindow: true })
-    .then(([tab]) => (typeof tab?.id === "number" ? sendPageFromChromeEntry(tab.id) : undefined));
-});
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== "openclaw-send-page" || typeof tab?.id !== "number") {
-    return;
-  }
-  const selection = info.selectionText?.trim() ?? "";
-  if (selection) {
-    void withShareBadge(sendSelectionSnapshot(tab, selection));
-    return;
-  }
-  void sendPageFromChromeEntry(tab.id);
+registerTabAccessEvents({
+  accessReady: tabAccessReady,
+  policy: tabAccessPolicy,
+  attachedTabs,
+  attachedAccessEpochs,
+  copilotDeniedTabs,
+  attachingTabs,
+  getCopilot: () => copilot,
+  send,
+  scheduleTabsSync,
+  detachDebugger,
+  pauseTab,
+  removeTabFromOpenClawGroup,
+  runAccessMutation,
 });
 
 // Watchdog: MV3 can stop this worker; the alarm revives it and re-connects.
@@ -774,7 +721,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 chrome.runtime.onStartup.addListener(() => void connectRelay());
 chrome.runtime.onInstalled.addListener(() => {
-  void installPageShareContextMenu();
+  void pageShare.installContextMenu();
   void connectRelay();
 });
 void [connectRelay(), copilotReady];

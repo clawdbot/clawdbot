@@ -40,7 +40,11 @@ async function main() {
   // Ship only the runtime extension; colocated *.test.ts and *.d.ts stay out.
   await fs.cp(srcDir, outDir, {
     recursive: true,
-    filter: (source) => !source.endsWith(".test.ts") && !source.endsWith(".d.ts"),
+    filter: (source) =>
+      !source.endsWith(".test.ts") &&
+      !source.endsWith(".test-support.ts") &&
+      !source.endsWith(".test-harness.ts") &&
+      !source.endsWith(".d.ts"),
   });
 }
 
