@@ -189,7 +189,8 @@ describe("legacy x_search config", () => {
       },
     } as OpenClawConfig);
 
-    expect((result.config.tools?.web as Record<string, unknown>).x_search).toEqual({
+    const web = result.config.tools?.web as Record<string, unknown> | undefined;
+    expect(web?.x_search).toEqual({
       enabled: true,
       model: "grok-4-1-fast",
     });
