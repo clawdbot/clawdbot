@@ -1502,6 +1502,7 @@
     "check:database-first-legacy-stores": "node scripts/check-database-first-legacy-stores.mjs",
     "check:deprecated-api-usage": "node scripts/check-deprecated-api-usage.mjs",
     "check:deprecated-jsdoc": "node scripts/check-deprecated-jsdoc.mjs",
+    "check:doctor-deprecation-registry": "node --import tsx scripts/check-doctor-deprecation-registry.ts",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-mdx && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
     "check:env-var-count": "node scripts/check-env-var-count.mjs",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",

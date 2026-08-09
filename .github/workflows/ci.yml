@@ -2227,6 +2227,14 @@ jobs:
               else
                 echo "[skip] historical target predates the script declaration contract"
               fi
+              if [[ "$HISTORICAL_TARGET" == "true" ]]; then
+                echo "[skip] historical target skips the wall-clock doctor deprecation registry guard"
+              elif has_package_script "check:doctor-deprecation-registry"; then
+                pnpm check:doctor-deprecation-registry
+              else
+                echo "Current CI targets must provide the check:doctor-deprecation-registry package script." >&2
+                exit 1
+              fi
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage

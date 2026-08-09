@@ -1460,6 +1460,7 @@ describe("scripts/changed-lanes", () => {
       "environment variable count ratchet",
       "max-lines suppression ratchet",
       "changelog attributions",
+      "doctor deprecation registry",
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
       "duplicate scan target coverage",
@@ -1640,6 +1641,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).toEqual([
       "check:no-conflict-markers",
       "check:changelog-attributions",
+      "check:doctor-deprecation-registry",
       "lint:extensions:no-guarded-wildcard-reexports",
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
@@ -2314,6 +2316,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
       { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
       {
         name: "guarded extension wildcard re-exports",
         args: ["lint:extensions:no-guarded-wildcard-reexports"],
@@ -2336,6 +2339,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
       { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
       {
         name: "guarded extension wildcard re-exports",
         args: ["lint:extensions:no-guarded-wildcard-reexports"],

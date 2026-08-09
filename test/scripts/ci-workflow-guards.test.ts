@@ -4377,6 +4377,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(preflightGuards).toContain(
       "Current CI targets must provide the check:script-declarations package script.",
     );
+    expect(preflightGuards).toContain('has_package_script "check:doctor-deprecation-registry"');
+    expect(preflightGuards).toContain("pnpm check:doctor-deprecation-registry");
+    expect(preflightGuards).toContain(
+      "[skip] historical target skips the wall-clock doctor deprecation registry guard",
+    );
+    expect(preflightGuards).toContain(
+      "Current CI targets must provide the check:doctor-deprecation-registry package script.",
+    );
+    expect(preflightGuards.indexOf('if [[ "$HISTORICAL_TARGET" == "true" ]]')).toBeLessThan(
+      preflightGuards.indexOf("pnpm check:doctor-deprecation-registry"),
+    );
     expect(npmLockGuards).toContain("pnpm deps:npm-lock:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
     expect(parsedWorkflow.jobs.preflight.outputs.diff_base_revision).toBe(
