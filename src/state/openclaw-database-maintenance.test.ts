@@ -13,8 +13,8 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 describe("OpenClaw database maintenance schema validation", () => {
   it("accepts the current global and agent schemas", () => {
