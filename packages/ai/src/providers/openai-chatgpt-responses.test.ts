@@ -4,6 +4,7 @@ import { zstdDecompressSync } from "node:zlib";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type { Context, Model } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -1110,5 +1111,57 @@ describe("parseSSEForTest", () => {
     // 16 MiB + a couple of overshoot pulls, well under 32.
     expect(pullCount).toBeGreaterThanOrEqual(17);
     expect(pullCount).toBeLessThanOrEqual(20);
+  });
+
+  function streamOf(...chunks: string[]): ReadableStream<Uint8Array> {
+    const encoded = chunks.map((chunk) => new TextEncoder().encode(chunk));
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of encoded) {
+          controller.enqueue(chunk);
+        }
+        controller.close();
+      },
+    });
+  }
+
+  it("parses a trailing frame that reaches EOF without its blank-line terminator", async () => {
+    // A proxy that trims the final "\n\n" must not cost the terminal event:
+    // the residue is still a complete data frame.
+    const events: Record<string, unknown>[] = [];
+    for await (const event of parseSSEForTest(
+      new Response(
+        streamOf(
+          'data: {"type":"response.output_item.done"}\n\n',
+          'data: {"type":"response.completed"}',
+        ),
+      ),
+    )) {
+      events.push(event);
+    }
+    expect(events.map((event) => event.type)).toEqual([
+      "response.output_item.done",
+      "response.completed",
+    ]);
+  });
+
+  it("does not duplicate the final frame when the stream ends with a blank line", async () => {
+    const events: Record<string, unknown>[] = [];
+    for await (const event of parseSSEForTest(
+      new Response(streamOf('data: {"type":"response.completed"}\n\n')),
+    )) {
+      events.push(event);
+    }
+    expect(events).toHaveLength(1);
+  });
+
+  it("rejects a malformed trailing frame at EOF", async () => {
+    await expect(async () => {
+      for await (const event of parseSSEForTest(
+        new Response(streamOf('data: {"type":"response.output_item.done"}\n\n', "data: {not-json")),
+      )) {
+        void event;
+      }
+    }).rejects.toThrow(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
   });
 });
