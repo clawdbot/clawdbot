@@ -118,39 +118,26 @@ function digestStable(value: unknown): string {
 }
 
 /**
- * Free-text body keys on inter-agent session sends. Collapsing them lets the loop
- * detector treat repeated sends to one target as one semantic call even when the
- * model rewords the body on every attempt (same evasion class as #117637, send
- * side: exact-argument streaks never build when each call differs).
- * The sessionKey routing field stays intact so sends to different sessions never
- * collide.
+ * Collapse free-text body keys for `sessions_send` so reworded sends to one session share a
+ * hash. `sessionKey` stays intact, so different targets remain distinct.
  *
- * Scoped to `sessions_send` only: `conversations_send`/`conversations_turn` are
- * direct external-channel delivery (they require a conversationRef and deliver to
- * a channel conversation, like the `message` tool), so reworded texts to one
- * conversation are legitimate distinct messages that must stay text-sensitive.
- * Their volatile delivery ids are already stripped from outcome hashes.
+ * Do not apply this to `conversations_send` or `conversations_turn`: they deliver directly to
+ * external conversations, where distinct text is legitimate and must stay text-sensitive.
  */
-const SESSIONS_SEND_TEXT_PARAM_KEYS = new Set(["message", "text"]);
 const SEMANTIC_SEND_TEXT_PLACEHOLDER = "semantic:send-text";
 
 function normalizeSessionsSendParamsForLoopHash(toolName: string, params: unknown): unknown {
-  if (toolName !== "sessions_send") {
+  if (toolName !== "sessions_send" || !isPlainObject(params)) {
     return params;
   }
-  if (!isPlainObject(params)) {
-    return params;
-  }
-  let changed = false;
-  const normalized: Record<string, unknown> = { ...params };
-  for (const key of Object.keys(normalized)) {
-    const value = normalized[key];
-    if (SESSIONS_SEND_TEXT_PARAM_KEYS.has(key) && typeof value === "string") {
-      normalized[key] = SEMANTIC_SEND_TEXT_PLACEHOLDER;
-      changed = true;
-    }
-  }
-  return changed ? normalized : params;
+  return Object.fromEntries(
+    Object.entries(params).map(([key, value]) => [
+      key,
+      (key === "message" || key === "text") && typeof value === "string"
+        ? SEMANTIC_SEND_TEXT_PLACEHOLDER
+        : value,
+    ]),
+  );
 }
 
 function extractTextContent(result: unknown): string {
