@@ -129,7 +129,7 @@ export function mintAttachGrant(params: {
   if (!sessionKey) {
     throw new Error("mintAttachGrant: sessionKey is required");
   }
-  const agentId = params.agentId?.trim() || undefined;
+  const agentId = sessionKey === "global" ? params.agentId?.trim() || undefined : undefined;
   const nowMs = params.nowMs ?? Date.now();
   // Mint sweeps stale entries so abandoned grants do not accumulate.
   sweepExpiredAttachGrants(nowMs);
