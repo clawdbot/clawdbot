@@ -24,8 +24,7 @@
       "pluginApi": ">=2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.8.1",
-      "bundledDist": false
+      "openclawVersion": "2026.8.1"
     },
     "release": {
       "publishToClawHub": true,
