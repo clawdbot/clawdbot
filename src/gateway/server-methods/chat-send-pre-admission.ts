@@ -23,7 +23,6 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
-export const ACTIVE_RUN_CHANGED_ERROR_REASON = "active-run-changed";
 
 export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerOptions["respond"]) {
   respond(
@@ -35,26 +34,14 @@ export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerO
   );
 }
 
-function respondChatTargetChanged(
-  respond: GatewayRequestHandlerOptions["respond"],
-  target: "branch" | "run",
-  reason: string,
-) {
+export function respondChatActiveLeafChanged(respond: GatewayRequestHandlerOptions["respond"]) {
   respond(
     false,
     undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, `active ${target} changed; review and retry`, {
-      details: { reason },
+    errorShape(ErrorCodes.INVALID_REQUEST, "active branch changed; review and retry", {
+      details: { reason: ACTIVE_LEAF_CHANGED_ERROR_REASON },
     }),
   );
-}
-
-export function respondChatActiveLeafChanged(respond: GatewayRequestHandlerOptions["respond"]) {
-  respondChatTargetChanged(respond, "branch", ACTIVE_LEAF_CHANGED_ERROR_REASON);
-}
-
-export function respondChatActiveRunChanged(respond: GatewayRequestHandlerOptions["respond"]) {
-  respondChatTargetChanged(respond, "run", ACTIVE_RUN_CHANGED_ERROR_REASON);
 }
 
 /** Settle stop/retry/dedupe cases before reserving lifecycle admission. */
