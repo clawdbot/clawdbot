@@ -148,15 +148,16 @@ export function resolveExistingAgentSessionStoreTargetsReadOnlyResult(
     configuredTarget,
     ...resolveExistingAgentSessionStoreTargetsSync(cfg, requested, { env }),
   ]);
+  const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
   for (const target of targets) {
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
-      defaultAgentId: target.agentId,
+      defaultAgentId,
       env,
     });
     const snapshot = readSessionStoreTargetSnapshot({
       cache: params.cache,
-      databaseAgentId: normalizeAgentId(resolved.agentId ?? target.agentId),
+      databaseAgentId: normalizeAgentId(resolved.agentId ?? defaultAgentId),
       env,
       sqlitePath: resolved.path,
     });

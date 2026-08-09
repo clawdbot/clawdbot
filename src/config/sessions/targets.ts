@@ -670,12 +670,26 @@ export function resolveSessionStoreTargets(
   if (hasAgent && allAgents) {
     throw new Error("--agent and --all-agents cannot be used together");
   }
-  if (opts.store && (hasAgent || allAgents)) {
-    throw new Error("--store cannot be combined with --agent or --all-agents");
+  if (opts.store && allAgents) {
+    throw new Error("--store cannot be combined with --all-agents");
   }
   if (opts.store) {
-    const defaultAgentId = resolveDefaultAgentId(cfg);
-    return [resolveExplicitSessionStoreTarget({ defaultAgentId, env, store: opts.store })];
+    const defaultAgentId = hasAgent
+      ? normalizeAgentId(opts.agent ?? "")
+      : resolveDefaultAgentId(cfg);
+    const knownAgentIds = new Set(listAgentIds(cfg).map(normalizeAgentId));
+    if (hasAgent && !knownAgentIds.has(defaultAgentId)) {
+      throw new Error(
+        `Unknown agent id "${opts.agent}". Use "openclaw agents list" to see configured agents.`,
+      );
+    }
+    const target = resolveExplicitSessionStoreTarget({ defaultAgentId, env, store: opts.store });
+    if (hasAgent && target.agentId !== defaultAgentId) {
+      throw new Error(
+        `Session store belongs to agent "${target.agentId}", not requested agent "${defaultAgentId}".`,
+      );
+    }
+    return [target];
   }
 
   if (allAgents) {

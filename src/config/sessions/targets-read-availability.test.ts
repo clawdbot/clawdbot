@@ -9,13 +9,17 @@ import {
 } from "./targets-read-availability.js";
 
 describe("session store availability", () => {
-  it("reuses one fixed-store ownership snapshot across agents", async () => {
+  it("reads cross-agent rows from a migrated fixed store", async () => {
     await withTempHome(async (home) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
       const storePath = path.join(home, "shared.sqlite");
       const cfg: OpenClawConfig = {
         session: { store: storePath },
-        agents: { entries: { main: { default: true }, ops: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "main" } },
+          entries: { main: {}, ops: {} },
+        },
       };
       await replaceSessionEntry(
         { agentId: "main", env, storePath, sessionKey: "agent:main:main" },
