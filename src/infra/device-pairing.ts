@@ -98,6 +98,7 @@ type PairedDeviceMetadataPatch = Pick<
   | "displayName"
   | "operatorLabel"
   | "platform"
+  | "deviceFamily"
   | "clientId"
   | "clientMode"
   | "remoteIp"
@@ -1526,6 +1527,9 @@ export async function updatePairedDeviceMetadata(
     }
     if ("platform" in patch) {
       next.platform = patch.platform;
+    }
+    if ("deviceFamily" in patch) {
+      next.deviceFamily = patch.deviceFamily;
     }
     if ("clientId" in patch) {
       next.clientId = patch.clientId;

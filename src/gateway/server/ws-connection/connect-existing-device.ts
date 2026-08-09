@@ -8,6 +8,7 @@ import {
 import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import { resolveNodeHostPairingMetadata } from "../../node-legacy-protocol-filter.js";
 import {
   isMobileNodeBootstrapConnect,
   isSetupCodeHandoffBootstrapClient,
@@ -182,11 +183,21 @@ export async function authorizeExistingGatewayDevice(params: {
   // and same-family mobile OS version labels, but real platform/device-family
   // changes must stay on the approved pairing record.
   if (device) {
+    const rollbackPairingMetadata = resolveNodeHostPairingMetadata(connectParams.client);
+    // This tuple is equivalent to the authenticated desktop identity, but unlike
+    // canonical v4 metadata it survives a rollback to a released v3 Gateway.
+    const shouldPersistRollbackPairingMetadata =
+      (rollbackPairingMetadata.platform !== connectParams.client.platform ||
+        rollbackPairingMetadata.deviceFamily !== connectParams.client.deviceFamily) &&
+      (rollbackPairingMetadata.platform !== paired.platform ||
+        rollbackPairingMetadata.deviceFamily !== paired.deviceFamily);
     await updatePairedDeviceMetadata(device.id, {
       ...clientAccessMetadata,
-      ...(metadataPinning.refreshPairedPlatform
-        ? { platform: metadataPinning.refreshPairedPlatform }
-        : {}),
+      ...(shouldPersistRollbackPairingMetadata
+        ? rollbackPairingMetadata
+        : metadataPinning.refreshPairedPlatform
+          ? { platform: metadataPinning.refreshPairedPlatform }
+          : {}),
     });
   }
   return { ok: true, handoffBootstrapProfile };
