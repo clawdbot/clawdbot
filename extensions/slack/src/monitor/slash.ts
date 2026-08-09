@@ -964,7 +964,12 @@ export async function registerSlackMonitorSlashCommands(params: {
         await handleSlashCommand({
           command,
           ack,
-          respond,
+          respond: createSlackSlashResponderWithFallback({
+            respond,
+            client: args.client,
+            command,
+            runtime,
+          }),
           body,
           eventScope,
           prompt: command.text?.trim() ?? "",
@@ -1001,7 +1006,12 @@ export async function registerSlackMonitorSlashCommands(params: {
         await handleSlashCommand({
           command: cmd,
           ack,
-          respond,
+          respond: createSlackSlashResponderWithFallback({
+            respond,
+            client: args.client,
+            command: cmd,
+            runtime,
+          }),
           body,
           eventScope,
           prompt,
@@ -1200,5 +1210,70 @@ export async function registerSlackMonitorSlashCommands(params: {
   };
   registerArgAction(SLACK_COMMAND_ARG_ACTION_LISTENER);
   return registration;
+}
+
+function createSlackSlashResponderWithFallback(params: {
+  respond: SlackCommandMiddlewareArgs["respond"];
+  client: AllMiddlewareArgs["client"];
+  command: SlackCommandMiddlewareArgs["command"];
+  runtime: SlackMonitorContext["runtime"];
+}): SlackCommandMiddlewareArgs["respond"] {
+  return async (message) => {
+    try {
+      return await params.respond(message);
+    } catch (error) {
+      if (!isSlackBoltRespondError(error)) {
+        throw error;
+      }
+      params.runtime.log?.(
+        warn(
+          `slack slash response_url failed; falling back to Web API: ${formatErrorMessage(error)}`,
+        ),
+      );
+      return await deliverSlackSlashResponseWithWebApi({
+        client: params.client,
+        command: params.command,
+        message,
+      });
+    }
+  };
+}
+
+async function deliverSlackSlashResponseWithWebApi(params: {
+  client: AllMiddlewareArgs["client"];
+  command: SlackCommandMiddlewareArgs["command"];
+  message: Parameters<SlackCommandMiddlewareArgs["respond"]>[0];
+}): Promise<Response> {
+  const payload = typeof params.message === "string" ? { text: params.message } : params.message;
+  const text = payload.text ?? "";
+  const blocks = "blocks" in payload && Array.isArray(payload.blocks) ? payload.blocks : undefined;
+  const mrkdwn =
+    "mrkdwn" in payload && typeof payload.mrkdwn === "boolean" ? payload.mrkdwn : undefined;
+
+  if (payload.response_type === "in_channel") {
+    await params.client.chat.postMessage({
+      channel: params.command.channel_id,
+      text,
+      ...(blocks ? { blocks } : {}),
+      ...(mrkdwn !== undefined ? { mrkdwn } : {}),
+    });
+  } else {
+    await params.client.chat.postEphemeral({
+      channel: params.command.channel_id,
+      user: params.command.user_id,
+      text,
+      ...(blocks ? { blocks } : {}),
+      ...(mrkdwn !== undefined ? { mrkdwn } : {}),
+    });
+  }
+  return new Response(null, { status: 200 });
+}
+
+function isSlackBoltRespondError(error: unknown): boolean {
+  return (
+    Boolean(error) &&
+    typeof error === "object" &&
+    (error as { code?: unknown }).code === "slack_bolt_respond_error"
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
