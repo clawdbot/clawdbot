@@ -114,7 +114,7 @@ export function createMattermostDraftStream(params: {
   throttleMs?: number;
   renderText?: (text: string) => string;
   chunkText?: (text: string) => string[];
-  surfaceDeleteFailure?: boolean;
+  cleanupMode?: "best-effort" | "strict";
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): MattermostDraftStream {
@@ -211,21 +211,14 @@ export function createMattermostDraftStream(params: {
   };
   const isValidMessageId = (value: unknown): value is string =>
     typeof value === "string" && value.length > 0;
-  let captureDeleteFailure: ((error: Error) => void) | undefined;
-  const deleteMessage = async (postId: string) => {
-    try {
-      await deleteMattermostPost(params.client, postId);
-    } catch (error) {
-      captureDeleteFailure?.(toErrorObject(error, "Mattermost progress cleanup failed"));
-      throw error;
-    }
-  };
+  const deleteMessage = (postId: string) => deleteMattermostPost(params.client, postId);
   const {
     loop,
     update: updateLifecycle,
     stop: stopLifecycle,
     stopForClear,
     clearWithStop,
+    clearStrictWithStop,
     seal: sealLifecycle,
   } = createFinalizableDraftLifecycle({
     throttleMs,
@@ -396,30 +389,14 @@ export function createMattermostDraftStream(params: {
     await currentGeneration.ready;
     assertNoAcceptedDeliveryFailure();
   };
-  let clearQueue = Promise.resolve();
-  const clear = () => {
-    const run = clearQueue.then(async () => {
-      assertNoAcceptedDeliveryFailure();
-      let deleteFailure: Error | undefined;
-      captureDeleteFailure = (error) => {
-        deleteFailure ??= error;
-      };
-      try {
-        await clearWithStop(discardPending);
-        if (params.surfaceDeleteFailure && deleteFailure) {
-          deleteFailure = undefined;
-          await clearWithStop(discardPending);
-          if (deleteFailure) {
-            throw toErrorObject(deleteFailure, "Mattermost progress cleanup failed");
-          }
-        }
-        assertNoAcceptedDeliveryFailure();
-      } finally {
-        captureDeleteFailure = undefined;
-      }
-    });
-    clearQueue = run.catch(() => {});
-    return run;
+  const clear = async () => {
+    assertNoAcceptedDeliveryFailure();
+    if (params.cleanupMode === "strict") {
+      await clearStrictWithStop(discardPending, { attempts: 2 });
+    } else {
+      await clearWithStop(discardPending);
+    }
+    assertNoAcceptedDeliveryFailure();
   };
   const retainTerminalText = async (text: string) => {
     await discardPending();

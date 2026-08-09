@@ -3359,7 +3359,7 @@ describe("mattermost inbound user posts", () => {
       expect.objectContaining({
         rootId: undefined,
         postType: "custom_openclaw_progress",
-        surfaceDeleteFailure: true,
+        cleanupMode: "strict",
       }),
     );
     expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(

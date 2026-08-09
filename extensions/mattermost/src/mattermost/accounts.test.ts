@@ -316,18 +316,27 @@ describe("resolveMattermostReplyToMode", () => {
           mattermost: {
             streaming: {
               mode: "progress",
+              preview: { toolProgress: false },
               progress: {
                 label: "Root progress",
                 toolProgress: false,
                 commandText: "raw",
               },
+              block: {
+                coalesce: { minChars: 100, maxChars: 1000 },
+              },
             },
             accounts: {
-              work: {
+              Work: {
                 streaming: {
+                  preview: { commandText: "status" },
                   progress: {
                     commandText: "status",
                     finalDelivery: "separate",
+                  },
+                  block: {
+                    enabled: true,
+                    coalesce: { idleMs: 250 },
                   },
                 },
               },
@@ -340,11 +349,19 @@ describe("resolveMattermostReplyToMode", () => {
 
     expect(account.streamingMode).toBe("progress");
     expect(account.progressFinalDelivery).toBe("separate");
+    expect(account.config.streaming?.preview).toEqual({
+      toolProgress: false,
+      commandText: "status",
+    });
     expect(account.config.streaming?.progress).toEqual({
       label: "Root progress",
       toolProgress: false,
       commandText: "status",
       finalDelivery: "separate",
+    });
+    expect(account.config.streaming?.block).toEqual({
+      enabled: true,
+      coalesce: { minChars: 100, maxChars: 1000, idleMs: 250 },
     });
   });
 });

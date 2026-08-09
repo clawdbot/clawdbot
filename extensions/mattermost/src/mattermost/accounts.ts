@@ -13,6 +13,7 @@ import {
   type TextChunkMode,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { BlockStreamingCoalesceConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSecretInputString, type SecretInputStringResolutionMode } from "../secret-input.js";
 import type {
@@ -56,7 +57,7 @@ const {
   resolveAccountConfig: mergeMattermostAccountConfig,
 } = createAccountListHelpers<MattermostAccountConfig>("mattermost", {
   omitKeys: ["defaultAccount"],
-  nestedObjectKeys: ["commands", "streaming"],
+  nestedObjectKeys: ["commands"],
   hasImplicitDefaultAccount: (cfg) => {
     const mattermost = cfg.channels?.mattermost;
     return Boolean(
@@ -66,6 +67,54 @@ const {
   },
 });
 export { listMattermostAccountIds, resolveDefaultMattermostAccountId };
+
+type MattermostStreamingConfig = NonNullable<MattermostAccountConfig["streaming"]>;
+
+function mergeMattermostStreamingConfig(
+  root: MattermostStreamingConfig | undefined,
+  account: MattermostStreamingConfig | undefined,
+): MattermostStreamingConfig | undefined {
+  if (!root || !account) {
+    return account ?? root;
+  }
+  return {
+    ...root,
+    ...account,
+    ...(root.preview || account.preview
+      ? { preview: { ...root.preview, ...account.preview } }
+      : {}),
+    ...(root.progress || account.progress
+      ? { progress: { ...root.progress, ...account.progress } }
+      : {}),
+    ...(root.block || account.block
+      ? {
+          block: {
+            ...root.block,
+            ...account.block,
+            ...(root.block?.coalesce || account.block?.coalesce
+              ? {
+                  coalesce: {
+                    ...root.block?.coalesce,
+                    ...account.block?.coalesce,
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function resolveMergedMattermostAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): MattermostAccountConfig {
+  const rootConfig = cfg.channels?.mattermost;
+  const accountConfig = resolveAccountEntry(rootConfig?.accounts, accountId);
+  const merged = mergeMattermostAccountConfig(cfg, accountId);
+  const streaming = mergeMattermostStreamingConfig(rootConfig?.streaming, accountConfig?.streaming);
+  return streaming ? { ...merged, streaming } : merged;
+}
 
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
   if (config.chatmode === "oncall") {
@@ -89,16 +138,7 @@ function resolveMattermostAccountWithMode(params: {
     params.accountId ?? resolveDefaultMattermostAccountId(params.cfg),
   );
   const baseEnabled = params.cfg.channels?.mattermost?.enabled !== false;
-  const merged = mergeMattermostAccountConfig(params.cfg, accountId);
-  const rootProgress = params.cfg.channels?.mattermost?.streaming?.progress;
-  const accountProgress =
-    params.cfg.channels?.mattermost?.accounts?.[accountId]?.streaming?.progress;
-  if (rootProgress && accountProgress && merged.streaming) {
-    merged.streaming.progress = {
-      ...rootProgress,
-      ...accountProgress,
-    };
-  }
+  const merged = resolveMergedMattermostAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
 

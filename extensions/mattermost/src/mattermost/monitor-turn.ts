@@ -22,10 +22,8 @@ import {
 import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import {
   formatMattermostFinalDeliveryOutcomeLog,
-  formatMattermostTerminalProgressText,
   resolveMattermostReplyRootId,
   resolveMattermostProgressDeliveryPolicy,
-  pinMattermostProgressLabel,
   shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
 } from "./monitor-context.js";
@@ -41,6 +39,7 @@ import { deliverMattermostReplyPayload, joinMattermostVisibleContent } from "./r
 import type { HistoryEntry, ReplyPayload } from "./runtime-api.js";
 import { createChannelMessageReplyPipeline } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
+import { createMattermostSeparateProgressController } from "./separate-progress.js";
 import { recordMattermostThreadParticipation } from "./thread-participation.js";
 
 type MattermostInboundTurnParams = {
@@ -131,7 +130,7 @@ export async function dispatchMattermostInboundTurn(
         channelId,
         rootId: effectiveReplyToId,
         ...(progressPostType ? { postType: progressPostType } : {}),
-        surfaceDeleteFailure: separateProgressFinalDelivery,
+        cleanupMode: separateProgressFinalDelivery ? "strict" : "best-effort",
         throttleMs: 1200,
         chunkText: (value) =>
           core.channel.text.chunkMarkdownTextWithMode(
@@ -143,26 +142,12 @@ export async function dispatchMattermostInboundTurn(
         warn: monitor.logVerboseMessage,
       })
     : createDisabledMattermostDraftStream();
-  let terminalProgressPromise: Promise<void> | undefined;
-  const markSeparateProgressFailed = async () => {
-    if (!separateProgressFinalDelivery) {
-      return;
-    }
-    if (!terminalProgressPromise) {
-      terminalProgressPromise = draftStream
-        .retainTerminalText(formatMattermostTerminalProgressText(pinnedProgressLabel))
-        .then(() => {});
-    }
-    const attempt = terminalProgressPromise;
-    try {
-      await attempt;
-    } catch (error) {
-      if (terminalProgressPromise === attempt) {
-        terminalProgressPromise = undefined;
-      }
-      throw error;
-    }
-  };
+  const separateProgress = createMattermostSeparateProgressController({
+    enabled: separateProgressFinalDelivery,
+    pinnedLabel: pinnedProgressLabel,
+    draftStream,
+    logVerboseMessage: monitor.logVerboseMessage,
+  });
   const previewBoundaryController = createMattermostDraftPreviewBoundaryController({
     enabled: draftPreviewEnabled && account.streamingMode === "block",
     forceNewMessage: async () => {
@@ -181,11 +166,7 @@ export async function dispatchMattermostInboundTurn(
     active: draftPreviewEnabled,
     seed: progressSeed,
     update: async (previewText, options) => {
-      draftStream.update(
-        separateProgressFinalDelivery
-          ? pinMattermostProgressLabel(previewText, pinnedProgressLabel)
-          : previewText,
-      );
+      draftStream.update(separateProgress.formatDraft(previewText));
       if (options?.flush) {
         await draftStream.flush();
       }
@@ -329,13 +310,7 @@ export async function dispatchMattermostInboundTurn(
         // Final text uses only confirmed-visible generations, so join prior boundary work before deciding whether to edit in place.
         await draftStream.settleBoundaries();
         progressDraft.markFinalReplyStarted();
-        if (separateProgressFinalDelivery && payloadEntry.isError) {
-          try {
-            await markSeparateProgressFailed();
-          } catch (err) {
-            monitor.logVerboseMessage(`mattermost terminal progress update failed: ${String(err)}`);
-          }
-        }
+        await separateProgress.prepareFinal(payloadEntry.isError === true);
       }
       // A visible same-thread final can be a send or an in-place draft edit; either path records participation.
       let threadParticipationRecorded = false;
@@ -432,21 +407,7 @@ export async function dispatchMattermostInboundTurn(
         markThreadParticipation();
       }
       if (info.kind === "final") {
-        if (
-          separateProgressFinalDelivery &&
-          (!result.visibleReplySent || payloadEntry.isError === true)
-        ) {
-          try {
-            await markSeparateProgressFailed();
-          } catch (error) {
-            if (!result.visibleReplySent) {
-              throw error;
-            }
-            monitor.logVerboseMessage(
-              `mattermost terminal progress retry failed after visible final: ${String(error)}`,
-            );
-          }
-        }
+        await separateProgress.settleFinal(result, payloadEntry.isError === true);
         progressDraft.markFinalReplyDelivered();
       }
       return result;
@@ -565,7 +526,7 @@ export async function dispatchMattermostInboundTurn(
                   payloadResult.text || "Thinking…",
                   {
                     snapshot: payloadResult.isReasoningSnapshot === true,
-                    startImmediately: separateProgressFinalDelivery,
+                    startImmediately: separateProgress.startReasoningImmediately,
                   },
                 );
               }
@@ -632,15 +593,7 @@ export async function dispatchMattermostInboundTurn(
       },
     });
   } catch (error: unknown) {
-    if (separateProgressFinalDelivery) {
-      try {
-        await markSeparateProgressFailed();
-      } catch (statusError: unknown) {
-        monitor.logVerboseMessage(
-          `mattermost terminal progress update failed: ${String(statusError)}`,
-        );
-      }
-    }
+    await separateProgress.settleTurnError();
     throw error;
   } finally {
     try {

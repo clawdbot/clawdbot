@@ -3,7 +3,7 @@
  *
  * Coordinates preview updates, final flushes, clears, and deletion callbacks for channel drafts.
  */
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 
 /**
@@ -43,6 +43,16 @@ type FinalizableDraftLifecycleParams<TMessageId, TUpdate = string> = Omit<
   sendOrEditStreamMessage: (value: TUpdate) => Promise<void | boolean>;
   emptyValue?: TUpdate;
   isEmpty?: (value: TUpdate) => boolean;
+};
+
+type FinalizableDraftCleanupOptions = {
+  /** Total deletion attempts before surfacing the last provider error. */
+  attempts?: number;
+};
+
+type FinalizableDraftDeleteFailure<TMessageId> = {
+  messageId: TMessageId;
+  error: Error;
 };
 
 /**
@@ -150,12 +160,12 @@ export async function takeMessageIdAfterStop<T>(
 async function deleteFinalizableDraftMessage<T>(
   params: DeleteFinalizableDraftMessageParams<T>,
   messageId: T,
-): Promise<boolean> {
+): Promise<Error | undefined> {
   try {
     await params.deleteMessage(messageId);
   } catch (err) {
     params.warn?.(`${params.warnPrefix}: ${formatErrorMessage(err)}`);
-    return false;
+    return toErrorObject(err, "draft preview cleanup failed");
   }
   try {
     // A replacement preview may become current while deletion is in flight; never clear its ID.
@@ -166,7 +176,7 @@ async function deleteFinalizableDraftMessage<T>(
   } catch (err) {
     params.warn?.(`${params.warnPrefix} after delete: ${formatErrorMessage(err)}`);
   }
-  return true;
+  return undefined;
 }
 
 /**
@@ -183,8 +193,8 @@ export async function clearFinalizableDraftMessage<T>(
   if (!params.isValidMessageId(messageId)) {
     return;
   }
-  const deleted = await deleteFinalizableDraftMessage(params, messageId);
-  if (!deleted) {
+  const deleteFailure = await deleteFinalizableDraftMessage(params, messageId);
+  if (deleteFailure) {
     params.onDeleteFailure?.(messageId);
   }
 }
@@ -206,7 +216,9 @@ export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
   let pendingDeleteIds: TMessageId[] = [];
   let clearTail = Promise.resolve();
 
-  const clearOnce = async (stopForClear: () => Promise<void>) => {
+  const clearOnce = async (
+    stopForClear: () => Promise<void>,
+  ): Promise<FinalizableDraftDeleteFailure<TMessageId>[]> => {
     await stopForClear();
     const currentMessageId = params.readMessageId();
     const deleteIds = pendingDeleteIds;
@@ -217,25 +229,59 @@ export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
       deleteIds.push(currentMessageId);
     }
 
+    const failures: FinalizableDraftDeleteFailure<TMessageId>[] = [];
     for (const messageId of deleteIds) {
-      const deleted = await deleteFinalizableDraftMessage(params, messageId);
-      if (!deleted && !pendingDeleteIds.some((pendingId) => Object.is(pendingId, messageId))) {
+      const error = await deleteFinalizableDraftMessage(params, messageId);
+      if (error && !pendingDeleteIds.some((pendingId) => Object.is(pendingId, messageId))) {
         pendingDeleteIds.push(messageId);
+        failures.push({ messageId, error });
       }
     }
+    return failures;
   };
 
-  const clearWithStop = (stopForClear: () => Promise<void>) => {
-    // Custom channel stops share the same serialized retry ownership as the default clear path.
-    const clearRun = clearTail.catch(() => {}).then(() => clearOnce(stopForClear));
-    clearTail = clearRun;
+  const enqueueClear = <TResult>(run: () => Promise<TResult>): Promise<TResult> => {
+    const clearRun = clearTail.catch(() => {}).then(run);
+    clearTail = clearRun.then(
+      () => undefined,
+      () => undefined,
+    );
     return clearRun;
   };
+  const clearWithStop = (stopForClear: () => Promise<void>): Promise<void> => {
+    // Custom channel stops share the same serialized retry ownership as the default clear path.
+    return enqueueClear(async () => {
+      await clearOnce(stopForClear);
+    });
+  };
   const clear = () => clearWithStop(controls.stopForClear);
+  const clearStrictWithStop = (
+    stopForClear: () => Promise<void>,
+    options: FinalizableDraftCleanupOptions = {},
+  ): Promise<void> => {
+    const requestedAttempts = options.attempts ?? 1;
+    const attempts = Number.isFinite(requestedAttempts)
+      ? Math.max(1, Math.trunc(requestedAttempts))
+      : 1;
+    return enqueueClear(async () => {
+      let failures: FinalizableDraftDeleteFailure<TMessageId>[] = [];
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        failures = await clearOnce(stopForClear);
+        if (failures.length === 0) {
+          return;
+        }
+      }
+      throw failures.at(-1)?.error ?? new Error("draft preview cleanup failed");
+    });
+  };
+  const clearStrict = (options?: FinalizableDraftCleanupOptions) =>
+    clearStrictWithStop(controls.stopForClear, options);
 
   return {
     ...controls,
     clear,
     clearWithStop,
+    clearStrict,
+    clearStrictWithStop,
   };
 }
