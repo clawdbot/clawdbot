@@ -20,7 +20,7 @@ import {
 import { claimOpenClawStateOwnership } from "./openclaw-state-ownership-operations.js";
 import {
   inspectOpenClawStateOwnershipAtPath,
-  OpenClawStateExternalOwnershipError,
+  OpenClawStateOwnershipError,
   OpenClawStateOwnershipMetadataError,
   STATE_SUPERVISION_KEY,
 } from "./openclaw-state-ownership.js";
@@ -121,7 +121,7 @@ describe("external shared-state ownership", () => {
     const before = snapshotSqliteFamily(fixture.databasePath);
 
     expect(() => openOpenClawStateDatabase({ env: fixture.unmarkedEnv })).toThrow(
-      OpenClawStateExternalOwnershipError,
+      OpenClawStateOwnershipError,
     );
 
     expect(snapshotSqliteFamily(fixture.databasePath)).toEqual(before);
@@ -147,17 +147,17 @@ describe("external shared-state ownership", () => {
     const unmarkedEnv = withoutExternalMarker(externalEnv);
 
     expect(() => openOpenClawStateDatabase({ env: unmarkedEnv })).toThrow(
-      OpenClawStateExternalOwnershipError,
+      OpenClawStateOwnershipError,
     );
     expect(() => openOpenClawStateDatabase({ env: unmarkedEnv, database: opened })).toThrow(
-      OpenClawStateExternalOwnershipError,
+      OpenClawStateOwnershipError,
     );
     expect(() =>
       runOpenClawStateWriteTransaction(() => undefined, {
         env: unmarkedEnv,
         database: opened,
       }),
-    ).toThrow(OpenClawStateExternalOwnershipError);
+    ).toThrow(OpenClawStateOwnershipError);
   });
 
   it("reports checkpoint failure and lets the same durable claim retry", () => {
@@ -231,32 +231,30 @@ describe("external shared-state ownership", () => {
     }
     const before = snapshotSqliteFamily(fixture.databasePath);
     expect(() => repairOpenClawStateDatabaseSchema({ env: fixture.unmarkedEnv })).toThrow(
-      OpenClawStateExternalOwnershipError,
+      OpenClawStateOwnershipError,
     );
     expect(() => repairOpenClawStateDatabaseSchemaIfNeeded({ env: fixture.unmarkedEnv })).toThrow(
-      OpenClawStateExternalOwnershipError,
+      OpenClawStateOwnershipError,
     );
     expect(() =>
       withOpenClawStateStartupMigrationCheckpointDatabase(() => undefined, {
         env: fixture.unmarkedEnv,
       }),
-    ).toThrow(OpenClawStateExternalOwnershipError);
+    ).toThrow(OpenClawStateOwnershipError);
     await expect(runDoctorStateSqliteCompact({ env: fixture.unmarkedEnv })).rejects.toThrow(
-      OpenClawStateExternalOwnershipError,
+      OpenClawStateOwnershipError,
     );
     const healthDeps = {
       env: fixture.unmarkedEnv,
       homedir: () => fixture.unmarkedEnv.OPENCLAW_STATE_DIR ?? "",
       logger: { warn: () => undefined },
     };
-    expect(() => readConfigHealthStateFromStore(healthDeps)).toThrow(
-      OpenClawStateExternalOwnershipError,
-    );
+    expect(() => readConfigHealthStateFromStore(healthDeps)).toThrow(OpenClawStateOwnershipError);
     expect(() =>
       writeConfigHealthStateToStore(healthDeps, {
         entries: { "/tmp/openclaw.json": { lastObservedSuspiciousSignature: "test" } },
       }),
-    ).toThrow(OpenClawStateExternalOwnershipError);
+    ).toThrow(OpenClawStateOwnershipError);
     expect(snapshotSqliteFamily(fixture.databasePath)).toEqual(before);
   });
 

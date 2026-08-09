@@ -12,7 +12,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
-  OpenClawStateExternalOwnershipError,
+  OpenClawStateOwnershipError,
   STATE_SUPERVISION_KEY,
 } from "../state/openclaw-state-ownership.js";
 import {
@@ -321,7 +321,7 @@ describe("startup migration checkpoint", () => {
 
     try {
       expect(() => acquireStartupMigrationLease({ env, owner: "unmarked", nowMs: 1 })).toThrow(
-        OpenClawStateExternalOwnershipError,
+        OpenClawStateOwnershipError,
       );
     } finally {
       exec.mockRestore();
