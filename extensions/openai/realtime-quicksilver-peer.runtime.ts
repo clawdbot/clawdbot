@@ -394,9 +394,10 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     if (this.mediaTimer || this.closed) {
       return;
     }
-    this.sendNextAudioFrame();
     this.mediaTimer = setInterval(() => this.sendNextAudioFrame(), OPUS_FRAME_DURATION_MS);
     this.mediaTimer.unref?.();
+    // Publish the timer before the first tick so synchronous error teardown can clear it.
+    this.sendNextAudioFrame();
   }
 
   private sendNextAudioFrame(): void {

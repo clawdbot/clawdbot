@@ -49,10 +49,11 @@ describe("GPT-Live pending microphone audio", () => {
     pending.append(Buffer.alloc(MAX_PENDING_AUDIO_BYTES - 4, 0x01));
     pending.readInto(Buffer.alloc(MAX_PENDING_AUDIO_BYTES - 6));
     pending.append(Buffer.from([0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09]));
+    const wrappedRead = Buffer.alloc(8);
 
-    expect(pending.drain()).toEqual(
-      Buffer.from([0x01, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09]),
-    );
+    expect(pending.readInto(wrappedRead)).toBe(8);
+    expect(wrappedRead).toEqual(Buffer.from([0x01, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]));
+    expect(pending.drain()).toEqual(Buffer.from([0x08, 0x09]));
     expect(pending).toHaveLength(0);
   });
 
@@ -66,7 +67,7 @@ describe("GPT-Live pending microphone audio", () => {
     expect(pending.drain()).toEqual(Buffer.from([0x03, 0x04]));
   });
 
-  it("releases circular storage when draining transfers PCM ownership", () => {
+  it("releases circular storage after draining an owned PCM copy", () => {
     const pending = new OpenAIQuicksilverPendingAudio();
     const sample = Buffer.from([0x01, 0x02]);
     const allocations = vi.spyOn(Buffer, "alloc");
@@ -104,10 +105,11 @@ describe("GPT-Live pending microphone audio", () => {
         frame.fill(index & 0xff);
         pending.append(frame);
       }
-      copiedBytes = copy.mock.calls.reduce(
-        (total, [, , start = 0, end = 0]) => total + end - start,
-        0,
-      );
+      for (const result of copy.mock.results) {
+        if (typeof result.value === "number") {
+          copiedBytes += result.value;
+        }
+      }
       concatCalls = concat.mock.calls.length;
       allocatedSizes = allocations.mock.calls.map(([bytes]) => bytes);
     } finally {

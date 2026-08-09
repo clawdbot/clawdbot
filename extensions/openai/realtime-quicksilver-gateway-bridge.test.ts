@@ -39,6 +39,7 @@ function createRelayTone(): Buffer {
 type TestableAudioPeer = {
   connected: boolean;
   handleInboundRtp(packet: unknown): void;
+  mediaTimer: ReturnType<typeof setInterval> | undefined;
   pendingAudio: OpenAIQuicksilverPendingAudio;
   sequenceNumber: number;
   timestamp: number;
@@ -48,6 +49,9 @@ type TestableAudioPeer = {
     decoder: {
       decode(packet: Uint8Array | null, options?: { maxFrameSize?: number }): Int16Array;
       decodePacketLoss(frameSize?: number): Int16Array;
+    };
+    encoder: {
+      encode(pcm: Int16Array, options?: { frameSize?: number }): Uint8Array;
     };
     peer: {
       connectionStateChange: {
@@ -371,6 +375,38 @@ describe("GPT-Live werift audio peer", () => {
     }
   });
 
+  it("clears the media pump when the first encoder tick synchronously closes the peer", async () => {
+    const encodeError = new Error("encoder failed");
+    const peerRef: { current?: OpenAIQuicksilverAudioPeer } = {};
+    const onError = vi.fn((_error: Error) => peerRef.current?.close());
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio: vi.fn(), onError },
+      iceServers: [],
+    });
+    peerRef.current = peer;
+    const testPeer = peer as unknown as TestableAudioPeer;
+    const encode = vi.spyOn(testPeer.state.encoder, "encode").mockImplementation(() => {
+      throw encodeError;
+    });
+    vi.useFakeTimers();
+    try {
+      testPeer.state.peer.connectionStateChange.execute("connected");
+
+      expect(encode).toHaveBeenCalledOnce();
+      expect(onError).toHaveBeenCalledOnce();
+      expect(onError).toHaveBeenCalledWith(encodeError);
+      expect(testPeer.mediaTimer).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(encode).toHaveBeenCalledOnce();
+      expect(onError).toHaveBeenCalledOnce();
+    } finally {
+      peer.close();
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["disconnected", "closed"] as const)(
     "reports a terminal %s connection state",
     async (connectionState) => {
@@ -563,8 +599,6 @@ describe("GPT-Live gateway relay bridge", () => {
 
   it("preserves caller-owned microphone frames while the media peer is starting", async () => {
     const { bridge, connection, peer, resolvePeer } = createPendingPeerBridge();
-    const pending = (bridge as unknown as TestableGatewayBridge).pendingAudio;
-    const clearPendingAudio = vi.spyOn(pending, "clear");
     try {
       expect(bridge.connect()).toBe(connection);
       const source = Buffer.from([0x7f, 0x41]);
@@ -576,7 +610,6 @@ describe("GPT-Live gateway relay bridge", () => {
       await connection;
 
       expect(peer.sendAudio).toHaveBeenCalledWith(Buffer.from([0x7f, 0x41, 0x22, 0x23]));
-      expect(clearPendingAudio).toHaveBeenCalledOnce();
       bridge.sendAudio(Buffer.from([0x30, 0x31]));
       expect(peer.sendAudio).toHaveBeenCalledTimes(2);
     } finally {

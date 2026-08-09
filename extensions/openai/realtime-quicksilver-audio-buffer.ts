@@ -74,7 +74,7 @@ export class OpenAIQuicksilverPendingAudio {
   drain(): Buffer {
     const audio = Buffer.alloc(this.pendingBytes);
     this.readInto(audio);
-    // Adoption transfers ownership; release startup storage while readInto keeps peer storage.
+    // Return an owned copy and release startup storage.
     this.clear();
     return audio;
   }
