@@ -157,15 +157,17 @@ function resolvePruneIntervalMs(value: number | undefined): number {
  * mistakes, not "off" switches: maxAttempts: 0 would deny every IP with any
  * failure history (remaining is always 0), while windowMs/lockoutMs: 0 would
  * silently turn the limiter into a no-op.
+ *
+ * Positive values pass through untouched — including fractions. Flooring a
+ * schema-accepted fraction like maxAttempts: 0.5 to 0 would recreate the
+ * permanent-denial trap, so no rounding happens here.
  */
 function resolvePositiveConfigValue(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter {
-  const maxAttempts = Math.floor(
-    resolvePositiveConfigValue(config?.maxAttempts, DEFAULT_MAX_ATTEMPTS),
-  );
+  const maxAttempts = resolvePositiveConfigValue(config?.maxAttempts, DEFAULT_MAX_ATTEMPTS);
   const windowMs = resolveTimerTimeoutMs(
     resolvePositiveConfigValue(config?.windowMs, DEFAULT_WINDOW_MS),
     DEFAULT_WINDOW_MS,

@@ -530,6 +530,30 @@ describe("auth rate limiter", () => {
     expect(limiter.check("10.0.0.53").remaining).toBe(9);
   });
 
+  it("preserves positive fractional maxAttempts, including across lockout expiry", () => {
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({
+        maxAttempts: 0.5,
+        windowMs: 60_000,
+        lockoutMs: 5_000,
+        pruneIntervalMs: 0,
+      });
+      // A schema-accepted fraction keeps its established semantics: the first
+      // failure locks, and once the lockout expires the fractional budget is
+      // back. Flooring it to 0 would deny the IP forever (remaining always 0).
+      limiter.recordFailure("10.0.0.60");
+      expect(limiter.check("10.0.0.60").allowed).toBe(false);
+
+      vi.advanceTimersByTime(5_001);
+      const result = limiter.check("10.0.0.60");
+      expect(result.allowed).toBe(true);
+      expect(result.remaining).toBe(0.5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back to the default window when windowMs is 0", () => {
     limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 0, lockoutMs: 60_000 });
     limiter.recordFailure("10.0.0.51");
