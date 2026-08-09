@@ -2580,6 +2580,7 @@ NODE
       "checks-node-core-test-nondist-shard",
       "checks-ui",
       "checks-ui-e2e",
+      "checks-ui-e2e-real-gateway",
       "control-ui-i18n",
       "native-i18n",
       "qa-smoke-ci-profile",
@@ -5140,10 +5141,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiTest.run).toContain("pnpm --dir ui test");
   });
 
-  it("gates current Control UI changes on the full mocked Chromium E2E suite", () => {
+  it("gates current Control UI changes on ordinary and real-Gateway Chromium E2E", () => {
     const workflow = readCiWorkflow();
     const ui = workflow.jobs["checks-ui"];
     const uiE2e = workflow.jobs["checks-ui-e2e"];
+    const uiE2eRealGateway = workflow.jobs["checks-ui-e2e-real-gateway"];
 
     expect(uiE2e.permissions).toEqual({ contents: "read" });
     expect(uiE2e.needs).toEqual(["preflight"]);
@@ -5157,12 +5159,23 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     // Each Chromium worker keeps serial file ownership while all four shards
     // together remain required by the aggregate CI gate.
     expect(uiE2e["timeout-minutes"]).toBe(25);
+    expect(uiE2e.env).toEqual({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" });
     expect(uiE2e.strategy).toEqual({
       "fail-fast": false,
       "max-parallel": 4,
       matrix: { shard: [1, 2, 3, 4] },
     });
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e");
+    expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e-real-gateway");
+
+    expect(uiE2eRealGateway.permissions).toEqual(uiE2e.permissions);
+    expect(uiE2eRealGateway.needs).toEqual(uiE2e.needs);
+    expect(uiE2eRealGateway.if).toBe(uiE2e.if);
+    expect(uiE2eRealGateway["runs-on"]).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+    );
+    expect(uiE2eRealGateway["timeout-minutes"]).toBe(20);
+    expect(uiE2eRealGateway.env).toBeUndefined();
 
     const uiE2eSetup = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
@@ -5258,11 +5271,28 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ).toBe(expected.useActionsCache);
     }
 
+    const uiSetup = expectDefined(
+      ui.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "Control UI Node setup",
+    );
+    const realGatewaySetup = expectDefined(
+      uiE2eRealGateway.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
+      "real-Gateway Control UI E2E Node setup",
+    );
+    expect(realGatewaySetup).toEqual(uiSetup);
+
     const chromiumInstall = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Install Playwright Chromium"),
       "Control UI E2E Chromium installation",
     );
     expect(chromiumInstall.run).toBe("node --import tsx scripts/ensure-playwright-chromium.mts");
+    const realGatewayChromiumInstall = expectDefined(
+      uiE2eRealGateway.steps.find(
+        (step: WorkflowStep) => step.name === "Install Playwright Chromium",
+      ),
+      "real-Gateway Control UI E2E Chromium installation",
+    );
+    expect(realGatewayChromiumInstall).toEqual(chromiumInstall);
 
     const scenario = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
@@ -5278,6 +5308,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(browserCopilot.if).toBe("matrix.shard == 1");
     expect(browserCopilot.run).toBe("pnpm test:e2e:browser-copilot");
     expect(JSON.stringify(uiE2e)).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
+
+    const realGatewayRuns = uiE2eRealGateway.steps
+      .filter((step: WorkflowStep) => step.name?.includes("with a real Gateway"))
+      .map((step: WorkflowStep) => step.run);
+    expect(realGatewayRuns).toEqual([
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
+    ]);
+    const realGatewayRunContract = realGatewayRuns.join("\n");
+    expect(realGatewayRunContract).not.toContain("--retry");
+    expect(realGatewayRunContract).not.toContain("--hookTimeout");
+    expect(realGatewayRunContract).not.toContain("--testTimeout");
+    expect(JSON.stringify(uiE2eRealGateway)).not.toContain("OPENCLAW_VITEST_NO_OUTPUT_RETRY");
   });
 
   it("does not rebuild Control UI after build:ci-artifacts", () => {
@@ -5621,6 +5664,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "native-i18n",
       "checks-ui",
       "checks-ui-e2e",
+      "checks-ui-e2e-real-gateway",
       "control-ui-i18n",
       "checks-fast-core",
       "qa-smoke-ci-profile",
