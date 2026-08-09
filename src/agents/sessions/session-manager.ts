@@ -4,7 +4,10 @@
  * The public facade lives here; codec, storage, persistence, and branching
  * behavior are split into focused internal modules.
  */
-import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessageSync,
+  loadTranscriptEventsSync,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { Message } from "../../llm/types.js";
@@ -80,6 +83,23 @@ export class SessionManager extends SessionManagerBranching {
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
     return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), target, entries);
+  }
+
+  /** Appends to the current transcript leaf without hydrating its history. */
+  static appendMessageToTranscript(
+    target: SessionTranscriptRuntimeTarget,
+    message: Message | CustomMessage | BashExecutionMessage,
+    options?: Pick<AppendPersistenceOptions, "config">,
+  ): string {
+    const result = appendTranscriptMessageSync(target, {
+      cwd: process.cwd(),
+      message,
+      ...(options?.config ? { config: options.config } : {}),
+    });
+    if (!result) {
+      throw new Error(`Session transcript message was not persisted: ${target.sessionId}`);
+    }
+    return result.messageId;
   }
 
   static inMemory(cwd: string = process.cwd()): SessionManager {

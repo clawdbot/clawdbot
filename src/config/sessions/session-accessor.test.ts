@@ -23,6 +23,7 @@ import {
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   applySessionEntryReplacements,
+  applySessionPatchProjections,
   appendTranscriptEvent,
   appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
@@ -49,6 +50,7 @@ import {
   replaceSessionEntry,
   resetSessionEntryLifecycle,
   SessionInitializationAgentScopeMismatchError,
+  type SessionPatchProjectionOperation,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionEntrySelection,
@@ -1842,6 +1844,56 @@ describe("session accessor seam", () => {
         }),
       }),
     ).rejects.toThrow("outside the selected row set");
+  });
+
+  it("projects ordered patches against one mutable store view", async () => {
+    const keys = ["a", "b", "c", "d"].map((suffix) => `agent:main:batch-${suffix}`);
+    for (const [index, sessionKey] of keys.entries()) {
+      await upsertSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: `batch-${index}`, updatedAt: index + 1 },
+      );
+    }
+    const snapshots = new Set<object>();
+    const operation = (
+      index: number,
+      label: string,
+      authorize?: () => { ok: false; error: string } | undefined,
+    ): SessionPatchProjectionOperation<{ ok: false; error: string }> => ({
+      resolveTarget: (snapshot) => {
+        snapshots.add(snapshot.store);
+        return { primaryKey: keys[index]! };
+      },
+      project: ({ existingEntry, isLabelInUse }) => {
+        if (isLabelInUse(label)) {
+          return { ok: false as const, error: `duplicate:${label}` };
+        }
+        return { ok: true as const, entry: { ...existingEntry!, label } };
+      },
+      ...(authorize ? { authorize } : {}),
+    });
+
+    const results = await applySessionPatchProjections({
+      storePath,
+      operations: [
+        operation(0, "Shared"),
+        operation(1, "Shared"),
+        operation(2, "Blocked", () => ({ ok: false, error: "authorization changed" })),
+        operation(3, "Blocked"),
+      ],
+    });
+
+    expect(snapshots.size).toBe(1);
+    expect(results.map((result) => (result.ok ? result.entry.label : result.error))).toEqual([
+      "Shared",
+      "duplicate:Shared",
+      "authorization changed",
+      "Blocked",
+    ]);
+    expect(loadSessionEntry({ sessionKey: keys[0]!, storePath })?.label).toBe("Shared");
+    expect(loadSessionEntry({ sessionKey: keys[1]!, storePath })?.label).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: keys[2]!, storePath })?.label).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: keys[3]!, storePath })?.label).toBe("Blocked");
   });
 
   it("prepares entry replacements without holding a write transaction", async () => {

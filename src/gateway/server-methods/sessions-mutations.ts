@@ -4,500 +4,121 @@ import {
   ErrorCodes,
   errorShape,
   type SessionsPatchManyResult,
-  type SessionsPatchManyTarget,
   validateSessionsPatchManyParams,
   validateSessionsPatchParams,
   validateSessionsPluginPatchParams,
   validateSessionsResetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
-import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
-import {
-  applySessionPatchProjection,
-  type SessionPatchProjectionSnapshot,
-} from "../../config/sessions/session-accessor.js";
-import { disableCronJobsBoundToSession } from "../../cron/job-session-bindings.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
-import {
-  isSessionLifecycleMutationActive,
-  isSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-  SESSION_ARCHIVE_ACTIVE_RUN_ERROR,
-} from "../../sessions/session-lifecycle-admission.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { ensureSessionGroupRegistered } from "../session-groups.js";
-import { triggerSessionPatchHook } from "../session-patch-hooks.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import {
-  loadSessionEntry,
-  resolveCanonicalGatewaySessionStoreKey,
-  resolveGatewaySessionThinkingProjection,
-  resolveSessionDisplayModelIdentityRef,
-  resolveSessionModelRef,
-  type SessionsPatchResult,
-} from "../session-utils.js";
-import { projectSessionsPatchEntry } from "../sessions-patch.js";
-import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
-import { appendSessionAudit } from "./session-audit.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
-import {
-  isAgentMainSessionKey,
-  loadSessionsRuntimeModule,
-  rejectPluginRuntimeSessionOwnershipMismatch,
-  requireSessionKey,
-  resolveGatewaySessionTargetFromKey,
-  resolveSessionWorkerPlacementPatchError,
-  sessionLog,
-} from "./sessions-shared.js";
+import { executeSessionPatchEngine } from "./sessions-patch-engine.js";
+import { loadSessionsRuntimeModule, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionMutationHandlers: GatewayRequestHandlers = {
-  "sessions.patchMany": async (options) => {
-    const { params, respond, context } = options;
+  "sessions.patchMany": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (
       !assertValidParams(params, validateSessionsPatchManyParams, "sessions.patchMany", respond)
     ) {
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    const logicalTargets = new Set<string>();
-    for (const target of params.targets) {
-      const resolved = resolveGatewaySessionTargetFromKey(target.key.trim(), cfg, {
-        agentId: target.agentId,
-      });
-      const logicalId = `${resolved.storePath}\0${resolved.target.canonicalKey ?? target.key}`;
-      if (logicalTargets.has(logicalId)) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Duplicate target."));
-        return;
-      }
-      logicalTargets.add(logicalId);
+    const executed = await executeSessionPatchEngine({
+      authorizationMode: "target",
+      client,
+      context,
+      patch: params.patch,
+      sessionMutationAuthorization,
+      targets: params.targets,
+    });
+    if (!executed.ok) {
+      respond(false, undefined, executed.error);
+      return;
     }
-    const patchHandler = sessionMutationHandlers["sessions.patch"];
-    if (!patchHandler) {
-      throw new Error("sessions.patch handler is not registered");
-    }
-    const patchTarget = async (
-      target: SessionsPatchManyTarget,
-    ): Promise<SessionsPatchManyResult["outcomes"][number]> => {
-      const identity = {
-        key: target.key,
-        ...(target.agentId ? { agentId: target.agentId } : {}),
-      };
-      let outcome: SessionsPatchManyResult["outcomes"][number] | undefined;
-      const delegatedAuthorization = options.sessionMutationAuthorization
-        ? {
-            ...options.sessionMutationAuthorization,
-            // Initial authorization covers the whole batch. Commit-time checks are
-            // target-local so one raced row cannot poison unrelated siblings.
-            assertCurrent: () =>
-              options.sessionMutationAuthorization!.assertTargetCurrent({
-                sessionKey: target.key,
-                ...(target.agentId ? { agentId: target.agentId } : {}),
-              }),
-          }
-        : undefined;
-      try {
-        const delegatedParams = Object.assign({}, target, params.patch);
-        await patchHandler({
-          ...options,
-          params: delegatedParams,
-          sessionMutationAuthorization: delegatedAuthorization,
-          respond: (ok, _payload, error) => {
-            outcome = ok ? { ok: true, ...identity } : { ok: false, ...identity, error: error! };
-          },
-        });
-      } catch (error) {
-        if (error instanceof SessionMutationAuthorizationChangedError) {
-          outcome = { ok: false, ...identity, error: error.error };
-        } else {
-          sessionLog.warn(
-            `sessions.patchMany: delegated patch failed for ${target.key}: ${formatErrorMessage(error)}`,
-          );
-          outcome = {
-            ok: false,
-            ...identity,
-            error: errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "Session patch failed unexpectedly. Retry the request.",
-              { retryable: true },
-            ),
-          };
-        }
+    const outcomes: SessionsPatchManyResult["outcomes"] = executed.outcomes.map((outcome) => {
+      if (!outcome.ok) {
+        return outcome;
       }
-      if (!outcome) {
-        sessionLog.warn(
-          `sessions.patchMany: delegated patch returned no outcome for ${target.key}`,
-        );
-        return {
-          ok: false,
-          ...identity,
-          error: errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "Session patch failed unexpectedly. Retry the request.",
-            { retryable: true },
-          ),
-        };
-      }
-      return outcome;
-    };
-    const outcomes = await Promise.all(params.targets.map(patchTarget));
+      return outcome.agentId
+        ? { ok: true, key: outcome.key, agentId: outcome.agentId }
+        : { ok: true, key: outcome.key };
+    });
     respond(true, { outcomes } satisfies SessionsPatchManyResult, undefined);
   },
   "sessions.patch": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsPatchParams, "sessions.patch", respond)) {
       return;
     }
-    const p = params;
-    const key = requireSessionKey(p.key, respond);
+    const key = requireSessionKey(params.key, respond);
     if (!key) {
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    const archiveActor = gatewayClientSessionCreator(client);
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
-    if (!requestedAgent.ok) {
-      respond(false, undefined, requestedAgent.error);
-      return;
-    }
-    const requestedAgentId = requestedAgent.agentId;
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
-      agentId: requestedAgentId,
-    });
-    const canonicalKey = target.canonicalKey ?? key;
-    const lifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
-    if (
-      rejectPluginRuntimeSessionOwnershipMismatch({
-        action: "patch",
-        client,
-        key: canonicalKey,
-        entry: lifecycleEntry,
-        respond,
-      })
-    ) {
-      return;
-    }
-    const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
-      canonicalKey,
-      lifecycleEntry,
-    );
-    if (missingHarnessSessionError) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError));
-      return;
-    }
-    const initialPlacementPatchError = resolveSessionWorkerPlacementPatchError({
-      agentId: target.agentId,
-      cfg,
+    const executed = await executeSessionPatchEngine({
+      authorizationMode: "request",
+      client,
       context,
-      entry: lifecycleEntry,
-      key,
-      patch: p,
-      sessionKey: canonicalKey,
-      validateModelRuntime: false,
+      patch: params,
+      sessionMutationAuthorization,
+      targets: [
+        {
+          key,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(params.expectedSessionId !== undefined
+            ? { expectedSessionId: params.expectedSessionId }
+            : {}),
+          ...(params.expectedLifecycleRevision !== undefined
+            ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
+            : {}),
+        },
+      ],
     });
-    if (initialPlacementPatchError) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, initialPlacementPatchError));
+    if (!executed.ok) {
+      respond(false, undefined, executed.error);
       return;
     }
-    const lifecycleIdentities = [canonicalKey, key, lifecycleEntry?.sessionId];
-    if (p.archived === true && isSessionLifecycleMutationActive(storePath, lifecycleIdentities)) {
+    const outcome = executed.outcomes[0];
+    if (!outcome) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, SESSION_ARCHIVE_ACTIVE_RUN_ERROR),
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "Session patch failed unexpectedly. Retry the request.",
+          {
+            retryable: true,
+          },
+        ),
       );
       return;
     }
-    let patchModelCatalog: Awaited<ReturnType<typeof context.loadGatewayModelCatalog>> | undefined;
-    const loadPatchModelCatalog = async () => {
-      const catalog = await context.loadGatewayModelCatalog({ agentId: target.agentId });
-      patchModelCatalog = catalog;
-      return catalog;
-    };
-    let wasArchivedBeforePatch = false;
-    const resolvePatchTarget = ({ entries }: SessionPatchProjectionSnapshot) => {
-      const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
-      const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      return { primaryKey, candidateKeys: migratedTarget.storeKeys };
-    };
-    const applyPatch = async () => {
-      const currentLifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
-      // Recheck inside the lifecycle lock so a replaced row cannot switch
-      // plugin ownership between authorization and the committed patch.
-      if (
-        rejectPluginRuntimeSessionOwnershipMismatch({
-          action: "patch",
-          client,
-          key: canonicalKey,
-          entry: currentLifecycleEntry,
-          respond,
-        })
-      ) {
-        return null;
-      }
-      // applyPatch runs under runExclusiveSessionLifecycleMutation for every
-      // patch, so expected identities also guard non-archive metadata writes.
-      const expectedSessionChanged =
-        (p.expectedSessionId !== undefined &&
-          currentLifecycleEntry?.sessionId !== p.expectedSessionId) ||
-        (p.expectedLifecycleRevision !== undefined &&
-          currentLifecycleEntry?.lifecycleRevision !== p.expectedLifecycleRevision);
-      // A reset queued ahead of archive can rotate the row before this mutation starts.
-      // Never apply stale destructive intent to the replacement session identity.
-      const lifecycleEntryRemoved =
-        lifecycleEntry !== undefined && currentLifecycleEntry === undefined;
-      const archiveTargetChanged =
-        p.archived === true &&
-        (lifecycleEntry === undefined
-          ? currentLifecycleEntry !== undefined
-          : currentLifecycleEntry !== undefined &&
-            (currentLifecycleEntry.sessionId !== lifecycleEntry.sessionId ||
-              currentLifecycleEntry.lifecycleRevision !== lifecycleEntry.lifecycleRevision));
-      if (expectedSessionChanged || lifecycleEntryRemoved || archiveTargetChanged) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before patch. Retry.`),
-        );
-        return null;
-      }
-      if (p.archived === true) {
-        if (canonicalKey === "global" || isAgentMainSessionKey(cfg, canonicalKey)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive an agent's main session."),
-          );
-          return null;
-        }
-        const { entry } = loadSessionEntry(key, { agentId: requestedAgentId });
-        const activeIdentities = [canonicalKey, key, entry?.sessionId];
-        if (
-          isSessionWorkAdmissionActive(storePath, activeIdentities) ||
-          replyRunRegistry.isActive(canonicalKey) ||
-          replyRunRegistry.isActive(key) ||
-          hasVisibleActiveSessionRun({
-            context,
-            requestedKey: key,
-            canonicalKey,
-            sessionId: entry?.sessionId,
-            defaultAgentId: resolveDefaultAgentId(cfg),
-          })
-        ) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, SESSION_ARCHIVE_ACTIVE_RUN_ERROR),
-          );
-          return null;
-        }
-      }
-      return await applySessionPatchProjection({
-        agentId: target.agentId,
-        assertCurrent: sessionMutationAuthorization?.assertCurrent,
-        storePath,
-        resolveTarget: resolvePatchTarget,
-        project: async ({ primaryKey, existingEntry, entries }) => {
-          wasArchivedBeforePatch = existingEntry?.archivedAt !== undefined;
-          const projected = await projectSessionsPatchEntry({
-            cfg,
-            entries,
-            existingEntry,
-            storeKey: primaryKey,
-            agentId: requestedAgentId,
-            patch: p,
-            archivedBy: archiveActor,
-            loadGatewayModelCatalog: loadPatchModelCatalog,
-          });
-          if (!projected.ok) {
-            return projected;
-          }
-          const placementPatchError = resolveSessionWorkerPlacementPatchError({
-            agentId: target.agentId,
-            cfg,
-            context,
-            entry: projected.entry,
-            key,
-            patch: p,
-            sessionKey: canonicalKey,
-            validateModelRuntime: true,
-          });
-          return placementPatchError
-            ? {
-                ok: false,
-                error: errorShape(ErrorCodes.INVALID_REQUEST, placementPatchError),
-              }
-            : projected;
-        },
-      });
-    };
-    const applied = await runExclusiveSessionLifecycleMutation({
-      scope: storePath,
-      identities: lifecycleIdentities,
-      run: async () => {
-        const result = await applyPatch();
-        if (!result?.ok) {
-          return result;
-        }
-        const archiveStateChanged =
-          typeof p.archived === "boolean" &&
-          wasArchivedBeforePatch !== (result.entry.archivedAt !== undefined);
-        if (!archiveStateChanged || !archiveActor) {
-          return result;
-        }
-        const action = result.entry.archivedAt === undefined ? "unarchived" : "archived";
-        try {
-          await appendSessionAudit({
-            cfg,
-            target: {
-              agentId: target.agentId,
-              entry: result.entry,
-              sessionKey: target.canonicalKey ?? key,
-              storePath,
-            },
-            text: `${action} by ${archiveActor.label ?? archiveActor.id}`,
-            now: Date.now(),
-          });
-        } catch (error) {
-          // The "<name> archived/unarchived this" system note is best-effort. The archive
-          // state (archivedAt/archivedBy) is the durable outcome and is already committed; if
-          // the note append fails (rare) keep the archive and log rather than reversing it.
-          // Reversing raced concurrent membership/pin changes and is not worth the complexity
-          // for this non-security lifecycle toggle — visibility changes, a real access
-          // boundary, still roll back on audit failure.
-          sessionLog.warn(
-            `sessions.patch: ${action} audit note failed for ${canonicalKey}; archive kept: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
-        return result;
-      },
-    });
-    if (!applied) {
+    if (!outcome.ok) {
+      respond(false, undefined, outcome.error);
       return;
     }
-    if (!applied.ok) {
-      respond(false, undefined, applied.error);
+    if (!outcome.result) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "Session patch failed unexpectedly. Retry the request.",
+          {
+            retryable: true,
+          },
+        ),
+      );
       return;
     }
-    const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-
-    triggerSessionPatchHook({
-      cfg,
-      sessionEntry: applied.entry,
-      sessionKey: target.canonicalKey ?? key,
-      patch: p,
-    });
-
-    // Cron mutations are operator.admin surface while archive is write-scoped;
-    // only cascade for internal callers (client == null) or admin operators so
-    // write-scoped archiving cannot flip admin-managed schedules.
-    const callerCanManageCron = client === null || callerScopes.includes(ADMIN_SCOPE);
-    if (p.archived === true && callerCanManageCron) {
-      // Archived sessions reject new work, so schedules bound to them would
-      // only accumulate failing runs; disable them with the archive.
-      try {
-        const disabledJobIds = await disableCronJobsBoundToSession({
-          cron: context.cron,
-          cfg,
-          sessionKey: target.canonicalKey ?? key,
-        });
-        if (disabledJobIds.length > 0) {
-          sessionLog.info(
-            `sessions.patch: disabled cron jobs bound to archived session ${target.canonicalKey ?? key}: ${disabledJobIds.join(", ")}`,
-          );
-        }
-      } catch (error) {
-        // Best-effort by design: archive is the primary action and must not
-        // fail or roll back on cron-store errors. Any job left enabled fails
-        // closed at run start because archived sessions reject new work.
-        sessionLog.warn(
-          `sessions.patch: failed to disable cron jobs for archived session ${target.canonicalKey ?? key}: ${formatErrorMessage(error)}`,
-        );
-      }
-    }
-
-    // Absorb ad-hoc categories into the gateway group catalog so ordering
-    // covers every group an operator UI can observe.
-    if (typeof p.category === "string" && p.category.trim()) {
-      ensureSessionGroupRegistered(p.category);
-    }
-
-    const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
-    const agentId = normalizeAgentId(
-      target.canonicalKey === "global"
-        ? target.agentId
-        : (parsed?.agentId ?? resolveDefaultAgentId(cfg)),
-    );
-    const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
-    if (
-      typeof p.model === "string" &&
-      callerScopes.includes(ADMIN_SCOPE) &&
-      applied.entry.modelOverrideSource === "user" &&
-      applied.entry.providerOverride &&
-      applied.entry.modelOverride
-    ) {
-      persistStickyModelSelectionBestEffort({
-        agentId,
-        model: `${resolved.provider}/${resolved.model}`,
-      });
-    }
-    const resolvedDisplayModel = resolveSessionDisplayModelIdentityRef({
-      cfg,
-      agentId,
-      provider: resolved.provider,
-      model: resolved.model,
-    });
-    const thinkingProjection = resolveGatewaySessionThinkingProjection({
-      cfg,
-      agentId,
-      provider: resolvedDisplayModel.provider ?? resolved.provider,
-      model: resolvedDisplayModel.model ?? resolved.model,
-      sessionKey: target.canonicalKey ?? key,
-      entry: applied.entry,
-      modelCatalog: patchModelCatalog,
-    });
-    const resolvedThinkingMetadata =
-      patchModelCatalog === undefined
-        ? {}
-        : {
-            thinkingLevel: thinkingProjection.effectiveThinkingLevel,
-            thinkingLevels: thinkingProjection.thinkingLevels,
-          };
-    const result: SessionsPatchResult = {
-      ok: true,
-      path: storePath,
-      key: target.canonicalKey,
-      entry: applied.entry,
-      resolved: {
-        modelProvider: resolvedDisplayModel.provider,
-        model: resolvedDisplayModel.model,
-        agentRuntime: thinkingProjection.agentRuntime,
-        ...resolvedThinkingMetadata,
-      },
-    };
-    respond(true, result, undefined);
-    emitSessionsChanged(context, {
-      sessionKey: target.canonicalKey,
-      ...(target.canonicalKey === "global" && requestedAgentId
-        ? { agentId: requestedAgentId }
-        : {}),
-      reason: "patch",
-    });
+    respond(true, outcome.result, undefined);
   },
   "sessions.pluginPatch": async ({
     params,
