@@ -72,8 +72,9 @@ The relay URL must use `wss://` unless it targets localhost. Treat the bearer to
 One Slack account can receive messages from every workspace covered by an
 Enterprise Grid org-wide installation. Choose direct Socket Mode or HTTP
 Request URLs; relay mode is not supported for enterprise accounts. Both
-least-privilege manifests below enable the V1 message, mention, reaction, and
-pin event paths, immediate replies, and listener-owned status reactions.
+least-privilege manifests below enable the V1 message, mention, membership,
+reaction, and pin event paths, immediate replies, and listener-owned status
+reactions.
 
 #### Socket Mode
 
@@ -118,6 +119,8 @@ pin event paths, immediate replies, and listener-owned status reactions.
         "message.groups",
         "message.im",
         "message.mpim",
+        "member_joined_channel",
+        "member_left_channel",
         "pin_added",
         "pin_removed",
         "reaction_added",
@@ -202,6 +205,8 @@ Socket Mode connection. Replace the example URL with the Gateway's public
         "message.groups",
         "message.im",
         "message.mpim",
+        "member_joined_channel",
+        "member_left_channel",
         "pin_added",
         "pin_removed",
         "reaction_added",
@@ -253,13 +258,15 @@ bot-authored `message` and `app_mention` events before dispatch, regardless of
 bot identity for loop prevention.
 
 Enterprise support accepts direct Socket Mode or HTTP message, mention,
-reaction, and pin events plus workspace-qualified outbound messages. Relay
-mode, slash commands, interactions, App Home, Slack-native approvals, and
+membership, reaction, and pin events plus workspace-qualified outbound
+messages. Relay mode, slash commands, channel lifecycle events, interactions,
+App Home, Agent and Assistant lifecycle events, Slack-native approvals, and
 bindings remain unavailable for an enterprise account. Slack action tools
 remain unavailable except for file uploads and adding or removing emoji
-reactions. Inbound reaction and pin notifications use the listener-owned,
-workspace-scoped Slack client. Outbound acknowledgment, typing, and status
-reactions are also supported through that client and require `reactions:write`.
+reactions. Inbound membership, reaction, and pin notifications use the
+listener-owned, workspace-scoped Slack client. Outbound acknowledgment, typing,
+and status reactions are also supported through that client and require
+`reactions:write`.
 
 OpenClaw records Enterprise Grid destinations as
 `team:<team-id>:channel:<channel-id>` or `team:<team-id>:user:<user-id>`.

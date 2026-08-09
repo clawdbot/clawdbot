@@ -7,7 +7,7 @@ import type { SlackMonitorContext } from "../context.js";
 import type { SlackPinEvent } from "../types.js";
 import {
   authorizeAndResolveSlackSystemEventContext,
-  resolveSlackSystemEventScope,
+  resolveSlackListenerEventScope,
 } from "./system-event-context.js";
 
 async function handleSlackPinEvent(params: {
@@ -36,7 +36,7 @@ async function handleSlackPinEvent(params: {
   } = params;
 
   try {
-    const eventScope = resolveSlackSystemEventScope({ ctx, body, context, client });
+    const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
     if (eventScope === null) {
       return;
     }

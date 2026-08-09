@@ -9,7 +9,7 @@ import type { SlackEventScope } from "../event-scope.js";
 import type { SlackReactionEvent } from "../types.js";
 import {
   authorizeAndResolveSlackSystemEventContext,
-  resolveSlackSystemEventScope,
+  resolveSlackListenerEventScope,
 } from "./system-event-context.js";
 
 function shouldEmitSlackReactionNotification(params: {
@@ -111,7 +111,7 @@ export function registerSlackReactionEvents(params: {
     "reaction_added",
     async (args: SlackEventMiddlewareArgs<"reaction_added"> & AllMiddlewareArgs) => {
       const { event, body, context, client } = args;
-      const eventScope = resolveSlackSystemEventScope({ ctx, body, context, client });
+      const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
       if (eventScope === null) {
         return;
       }
@@ -126,7 +126,7 @@ export function registerSlackReactionEvents(params: {
     "reaction_removed",
     async (args: SlackEventMiddlewareArgs<"reaction_removed"> & AllMiddlewareArgs) => {
       const { event, body, context, client } = args;
-      const eventScope = resolveSlackSystemEventScope({ ctx, body, context, client });
+      const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
       if (eventScope === null) {
         return;
       }

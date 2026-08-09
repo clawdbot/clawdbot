@@ -57,13 +57,13 @@ describe("registerSlackMonitorEvents", () => {
     }
   });
 
-  it("registers messages, reactions, and pins for enterprise installs", () => {
+  it("registers messages, reactions, pins, and member events for enterprise installs", () => {
     registerForInstallation("enterprise");
 
     expect(registrations.message).toHaveBeenCalledOnce();
     expect(registrations.reaction).toHaveBeenCalledOnce();
     expect(registrations.pin).toHaveBeenCalledOnce();
-    expect(registrations.member).not.toHaveBeenCalled();
+    expect(registrations.member).toHaveBeenCalledOnce();
     expect(registrations.channel).not.toHaveBeenCalled();
     expect(registrations.home).not.toHaveBeenCalled();
     expect(registrations.agent).not.toHaveBeenCalled();

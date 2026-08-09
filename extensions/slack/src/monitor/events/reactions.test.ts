@@ -38,7 +38,7 @@ function buildReactionEvent(overrides?: { user?: string; channel?: string }) {
 
 function buildEnterpriseListenerArgs(teamId: string) {
   return {
-    body: { api_app_id: "A_GRID" },
+    body: { api_app_id: "A_GRID", event_id: `Ev-reaction-${teamId}` },
     context: {
       isEnterpriseInstall: true,
       enterpriseId: "E_GRID",
@@ -347,11 +347,11 @@ describe("registerSlackReactionEvents", () => {
 
     expect(reactionQueueMock).toHaveBeenNthCalledWith(1, expect.any(String), {
       sessionKey: "session:T111",
-      contextKey: "slack:reaction:T111:added:D1:123.456:U1:thumbsup",
+      contextKey: "slack:reaction:T111:added:D1:123.456:U1:thumbsup:Ev-reaction-T111",
     });
     expect(reactionQueueMock).toHaveBeenNthCalledWith(2, expect.any(String), {
       sessionKey: "session:T222",
-      contextKey: "slack:reaction:T222:added:D1:123.456:U1:thumbsup",
+      contextKey: "slack:reaction:T222:added:D1:123.456:U1:thumbsup:Ev-reaction-T222",
     });
     expect(resolveChannelName).toHaveBeenCalledWith(
       "D1",

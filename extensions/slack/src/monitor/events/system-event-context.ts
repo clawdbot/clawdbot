@@ -50,7 +50,7 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   };
 }
 
-export function resolveSlackSystemEventScope(params: {
+export function resolveSlackListenerEventScope(params: {
   ctx: SlackMonitorContext;
   body: unknown;
   context: AllMiddlewareArgs["context"] | undefined;
@@ -64,7 +64,7 @@ export function resolveSlackSystemEventScope(params: {
     clientOptions: params.ctx.app.webClientOptions,
   });
   if (!resolved.ok) {
-    logVerbose(`slack: drop system event (${resolved.reason})`);
+    logVerbose(`slack: drop listener event (${resolved.reason})`);
     return null;
   }
   return resolved.scope;
