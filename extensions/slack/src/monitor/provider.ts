@@ -66,6 +66,7 @@ import {
   resolveSlackIdentityHealth,
   resolveSlackInstallationIdentity,
   type SlackAuthTestIdentity,
+  type SlackInstallationIdentity,
 } from "./enterprise-install.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackDurableIngress } from "./ingress.js";

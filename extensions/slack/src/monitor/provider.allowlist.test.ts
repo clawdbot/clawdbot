@@ -135,7 +135,7 @@ describe("slack startup user allowlist resolution", () => {
       await getSlackHandlerOrThrow("message");
       await flush();
 
-      const registration = register.mock.calls[0]?.[0] as
+      const registration = vi.mocked(register).mock.calls[0]?.[0] as
         | { context?: { resolveClient?: (teamId?: string) => unknown } }
         | undefined;
       const resolveClient = registration?.context?.resolveClient;

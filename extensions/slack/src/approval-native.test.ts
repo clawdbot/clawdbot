@@ -227,25 +227,25 @@ describe("slack native approval adapter", () => {
       },
     };
 
-    await expect(
+    expect(
       slackApprovalCapability.native?.resolveOriginTarget?.({
         cfg,
         accountId: "default",
         approvalKind: "exec",
         request,
       }),
-    ).resolves.toEqual({
+    ).toEqual({
       to: "team:T123:channel:C123",
       threadId: "1712345678.123456",
     });
-    await expect(
+    expect(
       slackApprovalCapability.native?.resolveApproverDmTargets?.({
         cfg,
         accountId: "default",
         approvalKind: "exec",
         request,
       }),
-    ).resolves.toEqual([{ to: "team:T123:user:U123APPROVER" }]);
+    ).toEqual([{ to: "team:T123:user:U123APPROVER" }]);
   });
 
   it("does not enable Grid approval delivery without a trusted team-qualified origin", () => {
