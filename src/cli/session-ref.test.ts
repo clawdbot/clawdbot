@@ -10,8 +10,7 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
 });
 
 import {
-  isSessionUrlInputCandidate,
-  parseBareSessionTuiOptions,
+  parseBareSessionInvocation,
   parseSessionTargetInput,
   SessionTargetParseError,
 } from "./session-ref.js";
@@ -176,60 +175,98 @@ describe("session target parsing", () => {
 
 describe("bare-root session URL options", () => {
   const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+  const argv = (...args: string[]) => ["node", "openclaw", ...args];
 
-  it("recognizes trimmed URL candidates without claiming bare refs", () => {
-    expect(isSessionUrlInputCandidate(`  ${target}  `)).toBe(true);
-    expect(isSessionUrlInputCandidate("movies-a1166b81")).toBe(false);
+  it.each([
+    ["--token", "token"],
+    ["--password", "password"],
+    ["--tls-fingerprint", "tlsFingerprint"],
+    ["--thinking", "thinking"],
+    ["--message", "message"],
+    ["--timeout-ms", "timeoutMs"],
+    ["--history-limit", "historyLimit"],
+  ] as const)("parses %s symmetrically before and after the URL", (flag, key) => {
+    for (const args of [
+      [flag, "sentinel", target],
+      [`${flag}=sentinel`, target],
+      [target, flag, "sentinel"],
+      [target, `${flag}=sentinel`],
+    ]) {
+      expect(parseBareSessionInvocation(argv(...args))).toEqual({
+        target,
+        options: { [key]: "sentinel" },
+      });
+    }
   });
 
-  it("parses the direct TUI option subset after the URL", () => {
+  it("parses boolean options on either side and preserves root globals", () => {
     expect(
-      parseBareSessionTuiOptions(
-        [
-          "node",
-          "openclaw",
+      parseBareSessionInvocation(
+        argv(
           "--no-color",
-          target,
-          "--token",
-          "direct-token",
-          "--password=direct-password",
-          "--tls-fingerprint",
-          "sha256:direct",
+          "--profile",
+          "work",
           "--deliver",
-          "--message",
-          "continue here",
-        ],
-        target,
+          target,
+          "--log-level=debug",
+          "--token=direct-token",
+        ),
       ),
-    ).toEqual({
-      token: "direct-token",
-      password: "direct-password",
-      tlsFingerprint: "sha256:direct",
-      deliver: true,
-      message: "continue here",
+    ).toEqual({ target, options: { deliver: true, token: "direct-token" } });
+    expect(parseBareSessionInvocation(argv(target, "--deliver"))).toEqual({
+      target,
+      options: { deliver: true },
     });
   });
 
-  it("rejects unsupported options without echoing their values", () => {
-    const secret = "do-not-print-me";
+  it.each([
+    ["bare ref", ["movies-a1166b81"]],
+    ["host shorthand", ["gateway.example/main/a1166b81"]],
+  ])("does not claim %s", (_label, args) => {
+    expect(parseBareSessionInvocation(argv(...args))).toBeNull();
+  });
+
+  it.each([
+    ["split before", ["--token", target]],
+    ["split after", [target, "--token"]],
+    ["inline before", ["--token=", target]],
+    ["inline after", [target, "--token="]],
+  ])("rejects a missing value %s", (_label, args) => {
+    expect(() => parseBareSessionInvocation(argv(...args))).toThrow("--token requires a value");
+  });
+
+  it.each([
+    ["inline before", ["--typo=do-not-print-me", target]],
+    ["inline after", [target, "--typo=do-not-print-me"]],
+    ["split before", ["--typo", "do-not-print-me", target]],
+    ["split after", [target, "--typo", "do-not-print-me"]],
+  ])("rejects an unknown option %s without reflecting its value", (_label, args) => {
     let error: unknown;
     try {
-      parseBareSessionTuiOptions(["node", "openclaw", target, `--typo=${secret}`], target);
+      parseBareSessionInvocation(argv(...args));
     } catch (caught) {
       error = caught;
     }
     expect(String(error)).toContain("Unsupported bare session URL option: --typo");
-    expect(String(error)).not.toContain(secret);
+    expect(String(error)).not.toContain("do-not-print-me");
   });
 
   it.each([
-    ["option terminator", ["--", "ignored"], "Unsupported bare session URL option: --"],
-    ["trailing positional", ["ignored"], "Unsupported bare session URL option: ignored"],
-    ["conflicting session", ["--session", "agent:main:other"], "--session"],
-  ])("rejects %s", (_label, suffix, expected) => {
-    expect(() =>
-      parseBareSessionTuiOptions(["node", "openclaw", target, ...suffix], target),
-    ).toThrow(expected);
+    ["terminator before", ["--", target], "Unsupported bare session URL option: --"],
+    ["terminator after", [target, "--"], "Unsupported bare session URL option: --"],
+    ["extra before", ["do-not-print-me", target], "Unexpected extra argument"],
+    ["extra after", [target, "do-not-print-me"], "Unexpected extra argument"],
+    ["second URL", [target, "https://secret.example/path"], "Unexpected extra argument"],
+  ])("rejects %s without reflecting extra values", (_label, args, expected) => {
+    let error: unknown;
+    try {
+      parseBareSessionInvocation(argv(...args));
+    } catch (caught) {
+      error = caught;
+    }
+    expect(String(error)).toContain(expected);
+    expect(String(error)).not.toContain("do-not-print-me");
+    expect(String(error)).not.toContain("secret.example");
   });
 });
 

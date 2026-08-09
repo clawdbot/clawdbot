@@ -2724,30 +2724,55 @@ describe("runCli exit behavior", () => {
     expect(tryRouteCliMock).not.toHaveBeenCalled();
   });
 
-  it("forwards bare-root TUI options directly without an environment handoff", async () => {
+  it.each([
+    {
+      label: "after the URL",
+      args: [
+        "https://gateway.example/dashboard/main/movies-a1166b81",
+        "--token",
+        "direct-token",
+        "--password=direct-password",
+        "--tls-fingerprint",
+        "sha256:direct",
+        "--deliver",
+        "--message",
+        "continue here",
+      ],
+    },
+    {
+      label: "before the URL with split values",
+      args: [
+        "--token",
+        "direct-token",
+        "--password",
+        "direct-password",
+        "--tls-fingerprint",
+        "sha256:direct",
+        "https://gateway.example/dashboard/main/movies-a1166b81",
+        "--deliver",
+        "--message",
+        "continue here",
+      ],
+    },
+    {
+      label: "before the URL with inline values",
+      args: [
+        "--token=direct-token",
+        "--password=direct-password",
+        "--tls-fingerprint=sha256:direct",
+        "--message=continue here",
+        "https://gateway.example/dashboard/main/movies-a1166b81",
+        "--deliver",
+      ],
+    },
+  ])("forwards bare-root TUI options $label without an environment handoff", async ({ args }) => {
     const target = "https://gateway.example/dashboard/main/movies-a1166b81";
-
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_TOKEN: "ambient-token",
         OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
       },
-      () =>
-        withInteractiveTty(() =>
-          runCli([
-            "node",
-            "openclaw",
-            target,
-            "--token",
-            "direct-token",
-            "--password=direct-password",
-            "--tls-fingerprint",
-            "sha256:direct",
-            "--deliver",
-            "--message",
-            "continue here",
-          ]),
-        ),
+      () => withInteractiveTty(() => runCli(["node", "openclaw", ...args])),
     );
 
     expect(runTuiCliActionMock).toHaveBeenCalledWith(target, {
@@ -2759,9 +2784,45 @@ describe("runCli exit behavior", () => {
     });
   });
 
+  it.each([
+    ["unknown inline option", ["--typo=do-not-print-me"]],
+    ["unknown split option", ["--typo", "do-not-print-me"]],
+    ["extra positional", ["do-not-print-me"]],
+    ["option terminator", ["--"]],
+  ])("rejects a pre-URL %s without reflecting values", async (_label, prefix) => {
+    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+    let error: unknown;
+    try {
+      await runCli(["node", "openclaw", ...prefix, target]);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).not.toContain("do-not-print-me");
+    expect(runTuiCliActionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing pre-URL direct option value before command discovery", async () => {
+    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+
+    await expect(runCli(["node", "openclaw", "--token", target])).rejects.toThrow(
+      "--token requires a value",
+    );
+    expect(runTuiCliActionMock).not.toHaveBeenCalled();
+  });
+
   it("does not claim a bare session ref as root-command sugar", async () => {
     await expect(runCli(["node", "openclaw", "movies-a1166b81"])).rejects.toThrow(
       "Unknown command: openclaw movies-a1166b81",
+    );
+
+    expect(runTuiCliActionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not claim host shorthand as root-command sugar", async () => {
+    await expect(runCli(["node", "openclaw", "gateway.example/main/a1166b81"])).rejects.toThrow(
+      "Unknown command: openclaw gateway.example/main/a1166b81",
     );
 
     expect(runTuiCliActionMock).not.toHaveBeenCalled();
