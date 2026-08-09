@@ -16,6 +16,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
   "claw_installs.bootstrap_content_digest",
   "claw_installs.bootstrap_source_path",
+  "worker_environments.desktop_json",
   "claw_package_refs.extension_adapter_identity",
   "claw_package_refs.extension_detected_format",
   "claw_package_refs.extension_format",
@@ -98,6 +99,7 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
       "target_agent_id TEXT NOT NULL DEFAULT 'main'",
     ],
     "operator_approvals.resolution_ref": ["resolution_ref TEXT"],
+    "worker_environments.desktop_json": ["desktop_json TEXT"],
     "worker_environments.shared_host": ["shared_host INTEGER CHECK (shared_host IN (0, 1))"],
   },
 };
