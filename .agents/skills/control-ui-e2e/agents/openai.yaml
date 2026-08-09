@@ -1,4 +1,0 @@
-interface:
-  display_name: "Control UI E2E"
-  short_description: "Mocked browser E2E for Control UI"
-  default_prompt: "Use $control-ui-e2e to verify a Control UI change with the mocked Vitest + Playwright browser lane."

@@ -1,3 +1,0 @@
-<BODY>
-Translated paragraph.
-</BODY>

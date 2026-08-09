@@ -1,6 +1,0 @@
-{"message":{"role":"system","content":"Curated replay fixture: gateway restart recovery."}}
-{"message":{"role":"user","content":"Start a long workspace check and record the marker RESTART-RECOVERY-A."}}
-{"message":{"role":"assistant","content":"Started the check and recorded RESTART-RECOVERY-A."}}
-{"message":{"role":"tool","content":"gateway restarted before final delivery; session state recovered"}}
-{"message":{"role":"user","content":"Continue after the restart and confirm no duplicate marker was sent."}}
-{"message":{"role":"assistant","content":"Recovered after restart and did not duplicate the marker."}}

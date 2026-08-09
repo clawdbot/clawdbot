@@ -1,6 +1,0 @@
-{"message":{"role":"system","content":"Curated replay fixture: workspace edit loop."}}
-{"message":{"role":"user","content":"Read README.md, patch the typo in the local draft, and show the diff summary."}}
-{"message":{"role":"assistant","content":"I read README.md, applied the local typo patch, and summarized the diff."}}
-{"message":{"role":"tool","content":"patch applied to draft.md with one changed line"}}
-{"message":{"role":"user","content":"Run the lightweight check and tell me whether the patch is safe."}}
-{"message":{"role":"assistant","content":"The lightweight check passed and the patch is safe."}}

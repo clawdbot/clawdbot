@@ -1,4 +1,0 @@
-interface:
-  display_name: "OpenClaw Debugging"
-  short_description: "Debug model, tool, stream, and live behavior"
-  default_prompt: "Use $openclaw-debugging to identify the right OpenClaw debug boundary, turn on targeted logs, and choose the narrowest local or Crabbox proof."
