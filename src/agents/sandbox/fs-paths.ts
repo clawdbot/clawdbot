@@ -147,6 +147,64 @@ export function resolveWritableSandboxBindHostRoots(
   return roots;
 }
 
+/**
+ * Resolves a host target through an effective writable sandbox mount.
+ *
+ * A host path may be reachable through several container routes. Test each
+ * writable route against the complete mount table so a narrower read-only
+ * shadow wins only for the route it actually covers.
+ */
+export function resolveWritableSandboxHostPath(params: {
+  filePath: string;
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+  workspaceAccess: SandboxFsBridgeContext["workspaceAccess"];
+  containerWorkdir: string;
+  binds: readonly string[] | undefined;
+}): string | undefined {
+  const mounts = buildSandboxFsMounts({
+    workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
+    workspaceAccess: params.workspaceAccess,
+    containerName: "attachment-boundary",
+    containerWorkdir: params.containerWorkdir,
+    docker: { binds: params.binds ? [...params.binds] : undefined },
+  });
+  const targetPath = path.resolve(params.filePath);
+
+  for (const mount of mounts) {
+    if (!mount.writable) {
+      continue;
+    }
+    const mountedTarget = resolveHostTargetThroughMount(mount.hostRoot, targetPath);
+    if (!mountedTarget) {
+      continue;
+    }
+    const relativePath = path.relative(mount.hostRoot, mountedTarget);
+    const containerPath = relativePath
+      ? path.posix.join(mount.containerRoot, ...relativePath.split(path.sep))
+      : mount.containerRoot;
+    const effective = resolveSandboxFsPathWithMounts({
+      filePath: containerPath,
+      cwd: params.workspaceDir,
+      defaultWorkspaceRoot: params.workspaceDir,
+      defaultContainerRoot: params.containerWorkdir,
+      mounts,
+    });
+    if (effective.writable) {
+      const hostRoute = resolveSandboxFsPathWithMounts({
+        filePath: mountedTarget,
+        cwd: params.workspaceDir,
+        defaultWorkspaceRoot: params.workspaceDir,
+        defaultContainerRoot: params.containerWorkdir,
+        mounts,
+      });
+      return hostRoute.writable ? mountedTarget : effective.containerPath;
+    }
+  }
+  return undefined;
+}
+
 export function hasSandboxBindContainerPathAliases(binds: readonly string[] | undefined): boolean {
   for (const parsed of parseSandboxBindMounts(binds)) {
     if (parsed.hostRoot !== parsed.containerRoot) {
@@ -390,6 +448,29 @@ function isPathInsideHost(root: string, target: string): boolean {
   );
   const canonicalTarget = path.resolve(canonicalTargetParent, path.basename(resolvedTarget));
   return isPathInside(canonicalRoot, canonicalTarget);
+}
+
+function resolveHostTargetThroughMount(root: string, target: string): string | undefined {
+  const resolvedRoot = path.resolve(root);
+  const resolvedTarget = path.resolve(target);
+  const lexicalRelative = path.relative(resolvedRoot, resolvedTarget);
+  if (
+    lexicalRelative === "" ||
+    (!lexicalRelative.startsWith("..") && !path.isAbsolute(lexicalRelative))
+  ) {
+    return path.join(resolvedRoot, lexicalRelative);
+  }
+
+  // A configured mount root may be a symlink while the target uses its
+  // canonical path. Preserve the mounted alias so bridge resolution stays on
+  // the route the requester can actually mutate.
+  const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(resolvedRoot);
+  const canonicalTarget = resolveSandboxHostPathViaExistingAncestor(resolvedTarget);
+  const canonicalRelative = path.relative(canonicalRoot, canonicalTarget);
+  return canonicalRelative === "" ||
+    (!canonicalRelative.startsWith("..") && !path.isAbsolute(canonicalRelative))
+    ? path.join(resolvedRoot, canonicalRelative)
+    : undefined;
 }
 
 function isHostPathWithinOrEqual(root: string, target: string): boolean {

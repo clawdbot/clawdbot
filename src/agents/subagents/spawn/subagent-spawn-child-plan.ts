@@ -1,4 +1,3 @@
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
@@ -8,8 +7,7 @@ import { findModelCatalogEntry } from "../../model-catalog-lookup.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { resolveSandboxConfigForAgent } from "../../sandbox/config.js";
-import { resolveWritableSandboxBindHostRoots } from "../../sandbox/fs-paths.js";
-import { resolveSandboxHostPathViaExistingAncestor } from "../../sandbox/host-paths.js";
+import { resolveWritableSandboxHostPath } from "../../sandbox/fs-paths.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
@@ -108,35 +106,6 @@ type ResolveSubagentChildPlanResult =
   | { ok: false; result: SpawnSubagentResult }
   | { ok: true; resolved: ResolvedSubagentChildPlan };
 
-function resolveRelativeDescendant(rootDir: string, targetDir: string): string | undefined {
-  const relativePath = path.relative(rootDir, targetDir);
-  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
-    ? relativePath
-    : undefined;
-}
-
-function resolveTargetThroughMutationRoot(params: {
-  mutationRootDir: string;
-  targetWorkspaceDir: string;
-}): string | undefined {
-  const mutationRootDir = path.resolve(params.mutationRootDir);
-  const targetWorkspaceDir = path.resolve(params.targetWorkspaceDir);
-  const lexicalRelative = resolveRelativeDescendant(mutationRootDir, targetWorkspaceDir);
-  if (lexicalRelative !== undefined) {
-    return path.join(mutationRootDir, lexicalRelative);
-  }
-
-  // The mounted root may be a symlink while the configured target names its
-  // canonical descendant. Resolve only existing ancestors so a new child
-  // workspace is still re-addressed through the mount the requester can mutate.
-  const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(mutationRootDir);
-  const canonicalTarget = resolveSandboxHostPathViaExistingAncestor(targetWorkspaceDir);
-  const canonicalRelative = resolveRelativeDescendant(canonicalRoot, canonicalTarget);
-  return canonicalRelative === undefined
-    ? undefined
-    : path.join(mutationRootDir, canonicalRelative);
-}
-
 export async function resolveSubagentChildPlan(params: {
   request: SpawnSubagentParams;
   ctx: SpawnSubagentContext;
@@ -198,21 +167,22 @@ export async function resolveSubagentChildPlan(params: {
     toolSpawnMetadata.workspaceDir ??
       resolveAgentWorkspaceDir(params.cfg, requesterRuntime.agentId),
   );
+  const requesterAgentWorkspaceDir = resolveUserPath(
+    resolveAgentWorkspaceDir(params.cfg, requesterRuntime.agentId),
+  );
   const targetWorkspaceDir = resolveUserPath(
     spawnedCwd ?? spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(params.cfg, params.targetAgentId),
   );
-  const requesterMutationRoots = [
-    requesterWorkspaceDir,
-    ...resolveWritableSandboxBindHostRoots(requesterSandboxConfig.docker.binds),
-  ];
-  const sandboxTargetWorkspaceDir =
-    requesterRuntime.sandboxed && requesterSandboxConfig.workspaceAccess === "rw"
-      ? requesterMutationRoots
-          .map((mutationRootDir) =>
-            resolveTargetThroughMutationRoot({ mutationRootDir, targetWorkspaceDir }),
-          )
-          .find((candidate): candidate is string => candidate !== undefined)
-      : undefined;
+  const sandboxTargetWorkspaceDir = requesterRuntime.sandboxed
+    ? resolveWritableSandboxHostPath({
+        filePath: targetWorkspaceDir,
+        workspaceDir: requesterWorkspaceDir,
+        agentWorkspaceDir: requesterAgentWorkspaceDir,
+        workspaceAccess: requesterSandboxConfig.workspaceAccess,
+        containerWorkdir: requesterSandboxConfig.docker.workdir,
+        binds: requesterSandboxConfig.docker.binds,
+      })
+    : undefined;
   const requesterSandboxAttachmentBoundary = sandboxTargetWorkspaceDir
     ? {
         workspaceDir: requesterWorkspaceDir,

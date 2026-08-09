@@ -11,6 +11,7 @@ import {
   hasSandboxBindReadonlyHostShadows,
   resolveSandboxFsPathWithMounts,
   resolveWritableSandboxBindHostRoots,
+  resolveWritableSandboxHostPath,
 } from "./fs-paths.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
@@ -77,6 +78,35 @@ describe("sandbox bind mounts", () => {
       ]),
     ).toBe(false);
   });
+
+  it("does not select a writable parent route through a read-only bind shadow", () => {
+    expect(
+      resolveWritableSandboxHostPath({
+        filePath: "/tmp/data/readonly/worker",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        workspaceAccess: "rw",
+        containerWorkdir: "/workspace",
+        binds: ["/tmp/data:/mnt/shared:rw", "/tmp/data/readonly:/mnt/shared/readonly:ro"],
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each(["ro", "none"] as const)(
+    "selects an explicit writable bind when workspace access is %s",
+    (workspaceAccess) => {
+      expect(
+        resolveWritableSandboxHostPath({
+          filePath: "/tmp/data/worker",
+          workspaceDir: "/tmp/workspace",
+          agentWorkspaceDir: "/tmp/workspace",
+          workspaceAccess,
+          containerWorkdir: "/workspace",
+          binds: ["/tmp/data:/mnt/shared:rw"],
+        }),
+      ).toBe(path.resolve("/tmp/data/worker"));
+    },
+  );
 });
 
 describe("resolveSandboxFsPathWithMounts", () => {
