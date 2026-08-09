@@ -10,23 +10,10 @@ import type {
   PersistedWorkboardNotificationSubscription,
   WorkboardKeyedStore,
 } from "./src/persistence-types.js";
-import type { WorkboardStore } from "./src/store.js";
 // Doctor enumeration cold-loads this closure; sqlite-store pulls the
 // plugin-state-runtime/kysely graph, so it stays behind lazy imports below.
 
 const MAX_CARDS = 2000;
-
-async function legacyDecompositionRepairCount(store: WorkboardStore): Promise<number> {
-  let count = 0;
-  for (const card of await store.list()) {
-    if (card.metadata?.automation?.decompositionMode === "hard") {
-      continue;
-    }
-    const result = await store.repairDecomposition(card.id);
-    count += result.candidateChildIds.length;
-  }
-  return count;
-}
 
 function migrationEnv(params: { env: NodeJS.ProcessEnv; stateDir: string }): NodeJS.ProcessEnv {
   return { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
@@ -297,87 +284,6 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             ...attachmentResult.warnings,
           ],
         };
-      } finally {
-        sqlite.close();
-      }
-    },
-  },
-  {
-    id: "workboard-legacy-decomposition-links",
-    label: "Workboard legacy decomposition links",
-    async detectLegacyState(params) {
-      const [{ existsSync }, { createWorkboardSqliteStores, resolveWorkboardSqlitePath }, storeApi] =
-        await Promise.all([
-          import("node:fs"),
-          import("./src/sqlite-store.js"),
-          import("./src/store.js"),
-        ]);
-      const env = migrationEnv(params);
-      const sqlitePath = resolveWorkboardSqlitePath(env);
-      if (!existsSync(sqlitePath)) {
-        return null;
-      }
-      const sqlite = createWorkboardSqliteStores({ env });
-      try {
-        const store = new storeApi.WorkboardStore(sqlite.cards, {
-          boards: sqlite.boards,
-          subscriptions: sqlite.subscriptions,
-          attachments: sqlite.attachments,
-          dataVersion: sqlite.dataVersion,
-        });
-        const count = await legacyDecompositionRepairCount(store);
-        return count === 0
-          ? null
-          : {
-              preview: [
-                `- Workboard: ${count} proven legacy decomposition ${count === 1 ? "link" : "links"} will be unlinked → ${sqlitePath}`,
-              ],
-            };
-      } finally {
-        sqlite.close();
-      }
-    },
-    async migrateLegacyState(params) {
-      const [{ existsSync }, { createWorkboardSqliteStores, resolveWorkboardSqlitePath }, storeApi] =
-        await Promise.all([
-          import("node:fs"),
-          import("./src/sqlite-store.js"),
-          import("./src/store.js"),
-        ]);
-      const env = migrationEnv(params);
-      if (!existsSync(resolveWorkboardSqlitePath(env))) {
-        return { changes: [], warnings: [] };
-      }
-      const sqlite = createWorkboardSqliteStores({ env });
-      try {
-        const store = new storeApi.WorkboardStore(sqlite.cards, {
-          boards: sqlite.boards,
-          subscriptions: sqlite.subscriptions,
-          attachments: sqlite.attachments,
-          dataVersion: sqlite.dataVersion,
-        });
-        const changes: string[] = [];
-        const warnings: string[] = [];
-        let repaired = 0;
-        for (const card of await store.list()) {
-          if (card.metadata?.automation?.decompositionMode === "hard") {
-            continue;
-          }
-          try {
-            const result = await store.repairDecomposition(card.id, { apply: true });
-            repaired += result.repairedChildIds.length;
-          } catch (error) {
-            warnings.push(
-              `Failed migrating Workboard decomposition links for ${card.id}: ${String(error)}`,
-            );
-          }
-        }
-        if (repaired > 0) {
-          changes.push(
-            `Migrated ${repaired} proven legacy Workboard decomposition ${repaired === 1 ? "link" : "links"} to non-blocking orchestration`,
-          );
-        }
-        return { changes, warnings };
       } finally {
         sqlite.close();
       }

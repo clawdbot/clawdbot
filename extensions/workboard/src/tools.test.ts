@@ -5,7 +5,7 @@ import type { OpenClawPluginApi } from "../api.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
 import { createWorkboardTools } from "./tools.js";
-import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
+import { guardWorkboardToolsForWorkspaceAccess, WORKBOARD_TOOL_NAMES } from "./workspace-access.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -30,6 +30,29 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
+  it("declares repair tools and exposes a provider-safe decomposition mode enum", () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const tools = new Map(
+      createWorkboardTools({ api, store, context: { agentId: "main" } as never }).map((tool) => [
+        tool.name,
+        tool,
+      ]),
+    );
+
+    expect(WORKBOARD_TOOL_NAMES).toEqual(
+      expect.arrayContaining(["workboard_unlink_dependency", "workboard_repair_decomposition"]),
+    );
+    const decomposeSchema = tools.get("workboard_decompose")?.parameters as {
+      properties?: Record<string, { type?: string; enum?: string[]; anyOf?: unknown }>;
+    };
+    expect(decomposeSchema.properties?.decompositionMode).toMatchObject({
+      type: "string",
+      enum: ["hard", "orchestration"],
+    });
+    expect(decomposeSchema.properties?.decompositionMode?.anyOf).toBeUndefined();
+  });
+
   it("inherits the active tool filesystem boundary for workspace metadata", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const api = { runtime: {} } as unknown as OpenClawPluginApi;
@@ -543,7 +566,15 @@ describe("workboard tools", () => {
     );
     expect(decomposed.parent).toMatchObject({ status: "done" });
     expect(decomposed.children).toEqual([
-      expect.objectContaining({ title: "Child A" }),
+      expect.objectContaining({
+        title: "Child A",
+        metadata: {
+          automation: expect.objectContaining({ decompositionMode: "hard" }),
+          links: expect.arrayContaining([
+            expect.objectContaining({ type: "parent", targetCardId: parent.id }),
+          ]),
+        },
+      }),
       expect.objectContaining({ title: "Child B" }),
     ]);
 

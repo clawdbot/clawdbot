@@ -285,7 +285,7 @@ export function normalizeStatus(value: unknown, fallback: WorkboardStatus): Work
 
 export function normalizeDecompositionMode(
   value: unknown,
-  fallback: WorkboardDecompositionMode = "orchestration",
+  fallback: WorkboardDecompositionMode = "hard",
 ): WorkboardDecompositionMode {
   return WORKBOARD_DECOMPOSITION_MODES.includes(value as WorkboardDecompositionMode)
     ? (value as WorkboardDecompositionMode)
@@ -907,9 +907,12 @@ function normalizeDiagnosticAction(value: unknown): WorkboardDiagnosticAction | 
   const kind =
     record.kind === "claim" ||
     record.kind === "unblock" ||
+    record.kind === "promote" ||
+    record.kind === "reclaim" ||
     record.kind === "reassign" ||
     record.kind === "add_proof" ||
-    record.kind === "open_session"
+    record.kind === "open_session" ||
+    record.kind === "repair_dependency"
       ? record.kind
       : undefined;
   const label = normalizeBoundedString(record.label, undefined, 120, "diagnostic action label");

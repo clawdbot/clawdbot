@@ -353,7 +353,7 @@ export function createWorkboardTools(params: {
       name: "workboard_repair_decomposition",
       label: "Workboard Repair Decomposition",
       description:
-        "Dry-run by default, or apply an idempotent repair of proven legacy hard links from decomposition.",
+        "Dry-run by default, or apply an idempotent repair of stale hard links on explicitly orchestration-marked decomposition.",
       parameters: Type.Object(
         {
           parentId: Type.String({ description: "Aggregate parent Workboard card id." }),
@@ -819,7 +819,7 @@ export function createWorkboardTools(params: {
       name: "workboard_decompose",
       label: "Workboard Decompose",
       description:
-        "Fan out a Workboard card into linked child cards and optionally complete the parent orchestration card.",
+        "Fan out a Workboard card into hard-dependent children by default, or explicit non-blocking orchestration children, and optionally complete the parent.",
       parameters: Type.Object(
         {
           id: Type.String({ description: "Parent Workboard card id." }),
@@ -831,9 +831,10 @@ export function createWorkboardTools(params: {
             }),
           ),
           decompositionMode: Type.Optional(
-            Type.Union([Type.Literal("orchestration"), Type.Literal("hard")], {
+            Type.String({
+              enum: ["hard", "orchestration"],
               description:
-                "Child relationship mode. Defaults to non-blocking orchestration; use hard for explicit parent dependencies.",
+                "Child relationship mode. Hard dependencies are the default; use orchestration for explicit non-blocking provenance.",
             }),
           ),
           children: Type.Array(

@@ -113,7 +113,8 @@ function computeDependencyDiagnostics(
         child.status !== "done" &&
         card.status !== "done" &&
         child.metadata?.automation?.createdByCardId === card.id &&
-        child.metadata?.automation?.decompositionMode !== "hard"
+        card.metadata?.automation?.decompositionMode === "orchestration" &&
+        child.metadata?.automation?.decompositionMode === "orchestration"
       ) {
         add(
           card.id,
@@ -129,7 +130,7 @@ function computeDependencyDiagnostics(
           graphDiagnostic(
             "aggregate_deadlock",
             "Decomposition child is blocked by its aggregate parent",
-            "This child appears to retain a legacy hard dependency created by decomposition.",
+            "This explicitly orchestrated child retains a hard dependency created by decomposition.",
             now,
           ),
         );

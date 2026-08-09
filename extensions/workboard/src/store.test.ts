@@ -2578,7 +2578,7 @@ describe("WorkboardStore", () => {
     });
   });
 
-  it("preserves legacy hard links and records the omission-compatible intent", async () => {
+  it("preserves unmarked historical hard links without rewriting intent", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const parent = await store.create({ title: "Aggregate", status: "todo" });
     const child = await store.create({ title: "Legacy child", status: "todo" });
@@ -2596,7 +2596,7 @@ describe("WorkboardStore", () => {
     });
 
     const before = await store.diagnostics();
-    expect(before.diagnostics.flatMap((row) => row.diagnostics)).toEqual(
+    expect(before.diagnostics.flatMap((row) => row.diagnostics)).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: "aggregate_deadlock" })]),
     );
 
@@ -2605,12 +2605,8 @@ describe("WorkboardStore", () => {
       repairedChildIds: [],
       skippedChildIds: [child.id],
     });
-    await expect(store.get(parent.id)).resolves.toMatchObject({
-      metadata: { automation: { decompositionMode: "hard" } },
-    });
-    await expect(store.get(child.id)).resolves.toMatchObject({
-      metadata: { automation: { decompositionMode: "hard" } },
-    });
+    expect((await store.get(parent.id))?.metadata?.automation?.decompositionMode).toBeUndefined();
+    expect((await store.get(child.id))?.metadata?.automation?.decompositionMode).toBeUndefined();
     await expect(store.get(parent.id)).resolves.toMatchObject({
       metadata: {
         links: expect.arrayContaining([
@@ -2618,6 +2614,37 @@ describe("WorkboardStore", () => {
         ]),
       },
     });
+  });
+
+  it("preserves dependency repair, promote, and reclaim diagnostic actions", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Recoverable dependency",
+      metadata: {
+        diagnostics: [
+          {
+            kind: "aggregate_deadlock",
+            severity: "error",
+            title: "Dependency needs review",
+            detail: "Operator action is required.",
+            firstSeenAt: 10,
+            lastSeenAt: 20,
+            count: 1,
+            actions: [
+              { kind: "repair_dependency", label: "Repair" },
+              { kind: "promote", label: "Promote" },
+              { kind: "reclaim", label: "Reclaim" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect((await store.get(card.id))?.metadata?.diagnostics?.[0]?.actions).toEqual([
+      { kind: "repair_dependency", label: "Repair" },
+      { kind: "promote", label: "Promote" },
+      { kind: "reclaim", label: "Reclaim" },
+    ]);
   });
 
   it("keeps archived cards out of diagnostics without rewriting their history", async () => {
