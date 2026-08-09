@@ -982,7 +982,7 @@ export class GatewayClient {
         deviceId: this.opts.deviceIdentity.deviceId,
         role: authInfo.role ?? role,
         token: authInfo.deviceToken,
-        scopes: authInfo.scopes ?? [],
+        scopes: authInfo.deviceTokenScopes ?? authInfo.scopes ?? [],
         env: this.opts.env,
       });
     }

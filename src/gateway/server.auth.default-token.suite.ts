@@ -91,6 +91,7 @@ export function registerDefaultAuthTokenSuite(): void {
           role?: unknown;
           scopes?: unknown;
           deviceToken?: unknown;
+          deviceTokenScopes?: unknown;
         }
       | undefined {
       return (
@@ -100,6 +101,7 @@ export function registerDefaultAuthTokenSuite(): void {
                 role?: unknown;
                 scopes?: unknown;
                 deviceToken?: unknown;
+                deviceTokenScopes?: unknown;
               };
             }
           | undefined
@@ -326,7 +328,7 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
-    test("hello-ok reports persisted token scopes when reusing an existing device token", async () => {
+    test("hello-ok separates effective scopes from a reused device token grant", async () => {
       const { randomUUID } = await import("node:crypto");
       const os = await import("node:os");
       const path = await import("node:path");
@@ -347,10 +349,11 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(initial.ok).toBe(true);
         const auth = readHelloOkAuth(initial.payload);
         expect(auth?.role).toBe("operator");
-        expect(Array.isArray(auth?.scopes)).toBe(true);
+        expect(auth?.scopes).toEqual(["operator.admin"]);
         expect(typeof auth?.deviceToken).toBe("string");
+        expect(Array.isArray(auth?.deviceTokenScopes)).toBe(true);
         pairedDeviceToken = auth?.deviceToken as string | undefined;
-        pairedDeviceScopes = auth?.scopes;
+        pairedDeviceScopes = auth?.deviceTokenScopes;
       } finally {
         wsInitial.close();
       }
@@ -366,8 +369,11 @@ export function registerDefaultAuthTokenSuite(): void {
         const auth = readHelloOkAuth(reconnect.payload);
         expect(auth?.role).toBe("operator");
         expect(auth?.deviceToken).toBe(pairedDeviceToken);
-        expect(auth?.scopes).toEqual(pairedDeviceScopes);
-        expect(auth?.scopes).not.toEqual(["operator.read"]);
+        expect(auth?.scopes).toEqual(["operator.read"]);
+        expect(auth?.deviceTokenScopes).toEqual(pairedDeviceScopes);
+        const admin = await rpcReq(wsReconnect, "config.schema");
+        expect(admin.ok).toBe(false);
+        expect(admin.error?.message).toBe("missing scope: operator.admin");
       } finally {
         wsReconnect.close();
       }

@@ -817,7 +817,8 @@ class GatewaySessionInvokeTest {
               webSocket.send(
                 connectResponseFrame(
                   id,
-                  authJson = """{"deviceToken":"shared-node-token","role":"node","scopes":[]}""",
+                  authJson =
+                    """{"deviceToken":"shared-operator-token","deviceTokenScopes":["operator.admin","operator.read"],"role":"operator","scopes":["operator.read"]}""",
                 ),
               )
               webSocket.close(1000, "done")
@@ -837,12 +838,16 @@ class GatewaySessionInvokeTest {
           port = server.port,
           token = "shared-auth-token",
           bootstrapToken = null,
+          role = "operator",
+          scopes = listOf("operator.read"),
         )
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        assertEquals("shared-node-token", harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "node"))
-        assertNull(harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "operator"))
+        val entry = harness.deviceAuthStore.loadEntry(gatewayIdForPort(server.port), deviceId, "operator")
+        assertEquals("shared-operator-token", entry?.token)
+        assertEquals(listOf("operator.admin", "operator.read"), entry?.scopes)
+        assertNull(harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "node"))
       } finally {
         shutdownHarness(harness, server)
       }
@@ -920,7 +925,7 @@ class GatewaySessionInvokeTest {
                 connectResponseFrame(
                   id,
                   authJson =
-                    """{"deviceToken":"shared-node-token","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"shared-operator-token","role":"operator","scopes":["operator.approvals","operator.read"]}]}""",
+                    """{"deviceToken":"shared-node-token","role":"node","scopes":["node.exec"],"deviceTokens":[{"deviceToken":"shared-operator-token","role":"operator","scopes":["operator.approvals","operator.read"]}]}""",
                 ),
               )
               webSocket.close(1000, "done")
@@ -944,7 +949,9 @@ class GatewaySessionInvokeTest {
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        assertEquals("shared-node-token", harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "node"))
+        val nodeEntry = harness.deviceAuthStore.loadEntry(gatewayIdForPort(server.port), deviceId, "node")
+        assertEquals("shared-node-token", nodeEntry?.token)
+        assertEquals(listOf("node.exec"), nodeEntry?.scopes)
         assertNull(harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "operator"))
       } finally {
         shutdownHarness(harness, server)

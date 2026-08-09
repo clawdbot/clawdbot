@@ -45,7 +45,14 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
     );
 
     await lifecycle.acceptHello(
-      { auth: { deviceToken: "test-auth-token", role: "operator", scopes: ["operator.write"] } },
+      {
+        auth: {
+          deviceToken: "test-auth-token",
+          deviceTokenScopes: ["operator.admin", "operator.write"],
+          role: "operator",
+          scopes: ["operator.read"],
+        },
+      },
       plan,
     );
     expect(store).toHaveBeenCalledWith({
@@ -53,6 +60,19 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
       deviceId: "device",
       role: "operator",
       token: "test-auth-token",
+      scopes: ["operator.admin", "operator.write"],
+    });
+
+    store.mockClear();
+    await lifecycle.acceptHello(
+      { auth: { deviceToken: "legacy-token", role: "operator", scopes: ["operator.write"] } },
+      plan,
+    );
+    expect(store).toHaveBeenCalledWith({
+      clientId: "openclaw-browser-copilot",
+      deviceId: "device",
+      role: "operator",
+      token: "legacy-token",
       scopes: ["operator.write"],
     });
   });

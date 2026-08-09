@@ -1,7 +1,23 @@
 // Hello update-scope tests cover the authenticated role/scope projection passed to snapshots.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { buildGatewaySnapshotMock } = vi.hoisted(() => ({
+const {
+  buildGatewaySnapshotMock,
+  emitGatewayAuthSecurityEventMock,
+  listControlUiPluginTabsMock,
+  listControlUiPluginWidgetKindsMock,
+} = vi.hoisted(() => ({
+  emitGatewayAuthSecurityEventMock: vi.fn(),
+  listControlUiPluginTabsMock: vi.fn((scopes: readonly string[]) =>
+    scopes.includes("operator.admin")
+      ? [{ pluginId: "admin-plugin", id: "admin", label: "Admin" }]
+      : [],
+  ),
+  listControlUiPluginWidgetKindsMock: vi.fn((scopes: readonly string[]) =>
+    scopes.includes("operator.admin")
+      ? [{ pluginId: "admin-plugin", kind: "admin-plugin:admin", label: "Admin" }]
+      : [],
+  ),
   buildGatewaySnapshotMock: vi.fn((opts?: { includeUpdateDetails?: boolean }) => {
     const updateAvailable = {
       currentVersion: "2026.8.7",
@@ -52,8 +68,13 @@ vi.mock("../../../state/user-profiles.js", () => ({
   listProfiles: vi.fn(() => []),
 }));
 
+vi.mock("../../control-ui-plugin-tabs.js", () => ({
+  listControlUiPluginTabs: listControlUiPluginTabsMock,
+  listControlUiPluginWidgetKinds: listControlUiPluginWidgetKindsMock,
+}));
+
 vi.mock("./connect-auth-security.js", () => ({
-  emitGatewayAuthSecurityEvent: vi.fn(),
+  emitGatewayAuthSecurityEvent: emitGatewayAuthSecurityEventMock,
 }));
 
 import { sendGatewayHello } from "./connect-hello.js";
@@ -102,10 +123,19 @@ function makeState(role: "operator" | "node", scopes: string[]) {
   };
 }
 
-function helloSnapshot(context: ReturnType<typeof makeContext>) {
+function helloPayload(context: ReturnType<typeof makeContext>) {
   const response = context.sendFrame.mock.calls.at(0)?.at(0) as
     | {
         payload?: {
+          auth?: {
+            deviceToken?: string;
+            deviceTokenScopes?: string[];
+            issuedAtMs?: number;
+            role?: string;
+            scopes?: string[];
+          };
+          controlUiTabs?: unknown[];
+          controlUiWidgetKinds?: unknown[];
           snapshot?: {
             updateAvailable?: Record<string, unknown>;
             updateSchedule?: unknown;
@@ -113,7 +143,11 @@ function helloSnapshot(context: ReturnType<typeof makeContext>) {
         };
       }
     | undefined;
-  return response?.payload?.snapshot;
+  return response?.payload;
+}
+
+function helloSnapshot(context: ReturnType<typeof makeContext>) {
+  return helloPayload(context)?.snapshot;
 }
 
 function expectRedactedHelloSnapshot(context: ReturnType<typeof makeContext>) {
@@ -173,7 +207,7 @@ describe("sendGatewayHello update detail scope", () => {
     );
   });
 
-  it("does not widen the snapshot to broader reusable device-token scopes", async () => {
+  it("keeps hello projection and telemetry at effective scopes", async () => {
     const state = {
       ...makeState("operator", ["operator.pairing"]),
       deviceToken: {
@@ -192,5 +226,21 @@ describe("sendGatewayHello update detail scope", () => {
       includeUpdateDetails: false,
     });
     expectRedactedHelloSnapshot(context);
+    expect(helloPayload(context)?.auth).toEqual({
+      role: "operator",
+      scopes: ["operator.pairing"],
+      deviceToken: "paired-token",
+      deviceTokenScopes: ["operator.read", "operator.admin"],
+      issuedAtMs: 1,
+    });
+    expect(helloPayload(context)?.controlUiTabs).toBeUndefined();
+    expect(helloPayload(context)?.controlUiWidgetKinds).toBeUndefined();
+    expect(listControlUiPluginTabsMock).toHaveBeenCalledWith(["operator.pairing"], {
+      requireGatewayAuthGrant: false,
+    });
+    expect(listControlUiPluginWidgetKindsMock).toHaveBeenCalledWith(["operator.pairing"]);
+    expect(emitGatewayAuthSecurityEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "operator", scopes: ["operator.pairing"] }),
+    );
   });
 });

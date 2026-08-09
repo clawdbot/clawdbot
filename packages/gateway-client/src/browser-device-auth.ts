@@ -166,7 +166,7 @@ export class GatewayBrowserDeviceAuthLifecycle {
       deviceId: plan.identity.deviceId,
       role: hello.auth?.role ?? plan.role,
       token,
-      scopes: hello.auth?.scopes ?? [],
+      scopes: hello.auth?.deviceTokenScopes ?? hello.auth?.scopes ?? [],
     });
   }
 

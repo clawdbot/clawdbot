@@ -2738,7 +2738,7 @@ struct GatewayNodeSessionTests {
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "share-node-token",
             "role": "node",
-            "scopes": [],
+            "scopes": ["node.exec"],
         ])
         let gateway = GatewayNodeSession()
         let options = nodeConnectOptions(
@@ -2761,6 +2761,7 @@ struct GatewayNodeSessionTests {
         // Profile selects identity resolution, not a token namespace; (device_id, role) is the canonical key.
         // Per-profile identities keep caches disjoint in practice, and Node reads the same table by that key.
         #expect(DeviceAuthStore.loadToken(deviceId: shareDeviceId, role: "node")?.token == "share-node-token")
+        #expect(DeviceAuthStore.loadToken(deviceId: shareDeviceId, role: "node")?.scopes == ["node.exec"])
         #expect(
             DeviceAuthStore
                 .loadToken(deviceId: shareDeviceId, role: "node", profile: .shareExtension)?.token ==
@@ -2943,19 +2944,20 @@ struct GatewayNodeSessionTests {
     func `non bootstrap hello stores primary device token but not additional bootstrap tokens`() async throws {
         let identity = DeviceIdentityStore.loadOrCreate()
         let session = FakeGatewayWebSocketSession(helloAuth: [
-            "deviceToken": "server-node-token",
-            "role": "node",
-            "scopes": [],
+            "deviceToken": "server-operator-token",
+            "deviceTokenScopes": ["operator.admin", "operator.read"],
+            "role": "operator",
+            "scopes": ["operator.read"],
             "deviceTokens": [
                 [
-                    "deviceToken": "server-operator-token",
-                    "role": "operator",
-                    "scopes": ["operator.admin"],
+                    "deviceToken": "server-node-token",
+                    "role": "node",
+                    "scopes": [],
                 ],
             ],
         ])
         let gateway = GatewayNodeSession()
-        let options = nodeConnectOptions(includeDeviceIdentity: true)
+        let options = operatorConnectOptions(includeDeviceIdentity: true)
 
         try await gateway.connectForTest(
             testURL("wss://example.invalid"),
@@ -2963,10 +2965,10 @@ struct GatewayNodeSessionTests {
             options: options,
             session: session)
 
-        let nodeEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node"))
-        #expect(nodeEntry.token == "server-node-token")
-        #expect(nodeEntry.scopes == [])
-        #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator") == nil)
+        let operatorEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator"))
+        #expect(operatorEntry.token == "server-operator-token")
+        #expect(operatorEntry.scopes == ["operator.admin", "operator.read"])
+        #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node") == nil)
 
         await gateway.disconnect()
     }

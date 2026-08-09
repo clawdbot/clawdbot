@@ -1450,8 +1450,14 @@ class GatewaySession(
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull() }
           ?: emptyList()
+      val deviceTokenScopes =
+        authObj
+          ?.get("deviceTokenScopes")
+          .asArrayOrNull()
+          ?.mapNotNull { it.asStringOrNull() }
+          ?: authScopes
       if (!deviceToken.isNullOrBlank()) {
-        persistIssuedDeviceToken(authSource, deviceId, authRole, deviceToken, authScopes)
+        persistIssuedDeviceToken(authSource, deviceId, authRole, deviceToken, deviceTokenScopes)
       }
       if (shouldPersistBootstrapHandoffTokens(authSource)) {
         // Bootstrap connects can mint role-specific device tokens; store only locally trusted handoffs.

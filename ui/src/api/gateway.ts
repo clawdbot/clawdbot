@@ -517,7 +517,7 @@ export class GatewayBrowserClient {
         gatewayUrl: this.opts.url,
         role: hello.auth.role ?? plan.params.role ?? CONTROL_UI_OPERATOR_ROLE,
         token: hello.auth.deviceToken,
-        scopes: hello.auth.scopes ?? [],
+        scopes: hello.auth.deviceTokenScopes ?? hello.auth.scopes ?? [],
       });
     }
     void this.updateRecoveryScopeForHello(hello, plan);

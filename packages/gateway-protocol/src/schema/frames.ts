@@ -121,6 +121,7 @@ export const HelloOkSchema = closedObject({
   ),
   auth: closedObject({
     deviceToken: Type.Optional(NonEmptyString),
+    deviceTokenScopes: Type.Optional(Type.Array(NonEmptyString)),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

@@ -1995,6 +1995,7 @@ describe("GatewayClient connect auth payload", () => {
             role: "operator",
             scopes: ["operator.read"],
             deviceToken: "issued-origin-token",
+            deviceTokenScopes: ["operator.admin", "operator.read"],
           },
         },
       }),
@@ -2006,7 +2007,7 @@ describe("GatewayClient connect auth payload", () => {
         deviceId: "device-1",
         role: "operator",
         token: "issued-origin-token",
-        scopes: ["operator.read"],
+        scopes: ["operator.admin", "operator.read"],
         env: undefined,
       });
     });
