@@ -247,7 +247,7 @@ describe("terminal tool", () => {
       runId: "completed-run",
       lookupTaskByRunId: vi.fn(async () => ({
         taskId: "task-completed",
-        status: "succeeded",
+        status: "succeeded" as const,
         childSessionKey: "agent:main:completed-task",
       })),
       getGatewayContext: () => makeContext(manager),

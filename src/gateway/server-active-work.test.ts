@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
-import { baseOpenRequest, makeFakePty } from "./terminal/session-manager.test-helpers.js";
+import {
+  baseOpenRequest,
+  makeFakePty,
+  taskAgentOwner,
+} from "./terminal/session-manager.test-helpers.js";
 
 vi.mock("../cron/active-jobs.js", () => ({
   getActiveCronJobCount: vi.fn(() => 2),
@@ -67,11 +71,7 @@ describe("gateway server active work inspectors", () => {
     });
     await terminalSessions.open(
       baseOpenRequest({
-        owner: {
-          kind: "agent",
-          agentSessionKey: "agent:main:cron:job-1:run:run-1",
-          taskId: "task-1",
-        } as const,
+        owner: taskAgentOwner("agent:main:cron:job-1:run:run-1", "task-1"),
       }),
     );
     await terminalSessions.open(

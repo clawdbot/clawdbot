@@ -34,7 +34,11 @@ import {
 } from "./server-chat-state.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
-import { baseOpenRequest, makeFakePty } from "./terminal/session-manager.test-helpers.js";
+import {
+  baseOpenRequest,
+  makeFakePty,
+  taskAgentOwner,
+} from "./terminal/session-manager.test-helpers.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -484,7 +488,7 @@ describe("startGatewayEventSubscriptions", () => {
     }
     const taskOpen = await manager.open(
       baseOpenRequest({
-        owner: { kind: "agent", agentSessionKey: runSessionKey, taskId: task.taskId } as const,
+        owner: taskAgentOwner(runSessionKey, task.taskId),
       }),
     );
     const persistentOpen = await manager.open(

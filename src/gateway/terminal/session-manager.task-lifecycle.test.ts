@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { TerminalSessionManager } from "./session-manager.js";
-import { baseOpenRequest, makeFakePty } from "./session-manager.test-helpers.js";
+import { baseOpenRequest, makeFakePty, taskAgentOwner } from "./session-manager.test-helpers.js";
 
 const TERMINAL_EVENT_EXIT = "terminal.exit";
 
@@ -14,11 +14,7 @@ describe("TerminalSessionManager task lifecycle", () => {
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: () => spawn });
     const opening = manager.open(
       baseOpenRequest({
-        owner: {
-          kind: "agent",
-          agentSessionKey: "agent:main:cron:job-1:run:run-1",
-          taskId: "task-1",
-        } as const,
+        owner: taskAgentOwner("agent:main:cron:job-1:run:run-1", "task-1"),
       }),
     );
 
