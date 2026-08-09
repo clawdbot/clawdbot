@@ -128,6 +128,8 @@ describe("resolveResumeSession", () => {
 
 describe("runResumeCommand", () => {
   it("resolves the global session row", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
     const client = createGatewayClient([{ key: "global", displayName: "global" }]);
 
     await runResumeCommand("global", {});
@@ -161,13 +163,14 @@ describe("runResumeCommand", () => {
     );
   });
 
-  it("rejects a non-interactive picker before connecting", async () => {
+  it("rejects a non-interactive queried resume before connecting or launching the TUI", async () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
     Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
 
-    await expect(runResumeCommand(undefined, {})).rejects.toThrow(
-      "Session selection requires an interactive terminal. Pass a session key or name: `openclaw resume <query>`.",
+    await expect(runResumeCommand("global", {})).rejects.toThrow(
+      "Attaching to a session requires an interactive terminal. Re-run `openclaw resume [query]` from an interactive terminal.",
     );
     expect(gatewayMocks.connect).not.toHaveBeenCalled();
+    expect(gatewayMocks.runTui).not.toHaveBeenCalled();
   });
 });

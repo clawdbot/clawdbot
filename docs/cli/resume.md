@@ -38,6 +38,10 @@ status 1. If no recent session matches, it suggests the picker and
 [`openclaw tui`](/cli/tui). It never starts a Gateway automatically. If the
 configured Gateway is unavailable, start or repair it and rerun the command.
 
+With no explicit `--url`, `resume` follows the active local Gateway recorded by
+the running process. With `--url`, pass `--token` or `--password` explicitly
+unless a device credential is already stored for that exact Gateway origin.
+
 ## Examples
 
 ```bash

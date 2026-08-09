@@ -14,7 +14,7 @@ import {
 import type { ResumeCliOptions } from "./resume-cli.js";
 
 const RESUME_INTERACTIVE_TERMINAL_GUIDANCE =
-  "Session selection requires an interactive terminal. Pass a session key or name: `openclaw resume <query>`.";
+  "Attaching to a session requires an interactive terminal. Re-run `openclaw resume [query]` from an interactive terminal.";
 
 function requireInteractiveResumeTerminal() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -70,7 +70,6 @@ async function promptResumeSession(
       "No recent sessions found. Run `openclaw sessions` to inspect sessions or `openclaw tui` to start one.",
     );
   }
-  requireInteractiveResumeTerminal();
   const selected = await selectStyled({
     message: "Resume a session",
     options: choices.map((choice) => ({
@@ -112,10 +111,8 @@ function formatResumeCandidate(candidate: SessionPickerChoice): string {
 
 /** Resolve or select one session and run the existing Gateway-backed TUI. */
 export async function runResumeCommand(query: string | undefined, opts: ResumeCliOptions) {
+  requireInteractiveResumeTerminal();
   const trimmedQuery = query?.trim();
-  if (!trimmedQuery) {
-    requireInteractiveResumeTerminal();
-  }
   const sessions = await fetchResumeSessions(opts);
   let sessionKey: string | null;
   if (trimmedQuery) {
