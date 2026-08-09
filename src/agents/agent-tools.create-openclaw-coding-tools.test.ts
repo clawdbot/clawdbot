@@ -118,10 +118,15 @@ function createToolsForStoredSession(storeTemplate: string, sessionKey: string) 
 
 function expectNoSubagentControlTools(tools: ReturnType<typeof createOpenClawCodingTools>) {
   const names = new Set(tools.map((tool) => tool.name));
+  expect(names.has("sessions")).toBe(false);
   expect(names.has("sessions_spawn")).toBe(false);
   expect(names.has("sessions_list")).toBe(false);
   expect(names.has("sessions_history")).toBe(false);
   expect(names.has("subagents")).toBe(false);
+}
+
+function expectNoSessionLifecycleTool(tools: ReturnType<typeof createOpenClawCodingTools>) {
+  expect(tools.map((tool) => tool.name)).not.toContain("sessions");
 }
 
 function applyRuntimeToolsAllow<T extends { name: string }>(tools: T[], toolsAllow: string[]) {
@@ -1834,11 +1839,58 @@ describe("createOpenClawCodingTools", () => {
 
       const restrictedTools = createToolsForStoredSession(storeTemplate, "agent:main:acp:plain");
       const restrictedNames = new Set(restrictedTools.map((tool) => tool.name));
+      expect(restrictedNames.has("sessions")).toBe(false);
       expect(restrictedNames.has("sessions_spawn")).toBe(true);
       expect(restrictedNames.has("subagents")).toBe(true);
 
       const ancestryTools = createToolsForStoredSession(storeTemplate, "agent:writer:acp:child");
       expectNoSubagentControlTools(ancestryTools);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hard-denies session lifecycle mutations for leaf, orchestrator, and ACP inventories", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-lifecycle-policy-"));
+    try {
+      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      const entries = {
+        "agent:main:subagent:leaf": {
+          sessionId: "leaf-session",
+          updatedAt: Date.now(),
+          spawnDepth: 2,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
+        },
+        "agent:main:subagent:orchestrator": {
+          sessionId: "orchestrator-session",
+          updatedAt: Date.now(),
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+        },
+        "agent:main:acp:child": {
+          sessionId: "acp-session",
+          updatedAt: Date.now(),
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+          spawnedBy: "agent:main:subagent:orchestrator",
+        },
+      };
+      await writeSessionStore(storeTemplate, "main", entries);
+
+      const leaf = createToolsForStoredSession(storeTemplate, "agent:main:subagent:leaf");
+      const orchestrator = createToolsForStoredSession(
+        storeTemplate,
+        "agent:main:subagent:orchestrator",
+      );
+      const acp = createToolsForStoredSession(storeTemplate, "agent:main:acp:child");
+
+      expectNoSessionLifecycleTool(leaf);
+      expectNoSessionLifecycleTool(orchestrator);
+      expectNoSessionLifecycleTool(acp);
+      expect(toolNameList(orchestrator)).toContain("sessions_spawn");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

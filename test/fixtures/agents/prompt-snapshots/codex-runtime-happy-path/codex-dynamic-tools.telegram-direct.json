@@ -1332,6 +1332,111 @@
       },
       {
         "deferLoading": true,
+        "description": "Session settings and lifecycle: patch label/icon/status, pin, archive/restore, model/thinking override; batch archive/delete with dry-run and ordered results; reset visible sessions; group_list/group_set/group_rename/group_delete.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "description": "Action",
+              "enum": [
+                "patch",
+                "archive",
+                "reset",
+                "delete",
+                "group_list",
+                "group_set",
+                "group_rename",
+                "group_delete"
+              ],
+              "type": "string"
+            },
+            "archived": {
+              "description": "True archives without deleting; false restores the session.",
+              "type": "boolean"
+            },
+            "attention": {
+              "description": "Request user attention with a curated icon; requires an active statusNote. 'clear' clears both attention and statusNote.",
+              "enum": ["clear", "hand", "key", "alert", "flag", "lock", "hourglass"],
+              "type": "string"
+            },
+            "deleteTranscript": {
+              "description": "Archive the deleted session transcript. Default: true.",
+              "type": "boolean"
+            },
+            "dryRun": {
+              "description": "Preview archive/delete outcomes without mutating state.",
+              "type": "boolean"
+            },
+            "icon": {
+              "description": "Sidebar icon: an emoji, name:<curated-id>, or svg:<svg …> you draw yourself (tiny, sanitized). Empty string removes it.",
+              "type": "string"
+            },
+            "label": {
+              "description": "Sidebar title override. Empty string clears it.",
+              "type": "string"
+            },
+            "model": {
+              "description": "Model override",
+              "type": "string"
+            },
+            "name": {
+              "description": "Group name",
+              "type": "string"
+            },
+            "names": {
+              "description": "Ordered group names",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "pinned": {
+              "description": "Pin session",
+              "type": "boolean"
+            },
+            "sessionKey": {
+              "description": "Single target. Required for reset; patch defaults to current; archive/delete require this or sessionKeys.",
+              "maxLength": 512,
+              "type": "string"
+            },
+            "sessionKeys": {
+              "description": "Ordered batch targets for archive/delete; cannot be combined with sessionKey.",
+              "items": {
+                "maxLength": 512,
+                "type": "string"
+              },
+              "maxItems": 8,
+              "minItems": 1,
+              "type": "array"
+            },
+            "statusNote": {
+              "description": "Short sidebar status line. Empty string clears it and declared attention. Clears automatically when the user reads or replies, or when its TTL expires.",
+              "maxLength": 120,
+              "type": "string"
+            },
+            "thinkingLevel": {
+              "description": "Thinking override",
+              "type": "string"
+            },
+            "to": {
+              "description": "New group name",
+              "type": "string"
+            },
+            "ttlMinutes": {
+              "description": "Status/attention lifetime in minutes. Default 30; maximum 120.",
+              "maximum": 120,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": ["action"],
+          "type": "object"
+        },
+        "name": "sessions",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
         "description": "Read sanitized visible-session history. Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
         "inputSchema": {
           "properties": {

@@ -265,7 +265,7 @@ describe("openclaw-tools update_plan gating", () => {
     expect(toolNames(denied)).not.toContain("message");
   });
 
-  it("keeps subagent spawn available for trusted embedded gateway-bound runs", () => {
+  it("keeps session lifecycle and spawn available for trusted embedded gateway-bound runs", () => {
     setEmbeddedMode(true);
     const defaultTools = createFastToolNames({
       config: {} as OpenClawConfig,
@@ -276,8 +276,10 @@ describe("openclaw-tools update_plan gating", () => {
     });
 
     expect(defaultTools).not.toContain("sessions_spawn");
+    expect(defaultTools).not.toContain("sessions");
     expect(defaultTools).not.toContain("sessions_send");
     expect(gatewayBoundTools).toContain("sessions_spawn");
+    expect(gatewayBoundTools).toContain("sessions");
     expect(gatewayBoundTools).not.toContain("sessions_send");
   });
 

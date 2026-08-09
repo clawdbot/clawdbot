@@ -3,6 +3,12 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import {
+  runSessionLifecycleBatch,
+  type SessionLifecycleBatchItem,
+  type SessionLifecycleOperation as SessionsLifecycleOperation,
+  type SessionLifecycleResult as SessionsLifecycleResult,
+} from "../sessions/session-lifecycle-batch.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 
 type SessionsLifecycleCliOptions = {
@@ -17,26 +23,6 @@ type SessionsLifecycleCliOptions = {
   json?: boolean;
 };
 
-type SessionsLifecycleOperation = "archive" | "delete";
-
-type SessionsLifecycleStatus =
-  | "archived"
-  | "already_archived"
-  | "deleted"
-  | "would_archive"
-  | "would_delete"
-  | "not_found"
-  | "failed";
-
-type SessionsLifecycleResult = {
-  key: string;
-  ok: boolean;
-  status: SessionsLifecycleStatus;
-  error?: string;
-  archived?: string[];
-  worktreePreserved?: { id: string; branch: string; path: string };
-};
-
 type SessionsListRow = {
   key: string;
   sessionId?: string;
@@ -47,20 +33,6 @@ type SessionsListResult = {
   sessions?: SessionsListRow[];
   hasMore?: boolean;
   nextOffset?: number | null;
-};
-
-type SessionsPatchResult = {
-  ok?: boolean;
-  key?: string;
-  entry?: { archivedAt?: number };
-};
-
-type SessionsDeleteResult = {
-  ok?: boolean;
-  key?: string;
-  deleted?: boolean;
-  archived?: string[];
-  worktreePreserved?: { id: string; branch: string; path: string };
 };
 
 type SessionsLifecycleRpcOptions = Parameters<typeof callGatewayFromCliWithTransport>[1];
@@ -204,9 +176,20 @@ async function runSessionsLifecycleCommand(
     return;
   }
 
-  const results = keys.map((key): SessionsLifecycleResult | undefined =>
-    key && sessions.has(key) ? undefined : notFoundResult(key, opts.agent),
-  );
+  const items: SessionLifecycleBatchItem[] = keys.map((key) => {
+    const session = sessions.get(key);
+    return session
+      ? {
+          key,
+          target: {
+            key: session.key,
+            ...(opts.agent ? { agentId: opts.agent } : {}),
+            sessionId: session.sessionId,
+            archived: session.archived,
+          },
+        }
+      : { key, result: notFoundResult(key, opts.agent) };
+  });
   const validTargets = keys.flatMap((key, index) => {
     const session = sessions.get(key);
     return session ? [{ index, session }] : [];
@@ -216,12 +199,17 @@ async function runSessionsLifecycleCommand(
     if (opts.json || !process.stdin.isTTY) {
       const error = "Deletion requires confirmation. Pass --yes to delete non-interactively.";
       for (const { index, session } of validTargets) {
-        results[index] = { key: session.key, ok: false, status: "failed", error };
+        items[index] = {
+          key: session.key,
+          result: { key: session.key, ok: false, status: "failed", error },
+        };
       }
       outputLifecycleResults(
         operation,
         false,
-        results.filter((result) => result !== undefined),
+        items.map((item) =>
+          "result" in item ? item.result : notFoundResult(item.key, opts.agent),
+        ),
         runtime,
         Boolean(opts.json),
       );
@@ -237,83 +225,18 @@ async function runSessionsLifecycleCommand(
     }
   }
 
-  for (const { index, session } of validTargets) {
-    if (opts.dryRun) {
-      results[index] = {
-        key: session.key,
-        ok: true,
-        status:
-          operation === "archive"
-            ? session.archived === true
-              ? "already_archived"
-              : "would_archive"
-            : "would_delete",
-      };
-      continue;
-    }
-    if (operation === "archive" && session.archived === true) {
-      results[index] = { key: session.key, ok: true, status: "already_archived" };
-      continue;
-    }
-    try {
-      if (operation === "archive") {
-        const response = (await callGatewayFromCliWithTransport(
-          "sessions.patch",
-          rpcOptions,
-          {
-            key: session.key,
-            ...(opts.agent ? { agentId: opts.agent } : {}),
-            ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
-            archived: true,
-          },
-          { defaultTimeoutMs: 30_000 },
-        )) as SessionsPatchResult;
-        if (response?.ok !== true || response.entry?.archivedAt === undefined) {
-          throw new Error("Gateway did not confirm that the session was archived.");
-        }
-        results[index] = { key: response.key ?? session.key, ok: true, status: "archived" };
-      } else {
-        const response = (await callGatewayFromCliWithTransport(
-          "sessions.delete",
-          rpcOptions,
-          {
-            key: session.key,
-            ...(opts.agent ? { agentId: opts.agent } : {}),
-            ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
-            deleteTranscript: true,
-            ...(session.archived === true ? { archivedOnly: true } : {}),
-          },
-          { defaultTimeoutMs: 30_000 },
-        )) as SessionsDeleteResult;
-        if (response?.ok !== true || response.deleted !== true) {
-          results[index] = notFoundResult(session.key, opts.agent);
-          continue;
-        }
-        results[index] = {
-          key: response.key ?? session.key,
-          ok: true,
-          status: "deleted",
-          archived: response.archived ?? [],
-          ...(response.worktreePreserved ? { worktreePreserved: response.worktreePreserved } : {}),
-        };
-      }
-    } catch (error) {
-      results[index] = {
-        key: session.key,
-        ok: false,
-        status: "failed",
-        error: formatErrorMessage(error),
-      };
-    }
-  }
-
-  outputLifecycleResults(
+  const results = await runSessionLifecycleBatch({
     operation,
-    Boolean(opts.dryRun),
-    results.filter((result) => result !== undefined),
-    runtime,
-    Boolean(opts.json),
-  );
+    items,
+    dryRun: opts.dryRun,
+    call: async <T>(method: string, params: Record<string, unknown>) =>
+      (await callGatewayFromCliWithTransport(method, rpcOptions, params, {
+        defaultTimeoutMs: 30_000,
+      })) as T,
+    notFound: (key) => notFoundResult(key, opts.agent),
+  });
+
+  outputLifecycleResults(operation, Boolean(opts.dryRun), results, runtime, Boolean(opts.json));
 }
 
 /** Archive one or more stored sessions through the same Gateway patch used by Control UI. */

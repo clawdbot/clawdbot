@@ -503,11 +503,6 @@ export function createOpenClawTools(
             runId: options?.runId,
             selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
-          createSessionsTool({
-            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-            sandboxed: options?.sandboxed,
-            config: resolvedConfig,
-          }),
           createScreenTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
           }),
@@ -657,6 +652,11 @@ export function createOpenClawTools(
         ]),
     ...(!embedded || options?.allowGatewaySubagentBinding === true
       ? [
+          createSessionsTool({
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            sandboxed: options?.sandboxed,
+            config: resolvedConfig,
+          }),
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,
             requesterTurnRunId: options?.runId,

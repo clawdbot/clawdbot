@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
+import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema/primitives.js";
 import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-icon.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
@@ -20,6 +21,12 @@ import {
   getSessionWorkAdmissionRelease,
   SESSION_ARCHIVE_ACTIVE_RUN_ERROR,
 } from "../../sessions/session-lifecycle-admission.js";
+import {
+  runSessionLifecycleBatch,
+  type SessionLifecycleBatchItem,
+  type SessionLifecycleResult,
+} from "../../sessions/session-lifecycle-batch.js";
+import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
 import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -39,6 +46,7 @@ import { resolveSessionReference } from "./sessions-resolution.js";
 
 const ACTIONS = [
   "patch",
+  "archive",
   "reset",
   "delete",
   "group_list",
@@ -48,10 +56,35 @@ const ACTIONS = [
 ] as const;
 const GROUP_NAME_MAX_LENGTH = 512;
 const GROUP_NAMES_MAX_ITEMS = 200;
+const SESSION_LIFECYCLE_MAX_ITEMS = 8;
+const SESSION_LIFECYCLE_ERROR_MAX_BYTES = 160;
 const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
 const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
 const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
 const log = createSubsystemLogger("agents/sessions");
+
+const ACTION_FIELDS: Record<(typeof ACTIONS)[number], readonly string[]> = {
+  patch: [
+    "action",
+    "sessionKey",
+    "label",
+    "icon",
+    "statusNote",
+    "attention",
+    "ttlMinutes",
+    "pinned",
+    "archived",
+    "model",
+    "thinkingLevel",
+  ],
+  archive: ["action", "sessionKey", "sessionKeys", "dryRun"],
+  reset: ["action", "sessionKey"],
+  delete: ["action", "sessionKey", "sessionKeys", "dryRun", "deleteTranscript"],
+  group_list: ["action"],
+  group_set: ["action", "names"],
+  group_rename: ["action", "name", "to"],
+  group_delete: ["action", "name"],
+};
 
 type SessionsResolved = NonNullable<SessionsPatchResult["resolved"]>;
 
@@ -85,7 +118,24 @@ function withBoundedSessionsResolved(
 const SessionsToolSchema = Type.Object(
   {
     action: stringEnum(ACTIONS, { description: "Action" }),
-    sessionKey: Type.Optional(Type.String({ description: "Target session. Default: current" })),
+    sessionKey: Type.Optional(
+      Type.String({
+        maxLength: CHAT_SEND_SESSION_KEY_MAX_LENGTH,
+        description:
+          "Single target. Required for reset; patch defaults to current; archive/delete require this or sessionKeys.",
+      }),
+    ),
+    sessionKeys: Type.Optional(
+      Type.Array(Type.String({ maxLength: CHAT_SEND_SESSION_KEY_MAX_LENGTH }), {
+        minItems: 1,
+        maxItems: SESSION_LIFECYCLE_MAX_ITEMS,
+        description:
+          "Ordered batch targets for archive/delete; cannot be combined with sessionKey.",
+      }),
+    ),
+    dryRun: Type.Optional(
+      Type.Boolean({ description: "Preview archive/delete outcomes without mutating state." }),
+    ),
     deleteTranscript: Type.Optional(
       Type.Boolean({ description: "Archive the deleted session transcript. Default: true." }),
     ),
@@ -193,6 +243,55 @@ function readGroupNames(value: unknown): string[] {
   return value.map((name, index) => readGroupName(name, `names[${index}]`));
 }
 
+function assertActionParams(
+  params: Record<string, unknown>,
+  action: string,
+): asserts action is (typeof ACTIONS)[number] {
+  if (!(ACTIONS as readonly string[]).includes(action)) {
+    throw new ToolInputError(`Unknown action: ${action}`);
+  }
+  const allowed = new Set(ACTION_FIELDS[action as (typeof ACTIONS)[number]]);
+  const unexpected = Object.keys(params).filter((key) => !allowed.has(key));
+  if (unexpected.length > 0) {
+    throw new ToolInputError(`${unexpected.join(", ")} not valid for action=${action}`);
+  }
+}
+
+function readLifecycleKeys(params: Record<string, unknown>): string[] {
+  const single = normalizeOptionalString(readStringParam(params, "sessionKey"));
+  const batch = params.sessionKeys;
+  if (single && batch !== undefined) {
+    throw new ToolInputError("Use either sessionKey or sessionKeys, not both");
+  }
+  if (batch !== undefined) {
+    if (!Array.isArray(batch) || batch.length === 0) {
+      throw new ToolInputError("sessionKeys must be a non-empty array");
+    }
+    if (batch.length > SESSION_LIFECYCLE_MAX_ITEMS) {
+      throw new ToolInputError(`sessionKeys cannot exceed ${SESSION_LIFECYCLE_MAX_ITEMS} items`);
+    }
+    return batch.map((value, index) => {
+      if (typeof value !== "string" || !value.trim()) {
+        throw new ToolInputError(`sessionKeys[${index}] must be a non-empty string`);
+      }
+      return value.trim();
+    });
+  }
+  if (!single) {
+    throw new ToolInputError("sessionKey or sessionKeys required");
+  }
+  return [single];
+}
+
+function lifecycleNotFound(key: string): SessionLifecycleResult {
+  return {
+    key,
+    ok: false,
+    status: "not_found",
+    error: "Session not found or no longer matches the selected generation.",
+  };
+}
+
 async function resolvePatchTarget(
   opts: SessionsToolOptions,
   sessionKey: string | undefined,
@@ -241,18 +340,144 @@ async function resolvePatchTarget(
   };
 }
 
+async function resolveLifecycleItems(
+  opts: SessionsToolOptions,
+  keys: readonly string[],
+  operation: "archive" | "delete",
+): Promise<SessionLifecycleBatchItem[]> {
+  const items: SessionLifecycleBatchItem[] = [];
+  const seen = new Set<string>();
+  for (const rawKey of keys) {
+    try {
+      const resolved = await resolvePatchTarget(opts, rawKey);
+      if (resolved.key === resolved.requesterKey) {
+        items.push({
+          key: rawKey,
+          result: {
+            key: rawKey,
+            ok: false,
+            status: "failed",
+            error:
+              operation === "archive"
+                ? "Use action=patch with archived=true to schedule current-session archival."
+                : "Cannot delete the session running this tool.",
+          },
+        });
+        continue;
+      }
+      if (seen.has(resolved.key)) {
+        items.push({
+          key: rawKey,
+          result: { key: rawKey, ok: false, status: "failed", error: "Duplicate target." },
+        });
+        continue;
+      }
+      seen.add(resolved.key);
+      const defaultAgentId = resolveDefaultAgentId(resolved.cfg);
+      const agentId = resolveAgentIdFromSessionKey(resolved.key, defaultAgentId);
+      const storePath = resolveStorePath(resolved.cfg.session?.store, { agentId });
+      const entry = loadSessionEntry({ agentId, sessionKey: resolved.key, storePath });
+      if (!entry) {
+        items.push({ key: rawKey, result: lifecycleNotFound(rawKey) });
+        continue;
+      }
+      items.push({
+        key: rawKey,
+        target: {
+          key: resolved.key,
+          ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+          ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
+          archived: entry.archivedAt !== undefined,
+        },
+      });
+    } catch (error) {
+      items.push({
+        key: rawKey,
+        result: {
+          key: rawKey,
+          ok: false,
+          status: "failed",
+          error: formatErrorMessage(error),
+        },
+      });
+    }
+  }
+  return items;
+}
+
+function lifecycleToolResult(result: SessionLifecycleResult, index: number) {
+  return {
+    index,
+    ok: result.ok,
+    status: result.status,
+    ...(result.error
+      ? { error: truncateUtf8Prefix(result.error, SESSION_LIFECYCLE_ERROR_MAX_BYTES) }
+      : {}),
+    ...(result.archived ? { archivedCount: result.archived.length } : {}),
+    ...(result.worktreePreserved ? { worktreePreserved: true } : {}),
+  };
+}
+
+function lifecycleToolEnvelope(
+  operation: "archive" | "delete",
+  dryRun: boolean,
+  results: SessionLifecycleResult[],
+) {
+  const payload = {
+    ok: results.every((result) => result.ok),
+    operation,
+    dryRun,
+    results: results.map(lifecycleToolResult),
+  };
+  if (!sessionsToolResultFitsBudget(payload)) {
+    return {
+      ok: false,
+      operation,
+      dryRun,
+      results: results.map((result, index) => ({
+        index,
+        ok: result.ok,
+        status: result.status,
+        detailsOmitted: true,
+      })),
+      warning: "Lifecycle outcome details were omitted to fit the tool-result budget.",
+    };
+  }
+  return payload;
+}
+
 export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool {
   const gatewayCall = opts.callGateway ?? callInProcessGatewayTool;
   return {
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, reset, delete, and groups: patch label/icon/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
+      "Session settings and lifecycle: patch label/icon/status, pin, archive/restore, model/thinking override; batch archive/delete with dry-run and ordered results; reset visible sessions; group_list/group_set/group_rename/group_delete.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      if (action === "reset" || action === "delete") {
+      assertActionParams(params, action);
+      if (action === "archive" || action === "delete") {
+        const keys = readLifecycleKeys(params);
+        const dryRun = readBoolean(params, "dryRun") ?? false;
+        const items = await resolveLifecycleItems(
+          { ...opts, config: opts.config ?? getRuntimeConfig() },
+          keys,
+          action,
+        );
+        const results = await runSessionLifecycleBatch({
+          operation: action,
+          items,
+          dryRun,
+          deleteTranscript: readBoolean(params, "deleteTranscript") ?? true,
+          archiveBeforeDelete: action === "delete",
+          call: gatewayCall,
+          notFound: lifecycleNotFound,
+        });
+        return jsonResult(lifecycleToolEnvelope(action, dryRun, results));
+      }
+      if (action === "reset") {
         const rawKey = readStringParam(params, "sessionKey", { required: true });
         const { key } = await resolvePatchTarget(
           { ...opts, config: opts.config ?? getRuntimeConfig() },
@@ -265,30 +490,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         if (key === context.effectiveRequesterKey) {
           throw new ToolInputError(`Cannot ${action} the session running this tool`);
         }
-        if (action === "reset") {
-          return jsonResult(await gatewayCall("sessions.reset", { key, reason: "reset" }));
-        }
-        // Archive returns the exact row generation. Carry it into the locked
-        // delete so a concurrent reset cannot delete a replacement session.
-        const archived = await gatewayCall<{
-          entry?: { sessionId?: string; lifecycleRevision?: string };
-        }>("sessions.patch", { key, archived: true });
-        const expectedSessionId = normalizeOptionalString(archived.entry?.sessionId);
-        if (!expectedSessionId) {
-          throw new ToolInputError("Session archive did not return its session identity");
-        }
-        const expectedLifecycleRevision = normalizeOptionalString(
-          archived.entry?.lifecycleRevision,
-        );
-        return jsonResult(
-          await gatewayCall("sessions.delete", {
-            key,
-            archivedOnly: true,
-            expectedSessionId,
-            ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
-            deleteTranscript: readBoolean(params, "deleteTranscript") ?? true,
-          }),
-        );
+        return jsonResult(await gatewayCall("sessions.reset", { key, reason: "reset" }));
       }
       if (action === "group_list") {
         return jsonResult(await gatewayCall("sessions.groups.list", {}));
@@ -313,14 +515,23 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           }),
         );
       }
-      if (action !== "patch") {
-        throw new ToolInputError(`Unknown action: ${action}`);
-      }
-
       const { cfg, key, requesterKey } = await resolvePatchTarget(
         { ...opts, config: opts.config ?? getRuntimeConfig() },
         normalizeOptionalString(readStringParam(params, "sessionKey")),
       );
+      const targetAgentId = resolveAgentIdFromSessionKey(key, resolveDefaultAgentId(cfg));
+      const targetStorePath = resolveStorePath(cfg.session?.store, { agentId: targetAgentId });
+      const targetEntry =
+        params.archived !== undefined && key !== requesterKey
+          ? loadSessionEntry({
+              agentId: targetAgentId,
+              sessionKey: key,
+              storePath: targetStorePath,
+            })
+          : undefined;
+      if (params.archived !== undefined && key !== requesterKey && !targetEntry) {
+        throw new ToolInputError(`Session not found: ${key}`);
+      }
       const patch = {
         key,
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
@@ -346,6 +557,10 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           : {}),
         ...(params.thinkingLevel !== undefined
           ? { thinkingLevel: readStringParam(params, "thinkingLevel", { required: true }) }
+          : {}),
+        ...(targetEntry?.sessionId ? { expectedSessionId: targetEntry.sessionId } : {}),
+        ...(targetEntry?.lifecycleRevision
+          ? { expectedLifecycleRevision: targetEntry.lifecycleRevision }
           : {}),
       };
       if (Object.keys(patch).length === 1) {

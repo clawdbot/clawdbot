@@ -82,6 +82,7 @@
     "gateway",
     "nodes",
     "session_status",
+    "sessions",
     "sessions_history",
     "sessions_list",
     "sessions_search",
@@ -221,20 +222,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 62568,
-    "roughTokens": 15642
+    "chars": 66693,
+    "roughTokens": 16674
   },
   "openClawDeveloperInstructions": {
-    "chars": 3410,
-    "roughTokens": 853
+    "chars": 3420,
+    "roughTokens": 855
   },
   "totalTextOnly": {
-    "chars": 27422,
-    "roughTokens": 6856
+    "chars": 27432,
+    "roughTokens": 6858
   },
   "totalWithDynamicToolsJson": {
-    "chars": 89992,
-    "roughTokens": 22498
+    "chars": 94127,
+    "roughTokens": 23532
   },
   "userInputText": {
     "chars": 929,
@@ -421,7 +422,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
@@ -529,6 +530,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "gateway",
   "nodes",
   "session_status",
+  "sessions",
   "sessions_history",
   "sessions_list",
   "sessions_search",

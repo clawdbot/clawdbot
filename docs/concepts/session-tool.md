@@ -60,9 +60,10 @@ Use [`sessions_search`](/concepts/session-search) for exact full-text recall acr
 
 The owner-gated `sessions` tool exposes bounded self-service surfaces:
 
-- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, sidebar icon, pin/archive state, model, and thinking level.
+- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, sidebar icon, pin/archive state, model, and thinking level. Single-session archive/restore patches are generation-fenced.
+- `action: "archive"` archives one visible `sessionKey` or an ordered `sessionKeys` batch of up to eight targets. Pass `dryRun: true` to return `would_archive`, `already_archived`, `not_found`, or `failed` outcomes without mutation. Result indexes map to input order, and a batch continues after target failures. To archive the session currently running the tool, use `patch` with `archived: true`; OpenClaw defers that self-archive until the run settles.
 - `action: "reset"` resets another visible session selected by `sessionKey`.
-- `action: "delete"` first archives and then deletes the exact same generation of another visible session selected by `sessionKey`. By default its transcript is retained as a deleted archive; pass `deleteTranscript: false` to leave the transcript state untouched. Resetting or deleting the session currently running the tool is rejected.
+- `action: "delete"` first archives and then deletes the exact same generation of one visible `sessionKey` or an ordered `sessionKeys` batch of up to eight targets. Pass `dryRun: true` to preview without mutation. By default its transcript is retained as a deleted archive; pass `deleteTranscript: false` to leave the transcript state untouched. A current-session target is reported as an item failure without aborting valid siblings; reset still rejects the current session.
 - `group_list`, `group_set`, `group_rename`, and `group_delete` manage the global ordered session-group catalog. `group_set` replaces the ordered name list rather than patching one entry.
 
 Use `sessions_spawn` with `visible: true` to create a persistent dashboard session. This keeps session creation on the controlled spawn path, which enforces the parent's tool policy, sandbox, concurrency limits, and run timeout.

@@ -82,6 +82,7 @@
     "gateway",
     "nodes",
     "session_status",
+    "sessions",
     "sessions_history",
     "sessions_list",
     "sessions_search",
@@ -222,20 +223,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 64102,
-    "roughTokens": 16026
+    "chars": 68227,
+    "roughTokens": 17057
   },
   "openClawDeveloperInstructions": {
-    "chars": 3410,
-    "roughTokens": 853
+    "chars": 3420,
+    "roughTokens": 855
   },
   "totalTextOnly": {
-    "chars": 27838,
-    "roughTokens": 6960
+    "chars": 27848,
+    "roughTokens": 6962
   },
   "totalWithDynamicToolsJson": {
-    "chars": 91942,
-    "roughTokens": 22986
+    "chars": 96077,
+    "roughTokens": 24020
   },
   "userInputText": {
     "chars": 1271,
@@ -422,7 +423,7 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
+Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search. Use `tool_search` to load exact callable specs before use.
 
 Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.
 
@@ -530,6 +531,7 @@ Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dyn
   "gateway",
   "nodes",
   "session_status",
+  "sessions",
   "sessions_history",
   "sessions_list",
   "sessions_search",

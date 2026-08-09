@@ -37,13 +37,11 @@ describe("sessions lifecycle commands", () => {
     mocks.confirm.mockResolvedValue(true);
   });
 
-  it("archives through sessions.patch and emits the stable JSON envelope", async () => {
+  it("archives through sessions.patchMany and emits the stable JSON envelope", async () => {
     mocks.callGateway
       .mockResolvedValueOnce(listResult([{ key: "agent:work:scratch-1", sessionId: "session-1" }]))
       .mockResolvedValueOnce({
-        ok: true,
-        key: "agent:work:scratch-1",
-        entry: { archivedAt: 123 },
+        outcomes: [{ ok: true, key: "agent:work:scratch-1", agentId: "work" }],
       });
     const runtime = createRuntime();
 
@@ -82,13 +80,17 @@ describe("sessions lifecycle commands", () => {
     );
     expect(mocks.callGateway).toHaveBeenNthCalledWith(
       2,
-      "sessions.patch",
+      "sessions.patchMany",
       expect.any(Object),
       {
-        key: "agent:work:scratch-1",
-        agentId: "work",
-        expectedSessionId: "session-1",
-        archived: true,
+        targets: [
+          {
+            key: "agent:work:scratch-1",
+            agentId: "work",
+            expectedSessionId: "session-1",
+          },
+        ],
+        patch: { archived: true },
       },
       { defaultTimeoutMs: 30_000 },
     );

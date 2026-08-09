@@ -54,6 +54,7 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   AUTOMATIONS_TOOL_NAME,
   // Direct user/session sends - subagents communicate through announce chain
   "message",
+  "sessions",
   "sessions_send",
   "conversations_list",
   "conversations_send",

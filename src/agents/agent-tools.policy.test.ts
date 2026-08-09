@@ -320,6 +320,7 @@ describe("resolveSubagentToolPolicyForSession", () => {
       const sessionKeys = {
         leaf: "agent:main:subagent:hard-deny-leaf",
         orchestrator: "agent:main:subagent:hard-deny-orchestrator",
+        acp: "agent:main:acp:hard-deny",
       } as const;
       await writeSessionEntries(storePath, {
         [sessionKeys.leaf]: {
@@ -336,6 +337,13 @@ describe("resolveSubagentToolPolicyForSession", () => {
           subagentRole: "orchestrator",
           subagentControlScope: "children",
         },
+        [sessionKeys.acp]: {
+          sessionId: "hard-deny-acp",
+          updatedAt: Date.now(),
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+        },
       });
       const hardDeniedTools = [
         "gateway",
@@ -344,6 +352,7 @@ describe("resolveSubagentToolPolicyForSession", () => {
         "automations",
         "cron",
         "message",
+        "sessions",
         "sessions_send",
         "conversations_list",
         "conversations_send",
