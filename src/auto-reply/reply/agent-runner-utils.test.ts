@@ -205,7 +205,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.runBaseParams.promptCacheKey).toBe("stable-session-cache-key");
   });
 
-  it("preserves queued conversation policy over stale template context", () => {
+  it("uses the queued conversation policy snapshot", () => {
     const run = makeRun({ conversationToolPolicy: { deny: ["exec"] } });
 
     const resolved = buildEmbeddedRunExecutionParams({
@@ -220,7 +220,6 @@ describe("agent-runner-utils", () => {
       runId: "run-1",
     });
 
-    expect(resolved.embeddedContext.conversationToolPolicy).toEqual({ deny: ["exec"] });
     expect(resolved.runBaseParams.conversationToolPolicy).toEqual({ deny: ["exec"] });
   });
 

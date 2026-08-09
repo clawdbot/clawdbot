@@ -279,7 +279,6 @@ function buildEmbeddedContextFromTemplate(params: {
       to: sessionCtx.To,
     }),
     messageThreadId: sessionCtx.MessageThreadId ?? undefined,
-    conversationToolPolicy: params.run.conversationToolPolicy ?? sessionCtx.ConversationToolPolicy,
     chatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
