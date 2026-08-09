@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { stableStringify } from "@openclaw/normalization-core";
 import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
@@ -14,6 +17,7 @@ import {
 } from "../plugins/prepared-message-tool-catalog.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { runProviderDynamicModel } from "../plugins/provider-runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import type { AgentCredentialMap } from "./agent-auth-credentials.js";
@@ -43,6 +47,7 @@ import {
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
 import {
+  completeConfiguredRuntimeModels,
   collectPreparedModelRuntimeConfiguredRefs,
   collectConfiguredProviderIdsNeedingStaticCatalog,
   collectPreparedModelRuntimeProviderIds,
@@ -518,8 +523,8 @@ function prepareConfiguredRuntimeFacts(
   agentFacts: PreparedModelRuntimeAgentFacts,
   workspaceFacts: PreparedModelRuntimeWorkspaceFacts,
   sharedTemplateModelRegistry: ModelRegistry,
+  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[],
 ): PreparedModelRuntimeCatalogFacts {
-  const { configuredRuntimeModels } = agentFacts;
   const { inlineProviderModels } = workspaceFacts;
   const templateModelRegistry = sharedTemplateModelRegistry;
   return {
@@ -641,12 +646,48 @@ export function prepareConfiguredRuntimeFactsBatch(params: {
       },
     );
     registryCount += 1;
-    for (const facts of group.agentFacts) {
-      catalogs.set(
-        facts.input,
-        prepareConfiguredRuntimeFacts(facts, params.workspaceFacts, templateModelRegistry),
-      );
-    }
+    // The captured registry exists only after agent-owned catalog parsing. Complete static misses
+    // here so turn facts stay within this lifecycle generation without starting live discovery.
+    withPluginRuntimeRegistryScope(params.workspaceFacts.pluginRegistry, () => {
+      for (const facts of group.agentFacts) {
+        const { input } = facts;
+        const configuredRuntimeModels = params.workspaceFacts.pluginRegistry
+          ? completeConfiguredRuntimeModels({
+              configuredModelRefs: facts.configuredModelRefs,
+              configuredRuntimeModels: facts.configuredRuntimeModels,
+              resolveDynamicModel: ({ provider, modelId }) => {
+                const providerConfig =
+                  input.config.models?.providers?.[provider] ??
+                  findNormalizedProviderValue(input.config.models?.providers, provider);
+                return runProviderDynamicModel({
+                  provider,
+                  config: input.config,
+                  workspaceDir: input.workspaceDir,
+                  env: facts.env,
+                  context: {
+                    config: input.config,
+                    agentDir: input.agentDir,
+                    workspaceDir: input.workspaceDir,
+                    provider,
+                    modelId,
+                    modelRegistry: templateModelRegistry,
+                    providerConfig,
+                  },
+                });
+              },
+            })
+          : facts.configuredRuntimeModels;
+        catalogs.set(
+          input,
+          prepareConfiguredRuntimeFacts(
+            facts,
+            params.workspaceFacts,
+            templateModelRegistry,
+            configuredRuntimeModels,
+          ),
+        );
+      }
+    });
   }
   return { catalogs, registryCount };
 }
