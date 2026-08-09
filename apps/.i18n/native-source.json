@@ -27131,7 +27131,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 317,
+      "line": 327,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Overview",
       "surface": "apple",
@@ -27139,7 +27139,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 345,
+      "line": 355,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Agents",
       "surface": "apple",
@@ -27147,7 +27147,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 352,
+      "line": 362,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Instances",
       "surface": "apple",
@@ -27155,7 +27155,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 363,
+      "line": 373,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Files",
       "surface": "apple",
@@ -27163,7 +27163,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 370,
+      "line": 380,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -27171,7 +27171,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 377,
+      "line": 387,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Usage",
       "surface": "apple",
@@ -27179,7 +27179,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 384,
+      "line": 394,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Automations",
       "surface": "apple",
@@ -27187,7 +27187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 474,
+      "line": 484,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Hide Sidebar",
       "surface": "apple",
@@ -27195,7 +27195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 480,
+      "line": 490,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Show Sidebar",
       "surface": "apple",
@@ -27203,7 +27203,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 607,
+      "line": 626,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Close canvas",
       "surface": "apple",
@@ -27211,7 +27211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 873,
+      "line": 892,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway needs attention",
       "surface": "apple",
@@ -27219,7 +27219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 873,
+      "line": 892,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw iOS",
       "surface": "apple",
@@ -27227,7 +27227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 909,
+      "line": 928,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Available",
       "surface": "apple",
@@ -27235,7 +27235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 909,
+      "line": 928,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway default",
       "surface": "apple",
@@ -27243,7 +27243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 909,
+      "line": 928,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Routed on this phone",
       "surface": "apple",
