@@ -762,6 +762,49 @@ describe("Crabbox worker provider", () => {
     expect(operationLeaseId(operationId)).toMatch(/^cbx_[a-f0-9]{12}$/u);
   });
 
+  it("rejects a non-boolean desktop profile setting", async () => {
+    const provider = providerWithRunner(async () => commandResult());
+    await expect(provider.provision({ ...PROFILE, desktop: "yes" }, OPERATION_ID)).rejects.toThrow(
+      "Crabbox profile desktop must be a boolean",
+    );
+  });
+
+  it("adds --desktop to the fixed-ID warmup and returns the endpoint", async () => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return argv[1] === "warmup"
+        ? commandResult()
+        : commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, desktop: true }, OPERATION_ID),
+    ).resolves.toMatchObject({
+      desktop: {
+        protocol: "rfb",
+        port: 5900,
+        passwordFilePath: "/var/lib/crabbox/vnc.password",
+      },
+    });
+    expect(calls.find((argv) => argv[1] === "warmup")).toEqual(
+      expect.arrayContaining(["--lease-id", LEASE_ID, "--desktop"]),
+    );
+  });
+
+  it("returns desktop metadata when Crabbox adopts a fixed-ID replay", async () => {
+    const calls: string[][] = [];
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, desktop: true }, OPERATION_ID),
+    ).resolves.toMatchObject({ desktop: { protocol: "rfb", port: 5900 } });
+    expect(calls.some((argv) => argv[1] === "warmup" && argv.includes(LEASE_ID))).toBe(true);
+  });
+
   it("runs one fixed warmup, ignores its output, and inspects only the canonical id", async () => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
     const provider = providerWithRunner(async (argv, options) => {
