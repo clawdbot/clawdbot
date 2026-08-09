@@ -813,7 +813,7 @@ export function buildGatewayCronService(params: {
             accountId: plan.accountId,
             sessionKey: resolveCronDeliverySessionKey(job),
           },
-          message,
+          payload: { text: message },
           abortSignal: abortSignal ?? new AbortController().signal,
         });
         return {
@@ -939,7 +939,7 @@ export function buildGatewayCronService(params: {
             accountId: plan.accountId,
             sessionKey: resolveCronDeliverySessionKey(job),
           },
-          message: notify,
+          payload: { text: notify },
           abortSignal: abortSignal ?? new AbortController().signal,
         });
         return {
@@ -1005,21 +1005,14 @@ export function buildGatewayCronService(params: {
         "cron: isolated agent setup timed out before runner start; backing off job without gateway restart",
       );
     },
-    sendCronFailureAlert: async ({ job, text, runAtMs, channel, to, mode, accountId, threadId }) =>
+    sendCronFailureAlert: async (alert) =>
       await sendGatewayCronFailureAlert({
+        ...alert,
         deps: params.deps,
         logger: cronLogger,
         resolveCronAgent,
         webhookToken: params.cfg.cron?.webhookToken,
         ssrfPolicy: webhookSsrfPolicy,
-        job,
-        text,
-        runAtMs,
-        channel,
-        to,
-        mode,
-        accountId,
-        threadId,
       }),
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {

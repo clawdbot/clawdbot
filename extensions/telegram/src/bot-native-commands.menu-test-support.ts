@@ -18,7 +18,9 @@ type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type CreateCommandBotResult = {
   bot: RegisterTelegramNativeCommandsParams["bot"];
   commandHandlers: Map<string, (ctx: unknown) => Promise<void>>;
+  callbackHandlers: Array<(ctx: unknown, next: () => Promise<void>) => Promise<void>>;
   sendMessage: ReturnType<typeof vi.fn>;
+  editMessageReplyMarkup: ReturnType<typeof vi.fn>;
   deleteMessage: ReturnType<typeof vi.fn>;
   setMyCommands: ReturnType<typeof vi.fn>;
 };
@@ -73,21 +75,35 @@ export function resetNativeCommandMenuMocks() {
 
 export function createCommandBot(params: CreateCommandBotParams = {}): CreateCommandBotResult {
   const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+  const callbackHandlers: Array<(ctx: unknown, next: () => Promise<void>) => Promise<void>> = [];
   const sendMessage = vi.fn().mockResolvedValue({ message_id: 999 });
+  const editMessageReplyMarkup = vi.fn().mockResolvedValue({});
   const deleteMessage = vi.fn().mockResolvedValue(true);
   const setMyCommands = vi.fn().mockResolvedValue(undefined);
   const bot = {
     api: {
       setMyCommands,
       sendMessage,
+      editMessageReplyMarkup,
       deleteMessage,
       ...params.api,
     },
     command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
       commandHandlers.set(name, cb);
     }),
+    on: vi.fn((_filter: string, cb: (ctx: unknown, next: () => Promise<void>) => Promise<void>) => {
+      callbackHandlers.push(cb);
+    }),
   } as unknown as RegisterTelegramNativeCommandsParams["bot"];
-  return { bot, commandHandlers, sendMessage, deleteMessage, setMyCommands };
+  return {
+    bot,
+    commandHandlers,
+    callbackHandlers,
+    sendMessage,
+    editMessageReplyMarkup,
+    deleteMessage,
+    setMyCommands,
+  };
 }
 
 export function createNativeCommandTestParams(

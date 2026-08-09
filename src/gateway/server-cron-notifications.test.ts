@@ -255,7 +255,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         mode: "webhook",
         to: "https://example.invalid/cron",
       }),
-      text: "cron failed",
+      payload: { text: "cron failed" },
       channel: "last",
       mode: "webhook",
       to: "https://example.invalid/cron",
@@ -285,7 +285,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
           mode: "webhook",
           to: "https://example.invalid/cron",
         }),
-        text: "cron failed",
+        payload: { text: "cron failed" },
         channel: "last",
         mode: "webhook",
         to: "https://example.invalid/cron",
@@ -321,7 +321,22 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         cfg: { agents: { defaults: { userTimezone: "America/New_York" } } },
       }),
       job,
-      text: "cron failed",
+      payload: {
+        text: "cron failed",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Log in to Codex",
+                  action: { type: "command", command: "/login codex" },
+                },
+              ],
+            },
+          ],
+        },
+      },
       runAtMs: Date.parse("2026-01-15T15:30:00.000Z"),
       channel: "telegram",
       to: "channel:ops",
@@ -330,7 +345,22 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
     expect(mocks.sendCronAnnouncePayloadStrict).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "cron failed\nRun started: 2026-01-15 10:30 EST",
+        payload: {
+          text: "cron failed\nRun started: 2026-01-15 10:30 EST",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  {
+                    label: "Log in to Codex",
+                    action: { type: "command", command: "/login codex" },
+                  },
+                ],
+              },
+            ],
+          },
+        },
       }),
     );
   });
@@ -349,7 +379,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       logger: { warn: vi.fn() },
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
       job,
-      text: "cron failed",
+      payload: { text: "cron failed" },
       channel: "telegram",
       to: "-1001234567890",
       accountId: "bot-a",
@@ -381,7 +411,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         cfg: { agents: { defaults: { userTimezone: "America/New_York" } } },
       }),
       job,
-      text: "cron failed",
+      payload: { text: "cron failed" },
       runAtMs,
       channel: "last",
       mode: "webhook",
@@ -490,7 +520,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       logger: { warn: vi.fn() },
       resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
       job,
-      text: "cron failed",
+      payload: { text: "cron failed" },
       channel: "discord",
       to: "channel:ops",
       mode: "announce",
@@ -537,7 +567,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
           logger: { warn: vi.fn() },
           resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
           job,
-          text: "cron failed",
+          payload: { text: "cron failed" },
           channel: "discord",
           to: "channel:ops",
           mode: "announce",
@@ -685,7 +715,9 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       "main",
       announceJob.id,
       expect.anything(),
-      '⚠️ Automation "notification admission" failed: provider unavailable\nRun started: 2026-01-15 10:30 EST',
+      {
+        text: '⚠️ Automation "notification admission" failed: provider unavailable\nRun started: 2026-01-15 10:30 EST',
+      },
     );
 
     vi.clearAllMocks();
@@ -874,7 +906,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         accountId: "bot-a",
         threadId: 42,
       }),
-      expect.any(String),
+      expect.objectContaining({ text: expect.any(String) }),
     );
   });
 
@@ -918,7 +950,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         sessionKey: undefined,
         inheritSessionThread: false,
       },
-      '⚠️ Automation "channel fd no mode" failed: boom',
+      { text: '⚠️ Automation "channel fd no mode" failed: boom' },
     );
     expect(logger.warn).not.toHaveBeenCalledWith(
       expect.objectContaining({ jobId: job.id }),

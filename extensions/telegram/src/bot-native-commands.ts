@@ -121,7 +121,10 @@ import {
 } from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
-import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
+import {
+  buildTelegramNativeCommandCallbackData,
+  parseTelegramNativeCommandCallbackData,
+} from "./native-command-callback-data.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
 
@@ -1046,6 +1049,14 @@ export const registerTelegramNativeCommands = ({
     );
   }
   const { nativeCommands, pluginCatalog } = fullCommandCatalog;
+  const loginCommand = listNativeCommandSpecsForConfig(cfg, { provider: "telegram" }).find(
+    (command) => findCommandByNativeName(command.name, "telegram")?.key === "login",
+  );
+  const nativeCommandsToHandle = nativeEnabled
+    ? nativeCommands
+    : loginCommand
+      ? [loginCommand]
+      : [];
   const loadFreshRuntimeConfig = (): OpenClawConfig => telegramDeps.getRuntimeConfig();
   const resolveFreshTelegramConfig = (runtimeCfg: OpenClawConfig): TelegramAccountConfig =>
     resolveTelegramAccount({ cfg: runtimeCfg, accountId }).config;
@@ -1225,14 +1236,18 @@ export const registerTelegramNativeCommands = ({
     return threadKeys?.sessionKey ?? baseSessionKey;
   };
 
-  if (commandsToRegister.length > 0 || pluginCatalog.commands.length > 0) {
-    for (const command of nativeCommands) {
+  let handleLoginCallback:
+    | ((ctx: Context, msg: NonNullable<Context["message"]>, rawText: string) => Promise<void>)
+    | undefined;
+  if (nativeCommandsToHandle.length > 0 || pluginCatalog.commands.length > 0) {
+    for (const command of nativeCommandsToHandle) {
       const normalizedCommandName = normalizeTelegramCommandName(command.name);
-      bot.command(normalizedCommandName, async (ctx: TelegramNativeCommandContext) => {
-        const msg = ctx.message;
-        if (!msg) {
-          return;
-        }
+      const commandDefinition = findCommandByNativeName(command.name, "telegram");
+      const handleNativeCommand = async (
+        ctx: Context,
+        msg: NonNullable<Context["message"]>,
+        rawText: string,
+      ) => {
         if (shouldSkipUpdate(ctx)) {
           return;
         }
@@ -1287,8 +1302,6 @@ export const registerTelegramNativeCommands = ({
         const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
         const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
         const originatingTo = buildTelegramRoutingTarget(chatId, threadSpec);
-        const commandDefinition = findCommandByNativeName(command.name, "telegram");
-        const rawText = ctx.match?.trim() ?? "";
         const commandArgs = commandDefinition
           ? parseCommandArgs(commandDefinition, rawText)
           : rawText
@@ -1881,7 +1894,23 @@ export const registerTelegramNativeCommands = ({
             ...deliveryBaseOptions,
           });
         }
-      });
+      };
+      if (nativeEnabled) {
+        bot.command(normalizedCommandName, async (ctx) => {
+          const msg = ctx.message;
+          if (!msg) {
+            return;
+          }
+          await handleNativeCommand(
+            ctx,
+            msg,
+            typeof ctx.match === "string" ? ctx.match.trim() : "",
+          );
+        });
+      }
+      if (commandDefinition?.key === "login") {
+        handleLoginCallback = handleNativeCommand;
+      }
     }
 
     for (const pluginCommand of pluginCatalog.commands) {
@@ -2111,6 +2140,56 @@ export const registerTelegramNativeCommands = ({
         });
       });
     }
+  }
+
+  if (handleLoginCallback) {
+    bot.on("callback_query:data", async (ctx, next) => {
+      const commandText = parseTelegramNativeCommandCallbackData(ctx.callbackQuery.data);
+      if (!commandText) {
+        await next();
+        return;
+      }
+      const commandBody = commandText.slice(1).trim();
+      const separatorIndex = commandBody.search(/\s/u);
+      const commandName = (
+        separatorIndex === -1 ? commandBody : commandBody.slice(0, separatorIndex)
+      )
+        .split("@", 1)[0]
+        ?.toLowerCase();
+      const commandDefinition = commandName
+        ? findCommandByNativeName(commandName, "telegram")
+        : undefined;
+      if (commandDefinition?.key !== "login") {
+        await next();
+        return;
+      }
+      const callbackMessage = ctx.callbackQuery.message;
+      if (!callbackMessage || callbackMessage.date <= 0) {
+        return;
+      }
+      const chat = callbackMessage.chat;
+      if (chat.type === "channel") {
+        return;
+      }
+      const rawText = separatorIndex === -1 ? "" : commandBody.slice(separatorIndex + 1).trim();
+      const message = {
+        ...callbackMessage,
+        chat,
+        from: ctx.callbackQuery.from,
+        text: commandText,
+      };
+      await handleLoginCallback(ctx, message, rawText);
+      if ((callbackMessage.reply_markup?.inline_keyboard.length ?? 0) > 0) {
+        await withTelegramApiErrorLogging({
+          operation: "editMessageReplyMarkup",
+          runtime,
+          fn: () =>
+            bot.api.editMessageReplyMarkup(callbackMessage.chat.id, callbackMessage.message_id, {
+              reply_markup: { inline_keyboard: [] },
+            }),
+        }).catch(() => {});
+      }
+    });
   }
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

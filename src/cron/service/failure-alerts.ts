@@ -1,7 +1,9 @@
 /** Resolves and emits cron failure-alert notifications. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
@@ -182,12 +184,35 @@ function emitFailureAlert(
     ...(errorReason ? [`Cause: ${errorReason}`] : []),
     `${detailLabel}: ${truncatedError}`,
   ].join("\n");
+  const oauthRefreshFailure = params.error ? classifyOAuthRefreshFailure(params.error) : null;
+  const payload: ReplyPayload = {
+    text,
+    ...(params.status === "error" &&
+    (errorReason === "auth" || errorReason === "auth_permanent") &&
+    oauthRefreshFailure?.provider === "openai"
+      ? {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons" as const,
+                buttons: [
+                  {
+                    label: "Log in to Codex",
+                    action: { type: "command" as const, command: "/login codex" },
+                  },
+                ],
+              },
+            ],
+          },
+        }
+      : {}),
+  };
 
   if (state.deps.sendCronFailureAlert) {
     void state.deps
       .sendCronFailureAlert({
         job: params.job,
-        text,
+        payload,
         runAtMs: params.runAtMs,
         channel: params.channel,
         to: params.to,
@@ -204,7 +229,7 @@ function emitFailureAlert(
     return;
   }
 
-  state.deps.enqueueSystemEvent(text, { agentId: params.job.agentId });
+  state.deps.enqueueSystemEvent(payload.text ?? "", { agentId: params.job.agentId });
   if (params.job.wakeMode === "now") {
     state.deps.requestHeartbeat({
       source: "cron",

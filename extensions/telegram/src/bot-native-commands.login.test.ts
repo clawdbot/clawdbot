@@ -193,6 +193,76 @@ describe("registerTelegramNativeCommands /login", () => {
     );
   });
 
+  it("routes the login button through the non-blocking native login flow", async () => {
+    const finishLogin = createDeferred<void>();
+    const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
+      await params.prompter.deviceCode?.({
+        title: "OpenAI Codex device code",
+        code: "BUTTON-CODE",
+        expiresInMinutes: 15,
+        message: "URL: https://auth.openai.com/codex/device",
+      });
+      await finishLogin.promise;
+      return {
+        providerId: "openai",
+        methodId: "device-code",
+        profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
+      };
+    });
+    const { callbackHandlers, editMessageReplyMarkup, sendMessage } = registerLoginCommand({
+      cfg: {
+        commands: { native: true, ownerAllowFrom: ["200"] },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig,
+      loginFlow,
+    });
+    const callbackHandler = callbackHandlers[0];
+    if (!callbackHandler) {
+      throw new Error("expected login callback handler to be registered");
+    }
+    const next = vi.fn(async () => undefined);
+
+    await callbackHandler(
+      {
+        callbackQuery: {
+          id: "login-button",
+          data: "tgcmd:/login codex",
+          from: { id: 200, username: "bob" },
+          message: {
+            message_id: 10,
+            date: Math.floor(Date.now() / 1000),
+            chat: { id: 100, type: "private" },
+            reply_markup: {
+              inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
+            },
+          },
+        },
+      },
+      next,
+    );
+
+    expect(next).not.toHaveBeenCalled();
+    expect(loginFlow).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining("Code: <code>BUTTON-CODE</code>"),
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+    expect(editMessageReplyMarkup).toHaveBeenCalledWith(100, 10, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(sendMessage.mock.calls.map((call) => String(call[1]))).not.toContain(
+      "Codex login complete. Try your request again now.",
+    );
+
+    finishLogin.resolve();
+    await vi.waitFor(() =>
+      expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
+        "Codex login complete. Try your request again now.",
+      ),
+    );
+  });
+
   it("rejects group /login codex without sending the device code publicly", async () => {
     const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
       await params.prompter.note("URL: https://auth.openai.com/codex/device\nCode: SECRET");
