@@ -841,7 +841,7 @@ async function buildIdentityMarkdownForWrite(params: {
   clearFields?: Array<"name" | "theme" | "emoji" | "avatar">;
   fallbackWorkspaceDir?: string;
   preferFallbackWorkspaceContent?: boolean;
-}): Promise<string> {
+}): Promise<{ content: string; hadSourceFile: boolean }> {
   let baseContent: string | undefined;
   if (params.preferFallbackWorkspaceContent && params.fallbackWorkspaceDir) {
     // Workspace moves may create a blank identity file; merge into the previous user-edited file.
@@ -862,9 +862,13 @@ async function buildIdentityMarkdownForWrite(params: {
     }
   }
 
-  return mergeIdentityMarkdownContent(baseContent, params.identity, {
-    clearFields: params.clearFields,
-  });
+  return {
+    content: mergeIdentityMarkdownContent(baseContent, params.identity, {
+      clearFields: params.clearFields,
+    }),
+    // Empty buffers still count as a present file; only not-found is undefined.
+    hadSourceFile: baseContent !== undefined,
+  };
 }
 
 async function buildIdentityMarkdownOrRespondUnsafe(params: {
@@ -874,7 +878,7 @@ async function buildIdentityMarkdownOrRespondUnsafe(params: {
   clearFields?: Array<"name" | "theme" | "emoji" | "avatar">;
   fallbackWorkspaceDir?: string;
   preferFallbackWorkspaceContent?: boolean;
-}): Promise<string | null> {
+}): Promise<{ content: string; hadSourceFile: boolean } | null> {
   try {
     return await buildIdentityMarkdownForWrite(params);
   } catch (err) {
@@ -1036,7 +1040,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         workspaceDir && identityWorkspaceDir !== previousWorkspaceDir
           ? previousWorkspaceDir
           : undefined;
-      const identityContent = await buildIdentityMarkdownOrRespondUnsafe({
+      const builtIdentity = await buildIdentityMarkdownOrRespondUnsafe({
         respond,
         workspaceDir: identityWorkspaceDir,
         identity: persistedIdentity ?? {},
@@ -1045,15 +1049,20 @@ export const agentsHandlers: GatewayRequestHandlers = {
         preferFallbackWorkspaceContent:
           Boolean(fallbackWorkspaceDir) && ensuredWorkspace?.identityPathCreated === true,
       });
-      if (identityContent === null) {
+      if (builtIdentity === null) {
         return;
       }
+      // Optional IDENTITY.md is intentionally absent when neither a source file nor
+      // persisted identity values exist. Clearing empty/null emoji/avatar must not
+      // synthesize a header-only file in that case.
+      const shouldWriteIdentityFile = builtIdentity.hadSourceFile || Boolean(persistedIdentity);
       if (
+        shouldWriteIdentityFile &&
         !(await writeWorkspaceFileOrRespond({
           respond,
           workspaceDir: identityWorkspaceDir,
           name: DEFAULT_IDENTITY_FILENAME,
-          content: identityContent,
+          content: builtIdentity.content,
         }))
       ) {
         return;

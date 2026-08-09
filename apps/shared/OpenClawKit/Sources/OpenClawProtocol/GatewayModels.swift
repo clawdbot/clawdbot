@@ -13843,8 +13843,8 @@ public struct AgentsUpdateParams: Codable, Sendable {
         name: String? = nil,
         workspace: String? = nil,
         modelvalue: AnyCodable?,
-        emojivalue: AnyCodable?,
-        avatarvalue: AnyCodable?)
+        emojivalue: AnyCodable? = nil,
+        avatarvalue: AnyCodable? = nil)
     {
         self.agentid = agentid
         self.name = name

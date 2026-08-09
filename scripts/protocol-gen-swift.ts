@@ -394,9 +394,14 @@ function emitStruct(name: string, schema: JsonSchema): string {
           const propName = swiftStoredPropertyName(name, key);
           const req = required.has(key);
           if (name === "AgentsUpdateParams" && agentsUpdateNullableStringKeys.has(key)) {
-            // No default: otherwise AgentsUpdateParams(agentid:) is ambiguous with the
-            // String?-facing compatibility initializer (same as model-only pattern).
-            return `        ${swiftStoredPropertyName(name, key)}: AnyCodable?`;
+            // modelvalue stays required so AgentsUpdateParams(agentid:) uniquely resolves
+            // to the String?-facing compatibility initializer. emojivalue/avatarvalue keep
+            // defaults so the shipped raw call AgentsUpdateParams(agentid:modelvalue:) still
+            // compiles without naming the newer clearable fields.
+            if (key === "model") {
+              return `        ${swiftStoredPropertyName(name, key)}: AnyCodable?`;
+            }
+            return `        ${swiftStoredPropertyName(name, key)}: AnyCodable? = nil`;
           }
           return `        ${swiftInitializerParam({
             name: propName,

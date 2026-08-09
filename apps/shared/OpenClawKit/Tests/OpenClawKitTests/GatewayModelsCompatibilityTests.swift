@@ -244,11 +244,9 @@ struct GatewayModelsCompatibilityTests {
     func `agent update model keeps legacy source compatibility and nullable wire semantics`() throws {
         let legacyParams = AgentsUpdateParams(agentid: "work", model: "openai/gpt-5.6")
         let omittedParams = AgentsUpdateParams(agentid: "work")
-        let clearedParams = AgentsUpdateParams(
-            agentid: "work",
-            modelvalue: AnyCodable(NSNull()),
-            emojivalue: nil,
-            avatarvalue: nil)
+        // Shipped raw model-null call site: must stay source-compatible without naming
+        // emojivalue/avatarvalue (see AgentsUpdateParams raw initializer defaults).
+        let clearedParams = AgentsUpdateParams(agentid: "work", modelvalue: AnyCodable(NSNull()))
 
         #expect(legacyParams.model == "openai/gpt-5.6")
         #expect(omittedParams.modelvalue == nil)

@@ -1119,6 +1119,64 @@ describe("agents.update", () => {
     expect(agent.identity).not.toHaveProperty("avatar");
   });
 
+  it("does not create IDENTITY.md when clearing emoji with no source file and no remaining identity", async () => {
+    mocks.loadConfigReturn = {
+      agents: {
+        list: [
+          {
+            id: "test-agent",
+            workspace: "/workspace/test-agent",
+            identity: { emoji: "🐢" },
+          },
+        ],
+      },
+    };
+    mocks.rootRead.mockRejectedValue(new FsSafeError("not-found", "file not found"));
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      emoji: null,
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    expect(mocks.rootWrite).not.toHaveBeenCalled();
+    const persisted = expectRecordFields(mockCallArg(mocks.writeConfigFile), {});
+    const agents = expectRecordFields(persisted.agents, {});
+    const agent = expectDefined(
+      (agents.list as MockAgentEntry[])[0],
+      "persisted agent after no-file emoji clear",
+    );
+    expect(agent.identity).toBeUndefined();
+  });
+
+  it("does not create IDENTITY.md on workspace move when identity is absent", async () => {
+    mocks.loadConfigReturn = {
+      agents: {
+        list: [
+          {
+            id: "test-agent",
+            workspace: "/workspace/test-agent",
+          },
+        ],
+      },
+    };
+    mocks.ensureAgentWorkspace.mockResolvedValueOnce({
+      dir: "/resolved/new/workspace",
+      identityPathCreated: true,
+    });
+    mocks.rootRead.mockRejectedValue(new FsSafeError("not-found", "file not found"));
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      workspace: "/new/workspace",
+    });
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+    expect(mocks.rootWrite).not.toHaveBeenCalled();
+  });
+
   it("clears parser-accepted unbulleted emoji/avatar lines from IDENTITY.md", async () => {
     const identityMarkdown = [
       "# IDENTITY.md - Agent Identity",
