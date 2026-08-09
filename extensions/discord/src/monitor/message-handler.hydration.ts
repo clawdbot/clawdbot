@@ -172,18 +172,32 @@ function shouldHydrateDiscordMessagePayload(params: { message: Message }) {
   return /<@!?\d+>|<@&\d+>|@everyone|@here/u.test(currentText);
 }
 
-function hasMissingReferencedMessagePayload(message: Message): boolean {
+type ReferencedMessagePayloadState = "complete" | "missing" | "invalid";
+
+function resolveReferencedMessagePayloadState(message: Message): ReferencedMessagePayloadState {
   const reference = message.messageReference;
   if (!reference?.message_id) {
-    return false;
+    return "complete";
   }
   if (reference.type != null && reference.type !== MessageReferenceType.Default) {
-    return false;
+    return "complete";
   }
   if (message.type != null && message.type !== MessageType.Reply) {
-    return false;
+    return "complete";
   }
-  return !Object.hasOwn(readMessageRawData(message), "referenced_message");
+  const rawData = readMessageRawData(message);
+  if (!Object.hasOwn(rawData, "referenced_message")) {
+    return "missing";
+  }
+  const referenced = rawData.referenced_message;
+  if (referenced == null) {
+    return "complete";
+  }
+  return typeof referenced === "object" &&
+    typeof referenced.id === "string" &&
+    referenced.id === reference.message_id
+    ? "complete"
+    : "invalid";
 }
 
 async function hydrateDiscordReplyReference(params: {
@@ -191,7 +205,8 @@ async function hydrateDiscordReplyReference(params: {
   message: Message;
   messageChannelId: string;
 }): Promise<Message> {
-  if (!hasMissingReferencedMessagePayload(params.message)) {
+  const payloadState = resolveReferencedMessagePayloadState(params.message);
+  if (payloadState === "complete") {
     return params.message;
   }
   const reference = params.message.messageReference;
@@ -216,6 +231,13 @@ async function hydrateDiscordReplyReference(params: {
     logVerbose(
       `discord: failed to hydrate referenced message ${referencedMessageId}: ${String(err)}`,
     );
+    if (payloadState === "invalid") {
+      // A mismatched nested payload must never become reply context for another message.
+      return mergeFetchedDiscordMessage(params.message, {
+        ...readMessageRawData(params.message),
+        referenced_message: null,
+      } as APIMessage);
+    }
     return params.message;
   }
 }

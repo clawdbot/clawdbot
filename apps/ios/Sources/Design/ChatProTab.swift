@@ -235,11 +235,16 @@ struct ChatProTab: View {
                     ? self.dictationControl
                     : nil,
                 voiceNoteControl: self.voiceNoteControl,
-                speech: self.speech)
+                speech: self.speech,
+                mediaPlaybackAllowed: {
+                    !self.appModel.talkMode.isEnabled &&
+                        !self.appModel.talkMode.hasActivePushToTalkSession &&
+                        !self.appModel.voiceNoteRecorder.ownsPendingChatAttachment
+                })
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
-                    .environment(\.openClawAssistantBubblesInCleanChrome, true)
-                    .id(ObjectIdentifier(viewModel))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .environment(\.openClawAssistantBubblesInCleanChrome, true)
+                .id(ObjectIdentifier(viewModel))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ContentUnavailableView(
                 "Preparing Chat",

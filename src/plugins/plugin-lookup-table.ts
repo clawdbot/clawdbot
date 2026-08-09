@@ -18,7 +18,6 @@ import { normalizeWorkerProviderIds } from "./worker-provider-registry.js";
 type PluginLookUpTableMetrics = PluginMetadataSnapshot["metrics"] & {
   startupPlanMs: number;
   startupPluginCount: number;
-  deferredChannelPluginCount: number;
 };
 
 export type PluginLookUpTable = PluginMetadataSnapshot & {
@@ -106,7 +105,6 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
       startupPlanMs,
       totalMs: metadataSnapshot.metrics.totalMs + startupPlanMs,
       startupPluginCount: startup.pluginIds.length,
-      deferredChannelPluginCount: startup.configuredDeferredChannelPluginIds.length,
     },
   };
   let memoByKey = lookupTableMemoBySnapshot.get(metadataSnapshot);

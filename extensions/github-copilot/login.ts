@@ -12,8 +12,8 @@ import {
   applyAuthProfileConfig,
   ensureAuthProfileStore,
   normalizeGithubCopilotDomain,
-  upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
+import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -27,7 +27,7 @@ const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
 const GITHUB_DEVICE_FLOW_DEFAULT_INTERVAL_MS = 5_000;
 const GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS = 5_000;
-// Data-residency GitHub Enterprise support: the device flow, token exchange, and
+// Data-residency GitHub Enterprise support: the device flow, runtime auth, and
 // completions endpoints all live under the tenant host (e.g. "acme.ghe.com")
 // instead of github.com. The host is threaded in from the selected auth flow so
 // the SSRF allowlist and every request target stay consistent for one login.
@@ -63,23 +63,12 @@ type DeviceTokenResponse =
 const GITHUB_DEVICE_ACCESS_DENIED = Symbol("github-device-access-denied");
 const GITHUB_DEVICE_EXPIRED = Symbol("github-device-expired");
 
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
 class GitHubDeviceFlowError extends Error {
   readonly kind: symbol;
   constructor(kind: symbol, message: string) {
     super(message);
     this.kind = kind;
     this.name = "GitHubDeviceFlowError";
-  }
-}
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
   }
 }
 
@@ -161,6 +150,8 @@ async function postGitHubDeviceFlowForm(params: {
   });
   try {
     if (!response.ok) {
+      // Release closes the dispatcher, so cancel its unread response body first.
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
     }
     return parseJsonResponse(
@@ -231,9 +222,11 @@ async function pollForAccessToken(params: {
       continue;
     }
     if (err === "slow_down") {
-      intervalMs =
-        positiveSecondsToSafeMilliseconds(json.interval) ??
-        Math.min(Number.MAX_SAFE_INTEGER, intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS);
+      // slow_down is cumulative; a returned interval may raise but never lower the required floor.
+      intervalMs = Math.max(
+        Math.min(Number.MAX_SAFE_INTEGER, intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS),
+        positiveSecondsToSafeMilliseconds(json.interval) ?? 0,
+      );
       continue;
     }
     if (err === "expired_token") {
@@ -391,7 +384,7 @@ export async function githubCopilotLoginCommand(
   }
 
   // Mint against the same host the runtime will route to. resolveGithubCopilotDomain
-  // is env-authoritative (COPILOT_GITHUB_DOMAIN wins), and runtime token exchange
+  // is env-authoritative (COPILOT_GITHUB_DOMAIN wins), and runtime authentication
   // uses the same resolver, so honoring it here keeps the minted token and the
   // runtime endpoint on the same tenant instead of minting a public token that
   // then 401s against api.<tenant>.

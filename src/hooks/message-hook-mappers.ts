@@ -188,11 +188,11 @@ export function deriveInboundMessageHookContext(
     sessionKey: ctx.SessionKey,
     agentId: ctx.AgentId,
     messageId:
-      overrides?.messageId ??
-      ctx.MessageSidFull ??
-      ctx.MessageSid ??
-      ctx.MessageSidFirst ??
-      ctx.MessageSidLast,
+      normalizeOptionalString(overrides?.messageId) ??
+      normalizeOptionalString(ctx.MessageSidFull) ??
+      normalizeOptionalString(ctx.MessageSid) ??
+      normalizeOptionalString(ctx.MessageSidFirst) ??
+      normalizeOptionalString(ctx.MessageSidLast),
     senderId: ctx.SenderId,
     senderName: ctx.SenderName,
     senderUsername: ctx.SenderUsername,
@@ -368,10 +368,13 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
   return { conversationId: baseConversationId };
 }
 
-export function toPluginInboundClaimContext(
+function buildPluginInboundClaimContext(
   canonical: CanonicalInboundMessageHookContext,
+  conversation: {
+    conversationId?: string;
+    parentConversationId?: string;
+  },
 ): PluginHookInboundClaimContext {
-  const conversation = resolveInboundConversation(canonical);
   const context: PluginHookInboundClaimContext = {
     channelId: canonical.channelId,
     accountId: canonical.accountId,
@@ -403,14 +406,14 @@ export function toPluginInboundClaimContext(
   return context;
 }
 
-export function toPluginInboundClaimEvent(
+function buildPluginInboundClaimEvent(
   canonical: CanonicalInboundMessageHookContext,
+  context: PluginHookInboundClaimContext,
   extras?: {
     commandAuthorized?: boolean;
     wasMentioned?: boolean;
   },
 ): PluginHookInboundClaimEvent {
-  const context = toPluginInboundClaimContext(canonical);
   const event: PluginHookInboundClaimEvent = {
     content: canonical.content,
     body: canonical.body,
@@ -467,6 +470,24 @@ export function toPluginInboundClaimEvent(
   }
   assignTraceFields(event, canonical.trace);
   return event;
+}
+
+export function toPluginInboundClaimPair(
+  canonical: CanonicalInboundMessageHookContext,
+  extras?: {
+    commandAuthorized?: boolean;
+    wasMentioned?: boolean;
+  },
+): {
+  context: PluginHookInboundClaimContext;
+  event: PluginHookInboundClaimEvent;
+} {
+  const conversation = resolveInboundConversation(canonical);
+  const context = buildPluginInboundClaimContext(canonical, conversation);
+  return {
+    context,
+    event: buildPluginInboundClaimEvent(canonical, context, extras),
+  };
 }
 
 export function toPluginMessageReceivedEvent(

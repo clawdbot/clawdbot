@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -261,7 +262,9 @@ export async function uploadSlackFile(params: {
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
   });
-  const uploadFileName = params.uploadFileName ?? fileName ?? "upload";
+  // Slack classifies previews by filename even when the upload body has a MIME type.
+  const uploadFileName =
+    params.uploadFileName ?? fileName ?? `upload${extensionForMime(contentType) ?? ""}`;
   const uploadTitle = params.uploadTitle ?? uploadFileName;
   const uploadUrlResp = await withSlackDnsRequestRetry("files.getUploadURLExternal", () =>
     params.client.files.getUploadURLExternal({

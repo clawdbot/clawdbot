@@ -85,15 +85,18 @@ if (!customElements.get("openclaw-workboard-mini-widget")) {
 export const renderWorkboardMiniWidget: PluginBoardWidgetRenderer = ({
   widget,
   sessionKey,
+  active,
   requestUpdate,
 }: {
   widget: BoardViewWidget;
   sessionKey: string;
+  active: boolean;
   requestUpdate: () => void;
 }) => html`
   <openclaw-workboard-mini-widget
     .widget=${widget}
     .sessionKey=${sessionKey}
+    .active=${active}
     .hostRequestUpdate=${requestUpdate}
   ></openclaw-workboard-mini-widget>
 `;

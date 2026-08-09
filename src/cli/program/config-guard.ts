@@ -5,6 +5,7 @@ import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { createInvalidConfigError } from "../../config/io.invalid-config.js";
+import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
 import {
   resolveIsNixMode,
   resolveLegacyStateDirs,
@@ -15,7 +16,6 @@ import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
-import { shouldMigrateStateFromPath } from "../argv.js";
 import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
@@ -189,16 +189,22 @@ function isGatewayStartupCommand(commandPath: string[]): boolean {
   );
 }
 
-async function getConfigSnapshot(options?: { observe: false }) {
+async function getConfigSnapshot(
+  options?: { observe: false; skipPluginValidation?: true },
+  measure?: ConfigSnapshotReadMeasure,
+) {
   if (options?.observe === false) {
-    return readConfigFileSnapshot(options);
+    return readConfigFileSnapshot({
+      ...options,
+      ...(measure ? { measure } : {}),
+    });
   }
   // Tests often mutate config fixtures; caching can make those flaky.
   if (process.env.VITEST === "true") {
-    return readConfigFileSnapshot();
+    return readConfigFileSnapshot(measure ? { measure } : undefined);
   }
   if (!configSnapshotPromise) {
-    const pendingSnapshot = readConfigFileSnapshot();
+    const pendingSnapshot = readConfigFileSnapshot(measure ? { measure } : undefined);
     configSnapshotPromise = pendingSnapshot;
     pendingSnapshot.catch(() => {
       if (configSnapshotPromise === pendingSnapshot) {
@@ -216,6 +222,7 @@ export async function ensureConfigReady(
     suppressDoctorStdout?: boolean;
     allowInvalid?: boolean;
     beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+    measure?: ConfigSnapshotReadMeasure;
     skipPristineCoreStateMigrations?: boolean;
     skipPristineStartupStateMigrations?: boolean;
   },
@@ -225,7 +232,14 @@ export async function ensureConfigReady(
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
-  const shouldConsiderStateMigration = shouldMigrateStateFromPath(commandPath);
+  const shouldConsiderStateMigration =
+    commandName !== "config" &&
+    commandName !== "health" &&
+    commandName !== "logs" &&
+    commandName !== "sessions" &&
+    // Remote RPC clients must not migrate state owned by the running gateway.
+    !(commandName === "gateway" && subcommandName === "call") &&
+    !(commandName === "update" && subcommandName === "status");
   const requiresLegacyStateInput = shouldRunStateMigrationOnlyWithLegacyInputs(commandPath);
   const runStateMigrationPreflight = async () => {
     didRunDoctorConfigFlow = true;
@@ -234,10 +248,11 @@ export async function ensureConfigReady(
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
+        ...(params.measure ? { measure: params.measure } : {}),
         ...(commandName === "status" ? { observe: false } : {}),
         ...(shouldRequireStartupMigrationCheckpoint(commandPath)
           ? { requireStartupMigrationCheckpoint: true }
-          : {}),
+          : { requireStateMigrationCheckpoint: true }),
         ...(params.beforeStateMigrations
           ? { beforeStateMigrations: params.beforeStateMigrations }
           : {}),
@@ -268,11 +283,16 @@ export async function ensureConfigReady(
     preflightSnapshot = await runStateMigrationPreflight();
   }
 
-  // Status performs a second non-observing read for its materialized/source pair;
-  // keep the startup guard from recording config health before the command begins.
+  // Read-only diagnostics must not record config health; logs also skips plugin
+  // metadata discovery because opening the shared state DB creates SQLite sidecars.
   const configSnapshotOptions =
-    commandName === "status" ? ({ observe: false } as const) : undefined;
-  let snapshot = preflightSnapshot ?? (await getConfigSnapshot(configSnapshotOptions));
+    commandName === "logs"
+      ? ({ observe: false, skipPluginValidation: true } as const)
+      : commandName === "status" || (commandName === "gateway" && subcommandName === "call")
+        ? ({ observe: false } as const)
+        : undefined;
+  let snapshot =
+    preflightSnapshot ?? (await getConfigSnapshot(configSnapshotOptions, params.measure));
   if (
     !preflightSnapshot &&
     !didRunDoctorConfigFlow &&
@@ -388,6 +408,7 @@ export async function ensureConfigReady(
             migrateState: false,
             migrateLegacyConfig: false,
             invalidConfigNote: false,
+            ...(params.measure ? { measure: params.measure } : {}),
             ...configSnapshotOptions,
           })
         ).snapshot;

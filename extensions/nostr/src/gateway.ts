@@ -10,7 +10,12 @@ import {
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+  stripMarkdown,
+} from "openclaw/plugin-sdk/text-chunking";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
@@ -23,14 +28,19 @@ type NostrGatewayStart = NonNullable<
 >;
 type NostrOutboundAdapter = Pick<
   ChannelOutboundAdapter,
-  "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
+  "chunker" | "deliveryCapabilities" | "deliveryMode" | "textChunkLimit" | "sendText"
 > & {
   sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
+  sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
 };
 
 const activeBuses = new Map<string, NostrBusHandle>();
 const metricsSnapshots = new Map<string, MetricsSnapshot>();
 const ACCESS_GROUP_PREFIX = "accessGroup:";
+
+function normalizeRelayLifecycleKey(relay: string): string {
+  return new URL(relay).toString();
+}
 
 function parseNostrAccessGroupAllowFromEntry(entry: string): string | null {
   const trimmed = entry.trim();
@@ -81,6 +91,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
   ctx.setStatus({
     accountId: account.accountId,
     publicKey: account.publicKey,
+    lifecycle: "starting",
   });
   ctx.log?.info?.(`[${account.accountId}] starting Nostr provider (pubkey: ${account.publicKey})`);
 
@@ -116,6 +127,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
     });
 
   let busHandle: NostrBusHandle | null = null;
+  const connectedRelays = new Set<string>();
 
   const authorizeSender = async (input: {
     senderId: string;
@@ -194,7 +206,10 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
                 payload && typeof payload === "object" && "text" in payload
                   ? ((payload as { text?: string }).text ?? "")
                   : "";
-              if (!outboundText.trim()) {
+              // Inbound DM replies bypass the outbound adapter; sanitize before
+              // Markdown conversion so private tool traces cannot reach a relay.
+              const sanitizedText = sanitizeAssistantVisibleText(outboundText);
+              if (!sanitizedText) {
                 return;
               }
               const tableMode = runtime.channel.text.resolveMarkdownTableMode({
@@ -203,7 +218,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
                 accountId: account.accountId,
               });
               const message = stripMarkdown(
-                runtime.channel.text.convertMarkdownTables(outboundText, tableMode),
+                runtime.channel.text.convertMarkdownTables(sanitizedText, tableMode),
               );
               if (message) {
                 await reply(message);
@@ -225,9 +240,21 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
           ctx.log?.error?.(`[${account.accountId}] Nostr error (${context}): ${error.message}`);
         },
         onConnect: (relay) => {
+          connectedRelays.add(normalizeRelayLifecycleKey(relay));
+          // Treat >=1 connected relay as ready. This favors partial availability over quorum
+          // fidelity; circuit-breaker health stays private to nostr-bus, so ready is not all-relays.
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
           ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
         },
         onDisconnect: (relay) => {
+          connectedRelays.delete(normalizeRelayLifecycleKey(relay));
+          if (connectedRelays.size === 0) {
+            ctx.setStatus({
+              accountId: account.accountId,
+              connected: false,
+              lifecycle: "recovering",
+            });
+          }
           ctx.log?.debug?.(`[${account.accountId}] Disconnected from relay: ${relay}`);
         },
         onEose: (relays) => {
@@ -312,6 +339,10 @@ export const nostrPairingTextAdapter = {
 export const nostrOutboundAdapter: NostrOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 4000,
+  // The outbound planner ignores textChunkLimit unless the adapter also
+  // supplies its chunker, causing oversized encrypted events to be rejected.
+  chunker: chunkTextForOutbound,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   deliveryCapabilities: {
     durableFinal: {
       text: true,

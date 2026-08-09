@@ -1,4 +1,5 @@
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
+import { resolveSourceReplyDeliveryMode } from "../auto-reply/reply/source-reply-delivery-mode.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import { markCommitmentsAttempted } from "../commitments/store.js";
@@ -132,7 +133,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       if (send.status === "failed" || send.status === "partial_failed") {
         throw send.error;
       }
-      return true;
+      return send.status === "sent";
     } catch (err) {
       log.warn(`heartbeat: HEARTBEAT_OK delivery failed: ${formatErrorMessage(err)}`);
       return false;
@@ -153,6 +154,11 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     const outcome = classifyHeartbeatAgentOutcome({
       agentRun,
       hasRelayableExecCompletion,
+      suppressUnmarkedSourceReplies:
+        resolveSourceReplyDeliveryMode({
+          cfg,
+          ctx: { ChatType: delivery.chatType, Provider: delivery.channel },
+        }) === "message_tool_only",
       responsePrefix: resolveHeartbeatResponsePrefix(),
       ackMaxChars: resolveHeartbeatAckMaxChars(cfg, heartbeat),
     });

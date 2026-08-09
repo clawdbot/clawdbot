@@ -1,6 +1,7 @@
+import path from "node:path";
 // Image runtime tests cover model-backed image routing, auth/profile handling,
 // provider payload transforms, and MiniMax/Copilot special paths.
-import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
@@ -97,12 +98,7 @@ function requireFirstMockCall<const Calls extends readonly unknown[][]>(
   return requireMockCallAt(mock, 0, label);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 vi.mock("../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
@@ -166,14 +162,6 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
 
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
-}));
-
-vi.mock("../plugin-sdk/provider-auth.js", () => ({
-  buildCopilotIdeHeaders: () => ({
-    "Editor-Version": "vscode/1.107.0",
-    "User-Agent": "GitHubCopilotChat/0.35.0",
-  }),
-  COPILOT_INTEGRATION_ID: "vscode-chat",
 }));
 
 const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -268,6 +256,12 @@ describe("describeImageWithModel", () => {
         ? {
             [API_KEY_FIELD]: "test-api-key",
             baseUrl: "https://api.githubcopilot.com",
+            request: {
+              headers: {
+                "Copilot-Integration-Id": "copilot-developer-cli",
+                "Openai-Organization": "github-copilot",
+              },
+            },
           }
         : undefined;
     });
@@ -763,6 +757,10 @@ describe("describeImageWithModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
+        preparedModelRuntime: expect.objectContaining({
+          agentDir: "/tmp/openclaw-agent",
+          workspaceDir: "/tmp/openclaw-workspace",
+        }),
         skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
         workspaceDir: "/tmp/openclaw-workspace",
@@ -841,6 +839,7 @@ describe("describeImageWithModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
+        preparedModelRuntime: expect.objectContaining({ agentDir: "/tmp/openclaw-agent" }),
         skipAgentDiscovery: true,
         skipProviderRuntimeHooks: true,
       },
@@ -855,6 +854,7 @@ describe("describeImageWithModel", () => {
         allowBundledStaticCatalogFallback: true,
         authStorage: preparedAuthStorage,
         modelRegistry: {},
+        preparedModelRuntime: expect.objectContaining({ agentDir: "/tmp/openclaw-agent" }),
         skipAgentDiscovery: true,
       },
     );

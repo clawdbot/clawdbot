@@ -1,3 +1,4 @@
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import type {
   SubagentRegistryLifecycleParams,
@@ -62,7 +63,7 @@ export function createSubagentRegistryLifecycleCommon(
     if (trimmed.length <= 8) {
       return "***";
     }
-    return `${trimmed.slice(0, 4)}…${trimmed.slice(-4)}`;
+    return `${sliceUtf16Safe(trimmed, 0, 4)}…${sliceUtf16Safe(trimmed, -4)}`;
   };
 
   const maskSessionKey = (sessionKey: string): string => {

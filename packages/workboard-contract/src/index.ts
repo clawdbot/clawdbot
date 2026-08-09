@@ -76,6 +76,7 @@ export const WORKBOARD_DIAGNOSTIC_KINDS = [
   "dependency_cycle",
   "broken_dependency",
   "aggregate_deadlock",
+  "archived_but_active",
 ] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 export const WORKBOARD_NOTIFICATION_KINDS = ["completed", "failed", "stale"] as const;

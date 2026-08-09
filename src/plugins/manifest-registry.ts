@@ -21,6 +21,7 @@ import {
   type PluginCandidate,
   type PluginDiscoveryResult,
 } from "./discovery.js";
+import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
@@ -29,6 +30,7 @@ import type {
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginFormat,
+  PluginManifestDoctorContract,
 } from "./manifest-types.js";
 import {
   isCoreReservedPluginId,
@@ -92,6 +94,7 @@ function isPluginRootPath(params: {
   rootPath: string;
   targetPath: string;
   rootRealPath: string;
+  realpathCache: Map<string, string>;
   rejectHardlinks?: boolean;
   targetMustExist?: boolean;
 }): boolean {
@@ -100,7 +103,7 @@ function isPluginRootPath(params: {
   if (!isPathInside(resolvedRootPath, resolvedTargetPath)) {
     return false;
   }
-  const targetRealPath = safeRealpathSync(resolvedTargetPath);
+  const targetRealPath = safeRealpathSync(resolvedTargetPath, params.realpathCache);
   if (!targetRealPath) {
     return params.targetMustExist !== true;
   }
@@ -124,6 +127,7 @@ function resolveManifestPluginSourcePath(params: {
   entry: string;
   rejectHardlinks: boolean;
   diagnostics: PluginDiagnostic[];
+  realpathCache: Map<string, string>;
 }): string | undefined {
   const pushDiagnostic = () => {
     params.diagnostics.push({
@@ -140,13 +144,14 @@ function resolveManifestPluginSourcePath(params: {
   }
 
   const rootPath = path.resolve(params.rootDir);
-  const rootRealPath = safeRealpathSync(rootPath) ?? rootPath;
+  const rootRealPath = safeRealpathSync(rootPath, params.realpathCache) ?? rootPath;
   const sourcePath = path.resolve(rootPath, params.entry);
   if (
     !isPluginRootPath({
       rootPath,
       targetPath: sourcePath,
       rootRealPath,
+      realpathCache: params.realpathCache,
       rejectHardlinks: params.rejectHardlinks,
       targetMustExist: fs.existsSync(sourcePath),
     })
@@ -161,6 +166,7 @@ function resolveManifestPluginSourcePath(params: {
       rootPath,
       targetPath: resolvedSourcePath,
       rootRealPath,
+      realpathCache: params.realpathCache,
       rejectHardlinks: params.rejectHardlinks,
       targetMustExist: fs.existsSync(resolvedSourcePath),
     })
@@ -243,6 +249,8 @@ export type PluginManifestRecord = {
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
+  doctorContract?: PluginManifestDoctorContract;
+  sessionRouteStateOwners?: DoctorSessionRouteStateOwner[];
   packageManifest?: OpenClawPackageManifest;
   packageDependencies?: PluginDependencySpecMap;
   packageOptionalDependencies?: PluginDependencySpecMap;
@@ -260,7 +268,6 @@ export type PluginManifestRecord = {
   rootDir: string;
   source: string;
   setupSource?: string;
-  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   manifestPath: string;
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
@@ -512,11 +519,13 @@ function buildRecord(params: {
   manifestPath: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks: boolean;
+  realpathCache: Map<string, string>;
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
   trustedOfficialInstall?: boolean;
 }): PluginManifestRecord {
+  const pluginId = params.candidate.effectivePluginId ?? params.manifest.id;
   const providerSourceEntry =
     params.manifest.providerCatalogEntry !== undefined
       ? {
@@ -549,7 +558,9 @@ function buildRecord(params: {
     params.candidate.packageManifest?.channel?.commands,
   );
   return {
-    id: params.manifest.id,
+    id: pluginId,
+    doctorContract: params.manifest.doctorContract,
+    sessionRouteStateOwners: params.manifest.sessionRouteStateOwners,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
@@ -572,11 +583,12 @@ function buildRecord(params: {
       ? resolveManifestPluginSourcePath({
           rootDir: params.candidate.rootDir,
           manifestPath: params.manifestPath,
-          pluginId: params.manifest.id,
+          pluginId,
           entryName: providerSourceEntry.entryName,
           entry: providerSourceEntry.entry,
           rejectHardlinks: params.rejectHardlinks,
           diagnostics: params.diagnostics,
+          realpathCache: params.realpathCache,
         })
       : undefined,
     modelSupport: params.manifest.modelSupport,
@@ -612,9 +624,6 @@ function buildRecord(params: {
     rootDir: params.candidate.rootDir,
     source: params.candidate.source,
     setupSource: params.candidate.setupSource,
-    startupDeferConfiguredChannelFullLoadUntilAfterListen:
-      params.candidate.packageManifest?.startup?.deferConfiguredChannelFullLoadUntilAfterListen ===
-      true,
     manifestPath: params.manifestPath,
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,
@@ -754,7 +763,13 @@ function dedupePluginDiagnostics(diagnostics: PluginDiagnostic[]): PluginDiagnos
   const seen = new Set<string>();
   const deduped: PluginDiagnostic[] = [];
   for (const diagnostic of diagnostics) {
-    const key = JSON.stringify([diagnostic.level, diagnostic.pluginId ?? "", diagnostic.message]);
+    // Errors belong to their failed source; equivalent compatibility warnings remain owner-deduped.
+    const key = JSON.stringify([
+      diagnostic.level,
+      diagnostic.pluginId ?? "",
+      diagnostic.message,
+      diagnostic.level === "error" ? (diagnostic.source ?? "") : "",
+    ]);
     if (seen.has(key)) {
       continue;
     }
@@ -1073,12 +1088,14 @@ export function loadPluginManifestRegistry(
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",
+        pluginId: candidate.diagnosticIdHint ?? candidate.idHint,
         message: manifestRes.error,
         source: manifestRes.manifestPath,
       });
       continue;
     }
     const manifest = manifestRes.manifest;
+    const effectivePluginId = candidate.effectivePluginId ?? manifest.id;
     if (candidate.origin !== "bundled") {
       const packageManifestSource = path.join(
         candidate.packageDir ?? candidate.rootDir,
@@ -1087,7 +1104,7 @@ export function loadPluginManifestRegistry(
       const allowLegacyBareMinHostVersion =
         candidate.origin === "global" &&
         matchesInstalledPluginRecord({
-          pluginId: manifest.id,
+          pluginId: effectivePluginId,
           candidate,
           config,
           env,
@@ -1101,7 +1118,7 @@ export function loadPluginManifestRegistry(
       if (!minHostVersionCheck.ok) {
         diagnostics.push({
           level: minHostVersionCheck.kind === "invalid" ? "error" : "warn",
-          pluginId: manifest.id,
+          pluginId: effectivePluginId,
           source: packageManifestSource,
           message:
             minHostVersionCheck.kind === "invalid"
@@ -1116,7 +1133,7 @@ export function loadPluginManifestRegistry(
       if (!packagePluginApiRangeCheck.ok) {
         diagnostics.push({
           level: "error",
-          pluginId: manifest.id,
+          pluginId: effectivePluginId,
           source: packageManifestSource,
           message: `plugin manifest invalid | ${packagePluginApiRangeCheck.error}`,
         });
@@ -1129,7 +1146,7 @@ export function loadPluginManifestRegistry(
       ) {
         diagnostics.push({
           level: "warn",
-          pluginId: manifest.id,
+          pluginId: effectivePluginId,
           source: packageManifestSource,
           message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
         });
@@ -1160,10 +1177,11 @@ export function loadPluginManifestRegistry(
           manifestPath: manifestRes.manifestPath,
           diagnostics,
           rejectHardlinks,
+          realpathCache,
           schemaCacheKey,
           configSchema,
           trustedOfficialInstall: isTrustedOfficialPluginInstall({
-            pluginId: manifest.id,
+            pluginId: effectivePluginId,
             candidate,
             env,
             installRecords: getInstallRecords(),
@@ -1173,7 +1191,7 @@ export function loadPluginManifestRegistry(
             : {}),
         });
 
-    const existing = seenIds.get(manifest.id);
+    const existing = seenIds.get(effectivePluginId);
     if (existing) {
       // Check whether both candidates point to the same physical directory
       // (e.g. via symlinks or different path representations). If so, this
@@ -1192,21 +1210,21 @@ export function loadPluginManifestRegistry(
         // an unexpected order (config > workspace > global > bundled).
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = record;
-          seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+          seenIds.set(effectivePluginId, { candidate, recordIndex: existing.recordIndex });
           pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
         }
         continue;
       }
 
       const candidateRank = resolveDuplicatePrecedenceRank({
-        pluginId: manifest.id,
+        pluginId: effectivePluginId,
         candidate,
         config,
         env,
         installRecords: getInstallRecords(),
       });
       const existingRank = resolveDuplicatePrecedenceRank({
-        pluginId: manifest.id,
+        pluginId: effectivePluginId,
         candidate: existing.candidate,
         config,
         env,
@@ -1217,12 +1235,12 @@ export function loadPluginManifestRegistry(
       const overriddenCandidate = candidateWins ? existing.candidate : candidate;
       if (candidateWins) {
         records[existing.recordIndex] = record;
-        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        seenIds.set(effectivePluginId, { candidate, recordIndex: existing.recordIndex });
         pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
       }
       if (
         isIntentionalInstalledBundledDuplicate({
-          pluginId: manifest.id,
+          pluginId: effectivePluginId,
           left: candidate,
           right: existing.candidate,
           config,
@@ -1237,7 +1255,7 @@ export function loadPluginManifestRegistry(
       }
       diagnostics.push({
         level: "warn",
-        pluginId: manifest.id,
+        pluginId: effectivePluginId,
         source: overriddenCandidate.source,
         message:
           winnerCandidate.origin === "config"
@@ -1247,7 +1265,7 @@ export function loadPluginManifestRegistry(
       continue;
     }
 
-    seenIds.set(manifest.id, { candidate, recordIndex: records.length });
+    seenIds.set(effectivePluginId, { candidate, recordIndex: records.length });
     records.push(record);
     pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
   }

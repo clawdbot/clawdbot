@@ -7,7 +7,6 @@ import crypto from "node:crypto";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
@@ -89,7 +88,7 @@ export async function runSessionsSendA2AFlow(params: {
   announceTimeoutMs: number;
   maxPingPongTurns: number;
   requesterSessionKey?: string;
-  requesterChannel?: GatewayMessageChannel;
+  requesterChannel?: string;
   baseline?: AssistantReplySnapshot;
   roundOneReply?: string;
   waitRunId?: string;

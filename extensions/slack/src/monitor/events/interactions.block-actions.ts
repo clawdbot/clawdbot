@@ -643,8 +643,8 @@ async function handleSlackApprovalInteraction(params: {
       approvalId: params.approval.approvalId,
       approvalKind: params.approval.approvalKind,
       decision: params.approval.decision,
+      channel: "slack",
       senderId: params.parsed.userId,
-      clientDisplayName: `Slack approval (${params.parsed.userId.trim() || "unknown"})`,
     });
     const terminalLabel = resolveSlackApprovalTerminalLabel(result.approval);
     const prefix = result.applied ? "Resolved" : "Already resolved";
@@ -736,9 +736,9 @@ async function handleSlackLegacyApprovalInteraction(params: {
         cfg: params.ctx.cfg,
         approvalId: parsedApproval.approvalId,
         decision: parsedApproval.decision,
+        channel: "slack",
         senderId: params.parsed.userId,
         resolveMethod,
-        clientDisplayName: `Slack approval (${params.parsed.userId.trim() || "unknown"})`,
       });
       try {
         await updateSlackInteractionMessage({
@@ -770,6 +770,7 @@ async function dispatchSlackPluginInteraction(params: {
   parsed: ParsedSlackBlockAction;
   pluginInteractionData: string;
   auth: { isAuthorizedSender: boolean };
+  channelType?: Parameters<typeof dispatchSlackPluginInteractiveHandler>[0]["channelType"];
   respond?: SlackBlockActionRespond;
 }): Promise<boolean> {
   const pluginInteractionId = buildSlackPluginInteractionId({
@@ -793,6 +794,7 @@ async function dispatchSlackPluginInteraction(params: {
   const pluginResult = await dispatchSlackPluginInteractiveHandler({
     data: params.pluginInteractionData,
     interactionId: pluginInteractionId,
+    channelType: params.channelType,
     ctx: {
       accountId: params.ctx.accountId,
       interactionId: pluginInteractionId,
@@ -1138,6 +1140,7 @@ async function handleSlackBlockAction(params: {
       auth: {
         isAuthorizedSender,
       },
+      channelType: auth.channelType,
       respond,
     });
     if (handled) {

@@ -21,7 +21,7 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -134,7 +134,7 @@ async function resolveDefaultSessionTranscriptsDir(agentId: string): Promise<str
 
 /** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
-  opts?: { workspace?: string },
+  opts?: { workspace?: string; json?: boolean },
   runtime: RuntimeEnv = defaultRuntime,
   deps: SetupCommandDeps = {},
 ) {
@@ -225,7 +225,10 @@ export async function setupCommand(
     next = (await ensureOnboardingAgent({ config: next, workspace, baseConfig: cfg })).config;
   }
 
-  if (!snapshot.exists || shouldPersistRoster || shouldWriteWorkspace || shouldWriteGatewayMode) {
+  const configChanged =
+    !snapshot.exists || shouldPersistRoster || shouldWriteWorkspace || shouldWriteGatewayMode;
+  let configStatus: "created" | "updated" | "unchanged";
+  if (configChanged) {
     // Preserve all existing config fields and touch only workspace/gateway mode
     // defaults that this command owns.
     const replaceConfig = deps.replaceConfigFile ?? writeDefaultConfigFile;
@@ -250,10 +253,11 @@ export async function setupCommand(
           : {}),
       },
     });
-    if (!snapshot.exists) {
+    configStatus = snapshot.exists ? "updated" : "created";
+    if (!opts?.json && !snapshot.exists) {
       const formatConfigPath = deps.formatConfigPath ?? formatDefaultConfigPath;
       runtime.log(`Wrote ${await formatConfigPath(configPath)}`);
-    } else {
+    } else if (!opts?.json) {
       const updates: string[] = [];
       if (shouldWriteWorkspace) {
         updates.push("set agents.defaults.workspace");
@@ -268,8 +272,11 @@ export async function setupCommand(
       });
     }
   } else {
-    const formatConfigPath = deps.formatConfigPath ?? formatDefaultConfigPath;
-    runtime.log(`Config OK: ${await formatConfigPath(configPath)}`);
+    configStatus = "unchanged";
+    if (!opts?.json) {
+      const formatConfigPath = deps.formatConfigPath ?? formatDefaultConfigPath;
+      runtime.log(`Config OK: ${await formatConfigPath(configPath)}`);
+    }
   }
 
   const ws = await (deps.ensureAgentWorkspace ?? ensureDefaultAgentWorkspace)({
@@ -277,13 +284,25 @@ export async function setupCommand(
     ensureBootstrapFiles: !resolvedDefaults.skipBootstrap,
     skipOptionalBootstrapFiles: resolvedDefaults.skipOptionalBootstrapFiles,
   });
-  runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
+  if (!opts?.json) {
+    runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
+  }
 
   const defaultAgentId = resolveDefaultAgentId(next);
   const sessionsDir = await (
     deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
   )(defaultAgentId);
   await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
+  if (opts?.json) {
+    writeRuntimeJson(runtime, {
+      ok: true,
+      configPath,
+      configStatus,
+      workspaceDir: ws.dir,
+      sessionsDir,
+    });
+    return;
+  }
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   runtime.log("");
   runtime.log("Setup complete: config, workspace, and session directories are ready.");

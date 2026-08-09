@@ -1,8 +1,9 @@
-// Setup wizard tests cover end-to-end onboarding prompt flows.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+// Setup wizard tests cover end-to-end onboarding prompt flows.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
@@ -33,9 +34,9 @@ type VerifySetupInferenceConfig =
   typeof import("../system-agent/setup-inference.js").verifySetupInferenceConfig;
 type ConfigureGatewayForSetup = typeof import("./setup.gateway-config.js").configureGatewayForSetup;
 type RunSetupMigrationImport = typeof import("./setup.migration-import.js").runSetupMigrationImport;
+type RunSearchSetupFlow = typeof import("../flows/search-setup.js").runSearchSetupFlow;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
-const keepCurrentAuthChoice = vi.hoisted(() => "__keep-current" as const);
 const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "skip"));
 const applyAuthChoice = vi.hoisted(() =>
   vi.fn<ApplyAuthChoice>(async (args) => ({ config: args.config })),
@@ -146,6 +147,9 @@ const setupChannels = vi.hoisted(() =>
   ),
 );
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const runSearchSetupFlow = vi.hoisted(() =>
+  vi.fn<RunSearchSetupFlow>(async (config) => ({ outcome: "completed", config })),
+);
 const promptRemoteGatewayConfig = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const validateGatewayWebSocketUrl = vi.hoisted(() =>
   vi.fn<(value: string) => string | undefined>(() => undefined),
@@ -278,12 +282,7 @@ function persistedWizardConfigs(): OpenClawConfig[] {
   );
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectRecordFields(
   value: unknown,
@@ -330,6 +329,10 @@ vi.mock("../commands/onboard-skills.js", () => ({
   setupSkills,
 }));
 
+vi.mock("../flows/search-setup.js", () => ({
+  runSearchSetupFlow,
+}));
+
 vi.mock("../commands/onboard-remote.js", () => ({
   promptRemoteGatewayConfig,
   validateGatewayWebSocketUrl,
@@ -344,7 +347,7 @@ vi.mock("../agents/auth-profiles.runtime.js", () => ({
 }));
 
 vi.mock("../commands/auth-choice-prompt.js", () => ({
-  KEEP_CURRENT_AUTH_CHOICE: keepCurrentAuthChoice,
+  isKeepCurrentAuthChoice: (value: unknown) => value === "__keep-current",
   promptAuthChoiceGrouped,
 }));
 
@@ -357,6 +360,7 @@ vi.mock("../commands/auth-choice.js", () => ({
 
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
+  resolveManifestProviderAuthChoices: () => [],
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
@@ -451,7 +455,9 @@ vi.mock("../daemon/systemd.js", () => ({
 }));
 
 vi.mock("../infra/control-ui-assets.js", () => ({
+  CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS: 600_000,
   ensureControlUiAssetsBuilt,
+  isControlUiStartupAssetsReady: vi.fn(() => true),
 }));
 
 vi.mock("../plugins/status.js", () => ({
@@ -558,6 +564,11 @@ describe("runSetupWizard", () => {
     setupChannels.mockImplementation(async (cfg) => cfg);
     setupSkills.mockReset();
     setupSkills.mockImplementation(async (cfg) => cfg);
+    runSearchSetupFlow.mockReset();
+    runSearchSetupFlow.mockImplementation(async (config: OpenClawConfig) => ({
+      outcome: "completed",
+      config,
+    }));
     promptRemoteGatewayConfig.mockReset();
     promptRemoteGatewayConfig.mockImplementation(async (cfg) => cfg);
     validateGatewayWebSocketUrl.mockReset();
@@ -1571,7 +1582,7 @@ describe("runSetupWizard", () => {
       warnings: [],
       legacyIssues: [],
     });
-    promptAuthChoiceGrouped.mockResolvedValueOnce(keepCurrentAuthChoice);
+    promptAuthChoiceGrouped.mockResolvedValueOnce("__keep-current");
     const workspaceDir = await makeCaseDir("keep-provider-config-");
     const prompter = buildWizardPrompter();
     const runtime = createRuntime();
@@ -1779,6 +1790,38 @@ describe("runSetupWizard", () => {
         process.env.BRAVE_API_KEY = prevBraveKey;
       }
     }
+  });
+
+  it("continues onboarding when search-provider installation fails", async () => {
+    const config: OpenClawConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
+    runSearchSetupFlow.mockResolvedValueOnce({
+      outcome: "install-failed",
+      config,
+      providerId: "brave",
+      reason: "failed",
+    });
+    readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
+    const prompter = buildWizardPrompter({});
+
+    await expect(
+      runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "skip",
+          installDaemon: false,
+          skipChannels: true,
+          skipSkills: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        createRuntime(),
+        prompter,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(runSearchSetupFlow).toHaveBeenCalledOnce();
+    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
   });
 
   it("defers channel setup plugin loads during QuickStart until a channel is selected", async () => {
@@ -2768,7 +2811,7 @@ describe("runSetupWizard", () => {
       });
     promptAuthChoiceGrouped
       .mockResolvedValueOnce("demo-provider")
-      .mockResolvedValueOnce(keepCurrentAuthChoice);
+      .mockResolvedValueOnce("__keep-current");
     verifySetupInferenceConfig
       .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
       .mockResolvedValueOnce({

@@ -1,5 +1,8 @@
 import type { GatewaySessionRow } from "../api/types.ts";
-import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  resolveUiSessionNavigationParentKey,
+} from "../lib/sessions/session-key.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
   rowDemandsVisibility,
@@ -50,11 +53,17 @@ export function projectSessionTree(params: {
   };
   for (const row of rowsByKey.values()) {
     for (const childKey of row.childSessions ?? []) {
-      appendChild(row.key, childKey);
+      const child = rowsByKey.get(childKey);
+      const navigationParentKey = resolveUiSessionNavigationParentKey(child);
+      // Runtime control and sidebar navigation can have different parents;
+      // known children belong to their explicit navigation parent only.
+      if (!navigationParentKey || areUiSessionKeysEquivalent(navigationParentKey, row.key)) {
+        appendChild(row.key, childKey);
+      }
     }
   }
   for (const row of rowsByKey.values()) {
-    const parentKey = row.spawnedBy ?? row.parentSessionKey;
+    const parentKey = resolveUiSessionNavigationParentKey(row);
     if (parentKey) {
       appendChild(parentKey, row.key);
     }
@@ -74,10 +83,7 @@ export function projectSessionTree(params: {
     });
     const projected = toSidebarSession(row, isChild);
     const projectedRunningChildCount = children.reduce(
-      (count, child) =>
-        count +
-        (child.hasActiveRun || child.status === "running" ? 1 : 0) +
-        child.runningChildCount,
+      (count, child) => count + (child.hasActiveRun ? 1 : 0) + child.runningChildCount,
       0,
     );
     const runningChildCount = Math.max(
@@ -141,7 +147,7 @@ export function projectSessionTree(params: {
   const rootKeys = new Set(roots.map((row) => row.key));
   return roots
     .filter((row) => {
-      const parentKey = row.spawnedBy ?? row.parentSessionKey;
+      const parentKey = resolveUiSessionNavigationParentKey(row);
       return !parentKey || !rootKeys.has(parentKey);
     })
     .map((row) => build(row, false, new Set()));

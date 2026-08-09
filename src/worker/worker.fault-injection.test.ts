@@ -13,6 +13,8 @@ import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { runWorkerProviderReplayRoundTrip } from "../../test/helpers/worker-provider-replay-roundtrip.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   resolveSessionTranscriptRuntimeTarget,
@@ -41,13 +43,12 @@ import {
 } from "../gateway/worker-environments/store.js";
 import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-store.js";
 import { createWorkerTranscriptCommitter } from "../gateway/worker-environments/transcript-commit.js";
+import { getAgentEventLifecycleGeneration, onAgentRuntimeEvent } from "../infra/agent-events.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
-  getAgentEventLifecycleGeneration,
   getAgentRunContext,
-  onAgentRuntimeEvent,
-} from "../infra/agent-events.js";
+} from "../infra/agent-run-registry.js";
 import { rawDataToString } from "../infra/ws.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import {
@@ -111,16 +112,6 @@ type Deferred<T> = {
   reject(error: Error): void;
 };
 
-function createDeferred<T = void>(): Deferred<T> {
-  let resolvePromise!: (value: T) => void;
-  let rejectPromise!: (error: Error) => void;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
-  return { promise, resolve: resolvePromise, reject: rejectPromise };
-}
-
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
 
 function doneMessage(text: string): WorkerDoneMessage {
@@ -181,7 +172,7 @@ type TranscriptGate = {
 };
 
 type ProviderPlan =
-  | { kind: "immediate"; text: string }
+  | { kind: "immediate"; text: string; outcome?: WorkerInferenceTerminalOutcome }
   | {
       kind: "partitioned";
       firstRelease: Deferred<void>;
@@ -198,12 +189,21 @@ type WorkerClients = {
   inference: WorkerInferenceProxyClient;
 };
 
+type WorkerClientOptions = {
+  admissionProof?: string;
+  epoch?: number;
+  baseLeafId?: string | null;
+  initialSeq?: number;
+  initialAckedSeq?: number;
+  runId?: string;
+};
+
 class ComposedGatewayHarness {
   readonly root: string;
   readonly stateDir: string;
   readonly sessionsDir: string;
   readonly storePath: string;
-  readonly sessionFile: string;
+  readonly sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>;
   readonly socketPath: string;
   readonly cfg: OpenClawConfig;
   readonly database: OpenClawStateDatabase;
@@ -239,28 +239,26 @@ class ComposedGatewayHarness {
       { agentId: "main", sessionKey: SESSION_KEY, storePath },
       { sessionId: SESSION_ID, updatedAt: 1 },
     );
-    const sessionFile = (
-      await resolveSessionTranscriptRuntimeTarget({
-        agentId: "main",
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        storePath,
-      })
-    ).sessionFile;
-    return new ComposedGatewayHarness({ root, sessionsDir, storePath, sessionFile });
+    const sessionTarget = await resolveSessionTranscriptRuntimeTarget({
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      storePath,
+    });
+    return new ComposedGatewayHarness({ root, sessionsDir, storePath, sessionTarget });
   }
 
   private constructor(params: {
     root: string;
     sessionsDir: string;
     storePath: string;
-    sessionFile: string;
+    sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>;
   }) {
     this.root = params.root;
     this.stateDir = path.join(params.root, "state");
     this.sessionsDir = params.sessionsDir;
     this.storePath = params.storePath;
-    this.sessionFile = params.sessionFile;
+    this.sessionTarget = params.sessionTarget;
     this.socketPath = path.join(params.root, "gateway.sock");
     this.cfg = {
       agents: { list: [{ id: "main", default: true }] },
@@ -319,19 +317,10 @@ class ComposedGatewayHarness {
     this.faults.push(rule);
   }
 
-  createClients(
-    params: {
-      admissionProof?: string;
-      epoch?: number;
-      baseLeafId?: string | null;
-      initialSeq?: number;
-      initialAckedSeq?: number;
-      runId?: string;
-    } = {},
-  ): WorkerClients {
+  createDescriptor(params: WorkerClientOptions = {}): WorkerLaunchDescriptor {
     const epoch = params.epoch ?? this.epoch;
     const credential = params.admissionProof ?? CREDENTIAL;
-    const descriptor: WorkerLaunchDescriptor = {
+    return {
       version: 2,
       socketPath: this.socketPath,
       admission: {
@@ -361,6 +350,11 @@ class ComposedGatewayHarness {
         },
       },
     };
+  }
+
+  createClients(params: WorkerClientOptions = {}): WorkerClients {
+    const descriptor = this.createDescriptor(params);
+    const epoch = descriptor.admission.ownerEpoch;
     const connection = createWorkerConnection({
       socketPath: this.socketPath,
       connectParams: buildWorkerConnectParams(descriptor),
@@ -562,7 +556,7 @@ class ComposedGatewayHarness {
       }
       const plan = this.providerPlan;
       if (plan.kind === "immediate") {
-        return doneOutcome(plan.text);
+        return structuredClone(plan.outcome ?? doneOutcome(plan.text));
       }
       if (plan.kind === "pending") {
         plan.started.resolve();
@@ -718,6 +712,17 @@ describe("cloud worker milestone 2 fault injection", () => {
     await harness.close();
   });
 
+  it("replays captured compaction exactly after worker commit and canonical reopen", async () => {
+    await runWorkerProviderReplayRoundTrip({
+      createDescriptor: (options) => harness.createDescriptor(options),
+      requestParams: (method) => harness.requestParams(method),
+      sessionTarget: harness.sessionTarget,
+      setOutcome: (outcome) => {
+        harness.providerPlan = { kind: "immediate", text: "roundtrip", outcome };
+      },
+    });
+  });
+
   it("survives repeated tunnel partitions without transcript duplication, live replay, or rebilling", async () => {
     const current = harness.createClients();
     clients.push(current);
@@ -772,10 +777,10 @@ describe("cloud worker milestone 2 fault injection", () => {
         .requestParams("worker.live-event")
         .map((request) => (request as WorkerLiveEventParams).seq),
     ).toEqual([1, 1, 2, 3]);
-    const transcript = SessionManager.open(harness.sessionFile).getEntries();
+    const transcript = SessionManager.open(harness.sessionTarget).getEntries();
     expect(transcript).toHaveLength(2);
     expect(new Set(transcript.map((entry) => entry.id)).size).toBe(2);
-    expect(SessionManager.open(harness.sessionFile).getLeafId()).toBe(committed.newLeafId);
+    expect(SessionManager.open(harness.sessionTarget).getLeafId()).toBe(committed.newLeafId);
   });
 
   it("recovers durable state across gateway restart and renumbers a lost live window", async () => {
@@ -839,7 +844,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     // resync replay renumbered from the fresh ack state.
     expect(liveRequests.length).toBeGreaterThanOrEqual(4);
     expect(liveRequests.slice(2)).toContainEqual([1, 0]);
-    expect(SessionManager.open(harness.sessionFile).getEntries()).toHaveLength(1);
+    expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(1);
     providerRelease.resolve(doneOutcome("late stale provider result"));
   });
 
@@ -886,7 +891,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     ).resolves.toEqual(doneOutcome("new owner reply"));
     await fresh.transcript.commit([transcriptMessage("new owner")]);
 
-    const messages = SessionManager.open(harness.sessionFile)
+    const messages = SessionManager.open(harness.sessionTarget)
       .getEntries()
       .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
     expect(messages).toHaveLength(2);
@@ -914,7 +919,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     const commit = current.transcript.commit([transcriptMessage("stale paid output")]);
     await entered.promise;
     harness.partition();
-    const local = SessionManager.open(harness.sessionFile);
+    const local = SessionManager.open(harness.sessionTarget);
     local.appendMessage(transcriptMessage("competing local entry"));
     release.resolve();
 
@@ -926,7 +931,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       current.transcript.commit([transcriptMessage("must not retry after stale")]),
     ).rejects.toMatchObject({ name: "WorkerTranscriptCommitError" });
     expect(harness.requestParams("worker.transcript.commit")).toHaveLength(2);
-    expect(SessionManager.open(harness.sessionFile).getEntries()).toHaveLength(1);
+    expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(1);
   });
 
   it("advances a worker live stream whose run context is dispatch-owned and visible", async () => {

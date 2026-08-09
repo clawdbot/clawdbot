@@ -106,7 +106,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
   <Step title="Access OpenClaw and approve devices">
     Open `https://<vm-name>.exe.xyz/` (see the Control UI output from onboarding). If it prompts for auth, paste the configured shared secret from the VM.
 
-    This guide uses token auth by default, so retrieve `gateway.auth.token` with `openclaw config get gateway.auth.token`, or generate a new one with `openclaw doctor --n`. If you switched the gateway to password auth, use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead.
+    This guide uses token auth by default, so run `openclaw gateway auth-token --show` in an interactive terminal to retrieve the configured token. If no token is configured, generate one with `openclaw doctor --generate-gateway-token` and restart the Gateway. If you switched the gateway to password auth, use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead.
 
     Approve devices with `openclaw devices list` and `openclaw devices approve <requestId>`. When in doubt, use Shelley from your browser.
 

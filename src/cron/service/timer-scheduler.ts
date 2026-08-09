@@ -18,6 +18,7 @@ import {
 } from "./jobs.js";
 import { locked } from "./locked.js";
 import {
+  activateQueuedCronRun,
   clearQueuedCronRunReservationMarker,
   isQueuedCronRunReservationCurrent,
   isQueuedCronRunReservationMarkerCurrent,
@@ -26,10 +27,9 @@ import {
   resolveRunConcurrency,
   restoreQueuedCronRunReservationLastError,
   runWithCronAdmission,
-  updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
-import { type CronServiceState, emit } from "./state.js";
-import { ensureLoaded, persist, persistOrRestore, snapshotStoreForRollback } from "./store.js";
+import { type CronServiceState, type DeferredCronNotifications, emit } from "./state.js";
+import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryCreateCronTaskRun } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
@@ -109,11 +109,7 @@ export function armTimer(state: CronServiceState) {
   // Intentionally avoid an `async` timer callback:
   // Vitest's fake-timer helpers can await async callbacks, which would block
   // tests that simulate long-running jobs. Runtime behavior is unchanged.
-  state.timer = setTimeout(() => {
-    void onTimer(state).catch((err: unknown) => {
-      state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
-    });
-  }, clampedDelay);
+  setCronTimer(state, clampedDelay);
   state.deps.log.debug(
     { nextAt, delayMs: clampedDelay, clamped: delay > MAX_TIMER_DELAY_MS },
     "cron: timer armed",
@@ -127,11 +123,15 @@ function armRunningRecheckTimer(state: CronServiceState) {
   if (state.timer) {
     clearTimeout(state.timer);
   }
+  setCronTimer(state, MAX_TIMER_DELAY_MS);
+}
+
+function setCronTimer(state: CronServiceState, delayMs: number): void {
   state.timer = setTimeout(() => {
     void onTimer(state).catch((err: unknown) => {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
     });
-  }, MAX_TIMER_DELAY_MS);
+  }, delayMs);
 }
 
 /** Handles one cron timer tick under the process-wide root work admission. */
@@ -177,20 +177,21 @@ async function onAdmittedTimer(state: CronServiceState) {
     armRunningRecheckTimer(state);
     return;
   }
-  const hasSessionReaperStore = Boolean(
-    state.deps.resolveSessionStorePath || state.deps.sessionStorePath,
-  );
-  const sessionReaperDefaultAgentId = hasSessionReaperStore
-    ? (state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId)?.trim()
-    : undefined;
-  if (hasSessionReaperStore && !sessionReaperDefaultAgentId) {
-    throw new Error("Cron session reaper requires the prepared configured default agent id.");
-  }
+  let sessionReaperDefaultAgentId: string | undefined;
   state.running = true;
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
   try {
+    const hasSessionReaperStore = Boolean(
+      state.deps.resolveSessionStorePath || state.deps.sessionStorePath,
+    );
+    sessionReaperDefaultAgentId = hasSessionReaperStore
+      ? (state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId)?.trim()
+      : undefined;
+    if (hasSessionReaperStore && !sessionReaperDefaultAgentId) {
+      throw new Error("Cron session reaper requires the prepared configured default agent id.");
+    }
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       if (state.stopped || state.restartRecoveryPending) {
@@ -207,12 +208,15 @@ async function onAdmittedTimer(state: CronServiceState) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
         // values without execution. This prevents jobs from being silently skipped
         // when the timer wakes up but findDueJobs returns empty (see #13992).
+        const rollbackSnapshot = snapshotStoreForRollback(state);
+        const postPersistNotifications: DeferredCronNotifications = [];
         const changed = recomputeNextRunsForMaintenance(state, {
           recomputeExpired: true,
           nowMs: dueCheckNow,
+          deferredNotifications: postPersistNotifications,
         });
         if (changed) {
-          await persist(state);
+          await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
         }
         return [];
       }
@@ -261,8 +265,11 @@ async function onAdmittedTimer(state: CronServiceState) {
               releaseQueuedCronRun(state, candidate.id, candidate.reservationIdentity);
             }
           }
-          recomputeNextRunsForMaintenance(state);
-          await persistOrRestore(state, rollbackSnapshot);
+          const postPersistNotifications: DeferredCronNotifications = [];
+          recomputeNextRunsForMaintenance(state, {
+            deferredNotifications: postPersistNotifications,
+          });
+          await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
           for (const candidate of pendingReleases) {
             releaseQueuedCronRun(state, candidate.id, candidate.reservationIdentity);
           }
@@ -289,7 +296,6 @@ async function onAdmittedTimer(state: CronServiceState) {
     const runDueJob = async (params: {
       id: string;
       job: CronJob;
-      reservedAtMs: number;
       reservationIdentity: object;
       startedAt: number;
     }): Promise<TimedCronRunOutcome> => {
@@ -311,7 +317,6 @@ async function onAdmittedTimer(state: CronServiceState) {
         state,
         job: executionJob,
         startedAt,
-        runIdStartedAt: params.reservedAtMs,
       });
 
       try {
@@ -381,8 +386,9 @@ async function onAdmittedTimer(state: CronServiceState) {
             releaseQueuedCronRun(state, due.id, due.reservationIdentity);
           }
         }
-        recomputeNextRunsForMaintenance(state);
-        await persistOrRestore(state, rollbackSnapshot);
+        const postPersistNotifications: DeferredCronNotifications = [];
+        recomputeNextRunsForMaintenance(state, { deferredNotifications: postPersistNotifications });
+        await persistOrRestore(state, rollbackSnapshot, { postPersistNotifications });
         for (const due of pendingReleases) {
           releaseQueuedCronRun(state, due.id, due.reservationIdentity);
         }
@@ -451,30 +457,18 @@ async function onAdmittedTimer(state: CronServiceState) {
                   releaseQueuedCronRun(state, due.id, due.reservationIdentity);
                   return undefined;
                 }
-                const startedAt = state.deps.nowMs();
-                const previousLastError = job.state.lastError;
-                const activationRollbackSnapshot = snapshotStoreForRollback(state);
-                delete job.state.queuedAtMs;
-                job.state.runningAtMs = startedAt;
-                job.state.lastError = undefined;
-                await persistOrRestore(state, activationRollbackSnapshot);
-                updateQueuedCronRunReservationMarker(
+                const activation = await activateQueuedCronRun({
                   state,
-                  due.id,
-                  due.reservationIdentity,
-                  startedAt,
-                  previousLastError,
-                );
-                if (state.stopped || state.restartRecoveryPending) {
-                  stopAdmittingDueJobs = true;
-                  job.state.lastError = previousLastError;
-                  const rollbackSnapshot = snapshotStoreForRollback(state);
-                  delete job.state.runningAtMs;
-                  await persistOrRestore(state, rollbackSnapshot);
-                  releaseQueuedCronRun(state, due.id, due.reservationIdentity);
+                  job,
+                  reservationIdentity: due.reservationIdentity,
+                  onUnavailable: () => {
+                    stopAdmittingDueJobs = true;
+                  },
+                });
+                if (activation.kind === "unavailable") {
                   return undefined;
                 }
-                return { ...due, job, startedAt };
+                return { ...due, job, startedAt: activation.startedAt };
               });
               if (!currentDueJob) {
                 return pMapSkip;
@@ -587,60 +581,69 @@ async function onAdmittedTimer(state: CronServiceState) {
         : new Error(formatErrorMessage(batchExecutionError));
     }
   } finally {
-    // Piggyback session reaper on timer tick (self-throttled to every 5 min).
-    // Placed in `finally` so the reaper runs even when a long-running job keeps
-    // `state.running` true across multiple timer ticks — the early return at the
-    // top of onTimer would otherwise skip the reaper indefinitely.
-    const storeTargets = new Map<string, { agentId: string; storePath: string }>();
-    const addStoreTarget = (agentId: string, storePath: string) => {
-      storeTargets.set(`${agentId}\0${storePath}`, { agentId, storePath });
-    };
-    const resolveJobAgentId = (job: CronJob, defaultAgentId: string) =>
-      typeof job.agentId === "string" && job.agentId.trim()
-        ? normalizeAgentId(job.agentId)
-        : resolveAgentIdFromSessionKey(job.sessionKey, defaultAgentId);
-    const configuredAgentIds = state.deps.resolveSessionStoreAgentIds?.() ?? [];
-    if (state.deps.resolveSessionStorePath) {
-      const defaultAgentId = sessionReaperDefaultAgentId!;
-      for (const agentId of configuredAgentIds) {
-        const normalizedAgentId = normalizeAgentId(agentId);
-        addStoreTarget(normalizedAgentId, state.deps.resolveSessionStorePath(normalizedAgentId));
-      }
-      for (const job of state.store?.jobs ?? []) {
-        const agentId = resolveJobAgentId(job, defaultAgentId);
-        addStoreTarget(agentId, state.deps.resolveSessionStorePath(agentId));
-      }
-      addStoreTarget(defaultAgentId, state.deps.resolveSessionStorePath(defaultAgentId));
-    } else if (state.deps.sessionStorePath) {
-      const defaultAgentId = sessionReaperDefaultAgentId!;
-      for (const agentId of configuredAgentIds) {
-        addStoreTarget(normalizeAgentId(agentId), state.deps.sessionStorePath);
-      }
-      for (const job of state.store?.jobs ?? []) {
-        addStoreTarget(resolveJobAgentId(job, defaultAgentId), state.deps.sessionStorePath);
-      }
-      addStoreTarget(defaultAgentId, state.deps.sessionStorePath);
-    }
+    try {
+      // Reaper discovery is maintenance: failure must never strand the timer
+      // or leave the scheduler's execution slot permanently occupied.
+      if (sessionReaperDefaultAgentId) {
+        const defaultAgentId = sessionReaperDefaultAgentId;
+        const storeTargets = new Map<string, { agentId: string; storePath: string }>();
+        const addStoreTarget = (agentId: string, storePath: string) => {
+          storeTargets.set(`${agentId}\0${storePath}`, { agentId, storePath });
+        };
+        const resolveJobAgentId = (job: CronJob) =>
+          typeof job.agentId === "string" && job.agentId.trim()
+            ? normalizeAgentId(job.agentId)
+            : resolveAgentIdFromSessionKey(job.sessionKey, defaultAgentId);
+        const configuredAgentIds = state.deps.resolveSessionStoreAgentIds?.() ?? [];
+        if (state.deps.resolveSessionStorePath) {
+          for (const agentId of configuredAgentIds) {
+            const normalizedAgentId = normalizeAgentId(agentId);
+            addStoreTarget(
+              normalizedAgentId,
+              state.deps.resolveSessionStorePath(normalizedAgentId),
+            );
+          }
+          for (const job of state.store?.jobs ?? []) {
+            const agentId = resolveJobAgentId(job);
+            addStoreTarget(agentId, state.deps.resolveSessionStorePath(agentId));
+          }
+          addStoreTarget(defaultAgentId, state.deps.resolveSessionStorePath(defaultAgentId));
+        } else if (state.deps.sessionStorePath) {
+          for (const agentId of configuredAgentIds) {
+            addStoreTarget(normalizeAgentId(agentId), state.deps.sessionStorePath);
+          }
+          for (const job of state.store?.jobs ?? []) {
+            addStoreTarget(resolveJobAgentId(job), state.deps.sessionStorePath);
+          }
+          addStoreTarget(defaultAgentId, state.deps.sessionStorePath);
+        }
 
-    if (storeTargets.size > 0) {
-      const nowMs = state.deps.nowMs();
-      for (const { agentId, storePath } of storeTargets.values()) {
-        try {
-          await sweepCronRunSessions({
-            agentId,
-            defaultAgentId: sessionReaperDefaultAgentId!,
-            cronConfig: state.deps.cronConfig,
-            sessionStorePath: storePath,
-            nowMs,
-            log: state.deps.log,
-          });
-        } catch (err) {
-          state.deps.log.warn({ err: String(err), storePath }, "cron: session reaper sweep failed");
+        if (storeTargets.size > 0) {
+          const nowMs = state.deps.nowMs();
+          for (const { agentId, storePath } of storeTargets.values()) {
+            try {
+              await sweepCronRunSessions({
+                agentId,
+                defaultAgentId,
+                cronConfig: state.deps.cronConfig,
+                sessionStorePath: storePath,
+                nowMs,
+                log: state.deps.log,
+              });
+            } catch (err) {
+              state.deps.log.warn(
+                { err: String(err), storePath },
+                "cron: session reaper sweep failed",
+              );
+            }
+          }
         }
       }
+    } catch (err) {
+      state.deps.log.warn({ err: String(err) }, "cron: session reaper preparation failed");
+    } finally {
+      state.running = false;
+      armTimer(state);
     }
-
-    state.running = false;
-    armTimer(state);
   }
 }

@@ -167,7 +167,8 @@ export function expectFreshFinalText(text: string) {
 export function useProgressDraftStartDelay() {
   vi.useFakeTimers();
   return async () => {
-    await vi.advanceTimersByTimeAsync(5_000);
+    // Mirrors core's DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS.
+    await vi.advanceTimersByTimeAsync(1_500);
   };
 }
 

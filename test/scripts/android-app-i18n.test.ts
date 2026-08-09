@@ -55,11 +55,11 @@ describe("Android app i18n resources", () => {
     );
     const base = await readFile("apps/android/wear/src/main/res/values/strings.xml", "utf8");
     const baseKeys = [...base.matchAll(/<string name="([^"]+)"/gu)]
-      .map((match) => match[1])
-      .toSorted();
+      .map((match) => match[1] as string)
+      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
     const basePlaceholders = [...base.matchAll(/%\d+\$[a-z]/giu)]
       .map((match) => match[0])
-      .toSorted();
+      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 
     expect(wearResources).toHaveLength(NATIVE_I18N_LOCALES.length);
     for (const [, content] of wearResources) {
@@ -77,9 +77,18 @@ describe("Android app i18n resources", () => {
       expect(content).toContain('<resources xmlns:tools="http://schemas.android.com/tools">');
       for (const tag of stringTags) {
         if (!tag.includes('translatable="false"')) {
-          expect(tag).toContain('tools:ignore="Typos,TypographyDashes,TypographyEllipsis"');
+          expect(tag.match(/\btools:ignore=/gu)).toHaveLength(1);
+          expect(tag).toMatch(/\btools:ignore="[^"]*\bTypos\b[^"]*"/u);
+          expect(tag).toMatch(/\btools:ignore="[^"]*\bTypographyDashes\b[^"]*"/u);
+          expect(tag).toMatch(/\btools:ignore="[^"]*\bTypographyEllipsis\b[^"]*"/u);
         }
       }
+      expect(content).toContain(
+        'name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis"',
+      );
+      expect(content).toContain(
+        'name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis"',
+      );
     }
   });
 

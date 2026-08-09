@@ -16,19 +16,13 @@ import {
   replaceSessionEntry,
   patchSessionEntry,
 } from "./session-accessor.entry.js";
-import type {
-  DeleteSessionEntryLifecycleResult,
-  SessionArchivedTranscriptCleanupRule,
-  SessionEntryLifecycleMutationResult,
-  SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
-} from "./session-accessor.lifecycle-types.js";
 import {
-  applySqliteSessionEntryLifecycleMutation,
+  applySqliteSessionEntryBatchProjection as applySessionEntryBatchProjection,
+  applySqliteSessionEntryLifecycleMutation as applySessionEntryLifecycleMutation,
   applySqliteSessionEntryReplacements as applySessionEntryReplacements,
   applySqliteSessionStoreProjection as applySessionStoreProjection,
   cleanupSqliteSessionLifecycleArtifacts as cleanupSessionLifecycleArtifacts,
-  deleteSqliteSessionEntryLifecycle,
+  deleteSqliteSessionEntryLifecycle as deleteSessionEntryLifecycle,
   purgeSqliteDeletedAgentSessionEntries as purgeDeletedAgentSessionEntries,
   rollbackSqliteAgentHarnessSessionEntryLifecycle as rollbackAgentHarnessSessionEntryLifecycle,
   rollbackSqlitePluginOwnedSessionEntryLifecycle as rollbackPluginOwnedSessionEntryLifecycle,
@@ -46,19 +40,23 @@ import type {
   SessionPatchProjectionTarget,
   SessionPatchProjectionContext,
   SessionPatchProjectionFailure,
+  SessionPatchProjectionOperation,
   SessionPatchProjectionResult,
-  DeleteSessionEntryLifecycleParams,
 } from "./session-accessor.types.js";
-import { resolveProjectionExistingEntry } from "./session-entry-selection.js";
-import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
+import {
+  resolveProjectionExistingEntry,
+  SessionLabelOwnerIndex,
+} from "./session-entry-selection.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 // Session lifecycle storage is canonical SQLite; direct exports keep reset,
 // rollback, cleanup, and bulk projections on their actual transaction owner.
 export {
+  applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
   applySessionStoreProjection,
   cleanupSessionLifecycleArtifacts,
+  deleteSessionEntryLifecycle,
   purgeDeletedAgentSessionEntries,
   resetSessionEntryLifecycle,
   rollbackAgentHarnessSessionEntryLifecycle,
@@ -203,11 +201,76 @@ export async function restoreSessionFromCompactionCheckpoint(
   });
 }
 
-/**
- * Applies a session patch projection through the accessor boundary.
- * The resolver sees a read-only snapshot and names the persisted key set; the
- * projector returns one replacement entry without receiving the mutable store.
- */
+/** Projects ordered session patches against one store snapshot and commits once. */
+export async function applySessionPatchProjections<
+  TFailure extends SessionPatchProjectionFailure,
+>(params: {
+  agentId?: string;
+  operations: readonly SessionPatchProjectionOperation<TFailure>[];
+  storePath: string;
+}): Promise<SessionPatchProjectionResult<TFailure>[]> {
+  return await applySessionEntryBatchProjection({
+    agentId: params.agentId,
+    storePath: params.storePath,
+    skipMaintenance: true,
+    update: async (workingStore) => {
+      const snapshot = { store: workingStore };
+      const labelOwners = new SessionLabelOwnerIndex(workingStore);
+      const mutations: Array<{
+        entry: SessionEntry;
+        previousSessionKeys?: readonly string[];
+        sessionKey: string;
+      }> = [];
+      const results: SessionPatchProjectionResult<TFailure>[] = [];
+      for (const operation of params.operations) {
+        try {
+          const target = operation.resolveTarget(snapshot);
+          const existingEntry = resolveProjectionExistingEntry(snapshot, target);
+          const candidateKeys = uniqueStrings(
+            (target.candidateKeys ?? [target.primaryKey]).map((key) => key.trim()).filter(Boolean),
+          );
+          const projected = await operation.project({
+            ...target,
+            ...snapshot,
+            ...(existingEntry ? { existingEntry } : {}),
+            isLabelInUse: (label) => labelOwners.isLabelInUse(label, candidateKeys),
+          });
+          if (!projected.ok) {
+            results.push(projected);
+            continue;
+          }
+          const authorizationFailure = operation.authorize?.();
+          if (authorizationFailure) {
+            results.push(authorizationFailure);
+            continue;
+          }
+          const previousSessionKeys = candidateKeys.filter(
+            (sessionKey) => sessionKey !== target.primaryKey && workingStore[sessionKey],
+          );
+          mutations.push({
+            entry: projected.entry,
+            ...(previousSessionKeys.length > 0 ? { previousSessionKeys } : {}),
+            sessionKey: target.primaryKey,
+          });
+          const cloned = labelOwners.replaceEntry(
+            candidateKeys,
+            target.primaryKey,
+            projected.entry,
+          );
+          results.push({ ok: true, entry: structuredClone(cloned) });
+        } catch (error) {
+          if (!operation.onError) {
+            throw error;
+          }
+          results.push(operation.onError(error));
+        }
+      }
+      return { mutations, result: results };
+    },
+  });
+}
+
+/** Applies one patch through the canonical ordered batch projection owner. */
 export async function applySessionPatchProjection<
   TFailure extends SessionPatchProjectionFailure,
 >(params: {
@@ -220,43 +283,28 @@ export async function applySessionPatchProjection<
     context: SessionPatchProjectionContext,
   ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
 }): Promise<SessionPatchProjectionResult<TFailure>> {
-  const entries = listSessionEntries({ agentId: params.agentId, storePath: params.storePath }).map(
-    ({ sessionKey, entry }) => ({
-      entry: structuredClone(entry),
-      sessionKey,
-    }),
-  );
-  const target = params.resolveTarget({ entries });
-  const existingEntry = resolveProjectionExistingEntry(entries, target);
-  const projected = await params.project({
-    ...target,
-    entries,
-    ...(existingEntry ? { existingEntry } : {}),
-  });
-  if (!projected.ok) {
-    return projected;
-  }
-  const candidateKeys = uniqueStrings(
-    (target.candidateKeys ?? [target.primaryKey]).map((key) => key.trim()).filter(Boolean),
-  );
-  await applySessionEntryLifecycleMutation({
+  const [result] = await applySessionPatchProjections({
     agentId: params.agentId,
     storePath: params.storePath,
-    removals: candidateKeys
-      .filter((sessionKey) => sessionKey !== target.primaryKey)
-      .map((sessionKey) => ({ sessionKey })),
-    upserts: [
+    operations: [
       {
-        sessionKey: target.primaryKey,
-        buildEntry: () => {
-          params.assertCurrent?.();
-          return projected.entry;
-        },
+        resolveTarget: params.resolveTarget,
+        project: params.project,
+        ...(params.assertCurrent
+          ? {
+              authorize: () => {
+                params.assertCurrent?.();
+                return undefined;
+              },
+            }
+          : {}),
       },
     ],
-    skipMaintenance: true,
   });
-  return { ...projected, entry: structuredClone(projected.entry) };
+  if (!result) {
+    throw new Error("Session patch projection produced no result");
+  }
+  return result;
 }
 
 /**
@@ -288,38 +336,6 @@ export async function preserveTemporarySessionMapping<T>(
     ...(snapshot.canRestore ? {} : { snapshotFailure: snapshot.snapshotFailure }),
     ...(restoreFailure ? { restoreFailure } : {}),
   };
-}
-
-/** Keeps the broader lifecycle compatibility contract at its public boundary. */
-export async function deleteSessionEntryLifecycle(
-  params: DeleteSessionEntryLifecycleParams,
-): Promise<DeleteSessionEntryLifecycleResult> {
-  return await deleteSqliteSessionEntryLifecycle(params);
-}
-
-/** Applies exact entry lifecycle mutations and artifact cleanup at the storage boundary. */
-export async function applySessionEntryLifecycleMutation(params: {
-  agentId?: string;
-  storePath: string;
-  removals?: Iterable<SessionEntryLifecycleRemoval>;
-  upserts?: Iterable<SessionEntryLifecycleUpsert>;
-  activeSessionKey?: string;
-  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
-  skipMaintenance?: boolean;
-  preserveActiveWork?: boolean;
-  archiveReason?: "deleted" | "reset";
-  restrictArchivedTranscriptsToStoreDir?: boolean;
-  cleanupArchivedTranscripts?: {
-    rules: SessionArchivedTranscriptCleanupRule[];
-    nowMs?: number;
-  };
-  pruneUnreferencedArtifacts?: {
-    olderThanMs: number;
-    dryRun?: boolean;
-  };
-  captureArtifactCleanupError?: boolean;
-}): Promise<SessionEntryLifecycleMutationResult> {
-  return await applySqliteSessionEntryLifecycleMutation(params);
 }
 
 /**

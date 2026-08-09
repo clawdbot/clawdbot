@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
+  getPreparedRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreCredentialsRevision,
   noteRuntimeAuthProfileStorePersistedMutation,
@@ -202,6 +203,45 @@ describe("runtime auth profile snapshots", () => {
       expect(structuredCloneSpy).not.toHaveBeenCalled();
     } finally {
       structuredCloneSpy.mockRestore();
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
+  it("merges inherited and agent prepared stores without persisted fallback", () => {
+    const inheritedAuthDir = "/tmp/openclaw-auth-runtime-inherited";
+    const agentDir = "/tmp/openclaw-auth-runtime-agent";
+    try {
+      setRuntimeAuthProfileStoreSnapshot(
+        {
+          ...createStore("inherited"),
+          profiles: {
+            ...createStore("inherited").profiles,
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "inherited-key",
+            },
+          },
+        },
+        inheritedAuthDir,
+      );
+      setRuntimeAuthProfileStoreSnapshot(createStore("agent"), agentDir);
+
+      const prepared = getPreparedRuntimeAuthProfileStoreSnapshot(agentDir, inheritedAuthDir);
+
+      expectOpenAICodexSnapshotCredential(prepared, { access: "agent" });
+      expect(prepared?.profiles["anthropic:default"]).toMatchObject({
+        type: "api_key",
+        provider: "anthropic",
+        key: "inherited-key",
+      });
+      expect(
+        getPreparedRuntimeAuthProfileStoreSnapshot(
+          "/tmp/openclaw-auth-runtime-missing",
+          "/tmp/openclaw-auth-runtime-also-missing",
+        ),
+      ).toBeUndefined();
+    } finally {
       clearRuntimeAuthProfileStoreSnapshots();
     }
   });

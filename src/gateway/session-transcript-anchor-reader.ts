@@ -3,13 +3,12 @@ import {
   type SessionTranscriptReadScope,
 } from "../config/sessions/session-accessor.js";
 import {
-  isSqliteReadTarget,
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
   toTranscriptReadScope,
   type ReadRecentSessionMessagesResult,
 } from "./session-transcript-readers.js";
-import { readSessionMessagesAroundIdWithStatsAsync as readSessionMessagesAroundIdWithStatsAsyncFile } from "./session-utils.fs-anchor.js";
+import { ArchivedTranscriptReader } from "./session-utils.fs.js";
 
 type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult & {
   found: boolean;
@@ -29,44 +28,34 @@ export async function readSessionMessagesAroundIdWithStatsAsync(
     scope.sessionEntry.sessionId !== scope.sessionId
       ? undefined
       : target.sessionFile;
-  if (isSqliteReadTarget(target)) {
-    const page = readSessionTranscriptMessageAnchorPage(toTranscriptReadScope(target), opts);
-    if (!page.found) {
-      if (opts.allowResetArchiveFallback === true) {
-        return await readSessionMessagesAroundIdWithStatsAsyncFile(
-          target.sessionId,
-          target.storePath,
-          sessionFile,
-          opts,
-          target.agentId,
-        );
-      }
-      return {
-        found: false,
-        hasOverreadContext: false,
-        messages: [],
-        offset: 0,
-        totalMessages: page.totalMessages,
-        transcriptPath: target.sessionFile,
-      };
+  const page = readSessionTranscriptMessageAnchorPage(toTranscriptReadScope(target), opts);
+  if (!page.found) {
+    if (opts.allowResetArchiveFallback === true) {
+      return await new ArchivedTranscriptReader({
+        agentId: target.agentId,
+        sessionFile,
+        sessionId: target.sessionId,
+        storePath: target.storePath,
+      }).readAroundId({ ...opts, resetArchiveOnly: true });
     }
     return {
-      found: true,
-      hasOverreadContext: page.hasOverreadContext,
-      messages: page.events.flatMap((entry) => {
-        const message = sqliteMessageEventWithSeq(entry);
-        return message === undefined ? [] : [message];
-      }),
-      offset: page.offset,
+      found: false,
+      hasOverreadContext: false,
+      messages: [],
+      offset: 0,
       totalMessages: page.totalMessages,
       transcriptPath: target.sessionFile,
     };
   }
-  return await readSessionMessagesAroundIdWithStatsAsyncFile(
-    target.sessionId,
-    target.storePath,
-    sessionFile,
-    opts,
-    target.agentId,
-  );
+  return {
+    found: true,
+    hasOverreadContext: page.hasOverreadContext,
+    messages: page.events.flatMap((entry) => {
+      const message = sqliteMessageEventWithSeq(entry);
+      return message === undefined ? [] : [message];
+    }),
+    offset: page.offset,
+    totalMessages: page.totalMessages,
+    transcriptPath: target.sessionFile,
+  };
 }

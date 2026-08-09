@@ -1,9 +1,8 @@
 // Workboard API module exposes the plugin public contract.
-import fs from "node:fs";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -11,8 +10,9 @@ import type {
   PersistedWorkboardNotificationSubscription,
   WorkboardKeyedStore,
 } from "./src/persistence-types.js";
-import { createWorkboardSqliteStores, resolveWorkboardSqlitePath } from "./src/sqlite-store.js";
-import { WorkboardStore } from "./src/store.js";
+import type { WorkboardStore } from "./src/store.js";
+// Doctor enumeration cold-loads this closure; sqlite-store pulls the
+// plugin-state-runtime/kysely graph, so it stays behind lazy imports below.
 
 const MAX_CARDS = 2000;
 
@@ -26,10 +26,6 @@ async function legacyDecompositionRepairCount(store: WorkboardStore): Promise<nu
     count += result.candidateChildIds.length;
   }
   return count;
-}
-
-function workboardSqliteExists(env: NodeJS.ProcessEnv): boolean {
-  return fs.existsSync(resolveWorkboardSqlitePath(env));
 }
 
 function migrationEnv(params: { env: NodeJS.ProcessEnv; stateDir: string }): NodeJS.ProcessEnv {
@@ -194,6 +190,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "workboard-28-kv-to-sqlite",
     label: "Workboard .28 plugin-state KV",
     async detectLegacyState(params) {
+      const { resolveWorkboardSqlitePath } = await import("./src/sqlite-store.js");
       const env = migrationEnv(params);
       const cards = await openLegacyStore<PersistedWorkboardCard>({
         context: params.context,
@@ -230,6 +227,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       };
     },
     async migrateLegacyState(params) {
+      const { createWorkboardSqliteStores } = await import("./src/sqlite-store.js");
       const env = migrationEnv(params);
       const cards = openLegacyStore<PersistedWorkboardCard>({
         context: params.context,
@@ -308,13 +306,20 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "workboard-legacy-decomposition-links",
     label: "Workboard legacy decomposition links",
     async detectLegacyState(params) {
+      const [{ existsSync }, { createWorkboardSqliteStores, resolveWorkboardSqlitePath }, storeApi] =
+        await Promise.all([
+          import("node:fs"),
+          import("./src/sqlite-store.js"),
+          import("./src/store.js"),
+        ]);
       const env = migrationEnv(params);
-      if (!workboardSqliteExists(env)) {
+      const sqlitePath = resolveWorkboardSqlitePath(env);
+      if (!existsSync(sqlitePath)) {
         return null;
       }
       const sqlite = createWorkboardSqliteStores({ env });
       try {
-        const store = new WorkboardStore(sqlite.cards, {
+        const store = new storeApi.WorkboardStore(sqlite.cards, {
           boards: sqlite.boards,
           subscriptions: sqlite.subscriptions,
           attachments: sqlite.attachments,
@@ -325,7 +330,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           ? null
           : {
               preview: [
-                `- Workboard: ${count} proven legacy decomposition ${count === 1 ? "link" : "links"} will be unlinked → ${resolveWorkboardSqlitePath(env)}`,
+                `- Workboard: ${count} proven legacy decomposition ${count === 1 ? "link" : "links"} will be unlinked → ${sqlitePath}`,
               ],
             };
       } finally {
@@ -333,13 +338,19 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
     },
     async migrateLegacyState(params) {
+      const [{ existsSync }, { createWorkboardSqliteStores, resolveWorkboardSqlitePath }, storeApi] =
+        await Promise.all([
+          import("node:fs"),
+          import("./src/sqlite-store.js"),
+          import("./src/store.js"),
+        ]);
       const env = migrationEnv(params);
-      if (!workboardSqliteExists(env)) {
+      if (!existsSync(resolveWorkboardSqlitePath(env))) {
         return { changes: [], warnings: [] };
       }
       const sqlite = createWorkboardSqliteStores({ env });
       try {
-        const store = new WorkboardStore(sqlite.cards, {
+        const store = new storeApi.WorkboardStore(sqlite.cards, {
           boards: sqlite.boards,
           subscriptions: sqlite.subscriptions,
           attachments: sqlite.attachments,

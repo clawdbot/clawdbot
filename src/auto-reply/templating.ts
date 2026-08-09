@@ -345,6 +345,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   CommandAuthorized?: boolean;
   CommandTurn?: CommandTurnContext;
   CommandSource?: "text" | "native";
+  CommandInterpretationSuppressed?: boolean;
   CommandTargetSessionKey?: string;
   /**
    * Internal flag: command handling prepared trailing prompt text for ACP dispatch.

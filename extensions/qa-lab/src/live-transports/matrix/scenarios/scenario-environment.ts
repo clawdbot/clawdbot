@@ -1,5 +1,6 @@
 // QA Lab Matrix setup prepares transport state for the shared flow host.
 import { setTimeout as sleep } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
@@ -15,11 +16,15 @@ import type { MatrixQaCanaryArtifact } from "./scenario-types.js";
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 type FlowPreparationInput = Parameters<NonNullable<AdapterDefinition["prepareFlow"]>>[0];
+type MatrixQaGateway = FlowPreparationInput["gateway"];
 type MatrixQaHarness = Awaited<ReturnType<typeof startMatrixQaHarness>>;
+
+const MATRIX_QA_PREPARATION_TIMEOUT_MS = 60_000;
 
 type MatrixQaScenarioEnvironmentParams = {
   accountId: string;
   harness: MatrixQaHarness;
+  onTransportInterruptionStateChange?: (active: boolean) => void;
   observedEvents: MatrixQaObservedEvent[];
   provisioning: MatrixQaProvisionResult;
 };
@@ -42,6 +47,16 @@ type MatrixQaConfigApplyStatus = {
   hash?: string;
 };
 
+function resetMatrixQaScenarioObserverState(params: {
+  syncState: MatrixQaScenarioContext["syncState"];
+  syncStreams: NonNullable<MatrixQaScenarioContext["syncStreams"]>;
+}) {
+  delete params.syncState.driver;
+  delete params.syncState.observer;
+  delete params.syncStreams.driver;
+  delete params.syncStreams.observer;
+}
+
 function readMatrixConfigOverrides(
   config: Record<string, unknown>,
 ): MatrixQaConfigOverrides | undefined {
@@ -51,14 +66,23 @@ function readMatrixConfigOverrides(
     : undefined;
 }
 
-function resolveMatrixQaReplacePaths(overrides: MatrixQaConfigOverrides | undefined) {
-  const replacePaths = ["channels.matrix", "messages"];
+function resolveMatrixQaReplacePaths(params: {
+  accountId: string;
+  overrides: MatrixQaConfigOverrides | undefined;
+}) {
+  // Scenario topology rebuilds groupAllowFrom and may shrink it. The Gateway
+  // requires the exact array path so a parent replacement cannot bypass its guard.
+  const replacePaths = [
+    "channels.matrix",
+    `channels.matrix.accounts.${params.accountId}.groupAllowFrom`,
+    "messages",
+  ];
   // Replacing an untouched root drops config.get-omitted runtime policy and can
   // invalidate lifecycle-owned state while the Matrix account is restarting.
-  if (overrides?.agentDefaults) {
+  if (params.overrides?.agentDefaults) {
     replacePaths.push("agents.defaults");
   }
-  if (overrides?.toolProfile || overrides?.audio) {
+  if (params.overrides?.toolProfile || params.overrides?.audio) {
     replacePaths.push("tools");
   }
   return replacePaths;
@@ -69,13 +93,21 @@ function isStaleConfigPatchError(error: unknown) {
 }
 
 async function patchGatewayConfig(params: {
+  deadlineMs: number;
   gateway: FlowPreparationInput["gateway"];
   patch: Record<string, unknown>;
   replacePaths?: string[];
   restartDelayMs?: number;
 }) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const snapshot = (await params.gateway.call("config.get", {}, { timeoutMs: 60_000 })) as {
+    const snapshot = (await params.gateway.call(
+      "config.get",
+      {},
+      {
+        deadlineMs: params.deadlineMs,
+        timeoutMs: 60_000,
+      },
+    )) as {
       hash?: string;
     };
     if (!snapshot.hash) {
@@ -90,7 +122,7 @@ async function patchGatewayConfig(params: {
           ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
           restartDelayMs: params.restartDelayMs ?? 0,
         },
-        { timeoutMs: 60_000 },
+        { deadlineMs: params.deadlineMs, timeoutMs: 60_000 },
       )) as MatrixQaConfigPatchResult;
       return result.noop === true ? { ...result, hash: snapshot.hash } : result;
     } catch (error) {
@@ -106,14 +138,19 @@ async function patchGatewayConfig(params: {
 async function waitForMatrixAccountReady(params: {
   afterStartAt?: number;
   accountId: string;
+  deadline: number;
   gateway: FlowPreparationInput["gateway"];
-  timeoutMs: number;
 }) {
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = params.deadline;
   let lastAccounts: unknown;
-  while (Date.now() < deadline) {
+  let remainingMs: number;
+  while ((remainingMs = deadline - Date.now()) > 0) {
     try {
-      const accounts = await readMatrixAccountStatuses(params.gateway);
+      const accounts = await readMatrixAccountStatuses(
+        params.gateway,
+        remainingMs,
+        params.deadline,
+      );
       lastAccounts = accounts;
       const account = accounts.find((entry) => entry.accountId === params.accountId);
       if (
@@ -129,7 +166,7 @@ async function waitForMatrixAccountReady(params: {
     } catch {
       // Retry until the scenario-specific readiness deadline.
     }
-    await sleep(500);
+    await sleep(Math.min(500, Math.max(0, deadline - Date.now())));
   }
   throw new Error(
     `matrix account "${params.accountId}" did not become ready; last accounts: ${JSON.stringify(lastAccounts ?? [])}`,
@@ -137,18 +174,19 @@ async function waitForMatrixAccountReady(params: {
 }
 
 async function waitForGatewayConfigApplied(params: {
+  deadline: number;
   expectedHash: string;
   gateway: FlowPreparationInput["gateway"];
-  timeoutMs: number;
 }) {
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = params.deadline;
   let lastStatus: MatrixQaConfigApplyStatus | undefined;
-  while (Date.now() < deadline) {
+  let remainingMs: number;
+  while ((remainingMs = deadline - Date.now()) > 0) {
     try {
       const status = (await params.gateway.call(
         "config.get",
         {},
-        { timeoutMs: Math.max(1, Math.min(5_000, deadline - Date.now())) },
+        { deadlineMs: params.deadline, timeoutMs: Math.min(5_000, remainingMs) },
       )) as MatrixQaConfigApplyStatus;
       lastStatus = status;
       if (
@@ -161,7 +199,7 @@ async function waitForGatewayConfigApplied(params: {
     } catch {
       // A restart may temporarily disconnect the control client; retry until the deadline.
     }
-    await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
+    await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
   }
   throw new Error(
     `Matrix QA config was not applied by the active Gateway; last status: ${JSON.stringify(lastStatus ?? {})}`,
@@ -177,11 +215,18 @@ type MatrixAccountStatus = {
   running?: boolean;
 };
 
-async function readMatrixAccountStatuses(gateway: FlowPreparationInput["gateway"]) {
+async function readMatrixAccountStatuses(
+  gateway: MatrixQaGateway,
+  timeoutMs = 5_000,
+  deadlineMs?: number,
+) {
   const payload = (await gateway.call(
     "channels.status",
-    { probe: false, timeoutMs: 2_000 },
-    { timeoutMs: 5_000 },
+    { probe: false, timeoutMs: Math.min(2_000, timeoutMs) },
+    {
+      ...(deadlineMs === undefined ? {} : { deadlineMs }),
+      timeoutMs: Math.min(5_000, timeoutMs),
+    },
   )) as { channelAccounts?: Record<string, MatrixAccountStatus[]> };
   return payload.channelAccounts?.matrix ?? [];
 }
@@ -192,8 +237,17 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
   let canary: MatrixQaCanaryArtifact | undefined;
 
   const prepareFlow = async (input: FlowPreparationInput) => {
+    const preparationDeadline =
+      Date.now() + Math.max(input.timeoutMs, MATRIX_QA_PREPARATION_TIMEOUT_MS);
     const configOverrides = readMatrixConfigOverrides(input.config);
-    const configSnapshot = (await input.gateway.call("config.get", {}, { timeoutMs: 60_000 })) as {
+    const configSnapshot = (await input.gateway.call(
+      "config.get",
+      {},
+      {
+        deadlineMs: preparationDeadline,
+        timeoutMs: 60_000,
+      },
+    )) as {
       config?: OpenClawConfig;
     };
     if (!configSnapshot.config) {
@@ -212,42 +266,49 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       sutUserId: params.provisioning.sut.userId,
       topology: params.provisioning.topology,
     });
+    const matrixConfigChanged = !isDeepStrictEqual(
+      configSnapshot.config.channels?.matrix,
+      gatewayConfig.channels?.matrix,
+    );
     const patchStartedAt = Date.now();
     const accountStartAtBeforePatch = (
-      await readMatrixAccountStatuses(input.gateway).catch(() => [])
+      await readMatrixAccountStatuses(input.gateway, 5_000, preparationDeadline).catch(() => [])
     ).find((account) => account.accountId === params.accountId)?.lastStartAt;
     const patchResult = await patchGatewayConfig({
+      deadlineMs: preparationDeadline,
       gateway: input.gateway,
       patch: gatewayConfig as Record<string, unknown>,
-      replacePaths: resolveMatrixQaReplacePaths(configOverrides),
+      replacePaths: resolveMatrixQaReplacePaths({
+        accountId: params.accountId,
+        overrides: configOverrides,
+      }),
     });
-    if (patchResult.noop !== true) {
-      await input.waitForConfigRestartSettle({
-        restartDelayMs: 0,
-        timeoutMs: input.timeoutMs,
-      });
-    }
     if (!patchResult.hash) {
       throw new Error("Matrix QA config patch returned no persisted hash");
     }
     // A changed or no-op write can observe persisted config before an earlier
     // reload installs that revision. Do not run against the previous snapshot.
     await waitForGatewayConfigApplied({
+      deadline: preparationDeadline,
       expectedHash: patchResult.hash,
       gateway: input.gateway,
-      timeoutMs: input.timeoutMs,
     });
     await waitForMatrixAccountReady({
-      // Restart-required writes acknowledge before SIGUSR1 completes. Require a
-      // fresh Matrix account start so the scenario cannot race the old gateway.
+      // Config writes acknowledge persisted state before a deferred channel
+      // reload completes. Require the changed Matrix account to actually restart
+      // so a later config patch cannot supersede this scenario's live runtime.
       afterStartAt:
-        patchResult.sentinel?.payload?.stats?.requiresRestart === true
+        matrixConfigChanged && patchResult.noop !== true
           ? (accountStartAtBeforePatch ?? patchStartedAt - 1)
           : undefined,
       accountId: params.accountId,
+      deadline: preparationDeadline,
       gateway: input.gateway,
-      timeoutMs: input.timeoutMs,
     });
+    // Scenario actors must prime after each config/reload boundary. Reusing an
+    // observer across channel restarts can retain an in-flight timeline cursor
+    // and consume the next scenario's first preview before its predicate exists.
+    resetMatrixQaScenarioObserverState({ syncState, syncStreams });
 
     const scenarioContext = {
       baseUrl: params.harness.baseUrl,
@@ -258,6 +319,7 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       driverUserId: params.provisioning.driver.userId,
       faultProxyObserver: params.harness.recording,
       faultProxyTargetBaseUrl: params.harness.upstreamBaseUrl,
+      installFaultRule: (rule) => params.harness.recording.installFaultRule(rule),
       observedEvents: params.observedEvents,
       observerAccessToken: params.provisioning.observer.accessToken,
       observerDeviceId: params.provisioning.observer.deviceId,
@@ -281,8 +343,8 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         await restart(async () => undefined);
         await waitForMatrixAccountReady({
           accountId: params.accountId,
+          deadline: Date.now() + input.timeoutMs,
           gateway: input.gateway,
-          timeoutMs: input.timeoutMs,
         });
       },
       restartGatewayAfterStateMutation: async (
@@ -296,8 +358,8 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         await restart(async ({ stateDir }) => await mutateState({ stateDir }));
         await waitForMatrixAccountReady({
           accountId: opts?.waitAccountId ?? params.accountId,
+          deadline: Date.now() + (opts?.timeoutMs ?? input.timeoutMs),
           gateway: input.gateway,
-          timeoutMs: opts?.timeoutMs ?? input.timeoutMs,
         });
       },
       restartGatewayWithQueuedMessage: async (queueMessage: () => Promise<void>) => {
@@ -308,17 +370,22 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         await restart(async () => await queueMessage());
         await waitForMatrixAccountReady({
           accountId: params.accountId,
+          deadline: Date.now() + input.timeoutMs,
           gateway: input.gateway,
-          timeoutMs: input.timeoutMs,
         });
       },
       interruptTransport: async () => {
-        await params.harness.restartService();
-        await waitForMatrixAccountReady({
-          accountId: params.accountId,
-          gateway: input.gateway,
-          timeoutMs: Math.max(input.timeoutMs, 90_000),
-        });
+        params.onTransportInterruptionStateChange?.(true);
+        try {
+          await params.harness.restartService();
+          await waitForMatrixAccountReady({
+            accountId: params.accountId,
+            deadline: Date.now() + Math.max(input.timeoutMs, 90_000),
+            gateway: input.gateway,
+          });
+        } finally {
+          params.onTransportInterruptionStateChange?.(false);
+        }
       },
       roomId: params.provisioning.roomId,
       sutAccountId: params.accountId,
@@ -335,6 +402,7 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         opts?: { replacePaths?: string[]; restartDelayMs?: number },
       ) => {
         await patchGatewayConfig({
+          deadlineMs: preparationDeadline,
           gateway: input.gateway,
           patch,
           replacePaths: opts?.replacePaths,
@@ -352,12 +420,17 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
         await waitForMatrixAccountReady({
           afterStartAt: opts?.afterStartAt,
           accountId,
+          deadline: Date.now() + (opts?.timeoutMs ?? input.timeoutMs),
           gateway: input.gateway,
-          timeoutMs: opts?.timeoutMs ?? input.timeoutMs,
         }),
     } satisfies MatrixQaScenarioContext;
     if (input.config.matrixRequireCanary === true && !canary) {
-      canary = await runMatrixQaCanary(scenarioContext);
+      canary = await runMatrixQaCanary({
+        ...scenarioContext,
+        // The scenario timeout can intentionally be a short no-reply window.
+        // A live model round trip needs its own bounded preparation budget.
+        timeoutMs: Math.max(input.timeoutMs, MATRIX_QA_PREPARATION_TIMEOUT_MS),
+      });
     }
     scenarioContext.canary = canary;
     return { scenarioContext };

@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 
-const googleMockState = vi.hoisted(() => ({ configs: [] as unknown[] }));
+const googleMockState = vi.hoisted(() => ({ configs: [] as unknown[], requests: [] as unknown[] }));
 
 vi.mock("@google/genai", () => ({
   GoogleGenAI: class MockGoogleGenAI {
     models = {
-      generateContentStream: vi.fn(() => {
+      generateContentStream: vi.fn((params: unknown) => {
+        googleMockState.requests.push(params);
         throw new Error("stop after constructor");
       }),
     };
@@ -26,7 +27,7 @@ vi.mock("@google/genai", () => ({
   },
 }));
 
-import { streamGoogleVertex } from "./google-vertex.js";
+import { streamGoogleVertex, streamSimpleGoogleVertex } from "./google-vertex.js";
 import { streamGoogle } from "./google.js";
 
 const context = {
@@ -61,9 +62,11 @@ function vertexModel(): Model<"google-vertex"> {
 describe("Google SDK construction auth", () => {
   beforeEach(() => {
     googleMockState.configs = [];
+    googleMockState.requests = [];
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     configureAiTransportHost({});
   });
 
@@ -120,5 +123,87 @@ describe("Google SDK construction auth", () => {
     });
     expect(JSON.stringify(googleMockState.configs[0])).not.toContain(sentinel);
     expect(buildModelFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      modelId: "gemma-4-26b-a4b-it",
+      reasoning: "low",
+      expectedThinking: { includeThoughts: true, thinkingLevel: "MINIMAL" },
+    },
+    {
+      modelId: "gemma-4-26b-a4b-it",
+      reasoning: "adaptive",
+      expectedThinking: { includeThoughts: true, thinkingLevel: "HIGH" },
+    },
+    {
+      modelId: "gemini-2.5-flash-lite",
+      reasoning: "minimal",
+      expectedThinking: { includeThoughts: true, thinkingBudget: 512 },
+    },
+  ] as const)(
+    "keeps the supported Vertex thinking policy for $modelId",
+    async ({ modelId, reasoning, expectedThinking }) => {
+      configureAiTransportHost({ resolveSecretSentinel: (value) => value });
+
+      await streamSimpleGoogleVertex({ ...vertexModel(), id: modelId }, context, {
+        apiKey: "test-vertex-key",
+        reasoning: reasoning as never,
+      }).result();
+
+      expect(googleMockState.requests[0]).toMatchObject({
+        config: { thinkingConfig: expectedThinking },
+      });
+    },
+  );
+
+  it.each(["gemma-4-26b-a4b-it", "gemini-2.5-pro"])(
+    "keeps unsupported disabled-thinking config out of Vertex requests for %s",
+    async (modelId) => {
+      configureAiTransportHost({ resolveSecretSentinel: (value) => value });
+
+      await streamSimpleGoogleVertex({ ...vertexModel(), id: modelId }, context, {
+        apiKey: "test-vertex-key",
+        reasoning: "off",
+      }).result();
+
+      expect(googleMockState.requests[0]).toMatchObject({ config: {} });
+      expect((googleMockState.requests[0] as { config: unknown }).config).not.toHaveProperty(
+        "thinkingConfig",
+      );
+    },
+  );
+
+  it("ignores blank Vertex project and location env fallbacks", async () => {
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "   ");
+    vi.stubEnv("GCLOUD_PROJECT", "   ");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "   ");
+
+    const missingProject = await streamGoogleVertex(vertexModel(), context).result();
+
+    expect(missingProject.stopReason).toBe("error");
+    expect(JSON.stringify(missingProject)).toContain("Vertex AI requires a project ID");
+    expect(googleMockState.configs).toHaveLength(0);
+
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", " vertex-project ");
+    vi.stubEnv("GCLOUD_PROJECT", "");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "   ");
+
+    const missingLocation = await streamGoogleVertex(vertexModel(), context).result();
+
+    expect(missingLocation.stopReason).toBe("error");
+    expect(JSON.stringify(missingLocation)).toContain("Vertex AI requires a location");
+    expect(googleMockState.configs).toHaveLength(0);
+
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", " us-central1 ");
+
+    const configured = await streamGoogleVertex(vertexModel(), context).result();
+
+    expect(configured.stopReason).toBe("error");
+    expect(googleMockState.configs[0]).toMatchObject({
+      vertexai: true,
+      project: "vertex-project",
+      location: "us-central1",
+    });
   });
 });

@@ -5,10 +5,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
@@ -152,7 +154,11 @@ function isLoopbackProviderBaseUrl(value: string): boolean {
     return false;
   }
   const hostname = new URL(normalized).hostname.toLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  return (
+    hostname === "localhost" ||
+    hostname === "[::1]" ||
+    (isCanonicalDottedDecimalIPv4(hostname) && isLoopbackIpAddress(hostname))
+  );
 }
 
 function isConfiguredProviderBaseUrl(targetBaseUrl: string, configuredBaseUrl?: string): boolean {
@@ -500,7 +506,7 @@ async function startAndWaitForLocalService(params: {
     if (Date.now() >= deadline) {
       throw new Error(`${provider} local service did not become ready at ${healthUrl}`);
     }
-    await sleep(PROBE_INTERVAL_MS, signal);
+    await sleepWithAbort(PROBE_INTERVAL_MS, signal, { ref: false });
   }
 }
 
@@ -698,25 +704,6 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
   });
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  throwIfAborted(signal);
-  return new Promise((resolve, reject) => {
-    const cleanup = () => signal?.removeEventListener("abort", onAbort);
-    const onDone = () => {
-      cleanup();
-      resolve();
-    };
-    const onAbort = () => {
-      clearTimeout(timeout);
-      cleanup();
-      reject(toAbortError(signal));
-    };
-    const timeout: NodeJS.Timeout = setTimeout(onDone, ms);
-    timeout.unref?.();
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 function waitForSpawnResult(
   child: ChildProcess,
   signal?: AbortSignal | null,
@@ -785,4 +772,3 @@ export function hasLocalServiceProcessExited(
 ): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

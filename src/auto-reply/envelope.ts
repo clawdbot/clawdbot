@@ -71,8 +71,9 @@ function sanitizeEnvelopeHeaderPart(value: string): string {
 /** Resolves envelope formatting defaults from agent config. */
 export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeFormatOptions {
   const defaults = cfg?.agents?.defaults;
+  const configuredTimezone = normalizeOptionalString(defaults?.userTimezone);
   return {
-    timezone: defaults?.userTimezone,
+    timezone: configuredTimezone ? (resolveTimezone(configuredTimezone) ?? "local") : undefined,
     includeTimestamp: true,
     includeElapsed: true,
     userTimezone: defaults?.userTimezone,

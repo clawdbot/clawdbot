@@ -29,6 +29,8 @@ export type SlashCommandDef = {
   shortcut?: string;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: SlashCommandTier;
+  source?: "native" | "plugin" | "skill";
+  skillModelVisible?: boolean;
 };
 
 type LocalArgChoice = string | { value: string; label: string };
@@ -45,6 +47,8 @@ type CommandLike = {
   }>;
   category?: string;
   tier?: string;
+  source?: "native" | "plugin" | "skill";
+  skillModelVisible?: boolean;
 };
 
 const REMOTE_SLASH_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9_-]*$/u;
@@ -239,18 +243,25 @@ function toSlashCommand(
   if (!name) {
     return null;
   }
+  const resolvedSource = command.source ?? (source === "local" ? "native" : undefined);
   return {
     key: command.key,
     name,
     aliases: getSlashAliases(command).filter((alias) => alias !== name),
     description: COMMAND_DESCRIPTION_OVERRIDES[command.key] ?? command.description,
-    descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key],
+    ...(COMMAND_DESCRIPTION_KEYS[command.key]
+      ? { descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key] }
+      : {}),
     args: COMMAND_ARGS_OVERRIDES[command.key] ?? formatArgs(command),
     icon: mapIcon(command),
     category: mapCategory(command),
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
     argOptions: getArgOptions(command),
     tier: source === "local" ? mapTier(command) : "standard",
+    ...(resolvedSource ? { source: resolvedSource } : {}),
+    ...(command.skillModelVisible !== undefined
+      ? { skillModelVisible: command.skillModelVisible }
+      : {}),
   };
 }
 
@@ -381,6 +392,12 @@ function normalizeCommandEntry(
     description: clampText(entry.description, MAX_REMOTE_DESCRIPTION_LENGTH),
     ...(args.length > 0 ? { args } : {}),
     category: typeof entry.category === "string" ? entry.category : undefined,
+    source:
+      entry.source === "native" || entry.source === "plugin" || entry.source === "skill"
+        ? entry.source
+        : undefined,
+    skillModelVisible:
+      typeof entry.skillModelVisible === "boolean" ? entry.skillModelVisible : undefined,
   };
 }
 
@@ -442,6 +459,24 @@ const TIER_ORDER: Record<SlashCommandTier, number> = {
   power: 2,
 };
 
+const NON_MATCHING_COMMAND_RANK = 4;
+
+function getSlashCommandRelevance(command: SlashCommandDef, filter: string): number {
+  const names = [command.name, ...(command.aliases ?? [])].map(normalizeLowercaseStringOrEmpty);
+  if (names.some((name) => name === filter)) {
+    return 0;
+  }
+  if (names.some((name) => name.startsWith(filter))) {
+    return 1;
+  }
+  if (names.some((name) => name.includes(filter))) {
+    return 2;
+  }
+  return normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(filter)
+    ? 3
+    : NON_MATCHING_COMMAND_RANK;
+}
+
 export function getSlashCommandCompletions(
   filter: string,
   options?: { showAll?: boolean },
@@ -450,10 +485,7 @@ export function getSlashCommandCompletions(
   const showAll = options?.showAll ?? false;
   let commands = lower
     ? SLASH_COMMANDS.filter(
-        (cmd) =>
-          cmd.name.startsWith(lower) ||
-          cmd.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias).startsWith(lower)) ||
-          normalizeLowercaseStringOrEmpty(getSlashCommandDescription(cmd)).includes(lower),
+        (command) => getSlashCommandRelevance(command, lower) < NON_MATCHING_COMMAND_RANK,
       )
     : SLASH_COMMANDS;
 
@@ -463,7 +495,12 @@ export function getSlashCommandCompletions(
   }
 
   return commands.toSorted((a, b) => {
-    // Sort by tier first (essential → standard → power)
+    if (lower) {
+      const relevance = getSlashCommandRelevance(a, lower) - getSlashCommandRelevance(b, lower);
+      if (relevance !== 0) {
+        return relevance;
+      }
+    }
     const aTier = TIER_ORDER[a.tier ?? "standard"] ?? 1;
     const bTier = TIER_ORDER[b.tier ?? "standard"] ?? 1;
     if (aTier !== bTier) {
@@ -474,15 +511,24 @@ export function getSlashCommandCompletions(
     if (ai !== bi) {
       return ai - bi;
     }
-    if (lower) {
-      const aExact = a.name.startsWith(lower) ? 0 : 1;
-      const bExact = b.name.startsWith(lower) ? 0 : 1;
-      if (aExact !== bExact) {
-        return aExact - bExact;
-      }
-    }
     return 0;
   });
+}
+
+export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
+  const lower = normalizeLowercaseStringOrEmpty(filter);
+  const normalized = lower.replace(/-/gu, "_");
+  return SLASH_COMMANDS.filter(
+    (command) => command.source === "skill" && command.skillModelVisible === true,
+  )
+    .filter(
+      (command) =>
+        !lower ||
+        command.name.startsWith(lower) ||
+        command.name.replace(/-/gu, "_").startsWith(normalized) ||
+        normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(lower),
+    )
+    .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
 /** Count of commands hidden by tier filtering (for "Show N more" UI). */

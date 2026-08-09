@@ -681,26 +681,43 @@ describe("scripts/restart-mac.sh", () => {
     );
 
     expect(result.status).toBe(1);
-    expect(killCalls).toContain("321\n");
+    expect(killCalls.trim().split(/\r?\n/u)).toHaveLength(20);
     expect(result.stdout).toBe("");
     expect(result.stderr).toBe("");
   });
 
-  it("passes restart cleanup when the final kill attempt clears the process", () => {
+  it("waits beyond the app signal failsafe for scoped processes to exit", () => {
     const { killCalls, result } = runCleanupFunction(
       [
         "#!/usr/bin/env bash",
         'kill_count="$(wc -l < "$OPENCLAW_TEST_KILL_CALLS" 2>/dev/null || echo 0)"',
-        'if [[ "$kill_count" -lt 10 ]]; then',
+        'if [[ "$kill_count" -lt 11 ]]; then',
         "  printf '%s\\n' '  321 /worktree/dist/OpenClaw.app/Contents/MacOS/OpenClaw --attach-only'",
         "fi",
       ].join("\n"),
     );
 
     expect(result.status).toBe(0);
-    expect(killCalls.trim().split(/\r?\n/u)).toHaveLength(10);
+    expect(killCalls.trim().split(/\r?\n/u)).toHaveLength(11);
     expect(result.stdout).toBe("");
     expect(result.stderr).toBe("");
+  });
+
+  it("keeps the restart grace period longer than the app signal failsafe", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+    const cleanupBlock = script.slice(
+      script.indexOf("kill_all_openclaw()"),
+      script.indexOf("stop_launch_agent()"),
+    );
+    const watcher = readFileSync(
+      "apps/macos/Sources/OpenClaw/TerminationSignalWatcher.swift",
+      "utf8",
+    );
+    const maxAttempts = Number(cleanupBlock.match(/local max_attempts=(\d+)/u)?.[1]);
+    const pollSeconds = Number(cleanupBlock.match(/local poll_seconds=([\d.]+)/u)?.[1]);
+    const failsafeSeconds = Number(watcher.match(/signalExitFailsafeSeconds = ([\d.]+)/u)?.[1]);
+
+    expect(maxAttempts * pollSeconds).toBeGreaterThan(failsafeSeconds);
   });
 
   it("passes restart cleanup when scoped processes are gone", () => {

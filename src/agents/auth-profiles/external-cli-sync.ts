@@ -54,8 +54,10 @@ type ExternalCliSyncProvider = {
 };
 
 // Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
+// Also the passthrough gate in cli-runner/prepare.ts: a live CLI login that
+// this sync would refuse to import must not authenticate a run either.
 /** Return true when imported CLI credentials match an existing profile identity. */
-function isSafeToUseExternalCliCredential(
+export function isSafeToUseExternalCliCredential(
   existing: OAuthCredential | undefined,
   imported: OAuthCredential,
 ): boolean {
@@ -274,12 +276,11 @@ function listScopedExternalCliProfileIds(params: {
   const requestedProfileIds = Array.from(options?.profileIds ?? [])
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
-  if (requestedProfileIds.length > 0) {
-    return requestedProfileIds.filter((profileId) =>
-      externalCliProfileIdMatches(providerConfig, profileId, {
-        allowLegacyNamespace: true,
-      }),
-    );
+  const matchingRequestedProfileIds = requestedProfileIds.filter((profileId) =>
+    externalCliProfileIdMatches(providerConfig, profileId, { allowLegacyNamespace: true }),
+  );
+  if (matchingRequestedProfileIds.length > 0) {
+    return matchingRequestedProfileIds;
   }
 
   const existingProfileIds = Object.keys(store.profiles).filter((profileId) =>

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { isAcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
   type WorkerWorkspaceManifest,
@@ -209,6 +210,11 @@ export async function applyStagedWorkerWorkspace(params: {
         }),
     };
   } catch (error) {
+    // Transport or settlement timeouts are observation evidence, never authority
+    // for an inverse operation; recovery owns restoring both sides.
+    if (isAcceptedWorkspacePublicationIndeterminateError(error)) {
+      throw error;
+    }
     try {
       await recoverWorkerWorkspaceReconciliation({ root, journal });
       params.journal.abort();

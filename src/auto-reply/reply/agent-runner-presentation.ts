@@ -16,13 +16,16 @@ import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 
 type AgentTurnPresentation = {
+  classifyStreamingPartial: (payload: ReplyPayload) => { text?: string; skip: boolean };
+  sanitizeStreamingText: (
+    text: string | undefined,
+    errorContext: boolean,
+  ) => { text?: string; skip: boolean };
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
-  preparePartialForTyping: (payload: ReplyPayload) => string | undefined;
-  handlePartialForTyping: (payload: ReplyPayload) => Promise<string | undefined>;
   startPresentationWhileTyping: (
     typingPromise: Promise<void>,
-    startPresentation: () => void | Promise<void>,
-  ) => Promise<void>;
+    startPresentation: () => boolean | void | Promise<boolean | void>,
+  ) => Promise<boolean | void>;
   blockReplyHandler: ReturnType<typeof createBlockReplyDeliveryHandler> | undefined;
 };
 
@@ -34,7 +37,7 @@ export function createAgentTurnPresentation(params: {
   directlySentBlockPayloads: Array<ReplyPayload | undefined>;
   heartbeatState: { didLogStrip: boolean };
 }): AgentTurnPresentation {
-  const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+  const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
     let text = payload.text;
     const reply = resolveSendableOutboundReplyParts(payload);
     if (params.turn.followupRun.run.silentExpected) {
@@ -66,34 +69,33 @@ export function createAgentTurnPresentation(params: {
     if (!text) {
       return reply.hasMedia ? { text: undefined, skip: false } : { skip: true };
     }
-    const sanitized = sanitizeUserFacingText(text, {
-      errorContext: Boolean(payload.isError),
-    });
+    return { text, skip: false };
+  };
+
+  const sanitizeStreamingText = (
+    text: string | undefined,
+    errorContext: boolean,
+  ): { text?: string; skip: boolean } => {
+    if (!text) {
+      return { skip: true };
+    }
+    const sanitized = sanitizeUserFacingText(text, { errorContext });
     return sanitized.trim() ? { text: sanitized, skip: false } : { skip: true };
   };
 
-  const preparePartialForTyping = (payload: ReplyPayload): string | undefined => {
-    if (isSilentReplyPrefixText(payload.text, SILENT_REPLY_TOKEN)) {
-      return undefined;
+  const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+    const classified = classifyStreamingPartial(payload);
+    if (classified.skip || !classified.text) {
+      return classified;
     }
-    const { text, skip } = normalizeStreamingText(payload);
-    return skip || !text ? undefined : text;
-  };
-
-  const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
-    const text = preparePartialForTyping(payload);
-    if (text === undefined) {
-      return undefined;
-    }
-    await params.turn.typingSignals.signalTextDelta(text);
-    return text;
+    return sanitizeStreamingText(classified.text, Boolean(payload.isError));
   };
 
   const startPresentationWhileTyping = async (
     typingPromise: Promise<void>,
-    startPresentation: () => void | Promise<void>,
+    startPresentation: () => boolean | void | Promise<boolean | void>,
   ) => {
-    let presentationPromise: void | Promise<void>;
+    let presentationPromise: boolean | void | Promise<boolean | void>;
     try {
       presentationPromise = startPresentation();
     } catch (err) {
@@ -101,7 +103,8 @@ export function createAgentTurnPresentation(params: {
       void typingPromise.catch(() => undefined);
       throw err;
     }
-    await Promise.all([typingPromise, presentationPromise]);
+    const [, result] = await Promise.all([typingPromise, presentationPromise]);
+    return result;
   };
 
   const blockReplyPipeline = params.turn.blockReplyPipeline;
@@ -126,9 +129,9 @@ export function createAgentTurnPresentation(params: {
     : undefined;
 
   return {
+    classifyStreamingPartial,
+    sanitizeStreamingText,
     normalizeStreamingText,
-    preparePartialForTyping,
-    handlePartialForTyping,
     startPresentationWhileTyping,
     blockReplyHandler,
   };

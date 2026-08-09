@@ -9,10 +9,11 @@ function formatActiveSubagentDetail(params: {
   pendingDescendants: number;
 }): string {
   const { entry, now, pendingDescendants } = params;
-  const startedAt = entry.startedAt ?? entry.sessionStartedAt ?? entry.createdAt;
+  const startedAt = entry.execution.startedAt ?? entry.sessionStartedAt ?? entry.createdAt;
   const durationMs = Math.max(
     0,
-    (entry.endedAt && pendingDescendants === 0 ? entry.endedAt : now) - startedAt,
+    (entry.execution.endedAt && pendingDescendants === 0 ? entry.execution.endedAt : now) -
+      startedAt,
   );
   const duration = formatDurationCompact(durationMs, { spaced: true }) ?? "0s";
   const label = formatRunLabel(entry, { maxLength: 56 });
@@ -36,7 +37,7 @@ export function buildSubagentsStatusLine(params: {
   }
   const activeWithDescendants = runs
     .map((entry) => ({ entry, pendingDescendants: pendingDescendantsForRun(entry) }))
-    .filter(({ entry, pendingDescendants }) => !entry.endedAt || pendingDescendants > 0);
+    .filter(({ entry, pendingDescendants }) => !entry.execution.endedAt || pendingDescendants > 0);
   const active = activeWithDescendants.map(({ entry }) => entry);
   const done = runs.length - active.length;
   if (active.length === 0) {

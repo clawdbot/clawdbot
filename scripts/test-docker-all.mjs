@@ -28,6 +28,7 @@ import {
   resolveDockerE2ePlan,
 } from "./lib/docker-e2e-plan.mjs";
 import { sleep } from "./lib/sleep.mjs";
+import { validatePrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
 
 const SCRIPT_ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_DIR = path.resolve(process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT || SCRIPT_ROOT_DIR);
@@ -49,9 +50,17 @@ const SHELL_PROCESS_GROUP_EXIT_POLL_MS = 25;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
-const IS_MAIN = process.argv[1]
-  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-  : false;
+const IS_MAIN = (() => {
+  if (!process.argv[1]) {
+    return false;
+  }
+  try {
+    // Node resolves ESM URLs through symlinks, but argv keeps the invoked path.
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
 
 function dockerAllUsage() {
   return [
@@ -343,6 +352,7 @@ function buildLaneRerunCommand(name, baseEnv) {
     ["OPENCLAW_DOCKER_E2E_BARE_IMAGE", baseEnv.OPENCLAW_DOCKER_E2E_BARE_IMAGE],
     ["OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE", baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE],
     ["OPENCLAW_CURRENT_PACKAGE_TGZ", baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ],
+    ["OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR", baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR],
     ["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC],
     ["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS],
     ["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS],
@@ -1530,7 +1540,22 @@ async function main() {
       upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
       upgradeSurvivorTargetRoot: process.env.OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT,
       allowFrozenTargetScenarioOmissions,
+      candidatePackageRoot: ROOT_DIR,
     });
+  if (plan.needs.prepublishPluginRegistry && process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR) {
+    baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR = path.resolve(
+      process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR,
+    );
+    validatePrepublishPluginRegistryArtifact({
+      artifactDir: baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR,
+      expectedCandidateVersion: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION,
+      expectedManifestSha256: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256,
+      expectedSourceSha: process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA,
+      requiredPackages: plan.requiredPrepublishPluginPackages,
+    });
+  } else {
+    delete baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
+  }
   if (omittedUnsupportedLaneNames.length > 0 && !allowFrozenTargetScenarioOmissions) {
     throw new Error(
       `frozen target scenario omissions require trusted workflow opt-in: ${omittedUnsupportedLaneNames.join(", ")}`,
@@ -1608,6 +1633,8 @@ async function main() {
     return;
   }
 
+  // Planning can report unsupported scenarios, but execution cannot pass when
+  // frozen-target omissions leave no selected lane to run.
   if (scheduledLanes.length === 0) {
     await writeSummary({
       chunk: releaseChunk || undefined,
@@ -1618,9 +1645,11 @@ async function main() {
       profile,
       selectedLanes: selectedLaneNames.length > 0 ? selectedLaneNames : undefined,
       startedAt: runStartedAt,
-      status: "passed",
+      status: "failed",
     });
-    return;
+    throw new Error(
+      `resolved zero runnable Docker lanes; frozen target does not support: ${omittedUnsupportedLanes.join(", ")}`,
+    );
   }
 
   await runPhase(

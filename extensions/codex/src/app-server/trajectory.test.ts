@@ -1,6 +1,5 @@
 // Codex tests cover SQLite-only trajectory plugin behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -8,7 +7,12 @@ import {
   loadSqliteTrajectoryRuntimeEvents,
   type SqliteTrajectoryRuntimeEventForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspaceSync,
+  type TempWorkspaceSync,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type CodexHostTrajectoryRecorder,
   createCodexTrajectoryRecorder,
@@ -18,18 +22,17 @@ import {
 
 type CodexTrajectoryRecorder = NonNullable<ReturnType<typeof createCodexTrajectoryRecorder>>;
 
-const tempDirs: string[] = [];
+let testWorkspace: TempWorkspaceSync;
 
-function makeTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-trajectory-"));
-  tempDirs.push(dir);
-  return dir;
-}
+beforeEach(() => {
+  testWorkspace = tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-codex-trajectory-",
+  });
+});
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  testWorkspace.cleanup();
 });
 
 function expectTrajectoryRecorder(
@@ -78,7 +81,6 @@ function createMemoryBackedRecorder(params: {
       ...params.attempt,
     } as never,
     trajectoryRecorder: host.recorder,
-    trajectorySessionFile: `sqlite:main:${sessionId}:${path.join(params.tmpDir, "sessions.json")}`,
     tools: params.tools,
     env: {},
   });
@@ -115,57 +117,12 @@ function createSqliteHostTrajectoryRecorder(params: {
 }
 
 describe("Codex trajectory recorder", () => {
-  it("rejects file-backed trajectory targets without creating sidecars", () => {
-    const tmpDir = makeTempDir();
-    const warn = vi.fn();
-    const recorder = createCodexTrajectoryRecorder({
-      cwd: tmpDir,
-      attempt: {
-        sessionFile: path.join(tmpDir, "session.jsonl"),
-        sessionId: "session-1",
-        model: { api: "responses" },
-      } as never,
-      env: {},
-      warn,
-    });
-
-    expect(recorder).toBeNull();
-    expect(warn).toHaveBeenCalledWith(
-      "codex trajectory capture requires a matching SQLite session target",
-      { sessionId: "session-1", reason: "non-sqlite-session-target" },
-    );
-    expect(fs.existsSync(path.join(tmpDir, "session.trajectory.jsonl"))).toBe(false);
-    expect(fs.existsSync(path.join(tmpDir, "session.trajectory-path.json"))).toBe(false);
-  });
-
-  it("rejects a SQLite marker for a different session identity", () => {
-    const tmpDir = makeTempDir();
-    const warn = vi.fn();
-    const recorder = createCodexTrajectoryRecorder({
-      cwd: tmpDir,
-      attempt: {
-        sessionFile: "sqlite:main:other:/tmp/openclaw-agent.sqlite",
-        sessionId: "session-1",
-        model: { api: "responses" },
-      } as never,
-      trajectoryRecorder: createMemoryHostTrajectoryRecorder().recorder,
-      env: {},
-      warn,
-    });
-
-    expect(recorder).toBeNull();
-    expect(warn).toHaveBeenCalledWith(
-      "codex trajectory capture requires a matching SQLite session target",
-      { sessionId: "session-1", reason: "session-id-mismatch" },
-    );
-  });
-
   it("warns when the SQLite host recorder is unavailable", () => {
     const warn = vi.fn();
     const recorder = createCodexTrajectoryRecorder({
-      cwd: makeTempDir(),
+      cwd: testWorkspace.dir,
       attempt: {
-        sessionFile: "sqlite:main:session-1:/tmp/openclaw-agent.sqlite",
+        sessionFile: "agent:main:session-1",
         sessionId: "session-1",
         model: { api: "responses" },
       } as never,
@@ -180,20 +137,22 @@ describe("Codex trajectory recorder", () => {
     );
   });
 
-  it("stores SQLite-backed trajectory captures in the session database", async () => {
-    const tmpDir = makeTempDir();
+  it("stores SQLite-backed captures for the canonical session-key target", async () => {
+    // Regression: the host stopped emitting legacy `sqlite:` session-file
+    // markers, so any marker re-derivation here drops every Codex capture.
+    const tmpDir = testWorkspace.dir;
     const storePath = path.join(tmpDir, "sessions", "sessions.json");
-    const trajectorySessionFile = `sqlite:main:session-1:${storePath}`;
     await upsertSessionEntry({
       agentId: "main",
       sessionKey: "agent:main:session-1",
       storePath,
-      entry: { sessionId: "session-1", sessionFile: trajectorySessionFile, updatedAt: 10 },
+      entry: { sessionId: "session-1", updatedAt: 10 },
     });
     const recorder = createCodexTrajectoryRecorder({
       cwd: tmpDir,
       attempt: {
-        sessionFile: path.join(tmpDir, "sessions", "session.jsonl"),
+        sessionFile: "agent:main:session-1",
+        sessionKey: "agent:main:session-1",
         sessionId: "session-1",
         model: { api: "responses" },
       } as never,
@@ -202,7 +161,6 @@ describe("Codex trajectory recorder", () => {
         sessionId: "session-1",
         storePath,
       }),
-      trajectorySessionFile,
       env: {},
     });
 
@@ -219,7 +177,7 @@ describe("Codex trajectory recorder", () => {
   });
 
   it("redacts secrets and keeps recorded strings UTF-16 safe", async () => {
-    const { events, recorder } = createMemoryBackedRecorder({ tmpDir: makeTempDir() });
+    const { events, recorder } = createMemoryBackedRecorder({ tmpDir: testWorkspace.dir });
     recorder.recordEvent("model.output", {
       text: `${"x".repeat(19_999)}😀`,
       apiKey: "secret",
@@ -249,7 +207,7 @@ describe("Codex trajectory recorder", () => {
         ],
       },
     ];
-    const tmpDir = makeTempDir();
+    const tmpDir = testWorkspace.dir;
     const init = createMemoryBackedRecorder({ tmpDir, tools });
 
     recordCodexTrajectoryContext(init.recorder, { attempt: {} as never, cwd: tmpDir, tools });
@@ -267,9 +225,9 @@ describe("Codex trajectory recorder", () => {
   it("honors explicit disablement without warning", () => {
     const warn = vi.fn();
     const recorder = createCodexTrajectoryRecorder({
-      cwd: makeTempDir(),
+      cwd: testWorkspace.dir,
       attempt: {
-        sessionFile: "sqlite:main:session-1:/tmp/openclaw-agent.sqlite",
+        sessionFile: "agent:main:session-1",
         sessionId: "session-1",
         model: { api: "responses" },
       } as never,
@@ -298,7 +256,7 @@ describe("Codex trajectory recorder", () => {
       total: 724_402,
     };
     const { events, recorder } = createMemoryBackedRecorder({
-      tmpDir: makeTempDir(),
+      tmpDir: testWorkspace.dir,
       attempt,
     });
 

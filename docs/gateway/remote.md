@@ -43,6 +43,8 @@ ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
 
 With the tunnel up, `openclaw health` and `openclaw status --deep` reach the remote Gateway via `ws://127.0.0.1:18789`. `openclaw gateway status`, `openclaw gateway health`, `openclaw gateway probe`, and `openclaw gateway call` can also target a forwarded URL via `--url`.
 
+To replace per-client SSH tunnels with one private `wss://` endpoint while keeping the Gateway on loopback, follow [Give your Gateway a stable HTTPS URL](/gateway/stable-https-url).
+
 <Note>
 Replace `18789` with your configured `gateway.port` (or `--port` / `OPENCLAW_GATEWAY_PORT`).
 </Note>
@@ -95,12 +97,12 @@ Gateway credential resolution follows one shared contract across call/probe/stat
   - CLI `--url` never reuses implicit config/env credentials.
   - Env `OPENCLAW_GATEWAY_URL` may use env credentials only (`OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`).
 - Local mode defaults:
-  - token: `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token` -> `gateway.remote.token` (remote fallback only when the local token is unset)
-  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.auth.password` -> `gateway.remote.password` (remote fallback only when the local password is unset)
+  - token: `gateway.auth.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.remote.token` (remote fallback only when the local token is unset)
+  - password: `gateway.auth.password` -> `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` (remote fallback only when the local password is unset)
 - Remote mode defaults:
   - token: `gateway.remote.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token`
   - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` -> `gateway.auth.password`
-- Node-host local-mode exception: `gateway.remote.token` / `gateway.remote.password` are ignored.
+- Node-host local-mode exception: environment credentials stay first and `gateway.remote.token` / `gateway.remote.password` are ignored because node commands target an explicit host and port.
 - Remote probe/status token checks are strict by default: they use `gateway.remote.token` only (no local token fallback) when targeting remote mode.
 - Gateway env overrides use `OPENCLAW_GATEWAY_*` only.
 

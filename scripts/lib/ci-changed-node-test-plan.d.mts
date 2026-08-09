@@ -1,6 +1,7 @@
 export type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];
+  planConcurrency?: number;
   requiresDist: boolean;
   runner: string;
   shardName: string;

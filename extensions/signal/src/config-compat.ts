@@ -2,6 +2,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 // Signal compatibility migration moves shipped flat transport config into account ownership.
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
 import {
   allocateSignalManagedNativePort,
@@ -40,10 +41,6 @@ type DetectTransport = (params: {
   url: string;
   account?: string;
 }) => Promise<SignalTransportConfig>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isSignalTransportConfig(value: unknown): value is SignalTransportConfig {
   if (!isRecord(value)) {

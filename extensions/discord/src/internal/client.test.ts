@@ -1,5 +1,6 @@
 // Discord tests cover client plugin behavior.
 import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "./client.js";
@@ -10,20 +11,6 @@ import { DiscordError } from "./rest.js";
 import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
 
 type AnyListener = Parameters<Client["registerListener"]>[0];
-
-function createDeferred<T = void>(): {
-  promise: Promise<T>;
-  resolve: (value: T | PromiseLike<T>) => void;
-  reject: (reason?: unknown) => void;
-} {
-  let resolve: (value: T | PromiseLike<T>) => void = () => {};
-  let reject: (reason?: unknown) => void = () => {};
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  return { promise, resolve, reject };
-}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -104,6 +91,44 @@ describe("ComponentRegistry", () => {
     expect(registry.resolve("encoded:payload=two", { componentType: ComponentType.Button })).toBe(
       button,
     );
+  });
+
+  it("preserves each message owner when replacing a one-off component wait", async () => {
+    const registry = new ComponentRegistry<Button>();
+    const firstMessage = {
+      id: "message-1",
+      channelId: "channel-1",
+      owner: "first",
+    } as never;
+    const secondMessage = {
+      id: "message-1",
+      channelId: "channel-1",
+      owner: "second",
+    } as never;
+
+    const first = registry.waitForMessageComponent(firstMessage, 5_000);
+    const second = registry.waitForMessageComponent(secondMessage, 5_000);
+    const firstResult = await first;
+    const resolved = registry.resolveOneOffComponent({
+      channelId: "channel-1",
+      customId: "choice:one",
+      messageId: "message-1",
+      values: ["one"],
+    });
+    const secondResult = await second;
+
+    expect(firstResult).toMatchObject({
+      success: false,
+      reason: "timed out",
+    });
+    expect(firstResult.message).toBe(firstMessage);
+    expect(resolved).toBe(true);
+    expect(secondResult).toMatchObject({
+      success: true,
+      customId: "choice:one",
+      values: ["one"],
+    });
+    expect(secondResult.message).toBe(secondMessage);
   });
 
   it("caps oversized one-off component wait timers", () => {
@@ -543,7 +568,7 @@ describe("Client gateway event queue", () => {
   it("holds a timed-out listener slot until its underlying promise resolves", async () => {
     vi.useFakeTimers();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const firstSettlement = createDeferred();
+    const firstSettlement = createDeferred<void>();
     const started: string[] = [];
     const first = {
       type: "READY",
@@ -593,7 +618,7 @@ describe("Client gateway event queue", () => {
   it("logs a listener failure that arrives after its dispatch timeout", async () => {
     vi.useFakeTimers();
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const settlement = createDeferred();
+    const settlement = createDeferred<void>();
     const lateError = new Error("late listener failure");
     const listener = {
       type: "READY",
@@ -629,8 +654,8 @@ describe("Client gateway event queue", () => {
 
   it("limits queued listener concurrency", async () => {
     const started: string[] = [];
-    const releaseFirst = createDeferred();
-    const releaseSecond = createDeferred();
+    const releaseFirst = createDeferred<void>();
+    const releaseSecond = createDeferred<void>();
     const first = {
       type: "READY",
       handle: vi.fn(async () => {

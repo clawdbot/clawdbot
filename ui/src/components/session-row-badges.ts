@@ -11,12 +11,6 @@ export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>[
 
 export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 
-export function isStoppableCloudWorkerPlacement(
-  placement: GatewaySessionRow["placement"],
-): boolean {
-  return placement?.state === "active";
-}
-
 function pullRequestStateLabel(state: SessionCatalogPullRequestSummary["state"]): string {
   switch (state) {
     case "open":

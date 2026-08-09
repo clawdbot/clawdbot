@@ -389,4 +389,17 @@ struct GatewayTLSPinningTests {
             required: true,
             systemTrustOk: false) == .reject(.untrustedCertificate))
     }
+
+    @Test func `clear all fingerprints removes every canonical pin without live storage`() {
+        self.withFakeKeychain { _ in
+            GatewayTLSStore.saveFingerprint("11", stableID: "gateway-1")
+            GatewayTLSStore.saveFingerprint("22", stableID: "gateway-2")
+            var clearedLegacy = false
+
+            #expect(GatewayTLSStore.clearAllFingerprints(clearLegacy: { clearedLegacy = true }))
+            #expect(clearedLegacy)
+            #expect(GatewayTLSStore.loadFingerprint(stableID: "gateway-1") == nil)
+            #expect(GatewayTLSStore.loadFingerprint(stableID: "gateway-2") == nil)
+        }
+    }
 }

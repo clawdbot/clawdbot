@@ -11,7 +11,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createCreateGoalTool, createGetGoalTool } from "./goal-tools.js";
+import { createCreateGoalTool, createGetGoalTool, createUpdateGoalTool } from "./goal-tools.js";
 
 async function createStoreConfig(): Promise<{ config: OpenClawConfig; template: string }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-goal-tools-"));
@@ -56,6 +56,7 @@ describe("goal tools", () => {
         updatedAt: 1,
         totalTokens: 125,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         goal: {
           schemaVersion: 1,
           id: "goal-1",
@@ -162,5 +163,41 @@ describe("goal tools", () => {
     expect(
       getSessionEntry({ storePath: researchStorePath, sessionKey: "agent:ops:main" })?.goal,
     ).toBeUndefined();
+  });
+
+  it("tells the model to send the requested final reply after completing a goal", async () => {
+    const { config, template } = await createStoreConfig();
+    const storePath = resolveStorePath(template, { agentId: "research" });
+    const options = {
+      agentSessionKey: "global",
+      runSessionKey: "global",
+      sessionAgentId: "research",
+      config,
+    };
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "global",
+      entry: { sessionId: "sess-global", updatedAt: 1 },
+    });
+    await createCreateGoalTool(options).execute("call-create", {
+      objective: "Write the artifact and reply GOAL-DONE",
+    });
+
+    const tool = createUpdateGoalTool(options);
+    const result = await tool.execute("call-complete", { status: "complete" });
+
+    expect(tool.description).toContain("does not reply to the user");
+    expect(result.details).toMatchObject({
+      status: "updated",
+      goal: { status: "complete" },
+      nextAction: expect.stringContaining("provide the requested visible final response"),
+    });
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("provide the requested visible final response"),
+      }),
+    ]);
+    expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal?.status).toBe("complete");
   });
 });

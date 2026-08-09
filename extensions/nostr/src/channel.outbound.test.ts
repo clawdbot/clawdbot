@@ -85,6 +85,93 @@ describe("nostr outbound cfg threading", () => {
     mocks.startNostrBus.mockReset();
   });
 
+  it.each([
+    {
+      name: "strips an internal tool-failure banner",
+      text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
+      expected: "Done.",
+    },
+    {
+      name: "strips internal tool-call XML",
+      text: '<tool_call>{"name":"read","arguments":{"path":"private"}}</tool_call>Done.',
+      expected: "Done.",
+    },
+    {
+      name: "strips multiline tool-response scaffolding",
+      text: [
+        "Before",
+        "<function_response>",
+        "private output",
+        "</function_response>",
+        "After",
+      ].join("\n"),
+      expected: "Before\n\nAfter",
+    },
+    {
+      name: "suppresses an internal-trace-only reply",
+      text: "⚠️ 🛠️ `search repos (agent)` failed",
+      expected: "",
+    },
+    {
+      name: "preserves ordinary visible prose",
+      text: "The relay has two active subscriptions.",
+      expected: "The relay has two active subscriptions.",
+    },
+  ])("$name through the Nostr outbound sanitizer", ({ text, expected }) => {
+    const sanitizeText = nostrPlugin.outbound?.sanitizeText;
+    expect(sanitizeText).toBeTypeOf("function");
+    if (!sanitizeText) {
+      throw new Error("Expected Nostr outbound assistant-visible text sanitizer");
+    }
+    expect(sanitizeText({ text, payload: { text } })).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "preserves a short reply as one encrypted message",
+      text: "Hello from Nostr.",
+      expectedChunkCount: 1,
+      joinWith: "",
+    },
+    {
+      name: "splits long replies at word boundaries",
+      text: `${"word ".repeat(1_200)}final`,
+      expectedChunkCount: 2,
+      joinWith: " ",
+    },
+    {
+      name: "preserves newline-delimited reply order",
+      text: `${"line\n".repeat(1_200)}final`,
+      expectedChunkCount: 2,
+      joinWith: "\n",
+    },
+    {
+      name: "hard-splits an uninterrupted oversized reply",
+      text: "x".repeat(8_001),
+      expectedChunkCount: 3,
+      joinWith: "",
+    },
+    {
+      name: "preserves Unicode when an odd prefix shifts the chunk boundary",
+      text: `a${"😀".repeat(2_500)}`,
+      expectedChunkCount: 2,
+      joinWith: "",
+    },
+  ])("$name", ({ text, expectedChunkCount, joinWith }) => {
+    const outbound = nostrPlugin.outbound;
+    const textChunkLimit = outbound?.textChunkLimit;
+    expect(textChunkLimit).toBe(4_000);
+    expect(outbound?.chunker).toBeTypeOf("function");
+    if (!outbound?.chunker || textChunkLimit === undefined) {
+      throw new Error("Expected Nostr outbound text chunking");
+    }
+
+    const chunks = outbound.chunker(text, textChunkLimit);
+    expect(chunks).toHaveLength(expectedChunkCount);
+    expect(chunks.every((chunk) => chunk.length <= textChunkLimit)).toBe(true);
+    expect(chunks.join(joinWith)).toBe(text);
+  });
+
   it("converts tables before projecting markdown to Nostr plain text", async () => {
     const { resolveMarkdownTableMode, convertMarkdownTables } = installOutboundRuntime(
       vi.fn((text: string) => (text === "***" ? text : "**Table:** [docs](https://example.com)")),

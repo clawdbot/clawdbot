@@ -104,7 +104,9 @@ final class CLIInstallPrompter {
         alert.messageText = "Choose OpenClaw CLI channel"
         alert.informativeText =
             "This is an unreleased OpenClaw build. " +
-            "Local mode can use Stable, Beta, or Dev from Git main."
+            "Stable and Beta use published builds and are usually quick. " +
+            "Dev (Git main) downloads and builds from source, so it can take several minutes " +
+            "and needs several gigabytes free."
         for channel in channels {
             alert.addButton(withTitle: channel.label)
         }

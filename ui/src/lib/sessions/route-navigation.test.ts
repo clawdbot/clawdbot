@@ -1,8 +1,12 @@
+import { buildControlUiCatalogSessionUrl } from "@openclaw/session-url-contract";
 import { describe, expect, it } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "./catalog-key.ts";
 import {
   resolveSessionPreferredFace,
+  resolveSessionPreferredFaceForKey,
   SESSION_FACE_PREFERENCE_PARAM,
+  SESSION_NAVIGATION_KEY_PARAM,
   sessionNavigationTarget,
 } from "./route-navigation.ts";
 
@@ -41,21 +45,33 @@ describe("sessionNavigationTarget", () => {
   });
 
   it("requires the destination face while preserving catalog identity", () => {
+    const catalogKey = {
+      catalogId: "claude",
+      hostId: "gateway:local",
+      threadId: "thread-1",
+    };
     const target = sessionNavigationTarget({
       face: "dashboard",
-      sessionKey: buildCatalogSessionKey({
-        catalogId: "claude",
-        hostId: "gateway:local",
-        threadId: "thread-1",
-      }),
+      sessionKey: buildCatalogSessionKey(catalogKey),
       fallbackAgentId: "research",
+      basePath: "/admin/openclaw/",
       mainKey: "workspace",
     });
 
+    const canonicalHref = buildControlUiCatalogSessionUrl({
+      namespace: "dashboard",
+      agentId: "research",
+      basePath: "/admin/openclaw/",
+      catalog: catalogKey.catalogId,
+      host: catalogKey.hostId,
+      thread: catalogKey.threadId,
+    });
+    expect(canonicalHref).not.toBeNull();
+    expect(target.href).toBe(canonicalHref);
     expect(target).toEqual({
-      href: "/dashboard/research?catalog=claude&host=gateway%3Alocal&thread=thread-1",
+      href: "/admin/openclaw/dashboard/research?catalog=claude&host=gateway%3Alocal&thread=thread-1",
       options: {
-        pathname: "/dashboard/research",
+        pathname: "/admin/openclaw/dashboard/research",
         search: "?catalog=claude&host=gateway%3Alocal&thread=thread-1",
       },
     });
@@ -105,6 +121,41 @@ describe("sessionNavigationTarget", () => {
     });
 
     expect(target.href).toBe("/chat/main/release-notes-12345678");
-    expect(target.options).toEqual({ pathname: "/chat/main/release-notes-12345678" });
+    expect(target.options).toEqual({
+      pathname: "/chat/main/release-notes-12345678",
+      search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(row.key)}`,
+    });
+  });
+
+  it("treats another agent's cached global row as uncached", () => {
+    const context = {
+      basePath: "",
+      gateway: { snapshot: { hello: null } },
+      agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
+      agentSelection: { state: { selectedId: "research" } },
+      sessions: {
+        state: {
+          agentId: "main",
+          result: {
+            sessions: [{ key: "global", boardFace: "dashboard" }],
+          },
+        },
+      },
+    } as unknown as ApplicationContext;
+
+    const face = resolveSessionPreferredFaceForKey(context, "global");
+    const target = sessionNavigationTarget({
+      context,
+      face,
+      sessionKey: "global",
+      agentId: "research",
+      preferenceDerivedFace: true,
+    });
+
+    expect(face).toBe("chat");
+    expect(target.options).toEqual({
+      pathname: "/chat/research",
+      search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
+    });
   });
 });

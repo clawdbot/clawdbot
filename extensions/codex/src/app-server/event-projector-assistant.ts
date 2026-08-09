@@ -36,6 +36,7 @@ export class CodexAssistantProjection {
   // would drop legitimate verbatim answers ("reply with exactly the command output").
   private readonly rawPromotedAssistantItemIds = new Set<string>();
   private assistantStarted = false;
+  private responseModel: string | undefined;
   private streamedPartialAssistantItemId: string | undefined;
   private streamedPartialAssistantItemReplaceable = false;
 
@@ -83,6 +84,12 @@ export class CodexAssistantProjection {
       this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff &&
       this.hasLatestTerminalAssistantCandidateText()
     );
+  }
+
+  handleNotification(method: string, params: JsonObject): void {
+    if (method === "model/rerouted") {
+      this.responseModel = readString(params, "toModel") ?? this.responseModel;
+    }
   }
 
   async handleAssistantDelta(params: JsonObject): Promise<void> {
@@ -253,7 +260,13 @@ export class CodexAssistantProjection {
       this.assistantTextByItem.set(typedItemId, text);
       return;
     }
-    if (!text) {
+    if (
+      text === undefined ||
+      (!text &&
+        (phase === "commentary" ||
+          activeItemIds.size > 0 ||
+          readString(item, "type") !== "message"))
+    ) {
       return;
     }
     const itemId = rawItemId ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
@@ -263,6 +276,7 @@ export class CodexAssistantProjection {
       pendingTerminalAssistantEchoItemId === undefined &&
       activeItemIds.size === 0;
     if (
+      text &&
       phase !== "commentary" &&
       candidateWasSupersededBeforeRaw &&
       itemId !== this.streamedPartialAssistantItemId &&
@@ -275,6 +289,10 @@ export class CodexAssistantProjection {
     }
     this.rememberAssistantItem(itemId);
     this.assistantTextByItem.set(itemId, text);
+    // Empty raw finals prove an actual stop; retain that fact without publishing fake output.
+    if (!text) {
+      return;
+    }
     this.rawPromotedAssistantItemIds.add(itemId);
     if (phase === "commentary") {
       this.emitCommentaryProgress({ itemId, text });
@@ -315,13 +333,17 @@ export class CodexAssistantProjection {
       return;
     }
     const turnItems = turn.items ?? [];
-    const authoritativeIndex = turnItems.findLastIndex(
-      (item) =>
-        item.type === "agentMessage" &&
-        readItemString(item, "phase") === "final_answer" &&
-        typeof item.text === "string" &&
-        item.text.trim().length > 0,
-    );
+    const authoritativeIndex = turnItems.findLastIndex((item) => {
+      if (
+        item.type !== "agentMessage" ||
+        typeof item.text !== "string" ||
+        item.text.trim().length === 0
+      ) {
+        return false;
+      }
+      const phase = readItemString(item, "phase");
+      return phase === "final_answer" || phase === undefined;
+    });
     const authoritative = authoritativeIndex >= 0 ? turnItems[authoritativeIndex] : undefined;
     const invalidatedByLaterTool = turnItems
       .slice(authoritativeIndex + 1)
@@ -382,7 +404,8 @@ export class CodexAssistantProjection {
   }
 
   createAssistantMessage(text: string, options: AssistantMessageOptions): AssistantMessage {
-    return buildAssistantMessage(this.params, text, options);
+    const message = buildAssistantMessage(this.params, text, options);
+    return this.responseModel ? { ...message, responseModel: this.responseModel } : message;
   }
 
   createAssistantMirrorMessage(title: string, text: string): AssistantMessage {

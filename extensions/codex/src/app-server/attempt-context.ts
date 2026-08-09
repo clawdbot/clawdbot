@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   buildBootstrapContextForFiles,
+  buildWatchedSessionsHarnessContext,
   embeddedAgentLog,
   resolveBootstrapFilesForRun,
   type AgentMessage,
@@ -19,6 +20,10 @@ import {
   prepareMemorySystemPromptAddition,
 } from "openclaw/plugin-sdk/core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
+import type {
+  SessionTranscriptTargetParams,
+  TranscriptTurnAdmission,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -77,8 +82,11 @@ export async function readMirroredSessionHistoryMessages(params: {
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: Partial<SessionTranscriptTargetParams>;
+  admission?: TranscriptTurnAdmission;
 }): Promise<AgentMessage[] | undefined> {
-  const messages = await readCodexMirroredSessionHistoryMessages(params);
+  const { admission, ...target } = params;
+  const messages = await readCodexMirroredSessionHistoryMessages(target, admission);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       sessionFile: params.sessionFile,
@@ -181,6 +189,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       config: params.params.config,
       sessionKey: params.sessionKey,
       sessionId: params.params.sessionId,
+      chatType: params.params.chatType,
       agentId: params.params.agentId ?? params.sessionAgentId,
       warn: (message) => embeddedAgentLog.warn(message),
       contextMode: params.params.bootstrapContextMode,
@@ -503,6 +512,7 @@ function readNonEmptyString(value: unknown): string | undefined {
 export function buildCodexOpenClawPromptContext(params: {
   params: EmbeddedRunAttemptParams;
   workspacePromptContext?: string;
+  watchedSessionsContext?: string;
 }): string | undefined {
   if (!shouldInjectCodexOpenClawPromptContext(params.params)) {
     return undefined;
@@ -511,6 +521,7 @@ export function buildCodexOpenClawPromptContext(params: {
     params.workspacePromptContext?.trim()
       ? ["## OpenClaw Workspace Context", "", params.workspacePromptContext.trim()].join("\n")
       : undefined,
+    params.watchedSessionsContext?.trim() || undefined,
   ].filter(isNonEmptyString);
   if (sections.length === 0) {
     return undefined;
@@ -521,6 +532,31 @@ export function buildCodexOpenClawPromptContext(params: {
     "",
     ...sections,
   ].join("\n");
+}
+
+/**
+ * Renders the watched-sessions block for the Codex per-turn runtime context.
+ * Codex builds its own instruction layers, so the embedded prompt's Watched
+ * Sessions section must be re-surfaced here or Codex-backed main sessions
+ * keep refusing cross-session questions (openclaw#114797).
+ */
+export function buildCodexWatchedSessionsContext(params: {
+  attempt: EmbeddedRunAttemptParams;
+  dynamicTools: readonly CodexDynamicToolSpec[];
+  sessionKey?: string;
+  sandboxed?: boolean;
+}): string | undefined {
+  if (!shouldInjectCodexOpenClawPromptContext(params.attempt)) {
+    return undefined;
+  }
+  return buildWatchedSessionsHarnessContext({
+    config: params.attempt.config,
+    sessionKey: params.sessionKey,
+    sandboxed: params.sandboxed,
+    toolNames: flattenCodexDynamicToolFunctions(params.dynamicTools).map((tool) =>
+      normalizeCodexDynamicToolName(tool.name),
+    ),
+  });
 }
 
 function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams): boolean {

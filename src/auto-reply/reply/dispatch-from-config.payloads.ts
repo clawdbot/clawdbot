@@ -1,6 +1,8 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
@@ -14,6 +16,56 @@ import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-le
 import type { ReplyOperation } from "./reply-run-registry.js";
 
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
+
+export const NO_VISIBLE_REPLY_FALLBACK_TEXT =
+  "No reply was generated for this message. This is usually a temporary model failure - please try again.";
+
+export const QUEUE_CAP_REJECTION_TEXT =
+  "This message was not queued because the session queue is full. Please try again after the current response finishes.";
+
+type SourceReplySuppressionState = {
+  ctx: { InboundEventKind?: InboundEventKind };
+  explicitCommandTurnCtx: boolean;
+  suppressAutomaticSourceDelivery: boolean;
+  sendPolicyDenied: boolean;
+};
+
+export function shouldDeliverDespiteSourceReplySuppression(
+  payload: ReplyPayload,
+  state: SourceReplySuppressionState,
+): boolean {
+  return (
+    state.suppressAutomaticSourceDelivery &&
+    !state.sendPolicyDenied &&
+    getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true &&
+    (state.ctx.InboundEventKind !== "room_event" || state.explicitCommandTurnCtx)
+  );
+}
+
+export function readAskUserQuestionId(payload: ReplyPayload): string | undefined {
+  const askUser = payload.channelData?.askUser;
+  if (!isRecord(askUser)) {
+    return undefined;
+  }
+  const questionId = askUser.questionId;
+  return typeof questionId === "string" ? questionId : undefined;
+}
+
+export function hasExecApprovalPayload(payload: ReplyPayload): boolean {
+  return isRecord(payload.channelData?.execApproval);
+}
+
+export function hasAskUserPayload(payload: ReplyPayload): boolean {
+  return isRecord(payload.channelData?.askUser);
+}
+
+export function requiresDurableToolResultDelivery(payload: ReplyPayload): boolean {
+  return (
+    resolveSendableOutboundReplyParts(payload).hasMedia ||
+    hasExecApprovalPayload(payload) ||
+    hasAskUserPayload(payload)
+  );
+}
 
 export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): string {
   const metadata = getReplyPayloadMetadata(payload);

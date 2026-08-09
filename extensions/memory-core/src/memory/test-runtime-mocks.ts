@@ -1,5 +1,19 @@
 // Memory Core plugin module implements test runtime mocks behavior.
-import { vi } from "vitest";
+import { afterAll, beforeAll, vi } from "vitest";
+import {
+  configureMemoryCoreDreamingStateForTests,
+  resetMemoryCoreDreamingStateForTests,
+} from "../test-helpers.js";
+
+// Memory indexing reads flush provenance from plugin state. Manager tests use
+// this shared setup instead of booting the full plugin runtime.
+beforeAll(async () => {
+  await configureMemoryCoreDreamingStateForTests();
+});
+
+afterAll(() => {
+  resetMemoryCoreDreamingStateForTests();
+});
 
 // Unit tests: avoid importing the real chokidar implementation (native fsevents, etc.).
 function createWatcherMock() {

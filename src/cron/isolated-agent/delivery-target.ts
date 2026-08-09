@@ -15,7 +15,6 @@ import { isReservedTargetLiteralError } from "../../infra/outbound/target-errors
 import type { ResolvedMessagingTarget } from "../../infra/outbound/target-resolver.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
-import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -26,7 +25,7 @@ import { resolveCronAgentSessionKey } from "./session-key.js";
 export type DeliveryTargetResolution =
   | {
       ok: true;
-      channel: Exclude<OutboundChannel, "none">;
+      channel: string;
       to: string;
       accountId?: string;
       threadId?: string | number;
@@ -34,7 +33,7 @@ export type DeliveryTargetResolution =
     }
   | {
       ok: false;
-      channel?: Exclude<OutboundChannel, "none">;
+      channel?: string;
       to?: string;
       accountId?: string;
       threadId?: string | number;
@@ -117,10 +116,7 @@ function shouldCarrySessionThread(params: {
   return routesSharePeer(params.route, params.lastRoute);
 }
 
-function stripSelectedProviderPrefix(params: {
-  channel: Exclude<OutboundChannel, "none">;
-  to?: string;
-}): string | undefined {
+function stripSelectedProviderPrefix(params: { channel: string; to?: string }): string | undefined {
   const trimmed = params.to?.trim();
   if (!trimmed) {
     return undefined;
@@ -196,7 +192,7 @@ export async function resolveDeliveryTarget(
     allowMismatchedLastTo,
   });
 
-  let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
+  let fallbackChannel: string | undefined;
   let channelResolutionError: Error | undefined;
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {
@@ -235,9 +231,7 @@ export async function resolveDeliveryTarget(
   // --account on cron add/edit). Fall back to the session's lastAccountId,
   // then to the agent's bound account from bindings config.
   const explicitAccountId =
-    typeof jobPayload.accountId === "string" && jobPayload.accountId.trim()
-      ? jobPayload.accountId.trim()
-      : undefined;
+    typeof jobPayload.accountId === "string" ? jobPayload.accountId.trim() || undefined : undefined;
   let accountId = explicitAccountId ?? resolved.accountId;
   if (!accountId && channel) {
     accountId = deliveryTargetRuntime.resolveFirstBoundAccountId({
@@ -245,11 +239,6 @@ export async function resolveDeliveryTarget(
       channelId: channel,
       agentId,
     });
-  }
-
-  // job.delivery.accountId takes highest precedence — explicitly set by the job author.
-  if (jobPayload.accountId) {
-    accountId = jobPayload.accountId;
   }
 
   if (!channel) {
@@ -492,16 +481,6 @@ export async function resolveDeliveryTarget(
     route?.threadId ??
     parserExplicitThreadId ??
     (canUseSessionThread ? resolved.threadId : undefined);
-  if (options?.dryRun) {
-    return {
-      ok: true,
-      channel,
-      to: toCandidate,
-      accountId,
-      threadId,
-      mode,
-    };
-  }
   return {
     ok: true,
     channel,

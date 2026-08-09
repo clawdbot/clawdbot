@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
@@ -21,6 +22,7 @@ type InProcessGatewayDispatchOptions = {
   onAccepted?: (payload: unknown) => void;
   requestIdPrefix?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 export function unwrapGatewayMethodDispatchResponse(
@@ -52,28 +54,49 @@ function resolveRemainingDispatchTimeoutMs(deadlineMs?: number): number | undefi
     : resolveSafeTimeoutDelayMs(deadlineMs - Date.now(), { minMs: 0 });
 }
 
+function resolveDispatchAbortError(method: string, signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : createAbortError(`gateway request aborted for ${method}`, { cause: signal.reason });
+}
+
 async function waitForDispatch<T>(
   method: string,
   promise: Promise<T>,
   deadlineMs?: number,
+  signal?: AbortSignal,
 ): Promise<T> {
+  if (signal?.aborted) {
+    throw resolveDispatchAbortError(method, signal);
+  }
   const remainingTimeoutMs = resolveRemainingDispatchTimeoutMs(deadlineMs);
-  if (remainingTimeoutMs === undefined) {
+  if (remainingTimeoutMs === undefined && !signal) {
     return await promise;
   }
   let timeout: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
   try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      if (remainingTimeoutMs !== undefined) {
         timeout = setTimeout(() => {
           reject(new Error(`gateway request timeout for ${method}`));
         }, remainingTimeoutMs);
-      }),
-    ]);
+      }
+      if (signal) {
+        onAbort = () => reject(resolveDispatchAbortError(method, signal));
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) {
+          onAbort();
+        }
+      }
+    });
+    return await Promise.race([promise, cancellation]);
   } finally {
     if (timeout) {
       clearTimeout(timeout);
+    }
+    if (signal && onAbort) {
+      signal.removeEventListener("abort", onAbort);
     }
   }
 }
@@ -84,6 +107,9 @@ export async function dispatchGatewayRequestInProcessRaw(
   params: unknown,
   options: InProcessGatewayDispatchOptions,
 ): Promise<GatewayMethodDispatchResponse> {
+  if (options.signal?.aborted) {
+    throw resolveDispatchAbortError(method, options.signal);
+  }
   let firstResponse: GatewayMethodDispatchResponse | undefined;
   let finalResponse: GatewayMethodDispatchResponse | undefined;
   let resolveFirstResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;
@@ -120,6 +146,7 @@ export async function dispatchGatewayRequestInProcessRaw(
     },
     context: options.context,
     methodRegistry: options.methodRegistry,
+    ...(options.signal ? { signal: options.signal } : {}),
   })
     .then(() => {
       if (!firstResponse) {
@@ -138,7 +165,7 @@ export async function dispatchGatewayRequestInProcessRaw(
       rejectFinalResponse?.(error);
     });
 
-  firstResponse = await waitForDispatch(method, firstResponsePromise, deadlineMs);
+  firstResponse = await waitForDispatch(method, firstResponsePromise, deadlineMs, options.signal);
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
   if (options.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;
@@ -149,36 +176,22 @@ export async function dispatchGatewayRequestInProcessRaw(
   }
   return (
     finalResponse ??
-    (await new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
-      resolveFinalResponse = resolve;
-      const timeoutMs = resolveRemainingDispatchTimeoutMs(deadlineMs);
-      const timeout =
-        timeoutMs === undefined
-          ? undefined
-          : setTimeout(() => reject(new Error(`gateway request timeout for ${method}`)), timeoutMs);
-      const clearFinalTimeout = () => {
-        if (timeout) {
-          clearTimeout(timeout);
+    (await waitForDispatch(
+      method,
+      new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
+        resolveFinalResponse = resolve;
+        rejectFinalResponse = reject;
+        if (postFirstResponseError) {
+          reject(postFirstResponseError);
+          return;
         }
-      };
-      rejectFinalResponse = (err) => {
-        clearFinalTimeout();
-        reject(err);
-      };
-      if (postFirstResponseError) {
-        rejectFinalResponse(postFirstResponseError);
-        return;
-      }
-      if (finalResponse) {
-        clearFinalTimeout();
-        resolve(finalResponse);
-        return;
-      }
-      resolveFinalResponse = (response) => {
-        clearFinalTimeout();
-        resolve(response);
-      };
-    }))
+        if (finalResponse) {
+          resolve(finalResponse);
+        }
+      }),
+      deadlineMs,
+      options.signal,
+    ))
   );
 }
 

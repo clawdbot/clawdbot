@@ -153,6 +153,58 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
     expect(new Set(seen.map((run) => run.cache)).size).toBe(3);
   });
 
+  it("runs per-config groups serially through one persistent cache slot", async () => {
+    const scratchDir = makeScratchDir();
+    const persistentRoot = path.join(makeScratchDir(), "persistent");
+    mkdirSync(persistentRoot, { recursive: true });
+    const seen: Array<{ args: string[]; cache: string | undefined; label: string }> = [];
+    let active = 0;
+    let peakActive = 0;
+
+    const exitCode = await runShardPlans(
+      resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
+          ["a", "b", "c"].map((name) => ({
+            configs: [`${name}.config.ts`],
+            shard_name: `cache-warm:${name}`,
+          })),
+        ),
+      }),
+      {
+        concurrency: 1,
+        env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: persistentRoot },
+        runChild: async (
+          args: string[],
+          childEnv: Record<string, string | undefined>,
+          label: string,
+        ) => {
+          active += 1;
+          peakActive = Math.max(peakActive, active);
+          seen.push({
+            args,
+            cache: childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
+            label,
+          });
+          active -= 1;
+          return 0;
+        },
+        scratchDir,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(peakActive).toBe(1);
+    expect(seen.map((run) => run.args)).toEqual([
+      ["a.config.ts"],
+      ["b.config.ts"],
+      ["c.config.ts"],
+    ]);
+    expect(seen.map((run) => run.label)).toEqual(["cache-warm:a", "cache-warm:b", "cache-warm:c"]);
+    expect(new Set(seen.map((run) => run.cache))).toEqual(
+      new Set([path.join(persistentRoot, "vitest-cache-0")]),
+    );
+  });
+
   it("forwards trusted Vitest arguments after the target separator", async () => {
     const scratchDir = makeScratchDir();
     const seen: string[][] = [];
@@ -203,7 +255,9 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
           }
           activeCaches.add(cache);
           seenCaches.add(cache);
-          await new Promise((resolve) => setTimeout(resolve, 10));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 10);
+          });
           activeCaches.delete(cache);
           return 0;
         },

@@ -1,17 +1,5 @@
-.chat:has(.agent-chat__question-dock) .chat-thread {
-  padding-bottom: calc(6px + var(--chat-question-dock-height, 0px));
-  scroll-padding-bottom: var(--chat-question-dock-height, 0px);
-}
-
-.agent-chat__composer-shell:has(.agent-chat__question-dock) {
-  position: relative;
-  z-index: 8;
-  margin-top: calc(8px - var(--chat-question-dock-height, 0px));
-}
-
 .agent-chat__question-dock {
   position: relative;
-  z-index: 1;
   min-width: 0;
 }
 

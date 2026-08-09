@@ -6,6 +6,20 @@ import { buildInlineProviderModels, resolveProviderModelInput } from "./model.in
 import { makeModel } from "./model.test-harness.js";
 
 describe("buildInlineProviderModels", () => {
+  it("reflects in-place changes for callers without a prepared snapshot", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      alpha: { baseUrl: "http://alpha.local", models: [makeModel("first-model")] },
+    };
+
+    expect(expectDefined(buildInlineProviderModels(providers)[0], "first model").id).toBe(
+      "first-model",
+    );
+    expectDefined(providers.alpha, "alpha provider").models = [makeModel("second-model")];
+    expect(expectDefined(buildInlineProviderModels(providers)[0], "second model").id).toBe(
+      "second-model",
+    );
+  });
+
   it("attaches provider ids to inline models", () => {
     // Provider object keys are the source of truth for inline model provider ids;
     // trim them before runtime lookup stores the model.

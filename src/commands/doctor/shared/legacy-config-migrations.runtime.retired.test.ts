@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON } from "./legacy-config-migrations.runtime.cron.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY } from "./legacy-config-migrations.runtime.gateway.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_MCP } from "./legacy-config-migrations.runtime.mcp.js";
@@ -44,41 +45,197 @@ function getPath(value: unknown, path: string): unknown {
 }
 
 describe("retired runtime config migrations", () => {
-  it("uses a dedicated, actionable migration for the retired device-auth bypass", () => {
-    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY.find(
-      (candidate) => candidate.id === "gateway.control-ui-device-auth-bypass->pairing-migration",
-    );
-    expect(migration).toBeDefined();
-    const raw = {
-      gateway: { controlUi: { dangerouslyDisableDeviceAuth: true } },
-    };
-    const changes: string[] = [];
-    migration?.apply(raw, changes);
+  it.each([
+    ["a normal registration", [{ event: "command:new", module: "hooks/legacy.js" }]],
+    ["an empty array", []],
+    ["null", null],
+    ["a malformed scalar", "hooks/legacy.js"],
+    ["a malformed object", { module: "hooks/legacy.js" }],
+  ])("detects hooks.internal.handlers by key presence for %s", (_label, handlers) => {
+    const issues = findLegacyConfigIssues({ hooks: { internal: { handlers } } });
 
-    expect(raw).not.toHaveProperty("gateway.controlUi.dangerouslyDisableDeviceAuth");
-    expect(changes).toEqual([
-      "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser.",
-    ]);
-    expect(migration?.legacyRules?.[0]?.message).toContain("reopen the Control UI over HTTPS");
+    expect(issues).toContainEqual({
+      path: "hooks.internal.handlers",
+      message: expect.stringContaining("hooks.internal.handlers is retired"),
+    });
   });
 
-  it("removes a disabled retired device-auth bypass without requiring pairing", () => {
+  it("removes retired hook registrations while preserving canonical siblings", () => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-internal-hook-handlers",
+    );
+    expect(migration).toBeDefined();
+    const raw = {
+      hooks: {
+        internal: {
+          enabled: true,
+          handlers: [{ event: "command:new", module: "hooks/legacy.js" }],
+          entries: { canonical: { enabled: true } },
+          load: { extraDirs: ["/opt/openclaw/hooks"] },
+          sibling: "preserved",
+        },
+      },
+    };
+    const changes: string[] = [];
+
+    migration?.apply(raw, changes);
+
+    expect(raw.hooks.internal).toEqual({
+      enabled: true,
+      entries: { canonical: { enabled: true } },
+      load: { extraDirs: ["/opt/openclaw/hooks"] },
+      sibling: "preserved",
+    });
+    expect(changes).toEqual([
+      "Removed retired hooks.internal.handlers registrations; hook files must be migrated separately.",
+    ]);
+  });
+
+  it.each([
+    ["no canonical siblings", {}, {}],
+    [
+      "empty canonical siblings",
+      { entries: {}, load: { extraDirs: [] } },
+      {
+        entries: {},
+        load: { extraDirs: [] },
+      },
+    ],
+    ["blank extra directories", { load: { extraDirs: ["  "] } }, { load: { extraDirs: ["  "] } }],
+  ])("removes legacy-only enabled for %s", (_label, siblings, expected) => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-internal-hook-handlers",
+    );
+    const raw = {
+      hooks: { internal: { enabled: true, handlers: [], ...structuredClone(siblings) } },
+    };
+    const changes: string[] = [];
+
+    migration?.apply(raw, changes);
+
+    expect(raw.hooks.internal).toEqual(expected);
+    expect(changes).toEqual([
+      "Removed retired hooks.internal.handlers registrations; hook files must be migrated separately.",
+      "Removed legacy-only hooks.internal.enabled to avoid enabling broad hook discovery.",
+    ]);
+  });
+
+  it.each([
+    ["named entries", { enabled: true, entries: { canonical: { enabled: false } } }],
+    ["extra directories", { enabled: true, load: { extraDirs: ["/opt/openclaw/hooks"] } }],
+    ["explicit disablement", { enabled: false }],
+  ])("preserves canonical enabled state for %s", (_label, expected) => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-internal-hook-handlers",
+    );
+    const raw = { hooks: { internal: { ...structuredClone(expected), handlers: null } } };
+    const changes: string[] = [];
+
+    migration?.apply(raw, changes);
+
+    expect(raw.hooks.internal).toEqual(expected);
+    const rerunChanges: string[] = [];
+    migration?.apply(raw, rerunChanges);
+    expect(rerunChanges).toEqual([]);
+  });
+
+  it("explains the required manual migration before doctor removes registrations", () => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-internal-hook-handlers",
+    );
+    const message = migration?.legacyRules?.[0]?.message ?? "";
+
+    expect(message).toContain("managed/workspace hook directory");
+    expect(message).toContain("HOOK.md + handler file");
+    expect(message.indexOf("Move each module")).toBeLessThan(message.indexOf("doctor --fix"));
+    expect(message).toContain("removes retired registrations");
+    expect(message).toContain("does not materialize executable files");
+  });
+
+  it.each([
+    [
+      "strips the retired compaction gate while keeping an enabled byte threshold",
+      { truncateAfterCompaction: true, maxActiveTranscriptBytes: "20mb" },
+      { maxActiveTranscriptBytes: "20mb" },
+      ["Removed retired agents.defaults.compaction.truncateAfterCompaction."],
+      true,
+    ],
+    [
+      "preserves an explicit retired compaction opt-out",
+      { truncateAfterCompaction: false, maxActiveTranscriptBytes: "20mb" },
+      {},
+      [
+        "Removed maxActiveTranscriptBytes to preserve truncateAfterCompaction: false.",
+        "Removed retired agents.defaults.compaction.truncateAfterCompaction.",
+      ],
+      false,
+    ],
+    [
+      "strips the retired compaction gate without adding a byte threshold",
+      { truncateAfterCompaction: true },
+      {},
+      ["Removed retired agents.defaults.compaction.truncateAfterCompaction."],
+      false,
+    ],
+    [
+      "leaves compaction config without the retired gate untouched",
+      { maxActiveTranscriptBytes: "20mb" },
+      { maxActiveTranscriptBytes: "20mb" },
+      [],
+      false,
+    ],
+  ] as const)("%s", (_name, compaction, expected, expectedChanges, checkRule) => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-config-keys",
+    );
+    expect(migration).toBeDefined();
+    const raw = { agents: { defaults: { compaction: structuredClone(compaction) } } };
+    const changes: string[] = [];
+
+    migration?.apply(raw, changes);
+
+    expect(raw.agents.defaults.compaction).toEqual(expected);
+    expect(changes).toEqual(expectedChanges);
+    if (checkRule) {
+      const retiredRule = migration?.legacyRules?.find(
+        (candidate) =>
+          candidate.path.join(".") === "agents.defaults.compaction.truncateAfterCompaction",
+      );
+      expect(retiredRule?.message).toBe(
+        'agents.defaults.compaction.truncateAfterCompaction is retired; byte-triggered compaction now opts in via maxActiveTranscriptBytes alone. Run "openclaw doctor --fix".',
+      );
+    }
+  });
+
+  it.each([
+    [
+      "uses a dedicated, actionable migration for the retired device-auth bypass",
+      true,
+      "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser.",
+    ],
+    [
+      "removes a disabled retired device-auth bypass without requiring pairing",
+      false,
+      "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
+    ],
+  ] as const)("%s", (_name, bypassEnabled, expectedChange) => {
     const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY.find(
       (candidate) => candidate.id === "gateway.control-ui-device-auth-bypass->pairing-migration",
     );
     expect(migration).toBeDefined();
-    const raw = {
-      gateway: { controlUi: { dangerouslyDisableDeviceAuth: false } },
-    };
+    const raw = { gateway: { controlUi: { dangerouslyDisableDeviceAuth: bypassEnabled } } };
     const changes: string[] = [];
 
-    expect(migration?.legacyRules?.[0]?.match?.(false, raw)).toBe(true);
+    if (!bypassEnabled) {
+      expect(migration?.legacyRules?.[0]?.match?.(false, raw)).toBe(true);
+    }
     migration?.apply(raw, changes);
 
     expect(raw).not.toHaveProperty("gateway.controlUi.dangerouslyDisableDeviceAuth");
-    expect(changes).toEqual([
-      "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
-    ]);
+    expect(changes).toEqual([expectedChange]);
+    if (bypassEnabled) {
+      expect(migration?.legacyRules?.[0]?.message).toContain("reopen the Control UI over HTTPS");
+    }
   });
 
   it("consolidates modality model lists with capability tags and exact deduplication", () => {
@@ -439,7 +596,6 @@ describe("retired runtime config migrations", () => {
     });
 
     expect(result.raw).toMatchObject({
-      ui: { prefs: { showAdvancedSettings: true } },
       skills: { load: { watch: true } },
       agents: {
         defaults: {
@@ -451,11 +607,15 @@ describe("retired runtime config migrations", () => {
       },
       messages: { inbound: { byChannel: { whatsapp: 4_000 } } },
     });
+    expect(result.raw).not.toHaveProperty("ui");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.debounceMs");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.default.debounceMs");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.work.debounceMs");
     expect(result.changes).toContain(
       "Collapsed conflicting WhatsApp debounce values into messages.inbound.byChannel.whatsapp using channels.whatsapp.accounts.work.debounceMs (4000 ms); account-specific debounce is no longer supported.",
+    );
+    expect(result.changes).toContain(
+      "Removed browser-local ui.prefs keys: ui.prefs.chatMessageMaxWidth, ui.prefs.textScale, ui.prefs.sidebarLiveActivity, ui.prefs.showAdvancedSettings.",
     );
   });
 

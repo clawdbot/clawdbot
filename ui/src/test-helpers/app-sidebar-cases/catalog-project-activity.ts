@@ -49,12 +49,16 @@ describe("AppSidebar project session activity", () => {
     const active = sidebar.querySelector('[data-session-key*="active-thread"]');
     const idle = sidebar.querySelector('[data-session-key*="idle-thread"]');
     expect(project).not.toBeNull();
-    expect(active?.querySelector(".sidebar-session-indicator .session-run-spinner")).not.toBeNull();
+    expect(active?.querySelector(".session-row-state .session-run-spinner")).not.toBeNull();
     expect(active?.querySelector(".session-run-spinner")?.getAttribute("aria-label")).toBe(
       "Active run",
     );
-    expect(
-      idle?.querySelector(".sidebar-session-indicator .sidebar-session-indicator__dot"),
-    ).not.toBeNull();
+    const activeLead = active?.querySelector(".sidebar-session-indicator");
+    const idleLead = idle?.querySelector(".sidebar-session-indicator");
+    expect(activeLead).not.toBeNull();
+    expect(activeLead?.childElementCount).toBe(0);
+    expect(idleLead).not.toBeNull();
+    expect(idleLead?.childElementCount).toBe(0);
+    expect(idle?.querySelector(".session-row-state")).toBeNull();
   });
 });

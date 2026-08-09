@@ -10,7 +10,7 @@ import {
 
 export function createWorkerWorkspaceConflictTranscriptHandlers(
   loadSessionRuntime: () => Promise<{
-    resolveFreshestSessionEntryFromStoreKeys: typeof import("./session-utils.js").resolveFreshestSessionEntryFromStoreKeys;
+    resolveCanonicalSessionEntryFromStoreKeys: typeof import("./session-utils.js").resolveCanonicalSessionEntryFromStoreKeys;
     resolveGatewaySessionStoreTargetWithStore: typeof import("./session-utils.js").resolveGatewaySessionStoreTargetWithStore;
   }>,
 ) {
@@ -21,7 +21,7 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
       agentId: string;
     }) => {
       const {
-        resolveFreshestSessionEntryFromStoreKeys,
+        resolveCanonicalSessionEntryFromStoreKeys,
         resolveGatewaySessionStoreTargetWithStore,
       } = await loadSessionRuntime();
       const target = resolveGatewaySessionStoreTargetWithStore({
@@ -30,7 +30,7 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
         agentId: identity.agentId,
         clone: false,
       });
-      const entry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
+      const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
       if (entry?.sessionId !== identity.sessionId) {
         return undefined;
       }
@@ -41,8 +41,10 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
           sessionKey: target.canonicalKey,
           storePath: target.storePath,
         },
-        ({ sessionFile }) => {
-          for (const transcriptEntry of SessionManager.open(sessionFile).getBranch().toReversed()) {
+        (transcriptTarget) => {
+          for (const transcriptEntry of SessionManager.open(transcriptTarget)
+            .getBranch()
+            .toReversed()) {
             if (transcriptEntry.type !== "custom_message") {
               continue;
             }
@@ -87,7 +89,7 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
       ),
     ) => {
       const {
-        resolveFreshestSessionEntryFromStoreKeys,
+        resolveCanonicalSessionEntryFromStoreKeys,
         resolveGatewaySessionStoreTargetWithStore,
       } = await loadSessionRuntime();
       const target = resolveGatewaySessionStoreTargetWithStore({
@@ -96,7 +98,7 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
         agentId: conflict.agentId,
         clone: false,
       });
-      const entry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
+      const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
       if (entry?.sessionId !== conflict.sessionId) {
         throw new Error(`Recovered cloud workspace conflict lost session ${conflict.sessionId}`);
       }
@@ -107,8 +109,8 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
           sessionKey: target.canonicalKey,
           storePath: target.storePath,
         },
-        ({ sessionFile }) => {
-          const manager = SessionManager.open(sessionFile);
+        (transcriptTarget) => {
+          const manager = SessionManager.open(transcriptTarget);
           const latestConflictEntry = manager
             .getBranch()
             .toReversed()

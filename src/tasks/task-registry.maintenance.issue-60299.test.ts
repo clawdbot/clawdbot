@@ -900,6 +900,7 @@ describe("task-registry maintenance issue #60299", () => {
         endedAt: now + index + 1,
         lastEventAt: now + index + 1,
         cleanupAfter: 0,
+        detail: { kind: "cron-run", status: "ok", storeKey: "store:history" },
       }),
     );
     const lostTask = makeStaleTask({
@@ -923,6 +924,72 @@ describe("task-registry maintenance issue #60299", () => {
     expect(currentTasks.has(lostTask.taskId)).toBe(true);
   });
 
+  it("keeps real cron run history while bounding newer quiet watcher evaluations", async () => {
+    const now = Date.now();
+    const sourceId = "cron-watcher-history-job";
+    const storeKey = "store:watcher-history";
+    const historicalRun = makeStaleTask({
+      taskId: "cron-watcher-fired-run",
+      runtime: "cron",
+      sourceId,
+      status: "succeeded",
+      endedAt: now,
+      lastEventAt: now,
+      cleanupAfter: 0,
+      detail: { kind: "cron-run", status: "ok", storeKey },
+    });
+    const quietRuns = Array.from({ length: CRON_HISTORY_KEEP_PER_JOB + 1 }, (_, index) =>
+      makeStaleTask({
+        taskId: `cron-watcher-quiet-${index}`,
+        runtime: "cron",
+        sourceId,
+        status: "succeeded",
+        endedAt: now + index + 1,
+        lastEventAt: now + index + 1,
+        cleanupAfter: 0,
+        detail: { storeKey },
+      }),
+    );
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [historicalRun, ...quietRuns],
+    });
+
+    const result = await runTaskRegistryMaintenance();
+
+    expect(result.pruned).toBe(1);
+    expect(currentTasks.size).toBe(CRON_HISTORY_KEEP_PER_JOB + 1);
+    expect(currentTasks.has(historicalRun.taskId)).toBe(true);
+    expect(currentTasks.has("cron-watcher-quiet-0")).toBe(false);
+    expect(currentTasks.has("cron-watcher-quiet-1")).toBe(true);
+    expect(currentTasks.has(`cron-watcher-quiet-${CRON_HISTORY_KEEP_PER_JOB}`)).toBe(true);
+  });
+
+  it("retains the newest-created cron runs when terminal timestamps are identical", async () => {
+    const now = Date.now();
+    const tasks = Array.from({ length: CRON_HISTORY_KEEP_PER_JOB + 1 }, (_, index) =>
+      makeStaleTask({
+        taskId: `cron-same-ms-${String(CRON_HISTORY_KEEP_PER_JOB - index).padStart(4, "0")}`,
+        runtime: "cron",
+        sourceId: "cron-same-ms-job",
+        status: "succeeded",
+        createdAt: now + index,
+        startedAt: now + index,
+        endedAt: now + CRON_HISTORY_KEEP_PER_JOB + 1,
+        lastEventAt: now + CRON_HISTORY_KEEP_PER_JOB + 1,
+        cleanupAfter: 0,
+        detail: { kind: "cron-run", status: "ok", storeKey: "store:same-ms" },
+      }),
+    );
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({ tasks });
+
+    const result = await runTaskRegistryMaintenance();
+
+    expect(result.pruned).toBe(1);
+    expect(currentTasks.size).toBe(CRON_HISTORY_KEEP_PER_JOB);
+    expect(currentTasks.has("cron-same-ms-2000")).toBe(false);
+    expect(currentTasks.has("cron-same-ms-0000")).toBe(true);
+  });
+
   it("scopes same-id cron history retention to each store", async () => {
     const now = Date.now();
     const storeATasks = Array.from({ length: CRON_HISTORY_KEEP_PER_JOB }, (_, index) =>
@@ -934,7 +1001,7 @@ describe("task-registry maintenance issue #60299", () => {
         endedAt: now + index + 2,
         lastEventAt: now + index + 2,
         cleanupAfter: 0,
-        detail: { storeKey: "store:a" },
+        detail: { kind: "cron-run", status: "ok", storeKey: "store:a" },
       }),
     );
     const storeBTask = makeStaleTask({
@@ -945,7 +1012,7 @@ describe("task-registry maintenance issue #60299", () => {
       endedAt: now + 1,
       lastEventAt: now + 1,
       cleanupAfter: 0,
-      detail: { storeKey: "store:b" },
+      detail: { kind: "cron-run", status: "ok", storeKey: "store:b" },
     });
     const { currentTasks } = createTaskRegistryMaintenanceHarness({
       tasks: [...storeATasks, storeBTask],

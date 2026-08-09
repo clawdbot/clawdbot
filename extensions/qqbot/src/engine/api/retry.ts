@@ -10,11 +10,11 @@
  * parameterized by `RetryPolicy` and optional `PersistentRetryPolicy`.
  */
 
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createChannelApiRetryRunner, resolveRetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { EngineLogger } from "../types.js";
-import { formatErrorMessage } from "../utils/format.js";
 
 /** Standard retry policy with exponential or fixed backoff. */
 interface RetryPolicy {

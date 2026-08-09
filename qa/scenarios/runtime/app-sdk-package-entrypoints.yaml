@@ -1,0 +1,25 @@
+title: Source-internal App SDK preview package entrypoint evidence
+
+scenario:
+  id: app-sdk-package-entrypoints
+  surface: app-sdk
+  category: app-sdk.client-api
+  coverage:
+    primary:
+      - app-sdk.sdk-entrypoints
+  objective: Verify a clean temporary consumer can install the source-built preview @openclaw/sdk artifact and execute its root entrypoint without treating the private package as published.
+  successCriteria:
+    - The private SDK preview and its workspace dependencies build and pack as npm artifacts without workspace-only dependency references.
+    - A temporary consumer installs the source-built preview artifacts through an isolated local registry.
+    - The preview package root exports GatewayClientTransport, OpenClaw, and normalizeGatewayEvent, and event normalization executes from the installed artifact.
+  docsRefs:
+    - docs/gateway/external-apps.md
+    - docs/gateway/protocol.md
+  codeRefs:
+    - packages/sdk/package.json
+    - packages/sdk/src/index.ts
+    - packages/sdk/src/package.e2e.test.ts
+  execution:
+    kind: vitest
+    path: packages/sdk/src/package.e2e.test.ts
+    summary: Pack the source-internal App SDK preview and import its root from a clean temporary consumer.

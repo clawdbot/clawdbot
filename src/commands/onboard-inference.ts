@@ -5,6 +5,11 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
+  formatCliBackendVersionAdvisory,
+  resolveCliBackendVersionGuidance,
+} from "../agents/cli-backend-version-support.js";
+import { resolveCliBackendLiveSessionRequirement } from "../agents/cli-backends.js";
+import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
@@ -45,6 +50,7 @@ type DetectInferenceBackendsDeps = {
   readGeminiCliCredentials?: () => { type: string } | null;
   detectCodexLoginState?: typeof detectCodexLoginState;
   randomInt?: (maxExclusive: number) => number;
+  resolveClaudeLiveSessionRequirement?: typeof resolveCliBackendLiveSessionRequirement;
 };
 
 type DetectInferenceBackendsOptions = {
@@ -85,6 +91,12 @@ function describeCliDetail(credentials: boolean | undefined, loginHint: string):
     return `installed, not logged in — ${loginHint}, then check again`;
   }
   return "installed";
+}
+
+function describeGeminiCliDetail(credentials: boolean | undefined): string {
+  return credentials === true
+    ? "installed; credentials found"
+    : "installed; login status unavailable";
 }
 
 async function detectCodexLoginState(
@@ -218,6 +230,13 @@ export async function detectInferenceBackends(
   const cliCandidates: InferenceBackendCandidate[] = [];
   const subscriptionPromotionEligibleCliKinds = new Set<InferenceBackendKind>();
   if (claudeProbe.found && !claudeProbe.timedOut) {
+    const liveSessionRequirement =
+      (
+        options.deps?.resolveClaudeLiveSessionRequirement ?? resolveCliBackendLiveSessionRequirement
+      )("claude-cli") ?? undefined;
+    const versionGuidance = liveSessionRequirement
+      ? resolveCliBackendVersionGuidance(claudeProbe.version, liveSessionRequirement)
+      : { status: "unknown" as const };
     const claudeCredential = readClaude();
     const credentials = detectCliCredentialState({
       probe: claudeProbe,
@@ -227,11 +246,21 @@ export async function detectInferenceBackends(
     if (credentials === true && claudeCredential?.type === "oauth") {
       subscriptionPromotionEligibleCliKinds.add("claude-cli");
     }
+    const detail = describeCliDetail(credentials, "run `claude auth login`");
+    // Only the live init record can prove capability support. Keep backports and
+    // wrappers selectable here even when their version predates the known release.
     cliCandidates.push({
       kind: "claude-cli",
       modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       label: "Claude Code",
-      detail: describeCliDetail(credentials, "run `claude auth login`"),
+      detail:
+        versionGuidance.status === "below-known-floor" && liveSessionRequirement
+          ? `${detail}; ${formatCliBackendVersionAdvisory({
+              label: "Claude Code",
+              requirement: liveSessionRequirement,
+              version: versionGuidance.version,
+            })}`
+          : detail,
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
@@ -260,15 +289,17 @@ export async function detectInferenceBackends(
     });
   }
   if (geminiProbe.found && !geminiProbe.timedOut) {
-    // Gemini CLI stores its OAuth login in a plain file on every platform (no
-    // keychain), so a missing credential file is a definitive logout signal.
-    const credentials = readGemini() !== null;
+    // Current Gemini CLI releases keep primary auth in a private secure store;
+    // oauth_creds.json is only a legacy migration source. Its absence cannot
+    // distinguish logout from a modern login, and probing the secure store can
+    // prompt the user, so only readable legacy credentials are conclusive.
+    const credentials = readGemini() !== null ? true : undefined;
     cliCandidates.push({
       kind: "gemini-cli",
       modelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
       label: "Gemini CLI",
-      detail: describeCliDetail(credentials, "sign in to Gemini CLI"),
-      credentials,
+      detail: describeGeminiCliDetail(credentials),
+      ...(credentials === undefined ? {} : { credentials }),
     });
   }
   // Claude Code and Codex share rank within a credential tier. Randomize before

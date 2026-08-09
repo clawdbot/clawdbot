@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
+  resolvePluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
 }));
 
 vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({

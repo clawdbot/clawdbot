@@ -22,7 +22,7 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
-import { sessionsHandlers } from "./sessions.js";
+import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 
 function createClient(params: {
   scopes: string[];
@@ -43,6 +43,7 @@ function createContext(params: {
   replay?: SessionApprovalReplay;
   replayError?: Error;
   globalScope?: boolean;
+  mainKey?: string;
   agents?: Array<{ id: string; default?: boolean }>;
 }) {
   const rollbackSubscription = vi.fn();
@@ -57,7 +58,14 @@ function createContext(params: {
   const context = {
     getRuntimeConfig: () => ({
       agents: { list: params.agents ?? [{ id: "main", default: true }] },
-      ...(params.globalScope ? { session: { scope: "global" as const } } : {}),
+      ...(params.globalScope || params.mainKey
+        ? {
+            session: {
+              ...(params.globalScope ? { scope: "global" as const } : {}),
+              ...(params.mainKey ? { mainKey: params.mainKey } : {}),
+            },
+          }
+        : {}),
     }),
     listSessionPendingApprovals,
     logGateway: { error: logError },
@@ -79,8 +87,8 @@ async function subscribe(params: {
 }) {
   const respond = vi.fn();
   await expectDefined(
-    sessionsHandlers["sessions.messages.subscribe"],
-    'sessionsHandlers["sessions.messages.subscribe"] test invariant',
+    sessionSubscriptionHandlers["sessions.messages.subscribe"],
+    'sessionSubscriptionHandlers["sessions.messages.subscribe"] test invariant',
   )({
     req: { id: "req-subscribe-approvals" } as never,
     params: params.body,
@@ -95,11 +103,9 @@ async function subscribe(params: {
 describe("sessions.messages.subscribe approval opt-in", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
-    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({ canonicalKey: sessionKey }));
   });
 
   it("allows an admin without a paired device and uses the exact scoped subscription key", async () => {
-    loadSessionEntryMock.mockReturnValueOnce({ canonicalKey: "global" });
     const approvalReplay = {
       sessionKey: "agent:work:global",
       updatedAtMs: 42,
@@ -113,7 +119,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     });
 
     const respond = await subscribe({
-      body: { key: "agent:work:main", includeApprovals: true },
+      body: { key: "global", agentId: "work", includeApprovals: true },
       client: createClient({ scopes: ["operator.admin"], connId: " conn-admin " }),
       context,
     });
@@ -134,10 +140,10 @@ describe("sessions.messages.subscribe approval opt-in", () => {
       { subscribed: true, key: "global", approvalReplay },
       undefined,
     );
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
   });
 
   it("allows a paired device with approval scope", async () => {
-    loadSessionEntryMock.mockReturnValueOnce({ canonicalKey: "agent:main:child" });
     const approvalReplay = {
       sessionKey: "agent:main:child",
       updatedAtMs: 43,
@@ -197,7 +203,6 @@ describe("sessions.messages.subscribe approval opt-in", () => {
   });
 
   it("keeps the non-approval response shape and skips replay", async () => {
-    loadSessionEntryMock.mockReturnValueOnce({ canonicalKey: "agent:main:child" });
     const { context, listSessionPendingApprovals, subscribeSessionMessageEvents } = createContext(
       {},
     );
@@ -220,6 +225,27 @@ describe("sessions.messages.subscribe approval opt-in", () => {
       undefined,
     );
     expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("approvalReplay");
+  });
+
+  it("canonicalizes configured main aliases without loading the session store", async () => {
+    const { context, subscribeSessionMessageEvents } = createContext({ mainKey: "work" });
+
+    const respond = await subscribe({
+      body: { key: "main" },
+      client: createClient({ scopes: ["operator.read"] }),
+      context,
+    });
+
+    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
+      "conn-approval-reviewer",
+      "agent:main:work",
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { subscribed: true, key: "agent:main:work" },
+      undefined,
+    );
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -1,11 +1,12 @@
 /**
  * Builds runtime context for context-engine backed embedded compaction.
  */
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
@@ -66,6 +67,7 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   provider: string;
   modelId: string;
   inheritedLevel?: ThinkLevel;
+  catalog?: ThinkingCatalogEntry[];
   agentId?: string;
   sessionKey?: string;
   agentRuntime?: string | null;
@@ -84,6 +86,7 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
       provider: params.provider,
       modelId: params.modelId,
       level: requestedLevel,
+      catalog: params.catalog,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       agentRuntime: params.agentRuntime,
@@ -305,9 +308,14 @@ export function resolveCompactionContextTokenBudget(params: {
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;
+  agentId?: string;
   requestedTokenBudget?: number;
   fallbackTokenBudget?: number;
 }) {
+  // Caller budgets stay bounded by the selected agent and model ceilings.
+  const agentContextTokens = params.agentId
+    ? resolveAgentConfig(params.config ?? {}, params.agentId)?.contextTokens
+    : undefined;
   const resolvedBudget =
     normalizeContextTokenBudget(
       resolveContextWindowInfo({
@@ -316,6 +324,7 @@ export function resolveCompactionContextTokenBudget(params: {
         modelId: params.modelId,
         modelContextTokens: readAgentModelContextTokens(params.model),
         modelContextWindow: params.model?.contextWindow,
+        agentContextTokens,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,
     ) ?? DEFAULT_CONTEXT_TOKENS;
@@ -374,6 +383,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     cwd: params.cwd ?? undefined,
     agentDir: params.agentDir,
     config: params.config,
+    toolOverrides: params.toolOverrides,
     skillsSnapshot: params.skillsSnapshot,
     senderIsOwner: params.senderIsOwner,
     senderId: params.senderId ?? undefined,

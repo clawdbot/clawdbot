@@ -1,4 +1,5 @@
 // Configure wizard tests cover guided setup routing across gateway, auth, channels, skills, and search.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -28,7 +29,6 @@ const mocks = vi.hoisted(() => {
       },
     ),
     resolveGatewayPort: vi.fn(),
-    ensureControlUiAssetsBuilt: vi.fn(),
     createClackPrompter: vi.fn(),
     note: vi.fn(),
     printWizardHeader: vi.fn(),
@@ -88,10 +88,6 @@ vi.mock("../config/config.js", () => ({
   writeConfigFile: mocks.writeConfigFile,
   replaceConfigFile: mocks.replaceConfigFile,
   resolveGatewayPort: mocks.resolveGatewayPort,
-}));
-
-vi.mock("../infra/control-ui-assets.js", () => ({
-  ensureControlUiAssetsBuilt: mocks.ensureControlUiAssetsBuilt,
 }));
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
@@ -162,9 +158,9 @@ vi.mock("./onboard-channels.js", () => ({
   setupChannels: mocks.setupChannels,
 }));
 
-vi.mock("./onboard-search.js", () => ({
+vi.mock("../flows/search-setup.js", () => ({
   resolveSearchProviderOptions: mocks.resolveSearchProviderOptions,
-  setupSearch: mocks.setupSearch,
+  runSearchSetupFlow: mocks.setupSearch,
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({
@@ -266,12 +262,7 @@ function setupBaseWizardState(config: OpenClawConfig = {}) {
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function mockCallArg(
   mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
@@ -326,7 +317,6 @@ describe("runConfigureWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.assertConfigPathForWrite.mockImplementation(() => {});
-    mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
     mocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
     mocks.resolveSearchProviderOptions.mockReturnValue([
       {
@@ -341,7 +331,10 @@ describe("runConfigureWizard", () => {
       },
     ]);
     mocks.setupSearch.mockReset();
-    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => cfg);
+    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => ({
+      outcome: "completed",
+      config: cfg,
+    }));
     mocks.promptAuthConfig.mockReset();
     mocks.promptAuthConfig.mockImplementation(async (cfg: OpenClawConfig) => cfg);
     mocks.promptGatewayConfig.mockReset();
@@ -483,6 +476,30 @@ describe("runConfigureWizard", () => {
     expect(remoteProbe?.timeoutMs).toBe(300);
   });
 
+  it("ignores blank gateway env credentials when probing the local gateway", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        auth: { token: "configured-token", password: "configured-password" },
+      },
+    });
+    process.env.OPENCLAW_GATEWAY_TOKEN = "";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "";
+    try {
+      await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+    } finally {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    }
+
+    const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
+      requireRecord(request, "probe request"),
+    );
+    const localProbe = probeRequests.find((request) => request.url === "ws://127.0.0.1:18789");
+    expect(localProbe?.token).toBe("configured-token");
+    expect(localProbe?.password).toBe("configured-password");
+  });
+
   it("uses the resolved configured port for the local gateway startup hint", async () => {
     setupBaseWizardState({
       gateway: {
@@ -606,7 +623,6 @@ describe("runConfigureWizard", () => {
     expect(mocks.probeGatewayReachable).not.toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: 300 }),
     );
-    expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
     expect(mocks.resolveControlUiLinks).not.toHaveBeenCalled();
     expect(requireWriteConfig().gateway).toBeUndefined();
   });
@@ -621,7 +637,6 @@ describe("runConfigureWizard", () => {
     expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
     expect(mocks.promptRemoteGatewayConfig).not.toHaveBeenCalled();
     expect(getGateway(requireWriteConfig()).mode).toBe("remote");
-    expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
     expect(mocks.resolveControlUiLinks).not.toHaveBeenCalled();
     expect(mocks.probeGatewayReachable).not.toHaveBeenCalled();
     expect(mocks.note).toHaveBeenCalledWith(
@@ -642,12 +657,15 @@ describe("runConfigureWizard", () => {
         config: { webSearch: { apiKey: "fc-entered-key" } },
       })(cfg);
       return {
-        ...configured,
-        tools: {
-          ...configured.tools,
-          web: {
-            ...configured.tools?.web,
-            fetch: { provider: "firecrawl" },
+        outcome: "completed",
+        config: {
+          ...configured,
+          tools: {
+            ...configured.tools,
+            web: {
+              ...configured.tools?.web,
+              fetch: { provider: "firecrawl" },
+            },
           },
         },
       };
@@ -692,13 +710,16 @@ describe("runConfigureWizard", () => {
   it("keeps web_search disabled when provider setup has no credential", async () => {
     setupBaseWizardState();
     mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => ({
-      ...cfg,
-      tools: {
-        ...cfg.tools,
-        web: {
-          ...cfg.tools?.web,
-          fetch: { provider: "firecrawl" },
-          search: { enabled: false, provider: "firecrawl" },
+      outcome: "completed",
+      config: {
+        ...cfg,
+        tools: {
+          ...cfg.tools,
+          web: {
+            ...cfg.tools?.web,
+            fetch: { provider: "firecrawl" },
+            search: { enabled: false, provider: "firecrawl" },
+          },
         },
       },
     }));
@@ -794,11 +815,12 @@ describe("runConfigureWizard", () => {
         credentialPath: "",
       }),
     ]);
-    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) =>
-      createEnabledWebSearchConfig("duckduckgo", {
+    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => ({
+      outcome: "completed",
+      config: createEnabledWebSearchConfig("duckduckgo", {
         enabled: true,
       })(cfg),
-    );
+    }));
     queueWizardPrompts({
       select: [],
       confirm: [true, false],

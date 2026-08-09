@@ -27,6 +27,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "custodian panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "terminal panel"
     },
     {
@@ -116,6 +123,13 @@
     {
       "count": 1,
       "kind": "html-attribute",
+      "name": "alt",
+      "path": "ui/src/components/login-gate.ts",
+      "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/components/login-gate.ts",
       "text": "OPENCLAW_GATEWAY_TOKEN ("
@@ -154,13 +168,6 @@
       "name": "text",
       "path": "ui/src/components/settings-sidebar.ts",
       "text": "esc"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/components/sidebar-update-card.ts",
-      "text": "· v"
     },
     {
       "count": 1,
@@ -363,34 +370,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "assistant"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "chats"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "Full vault breakdown:"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "Imported chats clustered around"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
       "text": "memory-wiki"
     },
     {
@@ -399,34 +378,6 @@
       "name": "text",
       "path": "ui/src/pages/agents/memory/view.ts",
       "text": "plugins.entries.memory-wiki.enabled = true"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "Selected section:"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "Showing the first chunk of this page"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "user ·"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/memory/view.ts",
-      "text": "Vault ·"
     },
     {
       "count": 2,
@@ -492,6 +443,27 @@
       "text": "NIP-05"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-skill-menu.ts",
+      "text": "Enter"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-skill-menu.ts",
+      "text": "Esc"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-skill-menu.ts",
+      "text": "Tab"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
@@ -511,27 +483,6 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
       "text": "Tab"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-status.ts",
-      "text": "Compacting context..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-status.ts",
-      "text": "Context compacted"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-view.ts",
-      "text": "Replying to"
     },
     {
       "count": 2,
@@ -560,13 +511,6 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "W"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-thread.ts",
-      "text": "pinned"
     },
     {
       "count": 1,
@@ -642,13 +586,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/custodian/custodian-page.ts",
-      "text": "OC"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/debug/view.ts",
       "text": "openclaw security audit --deep"
     },
@@ -656,7 +593,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
+      "path": "ui/src/pages/devices/view-exec-approvals.ts",
       "text": "exec host=gateway/node"
     },
     {

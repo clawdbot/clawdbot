@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildSystemAgentInferenceUnavailableErrorDetails,
   buildSystemAgentSessionInvalidatedErrorDetails,
+  readSystemAgentInferenceUnavailableErrorDetails,
   readSystemAgentSessionInvalidatedErrorDetails,
   SystemAgentErrorDetailCodes,
 } from "./system-agent-error-details.js";
 
 describe("system-agent error details", () => {
+  it("round-trips an inference unavailable marker", () => {
+    const details = buildSystemAgentInferenceUnavailableErrorDetails();
+
+    expect(details).toEqual({ code: "system_agent_inference_unavailable" });
+    expect(readSystemAgentInferenceUnavailableErrorDetails(details)).toEqual(details);
+  });
+
   it("round-trips a session invalidation marker", () => {
     const details = buildSystemAgentSessionInvalidatedErrorDetails();
 
@@ -21,6 +30,9 @@ describe("system-agent error details", () => {
   );
 
   it("exports the stable marker", () => {
+    expect(SystemAgentErrorDetailCodes.INFERENCE_UNAVAILABLE).toBe(
+      "system_agent_inference_unavailable",
+    );
     expect(SystemAgentErrorDetailCodes.SESSION_INVALIDATED).toBe(
       "system_agent_session_invalidated",
     );

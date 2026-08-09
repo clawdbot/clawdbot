@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
@@ -17,6 +18,12 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import type { CodexAppServerClient } from "./client.js";
+import {
+  mockClientRuntimeMethods as createMockClientRuntimeMethods,
+  threadStartResult as createThreadStartResult,
+  turnStartResult as createTurnStartResult,
+} from "./codex-app-server.test-fixtures.js";
+import * as codexRequirements from "./config-requirements.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
@@ -36,7 +43,21 @@ import {
   createCodexTestToolTerminalObserver,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
+
+const execApprovalsRuntimeMocks = vi.hoisted(() => ({
+  loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
+}));
+
+vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/exec-approvals-runtime")>();
+  return {
+    ...actual,
+    loadExecApprovals: execApprovalsRuntimeMocks.loadExecApprovals,
+  };
+});
 
 export let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
@@ -69,19 +90,19 @@ export function setCodexAppServerClientFactoryForTest(
   codexAppServerClientFactoryForTest = adaptCodexTestClientFactory(async (...args) => {
     const client = await factory(...args);
     const testClient = client as unknown as {
-      addCloseHandler?: (handler: () => void) => () => void;
+      addCloseHandler?: (handler: (client: CodexAppServerClient) => void) => () => void;
     };
     // Narrow test doubles still need the client lifecycle hook installed by
     // the keyed router, even when the test never simulates transport closure.
     testClient.addCloseHandler ??= () => () => undefined;
-    multiplexTestClientHandlers(client);
+    multiplexCodexTestClientHandlers(client);
     return client;
   });
 }
 
 // The keyed router, client runtime, and subagent monitor each register their
 // own handlers; single-slot test doubles would silently drop all but the last.
-function multiplexTestClientHandlers(client: CodexAppServerClient): void {
+export function multiplexCodexTestClientHandlers(client: CodexAppServerClient): void {
   if (multiplexedTestClients.has(client)) {
     return;
   }
@@ -187,16 +208,29 @@ async function drainActiveAppServerAttemptsForTest(): Promise<void> {
   }
 }
 
-export function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
-  const model = createCodexTestModel("codex");
+export function createParams(
+  sessionFile: string,
+  workspaceDir: string,
+  identity: {
+    prompt?: string;
+    provider?: string;
+    runId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+  } = {},
+): EmbeddedRunAttemptParams {
+  const sessionId = identity.sessionId ?? "session-1";
+  const sessionKey = identity.sessionKey ?? "agent:main:session-1";
+  const provider = identity.provider ?? "codex";
+  const model = createCodexTestModel(provider);
   return {
-    prompt: "hello",
-    sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    prompt: identity.prompt ?? "hello",
+    sessionId,
+    sessionKey,
     sessionFile,
     workspaceDir,
-    runId: "run-1",
-    provider: "codex",
+    runId: identity.runId ?? "run-1",
+    provider,
     modelId: "gpt-5.4-codex",
     model: {
       ...model,
@@ -291,7 +325,7 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
 }
 
 function getMockServerVersion() {
-  return "0.132.0";
+  return CODEX_APP_SERVER_VERSION;
 }
 
 export function getMockRuntimeIdentity() {
@@ -299,60 +333,16 @@ export function getMockRuntimeIdentity() {
 }
 
 export function mockClientRuntimeMethods() {
-  return {
-    getInstanceId: () => "test-client-1",
-    getRuntimeIdentity: getMockRuntimeIdentity,
-    getServerVersion: getMockServerVersion,
-  };
-}
-
-export function threadStartResult(threadId = "thread-1") {
-  return {
-    thread: {
-      id: threadId,
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: tempDir || "/tmp/openclaw-codex-test",
-      cliVersion: "0.125.0",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
-    model: "gpt-5.4-codex",
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: tempDir || "/tmp/openclaw-codex-test",
-    instructionSources: [],
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
-  };
+  return createMockClientRuntimeMethods();
 }
 
 export function turnStartResult(turnId = "turn-1", status = "inProgress") {
-  return {
-    turn: {
-      id: turnId,
-      status,
-      items: [],
-      error: null,
-      startedAt: null,
-      completedAt: null,
-      durationMs: null,
-    },
-  };
+  return createTurnStartResult(turnId, status);
+}
+
+export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
+  const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
+  return createThreadStartResult(threadId, cwd);
 }
 
 export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
@@ -397,10 +387,34 @@ export function createAppServerHarness(
     (notification: CodexServerNotification) => Promise<void> | void
   >();
   const serverRequestHandlers = new Set<AppServerRequestHandler>();
-  const closeHandlers = new Set<() => void>();
+  const closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  let closeError: Error | undefined;
   const request = vi.fn(async (method: string, params?: unknown, requestOptions?: unknown) => {
     requests.push({ method, params });
-    return requestImpl(method, params, requestOptions as { signal?: AbortSignal } | undefined);
+    const result = await requestImpl(
+      method,
+      params,
+      requestOptions as { signal?: AbortSignal } | undefined,
+    );
+    if (method === "turn/interrupt") {
+      const { threadId, turnId } = params as { threadId?: string; turnId?: string };
+      if (threadId && turnId) {
+        // Codex publishes this terminal after acknowledging interruption;
+        // test clients must preserve the same lifecycle instead of orphaning turns.
+        queueMicrotask(() => {
+          for (const handler of notificationHandlers) {
+            void handler({
+              method: "turn/completed",
+              params: {
+                threadId,
+                turn: { id: turnId, status: "interrupted" },
+              },
+            });
+          }
+        });
+      }
+    }
+    return result;
   });
 
   const client = {
@@ -416,10 +430,11 @@ export function createAppServerHarness(
       serverRequestHandlers.add(handler);
       return () => serverRequestHandlers.delete(handler);
     },
-    addCloseHandler: (handler: () => void) => {
+    addCloseHandler: (handler: (client: CodexAppServerClient) => void) => {
       closeHandlers.add(handler);
       return () => closeHandlers.delete(handler);
     },
+    getCloseError: () => closeError,
   } as unknown as CodexAppServerClient;
   setCodexAppServerClientFactoryForTest(
     async (_startOptions, authProfileId, agentDir, _config, clientOptions) => {
@@ -504,9 +519,10 @@ export function createAppServerHarness(
         },
       });
     },
-    close: () => {
+    close: (error?: Error) => {
+      closeError = error;
       for (const handler of closeHandlers) {
-        handler();
+        handler(client);
       }
     },
   };
@@ -625,6 +641,13 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
 
 export function setupRunAttemptTestHooks(): void {
   beforeEach(async () => {
+    // Machine-managed sandbox requirements must not leak into policy fixtures.
+    vi.spyOn(codexRequirements, "readCodexRequirementsToml").mockReturnValue(undefined);
+    // An uninitialized real host approvals store intentionally fails closed.
+    execApprovalsRuntimeMocks.loadExecApprovals.mockReset();
+    execApprovalsRuntimeMocks.loadExecApprovals.mockReturnValue({ version: 1, agents: {} });
+    defaultCodexAppInventoryCache.clear();
+    defaultCodexPluginMetadataCache.clear();
     resetCodexTestBindingStore();
     clearRuntimeAuthProfileStoreSnapshots();
     vi.useRealTimers();

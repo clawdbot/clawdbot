@@ -26,11 +26,17 @@
   word-break: break-word;
 }
 
-.chat-user-message-disclosure__preview {
+.chat-message-disclosure__preview {
   white-space: pre-wrap;
 }
 
-.chat-user-message-disclosure__toggle {
+.chat-message-disclosure__footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-message-disclosure__toggle {
   display: inline-flex;
   align-items: center;
   min-height: 30px;
@@ -47,14 +53,25 @@
   cursor: pointer;
 }
 
-.chat-user-message-disclosure__toggle:hover {
+.chat-message-disclosure__toggle:hover {
   border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
   color: var(--text);
 }
 
-.chat-user-message-disclosure__toggle:focus-visible {
+.chat-message-disclosure__toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.chat-message-disclosure__toggle:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.chat-message-disclosure__error {
+  margin-top: 8px;
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
 }
 
 .chat-text :where(p, ul, ol, pre, blockquote, table) {

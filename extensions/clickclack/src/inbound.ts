@@ -5,14 +5,15 @@ import { deriveDurableFinalDeliveryRequirements } from "openclaw/plugin-sdk/chan
  * routes resulting outbound text back to ClickClack.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
-import { resolveClickClackDiscussionRoute } from "./discussions/routing.js";
 import { createClickClackClient } from "./http-client.js";
 import { sendClickClackText } from "./outbound.js";
+import {
+  createClickClackAgentProgressPublisher,
+  type ClickClackItemEventPayload,
+} from "./progress.js";
 import { getClickClackRuntime } from "./runtime.js";
-import { buildClickClackTarget } from "./target.js";
 import type {
   ClickClackMessage,
   ClickClackMessageProvenance,
@@ -35,59 +36,6 @@ function hasClickClackReplyMedia(payload: {
 
 function resolveClickClackAgentRunId(messageId: string): string | undefined {
   return CLICKCLACK_MESSAGE_ID_PATTERN.test(messageId) ? `${CHANNEL_ID}:${messageId}` : undefined;
-}
-
-function resolveAccountAgentRoute(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedClickClackAccount;
-  target: string;
-  isDirect: boolean;
-}) {
-  const runtime = getClickClackRuntime();
-  const route = runtime.channel.routing.resolveAgentRoute({
-    cfg: params.cfg,
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-    peer: {
-      kind: params.isDirect ? "direct" : "channel",
-      id: params.target,
-    },
-  });
-  const agentId = normalizeAgentId(params.account.agentId ?? route.agentId);
-  if (agentId === route.agentId) {
-    return route;
-  }
-  const peer = {
-    kind: params.isDirect ? ("direct" as const) : ("channel" as const),
-    id: params.target,
-  };
-  const dmScope = params.cfg.session?.dmScope ?? "main";
-  // Account-level agent ownership changes only the agent prefix. Preserve the
-  // resolved session policy so outbound recipient routing reaches this key.
-  const sessionKey = runtime.channel.routing.buildAgentSessionKey({
-    agentId,
-    mainKey: params.cfg.session?.mainKey,
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-    peer,
-    dmScope,
-    identityLinks: params.cfg.session?.identityLinks,
-  });
-  const mainSessionKey = runtime.channel.routing.buildAgentSessionKey({
-    agentId,
-    mainKey: params.cfg.session?.mainKey,
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-    dmScope: "main",
-  });
-  return {
-    ...route,
-    agentId,
-    dmScope,
-    sessionKey,
-    mainSessionKey,
-    lastRoutePolicy: sessionKey === mainSessionKey ? "main" : "session",
-  };
 }
 
 async function dispatchModelReply(params: {
@@ -156,53 +104,44 @@ export async function handleClickClackInbound(params: {
   if (!conversationId) {
     return;
   }
-  const isDirect = Boolean(message.direct_conversation_id);
-  const target = buildClickClackTarget(
-    isDirect
-      ? { chatType: "direct", kind: "dm", id: message.author_id }
-      : { chatType: "group", kind: "channel", id: message.channel_id ?? "" },
-  );
-  const accountRoute = resolveAccountAgentRoute({
-    cfg: params.config as OpenClawConfig,
-    account: params.account,
-    target,
-    isDirect,
-  });
-  const discussionResolution =
-    !isDirect && message.channel_id
-      ? resolveClickClackDiscussionRoute({
-          runtime,
-          config: params.config,
-          accountId: params.account.accountId,
-          serverBaseUrl: params.account.baseUrl,
-          workspaceId: message.workspace_id,
-          channelId: message.channel_id,
-        })
-      : { state: "unbound" as const };
-  // A managed channel whose binding lost authority must never fall through to
-  // the account's ordinary agent/session. Reconciliation archives it separately.
-  if (discussionResolution.state === "revoked") {
-    return;
-  }
-  const discussionRoute =
-    discussionResolution.state === "active" ? discussionResolution.route : undefined;
-  const route = discussionRoute
-    ? {
-        ...accountRoute,
-        agentId: discussionRoute.agentId,
-        sessionKey: discussionRoute.sessionKey,
-        lastRoutePolicy: "session" as const,
-      }
-    : accountRoute;
+  const { discussionRoute, isDirect, route, target } = access.preparedRoute;
+  const progress = params.account.nativeProgress
+    ? createClickClackAgentProgressPublisher({
+        client: createClickClackClient({
+          baseUrl: params.account.apiEndpoint,
+          token: params.account.token,
+          correlationId: params.correlationId,
+        }),
+        target: message.channel_id
+          ? { workspaceId: message.workspace_id, channelId: message.channel_id }
+          : { workspaceId: message.workspace_id, conversationId },
+        turnId: message.id,
+        agentLabel:
+          params.account.name?.trim() ||
+          params.account.botHandle?.trim() ||
+          params.account.agentId?.trim() ||
+          params.account.accountId,
+        onError: (error) => {
+          runtime.logging
+            .getChildLogger({ plugin: "clickclack", feature: "agent-progress" })
+            .warn(`clickclack progress publish failed: ${String(error)}`);
+        },
+      })
+    : undefined;
   if (params.account.replyMode === "model" && !discussionRoute) {
-    await dispatchModelReply({
-      account: params.account,
-      cfg: params.config as OpenClawConfig,
-      message,
-      route,
-      target,
-      correlationId: params.correlationId,
-    });
+    progress?.start();
+    try {
+      await dispatchModelReply({
+        account: params.account,
+        cfg: params.config as OpenClawConfig,
+        message,
+        route,
+        target,
+        correlationId: params.correlationId,
+      });
+    } finally {
+      await progress?.finalize();
+    }
     return;
   }
   // Durable activity rows (streamed commentary + tool progress) are a
@@ -274,10 +213,7 @@ export async function handleClickClackInbound(params: {
     message: { body, bodyForAgent: message.body, rawBody: message.body, commandBody: message.body },
     access: {
       commands: { authorized: access.commandAuthorized },
-      mentions: {
-        canDetectMention: !isDirect,
-        wasMentioned: !isDirect,
-      },
+      mentions: access.mentionFacts,
     },
     extra: {
       GroupChannel: message.channel_id,
@@ -285,99 +221,109 @@ export async function handleClickClackInbound(params: {
     },
   });
   const runId = resolveClickClackAgentRunId(message.id);
-  const activityReplyOptions = activity
-    ? {
-        onModelSelected: (ctx: { provider: string; model: string; thinkLevel?: string }) => {
-          turnProvenance = {
-            model: ctx.provider && ctx.model ? `${ctx.provider}/${ctx.model}` : ctx.model,
-            thinking: ctx.thinkLevel,
-          };
-          activity?.setProvenance(turnProvenance);
-        },
-        onItemEvent: activity.onItemEvent,
-        commentaryProgressEnabled: true,
-        // The durable activity rows are ClickClack's own progress
-        // rendering, so item events must flow even when session verbose
-        // mode is off and the default tool-progress texts stay suppressed.
-        suppressDefaultToolProgressMessages: true,
-        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-      }
-    : undefined;
-  const dispatchPromise = runtime.channel.inbound.dispatch({
-    cfg: params.config as OpenClawConfig,
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-    route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
-    ctxPayload,
-    toolsAllow: params.account.toolsAllow,
-    // Provenance stamping shares the agentActivity opt-in: with the flag off
-    // the extension's wire payloads stay byte-identical to pre-activity
-    // builds, which is the documented contract for stock setups.
-    replyOptions:
-      runId || activityReplyOptions
-        ? {
-            ...(runId ? { runId } : {}),
-            ...activityReplyOptions,
-          }
-        : undefined,
-    delivery: {
-      deliver: async (payload) => {
-        if (hasClickClackReplyMedia(payload)) {
-          throw new Error("ClickClack media reply requires durable delivery");
+  const activityReplyOptions = {
+    ...(activity
+      ? {
+          onModelSelected: (ctx: { provider: string; model: string; thinkLevel?: string }) => {
+            turnProvenance = {
+              model: ctx.provider && ctx.model ? `${ctx.provider}/${ctx.model}` : ctx.model,
+              thinking: ctx.thinkLevel,
+            };
+            activity.setProvenance(turnProvenance);
+          },
         }
-        const text =
-          payload && typeof payload === "object" && "text" in payload
-            ? ((payload as { text?: string }).text ?? "")
-            : "";
-        if (!text.trim()) {
-          return;
+      : {}),
+    ...(progress || activity
+      ? {
+          onItemEvent: (payload: ClickClackItemEventPayload) => {
+            progress?.onItemEvent(payload);
+            activity?.onItemEvent(payload);
+            return false;
+          },
+          commentaryProgressEnabled: true,
+          // ClickClack owns the native progress rendering, so item events must flow
+          // even when session verbose mode is off and default tool-progress texts
+          // stay suppressed.
+          suppressDefaultToolProgressMessages: true,
+          allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         }
-        await sendClickClackText({
-          cfg: params.config,
-          accountId: params.account.accountId,
-          to: target,
-          text,
-          threadId: message.parent_message_id ? message.thread_root_id : undefined,
-          replyToId: message.id,
-          provenance: turnProvenance,
-          correlationId: params.correlationId,
-        });
+      : {}),
+  };
+  progress?.start();
+  const dispatch = () =>
+    runtime.channel.inbound.dispatch({
+      cfg: params.config as OpenClawConfig,
+      channel: CHANNEL_ID,
+      accountId: params.account.accountId,
+      route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
+      ctxPayload,
+      toolsAllow: params.account.toolsAllow,
+      replyOptions: {
+        ...(runId ? { runId } : {}),
+        ...activityReplyOptions,
       },
-      durable: (payload) => {
-        if (!hasClickClackReplyMedia(payload)) {
-          return false;
-        }
-        const threadId = message.parent_message_id ? message.thread_root_id : undefined;
-        return {
-          to: target,
-          threadId,
-          replyToId: message.id,
-          requiredCapabilities: deriveDurableFinalDeliveryRequirements({
-            payload,
+      delivery: {
+        deliver: async (payload) => {
+          if (hasClickClackReplyMedia(payload)) {
+            throw new Error("ClickClack media reply requires durable delivery");
+          }
+          const text =
+            payload && typeof payload === "object" && "text" in payload
+              ? ((payload as { text?: string }).text ?? "")
+              : "";
+          if (!text.trim()) {
+            return;
+          }
+          await sendClickClackText({
+            cfg: params.config,
+            accountId: params.account.accountId,
+            to: target,
+            text,
+            threadId: message.parent_message_id ? message.thread_root_id : undefined,
+            replyToId: message.id,
+            provenance: turnProvenance,
+            correlationId: params.correlationId,
+          });
+        },
+        durable: (payload) => {
+          if (!hasClickClackReplyMedia(payload)) {
+            return false;
+          }
+          const threadId = message.parent_message_id ? message.thread_root_id : undefined;
+          return {
+            to: target,
             threadId,
             replyToId: message.id,
-            reconcileUnknownSend: true,
-          }),
-        };
+            requiredCapabilities: deriveDurableFinalDeliveryRequirements({
+              payload,
+              threadId,
+              replyToId: message.id,
+              reconcileUnknownSend: true,
+            }),
+          };
+        },
+        onError: (error) => {
+          throw error instanceof Error
+            ? error
+            : new Error(`clickclack dispatch failed: ${String(error)}`);
+        },
       },
-      onError: (error) => {
-        throw error instanceof Error
-          ? error
-          : new Error(`clickclack dispatch failed: ${String(error)}`);
+      replyPipeline: {},
+      record: {
+        onRecordError: (error) => {
+          throw error instanceof Error
+            ? error
+            : new Error(`clickclack session record failed: ${String(error)}`);
+        },
       },
-    },
-    replyPipeline: {},
-    record: {
-      onRecordError: (error) => {
-        throw error instanceof Error
-          ? error
-          : new Error(`clickclack session record failed: ${String(error)}`);
-      },
-    },
-  });
+    });
   try {
-    await dispatchPromise;
+    await dispatch();
   } finally {
+    // Clear transient UI before awaiting optional durable activity writes:
+    // their transport has separate failure/latency characteristics and must
+    // not leave the native progress indicator behind after final delivery.
+    await progress?.finalize();
     await activity?.finalize();
   }
 }

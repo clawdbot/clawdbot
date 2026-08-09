@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -388,9 +389,16 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
         },
       });
+      // Matrix drafts are provider-visible before outbound modifiers run. Keep them off when a
+      // hook can rewrite or cancel so the original payload cannot escape the delivery gate.
+      const hookRunner = getGlobalHookRunner();
+      const allowProviderPreview = !(
+        (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+        (hookRunner?.hasHooks("message_sending") ?? false)
+      );
       const draftController = await createMatrixDraftController({
-        streaming,
-        previewToolProgressEnabled,
+        streaming: allowProviderPreview ? streaming : "off",
+        previewToolProgressEnabled: allowProviderPreview && previewToolProgressEnabled,
         replyToMode,
         messageId,
         threadTarget,
@@ -512,12 +520,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               }
             },
             delivery: {
+              observeMessageSent: true,
               deliver: deliverReply,
               onError: (err, info) => onReplyError(err, info as Parameters<typeof onReplyError>[1]),
             },
             dispatcherOptions: {
               ...turnDispatcherOptions,
-              onSettled: () => draftController.progressDraftGate.cancel(),
+              onSettled: () => draftController.cancelProgressDraft(),
             },
             replyOptions: {
               skillFilter: roomConfig?.skills,
@@ -530,9 +539,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               onBlockReplyQueued: draftStream
                 ? (payload, context) => {
                     if (payload.isCompactionNotice === true) {
-                      return;
+                      return false;
                     }
                     draftController.queueDraftBlockBoundary(payload, context);
+                    return false;
                   }
                 : undefined,
               // Reset draft boundary bookkeeping on assistant message
@@ -542,6 +552,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ? () => {
                     draftController.resetDraftBlockOffsets();
                     draftController.resetPreviewToolProgress();
+                    return false;
                   }
                 : undefined,
               onQueuedFollowupAdmitted: draftStream

@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mjs";
 import { resolvePluginSurface } from "./lib/plugin-inventory-doc.mjs";
 
 const DOC_PATH = "docs/plugins/plugin-inventory.md";
@@ -66,20 +67,6 @@ function readJsonPath(filePath) {
 
 function fileExists(relativePath) {
   return fs.existsSync(path.join(ROOT, relativePath));
-}
-
-function collectExcludedPackagedExtensionDirs(rootPackageJson) {
-  const excluded = new Set();
-  for (const entry of rootPackageJson.files ?? []) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
-    if (match?.[1]) {
-      excluded.add(match[1]);
-    }
-  }
-  return excluded;
 }
 
 function normalizeDocPath(value) {
@@ -315,7 +302,7 @@ function resolveDocs({ dirName, manifest, packageJson }) {
     }
   }
 
-  for (const candidate of [manifest.id, dirName]) {
+  for (const candidate of [manifest.id, dirName, ...(manifest.legacyPluginIds ?? [])]) {
     if (typeof candidate !== "string") {
       continue;
     }
@@ -347,6 +334,10 @@ function resolveInstallRoute(packageJson, status) {
     return "source checkout only";
   }
   if (status === "core") {
+    // Explicit bundle ownership describes the current install surface; release flags may stage future publication.
+    if (packageJson.openclaw?.build?.bundledDist === true) {
+      return "included in OpenClaw";
+    }
     const release = packageJson.openclaw?.release;
     if (release?.publishToClawHub === true || release?.publishToNpm === true) {
       return `included in OpenClaw; ${resolveInstallRoute(packageJson, "external")}`;

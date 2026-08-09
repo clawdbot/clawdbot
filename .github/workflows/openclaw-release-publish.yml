@@ -44,6 +44,7 @@ on:
           - alpha
           - beta
           - latest
+          - extended-stable
       plugin_publish_scope:
         description: Plugin publish scope to run before OpenClaw publish
         required: true
@@ -60,6 +61,11 @@ on:
         description: Publish the OpenClaw npm package after plugin npm succeeds; ClawHub may still run
         required: true
         default: true
+        type: boolean
+      publish_docker_only:
+        description: Publish Docker only after independently verifying an already-published extended-stable npm package
+        required: true
+        default: false
         type: boolean
       release_profile:
         description: Release coverage profile used for release evidence summaries; default reads it from the validation manifest
@@ -98,6 +104,7 @@ jobs:
     outputs:
       sha: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
       preflight_artifact_name: ${{ steps.preflight_artifact.outputs.name }}
+      preflight_tarball_sha256: ${{ steps.manifest.outputs.tarball_sha256 }}
       full_release_validation_run_attempt: ${{ steps.full_run.outputs.attempt }}
       windows_node_installer_digests: ${{ steps.windows_source.outputs.installer_digests }}
     steps:
@@ -112,6 +119,7 @@ jobs:
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
           WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
+          PUBLISH_DOCKER_ONLY: ${{ inputs.publish_docker_only && 'true' || 'false' }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
@@ -133,7 +141,7 @@ jobs:
             exit 1
           fi
           release_evidence_required=false
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" || "${PLUGIN_PUBLISH_SCOPE}" == "all-publishable" ]]; then
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" || "${PUBLISH_DOCKER_ONLY}" == "true" || "${PLUGIN_PUBLISH_SCOPE}" == "all-publishable" ]]; then
             release_evidence_required=true
           fi
           release_evidence_supplied=false
@@ -164,6 +172,20 @@ jobs:
           fi
           if [[ -n "${OPENCLAW_NPM_RESUME_RUN_ID}" && "${PUBLISH_OPENCLAW_NPM}" != "true" ]]; then
             echo "openclaw_npm_resume_run_id requires publish_openclaw_npm=true." >&2
+            exit 1
+          fi
+          if [[ "${PUBLISH_DOCKER_ONLY}" == "true" ]]; then
+            if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+              echo "publish_docker_only requires publish_openclaw_npm=false." >&2
+              exit 1
+            fi
+            if [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" ]]; then
+              echo "publish_docker_only is reserved for an already-published extended-stable release." >&2
+              exit 1
+            fi
+          fi
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" && "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+            echo "Extended-stable core npm publication stays on the canonical extended-stable release flow; use publish_docker_only=true only after its registry readback." >&2
             exit 1
           fi
           stable_release=true
@@ -453,6 +475,7 @@ jobs:
             exit 1
           fi
           echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "tarball_sha256=$tarball_sha256" >> "$GITHUB_OUTPUT"
 
       - name: Validate full release validation manifest
         id: full_manifest
@@ -520,7 +543,8 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin \
             +refs/heads/main:refs/remotes/origin/main \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
+            '+refs/heads/release/*:refs/remotes/origin/release/*' \
+            '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'
           if git merge-base --is-ancestor HEAD origin/main; then
             exit 0
           fi
@@ -529,6 +553,11 @@ jobs:
               exit 0
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
+          while IFS= read -r release_ref; do
+            if git merge-base --is-ancestor HEAD "${release_ref}"; then
+              exit 0
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/extended-stable)
           if [[ "${RELEASE_TAG}" == *"-alpha."* ]]; then
             if [[ ! "${WORKFLOW_REF_NAME}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
               echo "Alpha publish tags must be dispatched from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
@@ -539,7 +568,7 @@ jobs:
               exit 0
             fi
           fi
-          echo "Release tag must point to a commit reachable from main, release/*, or the matching Tideclaw alpha branch for alpha prereleases." >&2
+          echo "Release tag must point to a commit reachable from main, release/*, extended-stable/*, or the matching Tideclaw alpha branch for alpha prereleases." >&2
           exit 1
 
       - name: Summarize release target
@@ -567,6 +596,7 @@ jobs:
   publish:
     name: Publish plugins, then OpenClaw
     needs: [resolve_release_target]
+    if: ${{ !inputs.publish_docker_only }}
     permissions:
       actions: write
       attestations: write
@@ -2331,7 +2361,7 @@ jobs:
             upload_release_evidence_assets
             append_release_proof_to_github_release
             if [[ "${failed}" == "0" ]]; then
-              publish_github_release
+              echo "- GitHub release: kept draft until Docker publication succeeds" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "- GitHub release: left as draft because a required publish child failed" >> "$GITHUB_STEP_SUMMARY"
             fi
@@ -2347,3 +2377,76 @@ jobs:
           name: openclaw-release-postpublish-evidence-${{ inputs.tag }}
           path: ${{ runner.temp }}/openclaw-release-postpublish-evidence
           if-no-files-found: error
+
+  verify_core_npm_registry:
+    name: Verify already-published core npm package
+    needs: [resolve_release_target]
+    if: ${{ inputs.publish_docker_only }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Verify exact npm and selector readback matches preflight bytes
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_TARBALL_SHA256: ${{ needs.resolve_release_target.outputs.preflight_tarball_sha256 }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          exact_version="$(npm view "openclaw@${version}" version)"
+          selector_version="$(npm view openclaw@extended-stable version)"
+          if [[ "${exact_version}" != "${version}" || "${selector_version}" != "${version}" ]]; then
+            echo "npm exact-version or extended-stable selector readback does not match ${version}." >&2
+            exit 1
+          fi
+          tarball_url="$(npm view "openclaw@${version}" dist.tarball)"
+          tarball_path="${RUNNER_TEMP}/openclaw-${version}.tgz"
+          curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 180 \
+            -o "${tarball_path}" "${tarball_url}"
+          actual_tarball_sha256="$(sha256sum "${tarball_path}" | awk '{print $1}')"
+          if [[ -z "${EXPECTED_TARBALL_SHA256}" || "${actual_tarball_sha256}" != "${EXPECTED_TARBALL_SHA256}" ]]; then
+            echo "Published npm tarball does not match the release preflight artifact." >&2
+            exit 1
+          fi
+
+  publish_docker:
+    name: Publish Docker images
+    needs: [resolve_release_target, publish, verify_core_npm_registry]
+    if: ${{ always() && ((inputs.publish_openclaw_npm && needs.publish.result == 'success') || (inputs.publish_docker_only && needs.verify_core_npm_registry.result == 'success')) }}
+    uses: ./.github/workflows/docker-release.yml
+    with:
+      tag: ${{ inputs.tag }}
+      release_sha: ${{ needs.resolve_release_target.outputs.sha }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: write
+
+  finalize_github_release:
+    name: Finalize GitHub release
+    needs: [publish, publish_docker]
+    if: ${{ always() && inputs.publish_openclaw_npm && needs.publish.result == 'success' && needs.publish_docker.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the verified draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          expected_prerelease=false
+          if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
+            expected_prerelease=true
+          fi
+          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false
+          release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,isPrerelease)"
+          if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" != "false" ]] || \
+            [[ "$(printf '%s' "${release_json}" | jq -r '.isPrerelease')" != "${expected_prerelease}" ]]; then
+            echo "Published GitHub release state does not match the requested draft/prerelease classification." >&2
+            exit 1
+          fi

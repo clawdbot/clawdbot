@@ -13,7 +13,6 @@ import {
   findRegistryWorktreeByPath,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
-  getRegistryWorktreeProvisionedLedger,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktreeProvisionedChunk,
@@ -70,7 +69,6 @@ describe("managed worktree registry", () => {
     });
     expect(getRegistryWorktreeProvisionedPaths(env, "first")).toEqual([".env.local"]);
     expect(getRegistryWorktreeProvisionedPaths(env, "second")).toBeUndefined();
-    expect(getRegistryWorktreeProvisionedLedger(env, "second")).toEqual({ status: "legacy" });
 
     updateRegistryWorktree(env, "first", {
       lastActiveAt: 30,
@@ -89,10 +87,6 @@ describe("managed worktree registry", () => {
     expect(getRegistryWorktreeProvisionedState(env, "first")).toEqual([
       { path: ".env.local", mode: 0o600, chunks: 1 },
     ]);
-    expect(getRegistryWorktreeProvisionedLedger(env, "first")).toEqual({
-      status: "valid",
-      paths: [".env.local"],
-    });
     insertRegistryWorktreeProvisionedChunk(env, {
       worktreeId: "first",
       path: ".env.local",
@@ -122,7 +116,7 @@ describe("managed worktree registry", () => {
     openOpenClawStateDatabase({ env })
       .db.prepare("UPDATE worktrees SET provisioned_paths_json = ? WHERE id = ?")
       .run("not-json", "second");
-    expect(getRegistryWorktreeProvisionedLedger(env, "second")).toEqual({ status: "invalid" });
+    expect(getRegistryWorktreeProvisionedPaths(env, "second")).toBeUndefined();
   });
 
   it("adds the provisioned-path ledger to an existing worktree registry", () => {

@@ -15,7 +15,12 @@ import {
 } from "./infra/unhandled-rejections.js";
 
 type LegacyCliDeps = {
-  runCli: (argv: string[]) => Promise<void>;
+  runCli: (
+    argv: string[],
+    options?: {
+      retainConsoleRoutingUntilProcessExit?: boolean;
+    },
+  ) => Promise<void>;
 };
 
 type LibraryExports = typeof import("./library.js");
@@ -54,9 +59,12 @@ async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
 export async function runLegacyCliEntry(
   argv: string[] = process.argv,
   deps?: LegacyCliDeps,
+  options?: {
+    retainConsoleRoutingUntilProcessExit?: boolean;
+  },
 ): Promise<void> {
   const { runCli } = deps ?? (await loadLegacyCliDeps());
-  await runCli(argv);
+  await runCli(argv, options);
 }
 
 const isMain = isMainModule({
@@ -89,7 +97,7 @@ if (!isMain) {
 }
 
 if (isMain) {
-  const { restoreTerminalState } = await import("../packages/terminal-core/src/restore.js");
+  const { restoreRuntimeTerminalState } = await import("./runtime.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
@@ -116,12 +124,16 @@ if (isMain) {
     for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
       console.error("[openclaw]", message);
     }
-    restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
+    restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
     process.exit(1);
   });
 
   void runCliWithExitFinalization({
-    run: async () => await runLegacyCliEntry(process.argv),
+    run: async () =>
+      await runLegacyCliEntry(process.argv, undefined, {
+        // Finalizers and process-exit hooks can still emit diagnostics after runCli settles.
+        retainConsoleRoutingUntilProcessExit: true,
+      }),
     onError: (err) => {
       for (const line of formatCliFailureLines({
         title: "The CLI command failed.",
@@ -133,7 +145,7 @@ if (isMain) {
       for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
         console.error("[openclaw]", message);
       }
-      restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
+      restoreRuntimeTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
       process.exitCode = 1;
     },
   });

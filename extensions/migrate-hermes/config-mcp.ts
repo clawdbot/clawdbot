@@ -1,6 +1,7 @@
 // Hermes MCP config mapping and manual follow-up planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
+import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mcpValueHasEnvReferences, resolveMcpEnvReferences } from "./config-env.js";
 import { readPositiveNumber } from "./config-provider-contract.js";
 import { isRecord, readString, sanitizeName } from "./helpers.js";
@@ -10,20 +11,6 @@ const MCP_PROMPT_UTILITY_TOOLS = ["prompts_list", "prompts_get"] as const;
 
 function readBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
-}
-
-function readBooleanish(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (["true", "1", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-  return ["false", "0", "no", "off"].includes(normalized) ? false : undefined;
 }
 
 function readPositiveNumeric(value: unknown): number | undefined {
@@ -68,8 +55,8 @@ function mapHermesToolFilter(value: Record<string, unknown>): Record<string, unk
   }
   const include = readToolFilterList(tools.include);
   const exclude = readToolFilterList(tools.exclude);
-  const resourcesEnabled = readBooleanish(tools.resources) !== false;
-  const promptsEnabled = readBooleanish(tools.prompts) !== false;
+  const resourcesEnabled = parseBooleanValue(tools.resources) !== false;
+  const promptsEnabled = parseBooleanValue(tools.prompts) !== false;
 
   // Hermes tests set truthiness here: `include: []` means no whitelist, so native tools remain.
   if (include && include.length > 0) {
@@ -344,8 +331,8 @@ export function mcpManualItems(params: {
     ) ||
       (tools.include !== undefined && !readToolFilterList(tools.include)) ||
       (tools.exclude !== undefined && !readToolFilterList(tools.exclude)) ||
-      (tools.resources !== undefined && readBooleanish(tools.resources) === undefined) ||
-      (tools.prompts !== undefined && readBooleanish(tools.prompts) === undefined))
+      (tools.resources !== undefined && parseBooleanValue(tools.resources) === undefined) ||
+      (tools.prompts !== undefined && parseBooleanValue(tools.prompts) === undefined))
   ) {
     add(
       "tool-policy",

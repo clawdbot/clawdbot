@@ -214,7 +214,11 @@ describe("harness context engine lifecycle", () => {
       sessionTarget,
     };
     const engine = createContextEngine({
-      info: { id: engineId, name: "Configured runtime settings proof engine" },
+      info: {
+        id: engineId,
+        name: "Configured runtime settings proof engine",
+        acceptedHostParams: ["runtimeSettings", "runtimeContext", "sessionTarget"],
+      },
       bootstrap: vi.fn(async (params) => {
         captured.push({
           hook: "bootstrap",
@@ -585,5 +589,36 @@ describe("harness context engine lifecycle", () => {
       const ingestParams = call[0] as { isHeartbeat?: boolean };
       expect(ingestParams.isHeartbeat).toBe(true);
     }
+  });
+
+  it.each([
+    { promptError: true, aborted: false, yieldAborted: false },
+    { promptError: false, aborted: true, yieldAborted: false },
+    { promptError: false, aborted: false, yieldAborted: true },
+  ])("does not advance context ingestion for unsuccessful turns: %o", async (terminal) => {
+    const afterTurn = vi.fn(async () => {});
+    const ingest = vi.fn(async () => ({ ingested: true }));
+    const ingestBatch = vi.fn(async () => ({ ingestedCount: 0 }));
+    const maintain = vi.fn(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: createContextEngine({ afterTurn, ingest, ingestBatch, maintain }),
+      ...terminal,
+      sessionIdUsed: sessionParams.sessionIdUsed,
+      sessionKey: sessionParams.sessionKey,
+      sessionFile: sessionParams.sessionFile,
+      messagesSnapshot: [textMessage("user", "failed", 1)],
+      prePromptMessageCount: 0,
+      warn: () => {},
+    });
+
+    expect(afterTurn).not.toHaveBeenCalled();
+    expect(ingest).not.toHaveBeenCalled();
+    expect(ingestBatch).not.toHaveBeenCalled();
+    expect(maintain).not.toHaveBeenCalled();
   });
 });

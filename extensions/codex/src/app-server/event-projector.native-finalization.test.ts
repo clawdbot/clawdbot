@@ -23,6 +23,35 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector native tool finalization", () => {
+  it("marks only explicitly completed native tool metadata with false", async () => {
+    const projector = await createProjector();
+    const command = {
+      type: "commandExecution",
+      command: "pnpm test extensions/codex",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: null,
+      durationMs: null,
+    };
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { ...command, id: "cmd-started-only", status: "inProgress" },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { ...command, id: "cmd-completed", status: "completed" },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.toolMetas.map((meta) => meta.isError)).toEqual([undefined, false]);
+  });
+
   it("keeps raw open-page status unknown until explicit completion", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
@@ -466,12 +495,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
 
     expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(readAttemptTerminal(result).promptErrorSource).toBeNull();
-    expect(result.lastToolError).toMatchObject({
-      toolName: "bash",
-      error: expect.stringContaining("without a matching tool.result"),
-      mutatingAction: true,
-    });
-    expect(result.lastToolError?.actionFingerprint).toContain("node scripts/report.js --publish");
+    expect(result.lastToolError).toBeUndefined();
     expect(result.assistantTexts).toEqual([
       "The requested publish command was denied before execution.",
     ]);

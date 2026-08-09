@@ -65,13 +65,13 @@ describe("QA Lab Matrix CLI registration", () => {
       "--scenario",
       "--fast",
       "--fail-fast",
-      "--profile",
       "--sut-account",
     ]) {
       expect(optionNames).toContain(optionName);
     }
-    expect(optionNames).not.toContain("--credential-source");
-    expect(optionNames).not.toContain("--credential-role");
+    for (const optionName of ["--profile", "--shard", "--credential-source", "--credential-role"]) {
+      expect(optionNames).not.toContain(optionName);
+    }
   });
 
   it("delegates command options to the Matrix runtime", async () => {
@@ -83,8 +83,6 @@ describe("QA Lab Matrix CLI registration", () => {
       "node",
       "openclaw",
       "matrix",
-      "--profile",
-      "release",
       "--scenario",
       "matrix-allowlist-hot-reload",
     ]);
@@ -94,7 +92,6 @@ describe("QA Lab Matrix CLI registration", () => {
         channelId: "matrix",
         credentialMode: "env-only",
         options: expect.objectContaining({
-          profile: "release",
           providerMode: "live-frontier",
           scenarioIds: ["matrix-allowlist-hot-reload"],
         }),

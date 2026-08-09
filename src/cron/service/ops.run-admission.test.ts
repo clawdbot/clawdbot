@@ -1,11 +1,11 @@
 // Shared cron run-admission regressions cover cross-trigger limits and queued-run cleanup.
 import { describe, expect, it, vi } from "vitest";
 import {
-  createDeferred,
   createDueIsolatedJob,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
   clearCommandLane,
@@ -18,7 +18,10 @@ import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
-import { enqueueRun, list, run, stop, update } from "./ops.js";
+import { stop } from "./ops-lifecycle.js";
+import { update } from "./ops-mutations.js";
+import { list } from "./ops-read.js";
+import { enqueueRun, run } from "./ops-run.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
@@ -62,8 +65,8 @@ describe("cron service run admission", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const blockerStarted = createDeferred<void>();
-    const releaseBlocker = createDeferred<void>();
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
     const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
       blockerStarted.resolve();
       return await releaseBlocker.promise;
@@ -163,7 +166,7 @@ describe("cron service run admission", () => {
     });
 
     let now = dueAt;
-    const completingStarted = createDeferred<void>();
+    const completingStarted = createDeferred();
     const releaseCompleting = createDeferred<{ status: "ok"; summary: string }>();
     const runIsolatedAgentJob = vi.fn(async ({ job }: { job: { id: string } }) => {
       expect(job.id).toBe(completingJob.id);
@@ -243,7 +246,7 @@ describe("cron service run admission", () => {
     waitingJob.state.lastError = "prior failure";
     await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
 
-    const activeStarted = createDeferred<void>();
+    const activeStarted = createDeferred();
     const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
     const runIsolatedAgentJob = vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
       if (runningJob.id === activeJob.id) {
@@ -309,7 +312,7 @@ describe("cron service run admission", () => {
     streamJob.state.streamSourceIdentity = "source-a";
     await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, streamJob] });
 
-    const activeStarted = createDeferred<void>();
+    const activeStarted = createDeferred();
     const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
     const runIsolatedAgentJob = vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
       if (runningJob.id === activeJob.id) {
@@ -517,7 +520,7 @@ describe("cron service run admission", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
 
-    const activeStarted = createDeferred<void>();
+    const activeStarted = createDeferred();
     const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
     const runIsolatedAgentJob = vi.fn(async ({ job }: { job: { id: string } }) => {
       if (job.id === activeJob.id) {
@@ -578,9 +581,9 @@ describe("cron service run admission", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
 
-    const activeStarted = createDeferred<void>();
+    const activeStarted = createDeferred();
     const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
-    const replacementStarted = createDeferred<void>();
+    const replacementStarted = createDeferred();
     const runIsolatedAgentJob = vi.fn(async ({ job }: { job: { id: string } }) => {
       if (job.id === activeJob.id) {
         activeStarted.resolve();
@@ -668,9 +671,9 @@ describe("cron service run admission", () => {
     waitingJob.enabled = false;
     await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
 
-    const activeStarted = createDeferred<void>();
+    const activeStarted = createDeferred();
     const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
-    const waitingStarted = createDeferred<void>();
+    const waitingStarted = createDeferred();
     const releaseWaiting = createDeferred<{ status: "ok"; summary: string }>();
     const runIsolatedAgentJob = vi.fn(async ({ job }: { job: { id: string } }) => {
       if (job.id === activeJob.id) {
@@ -733,9 +736,9 @@ describe("cron service run admission", () => {
     await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
 
     let now = dueAt;
-    const activeStarted = createDeferred<void>();
+    const activeStarted = createDeferred();
     const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
-    const waitingStarted = createDeferred<void>();
+    const waitingStarted = createDeferred();
     const releaseWaiting = createDeferred<{ status: "ok"; summary: string }>();
     const state = createAdmissionTestState({
       cronEnabled: true,
@@ -958,7 +961,7 @@ describe("cron service run admission", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
 
-    const activeStarted = createDeferred<void>();
+    const activeStarted = createDeferred();
     const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
     const state = createAdmissionTestState({
       cronEnabled: true,
@@ -1010,7 +1013,7 @@ describe("cron service run admission", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, scheduledJob] });
 
-    const activeStarted = createDeferred<void>();
+    const activeStarted = createDeferred();
     const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
     const runIsolatedAgentJob = vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
       if (runningJob.id === activeJob.id) {

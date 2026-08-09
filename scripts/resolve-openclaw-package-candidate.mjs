@@ -13,10 +13,14 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
+import { createPrepublishPluginRegistryArtifact } from "./prepublish-plugin-registry-artifact.mjs";
 
-const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_DIR = resolveRepoRoot(import.meta.url);
 const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
 const PACKAGE_URL_DOWNLOAD_TIMEOUT_MS = 60_000;
 const PACKAGE_URL_MAX_BYTES = 250 * 1024 * 1024;
@@ -70,7 +74,7 @@ function usage() {
 
 Options:
   --package-spec <spec>       Published npm spec for source=npm.
-  --package-ref <ref>         Trusted repo ref for source=ref.
+  --package-ref <ref>         Trusted repo ref for source=ref or npm companion packaging.
   --package-url <url>         HTTPS tarball URL for source=url or source=trusted-url.
   --package-sha256 <sha256>   Expected tarball SHA-256 for source=url, source=trusted-url, or source=artifact.
   --trusted-source-id <id>    Named trusted URL policy for source=trusted-url.
@@ -79,6 +83,10 @@ Options:
   --artifact-dir <dir>        Directory containing exactly one .tgz for source=artifact.
   --output-name <name>        Output tarball filename. Default: ${DEFAULT_OUTPUT_NAME}
   --metadata <file>           Write package metadata JSON.
+  --plugin-registry-output-dir <dir>
+                              Build an immutable registry for source=ref before cleanup.
+  --required-plugin-packages-json <json>
+                              Scoped package names to include in that registry.
   --github-output <file>      Append tarball, sha256, package name/version outputs.`;
 }
 
@@ -93,61 +101,57 @@ export function parseArgs(argv) {
     packageSha256: "",
     packageSpec: "",
     packageUrl: "",
+    pluginRegistryOutputDir: "",
+    requiredPluginPackagesJson: "[]",
     source: "",
     trustedSourceId: "",
     trustedSourcePolicy: TRUSTED_PACKAGE_SOURCE_POLICY,
   };
-  const seen = new Set();
-  const setOnce = (flag, key, value) => {
-    if (seen.has(flag)) {
-      throw new Error(`${flag} was provided more than once`);
-    }
-    seen.add(flag);
-    options[key] = value;
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    const readValue = (name, readOptions = {}) => {
-      const value = argv[(index += 1)];
-      if (
-        value === undefined ||
-        (!readOptions.allowEmpty && value === "") ||
-        value.startsWith("-")
-      ) {
-        throw new Error(`${name} requires a value`);
-      }
-      return value;
-    };
-    if (arg === "--artifact-dir") {
-      setOnce(arg, "artifactDir", readValue(arg));
-    } else if (arg === "--github-output") {
-      setOnce(arg, "githubOutput", readValue(arg));
-    } else if (arg === "--metadata") {
-      setOnce(arg, "metadata", readValue(arg));
-    } else if (arg === "--output-dir") {
-      setOnce(arg, "outputDir", readValue(arg));
-    } else if (arg === "--output-name") {
-      setOnce(arg, "outputName", readValue(arg));
-    } else if (arg === "--package-sha256") {
-      setOnce(arg, "packageSha256", readValue(arg, { allowEmpty: true }).toLowerCase());
-    } else if (arg === "--package-ref") {
-      setOnce(arg, "packageRef", readValue(arg, { allowEmpty: true }));
-    } else if (arg === "--package-spec") {
-      setOnce(arg, "packageSpec", readValue(arg, { allowEmpty: true }));
-    } else if (arg === "--package-url") {
-      setOnce(arg, "packageUrl", readValue(arg, { allowEmpty: true }));
-    } else if (arg === "--source") {
-      setOnce(arg, "source", readValue(arg));
-    } else if (arg === "--trusted-source-id") {
-      setOnce(arg, "trustedSourceId", readValue(arg, { allowEmpty: true }));
-    } else if (arg === "--trusted-source-policy") {
-      setOnce(arg, "trustedSourcePolicy", readValue(arg));
-    } else if (arg === "--help" || arg === "-h") {
-      options.help = true;
-    } else {
-      throw new Error(`unknown argument: ${arg}`);
-    }
-  }
+  parseFlagArgs(
+    argv,
+    options,
+    [
+      ...[
+        ["--artifact-dir", "artifactDir"],
+        ["--github-output", "githubOutput"],
+        ["--metadata", "metadata"],
+        ["--output-dir", "outputDir"],
+        ["--output-name", "outputName"],
+        ["--plugin-registry-output-dir", "pluginRegistryOutputDir"],
+        ["--required-plugin-packages-json", "requiredPluginPackagesJson"],
+        ["--source", "source"],
+        ["--trusted-source-policy", "trustedSourcePolicy"],
+      ].map(([flag, key]) =>
+        stringFlag(flag, key, { allowInline: false, rejectShortOptions: true }),
+      ),
+      ...[
+        ["--package-ref", "packageRef"],
+        ["--package-spec", "packageSpec"],
+        ["--package-url", "packageUrl"],
+        ["--trusted-source-id", "trustedSourceId"],
+      ].map(([flag, key]) =>
+        stringFlag(flag, key, {
+          allowEmpty: true,
+          allowInline: false,
+          rejectShortOptions: true,
+        }),
+      ),
+      stringFlag("--package-sha256", "packageSha256", {
+        allowEmpty: true,
+        allowInline: false,
+        rejectShortOptions: true,
+        transform: (value) => value.toLowerCase(),
+      }),
+      booleanFlag("--help", "help", true, { repeatable: true }),
+      booleanFlag("-h", "help", true, { repeatable: true }),
+    ],
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
+        throw new Error(`unknown argument: ${arg}`);
+      },
+    },
+  );
   validateOutputName(options.outputName);
   return options;
 }
@@ -660,9 +664,10 @@ async function moveNewestPackedTarball(outputDir, packOutput, outputName) {
   try {
     parsed = JSON.parse(packOutput);
   } catch {}
-  if (Array.isArray(parsed)) {
+  if (parsed !== undefined) {
     const packedFilename =
-      parsed.find((entry) => typeof entry?.filename === "string")?.filename ?? "";
+      resolveNpmJsonEntries(parsed).find((entry) => typeof entry?.filename === "string")
+        ?.filename ?? "";
     if (packedFilename) {
       filename = resolvePackedOpenClawTarballFilename(packedFilename);
     }
@@ -1468,7 +1473,9 @@ async function resolveCandidate(options) {
   let packageTrustedReason = "";
   let packageTrustedSourceId = "";
   let packageWorktreeDir = "";
+  let pluginRegistrySource;
   let artifactMetadata = {};
+  let pluginRegistryIdentity;
   let resolveError;
 
   try {
@@ -1476,6 +1483,9 @@ async function resolveCandidate(options) {
       packageRef = options.packageRef || "main";
       const packageSource = await preparePackageSourceWorktree(packageRef);
       packageWorktreeDir = packageSource.sourceDir;
+      if (options.pluginRegistryOutputDir) {
+        pluginRegistrySource = packageSource;
+      }
       packageSourceSha = packageSource.selectedSha;
       packageTrustedReason = packageSource.trustedReason;
       await installPackageSourceDeps(packageSource.sourceDir);
@@ -1505,6 +1515,12 @@ async function resolveCandidate(options) {
         packOutput,
         options.outputName || DEFAULT_OUTPUT_NAME,
       );
+      if (options.pluginRegistryOutputDir) {
+        pluginRegistrySource = await preparePackageSourceWorktree(options.packageRef);
+        packageWorktreeDir = pluginRegistrySource.sourceDir;
+        packageRef = options.packageRef;
+        await installPackageSourceDeps(pluginRegistrySource.sourceDir);
+      }
     } else if (options.source === "url" || options.source === "trusted-url") {
       if (!options.packageUrl) {
         throw new Error(`${options.source} requires --package-url`);
@@ -1548,6 +1564,29 @@ async function resolveCandidate(options) {
         `source must be one of: ref, npm, url, trusted-url, artifact. Got: ${options.source}`,
       );
     }
+    if (options.pluginRegistryOutputDir && !pluginRegistrySource) {
+      throw new Error(
+        "--plugin-registry-output-dir is only supported with source=ref or source=npm",
+      );
+    }
+    if (options.pluginRegistryOutputDir && pluginRegistrySource) {
+      const requiredPackages = JSON.parse(options.requiredPluginPackagesJson);
+      const rootPackage = JSON.parse(
+        await fs.readFile(path.join(pluginRegistrySource.sourceDir, "package.json"), "utf8"),
+      );
+      const registry = createPrepublishPluginRegistryArtifact({
+        repoRoot: pluginRegistrySource.sourceDir,
+        outputDir: path.resolve(ROOT_DIR, options.pluginRegistryOutputDir),
+        sourceSha: pluginRegistrySource.selectedSha,
+        candidateVersion: rootPackage.version,
+        requiredPackages,
+      });
+      pluginRegistryIdentity = {
+        candidateVersion: rootPackage.version,
+        manifestSha256: registry.manifestSha256,
+        sourceSha: pluginRegistrySource.selectedSha,
+      };
+    }
   } catch (error) {
     resolveError = error;
     throw error;
@@ -1574,12 +1613,22 @@ async function resolveCandidate(options) {
       packageTrustedReason = "package-build-info";
     }
   }
+  if (
+    pluginRegistryIdentity &&
+    (pluginRegistryIdentity.candidateVersion !== pkg.version ||
+      pluginRegistryIdentity.sourceSha !== packageSourceSha)
+  ) {
+    throw new Error(
+      "prepublish plugin registry source SHA/version differs from the package candidate",
+    );
+  }
   const metadata = {
     name: pkg.name,
     packageRef,
     packageSpec: options.packageSpec || "",
     packageSourceSha,
     packageTrustedReason,
+    pluginRegistryManifestSha256: pluginRegistryIdentity?.manifestSha256 ?? "",
     trustedSourceId: packageTrustedSourceId,
     sha256: digest,
     source: options.source,
@@ -1605,6 +1654,7 @@ async function resolveCandidate(options) {
     package_name: pkg.name,
     package_source_sha: packageSourceSha,
     package_version: pkg.version,
+    plugin_registry_manifest_sha256: pluginRegistryIdentity?.manifestSha256 ?? "",
     sha256: digest,
     tarball: metadata.tarball,
   });

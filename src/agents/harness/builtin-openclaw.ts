@@ -6,6 +6,7 @@
  */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
+import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-runtime.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
 
@@ -72,6 +73,29 @@ export function createOpenClawAgentHarness(): AgentHarness {
     contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
     supports: () => ({ supported: true, priority: 0 }),
     runAttempt: runEmbeddedAttempt,
+    runIsolatedCompletion: async (params) => {
+      const timeoutSignal = AbortSignal.timeout(params.timeoutMs);
+      const signal = params.abortSignal
+        ? AbortSignal.any([params.abortSignal, timeoutSignal])
+        : timeoutSignal;
+      const assistant = await completeWithPreparedSimpleCompletionModel({
+        model: params.model,
+        auth: params.auth,
+        cfg: params.config,
+        context: {
+          systemPrompt: params.systemPrompt,
+          messages: [{ role: "user", content: params.prompt, timestamp: Date.now() }],
+          tools: [],
+        },
+        options: {
+          maxTokens: params.streamParams?.maxTokens,
+          temperature: params.streamParams?.temperature,
+          reasoning: params.thinkLevel,
+          signal,
+        },
+      });
+      return { assistant };
+    },
     finalizeSettledTurn: async ({ attempt }) => {
       // Preserve only transcript/model transport state. The operation-specific
       // runner path suppresses every ambient prompt and capability contributor.
