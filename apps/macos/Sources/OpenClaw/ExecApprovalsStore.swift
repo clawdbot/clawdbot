@@ -320,10 +320,12 @@ enum ExecApprovalsStore {
         if file.socket == nil {
             file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
         }
-        file.socket?.path = self.resolvedPersistedSocketPath(
-            existing: file.socket?.path,
+        let existingSocketPath = file.socket?.path
+        let resolvedSocketPath = self.resolvedPersistedSocketPath(
+            existing: existingSocketPath,
             stateDirectoryURL: self.stateDirURL(),
             computed: self.socketPath())
+        file.socket?.path = resolvedSocketPath
         let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if token.isEmpty {
             file.socket?.token = self.generateToken()
