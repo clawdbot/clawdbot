@@ -17,13 +17,10 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStoredConversationId } from "./src/conversation-store-helpers.js";
 import {
   buildMSTeamsConversationStateKey,
-  MSTEAMS_CONVERSATIONS_LEGACY_FILENAME,
   MSTEAMS_CONVERSATIONS_NAMESPACE,
   MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS,
-  normalizeMSTeamsLegacyConversationStore,
   prepareMSTeamsConversationReferenceForStorage,
   selectRetainedMSTeamsConversations,
-  type MSTeamsLegacyConversationStoreData,
 } from "./src/conversation-store-state.js";
 import type { StoredConversationReference } from "./src/conversation-store.js";
 import {
@@ -33,6 +30,7 @@ import {
   MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
   normalizeMSTeamsDelegatedTokens,
 } from "./src/delegated-state.js";
+import { resolveLegacyConversationMigrationSource } from "./src/doctor-conversation-migration.js";
 import type { MSTeamsDelegatedTokens } from "./src/oauth.shared.js";
 import {
   buildMSTeamsPollStateKey,
@@ -181,23 +179,6 @@ function resolveStateFilePath(stateDir: string, filename: string): string {
   return path.join(stateDir, filename);
 }
 
-async function resolveLegacyConversationMigrationSource(stateDir: string): Promise<{
-  filePath: string;
-  state: MSTeamsLegacyConversationStoreData;
-  archived: boolean;
-} | null> {
-  const filePath = resolveStateFilePath(stateDir, MSTEAMS_CONVERSATIONS_LEGACY_FILENAME);
-  const activeState = await readLegacyJsonFile(filePath, parseLegacyConversationStore);
-  if (activeState) {
-    return { filePath, state: activeState, archived: false };
-  }
-  // Broken shipped migrations may have archived the only recoverable source before
-  // canonical rows were visible. Doctor may reread that snapshot, but never removes it.
-  const archivedPath = `${filePath}.migrated`;
-  const archivedState = await readLegacyJsonFile(archivedPath, parseLegacyConversationStore);
-  return archivedState ? { filePath: archivedPath, state: archivedState, archived: true } : null;
-}
-
 async function readLegacyJsonFile<T>(
   filePath: string,
   parse: (value: unknown) => T | null,
@@ -211,16 +192,6 @@ async function readLegacyJsonFile<T>(
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
-
-function parseLegacyConversationStore(value: unknown): MSTeamsLegacyConversationStoreData | null {
-  if (!isRecord(value) || value.version !== 1 || !isRecord(value.conversations)) {
-    return null;
-  }
-  return normalizeMSTeamsLegacyConversationStore({
-    version: 1,
-    conversations: value.conversations as Record<string, StoredConversationReference>,
-  });
 }
 
 function resolveLegacyConversationId(
