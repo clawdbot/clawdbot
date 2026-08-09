@@ -15,6 +15,7 @@ import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js"
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
@@ -31,7 +32,6 @@ import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
-  resolveCanonicalMainSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";

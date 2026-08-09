@@ -5,6 +5,7 @@ import {
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { AgentsListResult } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   callGateway,
@@ -13,7 +14,6 @@ import {
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";
-import { resolveCanonicalMainSessionKey } from "../routing/session-key.js";
 import {
   parseSessionTargetInput,
   SessionTargetParseError,

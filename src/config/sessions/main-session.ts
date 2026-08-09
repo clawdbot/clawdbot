@@ -3,10 +3,10 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
-  resolveCanonicalMainSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { resolveCanonicalMainSessionKey } from "./main-session-key.js";
 import type { SessionScope } from "./types.js";
 
 const FALLBACK_DEFAULT_AGENT_ID = "main";

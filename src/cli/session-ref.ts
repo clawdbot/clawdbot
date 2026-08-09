@@ -5,7 +5,7 @@ import {
 } from "@openclaw/session-url-contract/parse";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
-import { normalizeWebSocketProtocol } from "../gateway/net.js";
+import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 
