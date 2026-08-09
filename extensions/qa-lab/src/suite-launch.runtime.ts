@@ -13,6 +13,7 @@ import {
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import { isQaFastModeEnabled } from "./model-selection.js";
+import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import {
   defaultQaSuiteConcurrencyForTransport,
@@ -765,10 +766,11 @@ async function runUnifiedQaSuite(params: {
       })
     : undefined;
   progress?.start();
-  const primaryModel =
-    params.runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
-  const alternateModel =
-    params.runParams?.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
+  const { primaryModel, alternateModel } = resolveQaRuntimeModelPair({
+    providerMode,
+    primaryModel: params.runParams?.primaryModel,
+    alternateModel: params.runParams?.alternateModel,
+  });
   const fastMode =
     typeof params.runParams?.fastMode === "boolean"
       ? params.runParams.fastMode
