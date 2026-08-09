@@ -1,6 +1,6 @@
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 // Control UI test helper supports modal dialog setup.
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 
 type DialogMethodName = "showModal" | "close";
@@ -41,6 +41,16 @@ export function installDialogPolyfill(): () => void {
     restoreDescriptor("showModal", snapshot.showModal);
     restoreDescriptor("close", snapshot.close);
   };
+}
+
+/** Await a dialog whose owner loads it behind a lazy import, then read it. */
+export async function waitForRenderedModalDialog(container: HTMLElement) {
+  await vi.waitFor(() => {
+    if (!container.querySelector("openclaw-modal-dialog")) {
+      throw new Error("Expected openclaw-modal-dialog");
+    }
+  });
+  return getRenderedModalDialog(container);
 }
 
 export async function getRenderedModalDialog(container: HTMLElement) {

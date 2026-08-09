@@ -33,6 +33,8 @@ type AgentRunContext = {
 type AgentRunContextOwnership = {
   lifecycleGeneration: string;
   claimIds: Set<string>;
+  /** Detached task ids exist only for the exact execution claims that own them. */
+  taskRunIds?: Map<string, string>;
   preserveAfterRelease: boolean;
   clearRequested: boolean;
   exclusiveClaimId?: string;
@@ -257,6 +259,31 @@ export function getAgentRunContext(runId: string): AgentRunContext | undefined {
   return getAgentRunRegistryState().contexts.get(runId);
 }
 
+export function bindAgentRunTaskRunId(runId: string, claimId: string, taskRunId: string): boolean {
+  const normalizedTaskRunId = taskRunId.trim();
+  const ownership = getAgentRunRegistryState().owners.get(runId);
+  if (!normalizedTaskRunId || !ownership?.claimIds.has(claimId)) {
+    return false;
+  }
+  ownership.taskRunIds ??= new Map();
+  ownership.taskRunIds.set(claimId, normalizedTaskRunId);
+  return true;
+}
+
+export function getAgentRunTaskRunId(runId: string): string | undefined {
+  const ownership = getAgentRunRegistryState().owners.get(runId);
+  if (!ownership?.taskRunIds) {
+    return undefined;
+  }
+  const taskRunIds = new Set<string>();
+  for (const [claimId, taskRunId] of ownership.taskRunIds) {
+    if (ownership.claimIds.has(claimId)) {
+      taskRunIds.add(taskRunId);
+    }
+  }
+  return taskRunIds.size === 1 ? taskRunIds.values().next().value : undefined;
+}
+
 /** Holds an existing run context only while its current execution awaits lane admission. */
 export function retainQueuedAgentRunContext(
   runId: string,
@@ -465,6 +492,7 @@ export function releaseAgentRunContext(runId: string, claimId: string | undefine
     return;
   }
   const versionBeforeRelease = readAgentRunIndexVersion();
+  owners.taskRunIds?.delete(claimId);
   owners.clearListeners?.delete(claimId);
   if (owners.exclusiveClaimId === claimId) {
     owners.exclusiveClaimId = undefined;

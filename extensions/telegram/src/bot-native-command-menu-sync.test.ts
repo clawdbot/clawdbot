@@ -327,7 +327,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
     expect((localizedPayload[0] as { description: string }).description).toHaveLength(256);
   });
 
-  it("prioritizes configured, canonical, then alias commands under localization-only pressure", async () => {
+  it("preserves canonical source order under localization-only pressure", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
     const localizedDescription = "한".repeat(250);
@@ -342,17 +342,16 @@ describe("bot-native-command-menu sync lifecycle", () => {
       setMyCommands,
       commandsToRegister: [
         {
-          command: "early_alias",
-          description: "Alias",
-          descriptionLocalizations: { ko: localizedDescription },
-          isAlias: true,
-        },
-        ...canonical,
-        {
           command: "configured",
           description: "Configured",
           descriptionLocalizations: { ko: localizedDescription },
-          isConfigured: true,
+        },
+        ...canonical,
+        {
+          command: "late_alias",
+          description: "Alias",
+          descriptionLocalizations: { ko: localizedDescription },
+          isAlias: true,
         },
       ],
       accountId: `test-localized-pressure-${Date.now()}`,
@@ -365,7 +364,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
     expect(localizedNames).toEqual([
       "configured",
       ...canonical.map(({ command }) => command),
-      "early_alias",
+      "late_alias",
     ]);
     expect(setMyCommandsPayload(setMyCommands, 3)).toEqual(setMyCommandsPayload(setMyCommands, 2));
   });
@@ -379,10 +378,9 @@ describe("bot-native-command-menu sync lifecycle", () => {
       setMyCommands,
       commandsToRegister: [
         {
-          command: "early_alias",
-          description: "Alias",
-          descriptionLocalizations: { ko: "별칭" },
-          isAlias: true,
+          command: "configured",
+          description: "Configured",
+          descriptionLocalizations: { ko: "설정" },
         },
         {
           command: "canonical",
@@ -390,10 +388,10 @@ describe("bot-native-command-menu sync lifecycle", () => {
           descriptionLocalizations: { ko: "표준" },
         },
         {
-          command: "configured",
-          description: "Configured",
-          descriptionLocalizations: { ko: "설정" },
-          isConfigured: true,
+          command: "late_alias",
+          description: "Alias",
+          descriptionLocalizations: { ko: "별칭" },
+          isAlias: true,
         },
       ],
       accountId: `test-localized-no-pressure-${Date.now()}`,
@@ -401,9 +399,9 @@ describe("bot-native-command-menu sync lifecycle", () => {
 
     await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
     expect(setMyCommandsPayload(setMyCommands, 2)).toEqual([
-      { command: "early_alias", description: "별칭" },
-      { command: "canonical", description: "표준" },
       { command: "configured", description: "설정" },
+      { command: "canonical", description: "표준" },
+      { command: "late_alias", description: "별칭" },
     ]);
     expect(setMyCommandsPayload(setMyCommands, 3)).toEqual(setMyCommandsPayload(setMyCommands, 2));
   });
@@ -505,7 +503,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
     expect(setMyCommands).toHaveBeenCalledTimes(2);
   });
 
-  it("ignores internal priority metadata in the requested-state hash (#32017)", async () => {
+  it("ignores isAlias and isSkill metadata in the requested-state hash (#32017)", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
     const accountId = `test-priority-hash-${Date.now()}`;
@@ -518,7 +516,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
           command: "skip_test",
           description: "Skip test command",
           isAlias: true,
-          isConfigured: true,
+          isSkill: true,
         },
       ],
       accountId,

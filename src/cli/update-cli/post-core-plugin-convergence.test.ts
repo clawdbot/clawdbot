@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 
 const mocks = vi.hoisted(() => ({
   listManagedPluginNpmRoots: vi.fn(),
+  maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
   relinkOpenClawPeerDependenciesInManagedNpmRoot: vi.fn(),
   runPluginPayloadSmokeCheck: vi.fn(),
@@ -14,6 +15,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../commands/doctor/shared/missing-configured-plugin-install.js", () => ({
   repairMissingConfiguredPluginInstalls: mocks.repairMissingConfiguredPluginInstalls,
+}));
+vi.mock("../../commands/doctor-plugin-registry.js", () => ({
+  maybeRepairStaleManagedNpmBundledPlugins: mocks.maybeRepairStaleManagedNpmBundledPlugins,
 }));
 vi.mock("../../plugins/plugin-peer-link.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/plugin-peer-link.js")>();
@@ -23,15 +27,20 @@ vi.mock("../../plugins/plugin-peer-link.js", async (importOriginal) => {
       mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot,
   };
 });
-vi.mock("../../plugins/npm-project-roots.js", () => ({
-  listManagedPluginNpmRoots: mocks.listManagedPluginNpmRoots,
-}));
+vi.mock("../../plugins/npm-project-roots.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/npm-project-roots.js")>();
+  return {
+    ...actual,
+    listManagedPluginNpmRoots: mocks.listManagedPluginNpmRoots,
+  };
+});
 vi.mock("./plugin-payload-validation.js", () => ({
   runPluginPayloadSmokeCheck: mocks.runPluginPayloadSmokeCheck,
 }));
 
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { resolvePluginNpmGenerationProjectDir } from "../../plugins/install-paths.js";
 import { VERSION } from "../../version.js";
 import {
   filterRecordsToActive,
@@ -50,6 +59,7 @@ describe("runPostCorePluginConvergence", () => {
     mocks.listManagedPluginNpmRoots.mockImplementation((npmRoot: string) =>
       Promise.resolve([npmRoot]),
     );
+    mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(false);
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [],
@@ -64,7 +74,11 @@ describe("runPostCorePluginConvergence", () => {
     mocks.runPluginPayloadSmokeCheck.mockResolvedValue({ checked: [], failures: [] });
   });
 
-  function writeBundledPlugin(rootDir: string, pluginId: string): string {
+  function writeBundledPlugin(
+    rootDir: string,
+    pluginId: string,
+    version = "2026.5.20-beta.1",
+  ): string {
     const pluginDir = path.join(rootDir, pluginId);
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n", "utf8");
@@ -73,7 +87,7 @@ describe("runPostCorePluginConvergence", () => {
       JSON.stringify({
         id: pluginId,
         name: pluginId,
-        version: "2026.5.20-beta.1",
+        version,
         configSchema: { type: "object" },
       }),
       "utf8",
@@ -82,7 +96,7 @@ describe("runPostCorePluginConvergence", () => {
       path.join(pluginDir, "package.json"),
       JSON.stringify({
         name: `@openclaw/${pluginId}`,
-        version: "2026.5.20-beta.1",
+        version,
       }),
       "utf8",
     );
@@ -96,6 +110,15 @@ describe("runPostCorePluginConvergence", () => {
       env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
     });
     expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledTimes(1);
+    expect(mocks.maybeRepairStaleManagedNpmBundledPlugins).toHaveBeenCalledWith({
+      config: cfg,
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+      prompter: { shouldRepair: true },
+    });
     expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
       cfg,
       env: {
@@ -104,6 +127,17 @@ describe("runPostCorePluginConvergence", () => {
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
     });
+    expect(
+      expectDefined(
+        mocks.maybeRepairStaleManagedNpmBundledPlugins.mock.invocationCallOrder[0],
+        "stale managed cleanup call order",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        mocks.repairMissingConfiguredPluginInstalls.mock.invocationCallOrder[0],
+        "missing configured plugin repair call order",
+      ),
+    );
   });
 
   it("checks active payloads without running repair or peer-link convergence", async () => {
@@ -370,6 +404,54 @@ describe("runPostCorePluginConvergence", () => {
       'Removed stale local bundled plugin install record "discord".',
     ]);
     expect(result.installRecords).toEqual({ brave: baseline.brave });
+  });
+
+  it("retires a stale managed generation when its official plugin is now bundled", async () => {
+    const stateDir = tempDirs.make("openclaw-post-core-convergence-");
+    const bundledRoot = tempDirs.make("openclaw-post-core-bundled-");
+    writeBundledPlugin(bundledRoot, "codex", VERSION);
+    const npmRoot = resolvePluginNpmGenerationProjectDir({
+      npmDir: path.join(stateDir, "npm"),
+      packageName: "@openclaw/codex",
+      generationKey: "@openclaw/codex@2026.7.2-beta.7",
+    });
+    const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "codex");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmRoot, "package.json"),
+      JSON.stringify({ dependencies: { "@openclaw/codex": "2026.7.2-beta.7" } }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", version: "2026.7.2-beta.7" }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(packageDir, "openclaw.plugin.json"),
+      JSON.stringify({ id: "codex", name: "codex", configSchema: { type: "object" } }),
+      "utf8",
+    );
+    const actualDoctorRegistry = await vi.importActual<
+      typeof import("../../commands/doctor-plugin-registry.js")
+    >("../../commands/doctor-plugin-registry.js");
+    mocks.maybeRepairStaleManagedNpmBundledPlugins.mockImplementation(
+      actualDoctorRegistry.maybeRepairStaleManagedNpmBundledPlugins,
+    );
+
+    await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
+      },
+      env: {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+        VITEST: "true",
+      },
+    });
+
+    expect(fs.existsSync(packageDir)).toBe(false);
   });
 
   it("forwards ClawHub risk acknowledgement options to repair", async () => {
