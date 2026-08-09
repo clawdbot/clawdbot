@@ -403,7 +403,7 @@ function expectFailureAnnounceCall(params: {
   });
   const payload = expectDefined(args[5], "failure reply payload");
   if (params.includeRunStarted) {
-    const lines = payload.text.split("\n");
+    const lines = expectDefined(payload.text, "failure reply text").split("\n");
     expect(lines).toEqual([
       params.message,
       expect.stringMatching(/^Run started: \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? \S+$/),
