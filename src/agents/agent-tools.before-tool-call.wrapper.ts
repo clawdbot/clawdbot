@@ -437,7 +437,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, params, "tool_preparation");
-        rethrowWithLoopWarning(tagBeforeToolCallFailure(error, signal));
+        return rethrowWithLoopWarning(tagBeforeToolCallFailure(error, signal));
       }
       const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params: preparedParams });
       const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params: preparedParams });
@@ -454,7 +454,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, hookParams, "before_tool_call");
-        rethrowWithLoopWarning(tagBeforeToolCallFailure(error, signal));
+        return rethrowWithLoopWarning(tagBeforeToolCallFailure(error, signal));
       }
       if (outcome.blocked) {
         if (outcome.kind !== "veto") {
@@ -464,7 +464,7 @@ export function wrapToolWithBeforeToolCallHook(
             outcome.deniedReason === "plugin-approval" ? "plugin_approval" : "before_tool_call",
             outcome.deniedReason,
           );
-          rethrowWithLoopWarning(
+          return rethrowWithLoopWarning(
             new BeforeToolCallFailureError(outcome.reason, outcome.disposition),
           );
         }
@@ -499,7 +499,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
-        rethrowWithLoopWarning(tagBeforeToolCallFailure(error, signal));
+        return rethrowWithLoopWarning(tagBeforeToolCallFailure(error, signal));
       }
       let onImplementationStart: (() => void) | undefined;
       if (prepareControl) {
@@ -511,7 +511,7 @@ export function wrapToolWithBeforeToolCallHook(
           }
           onImplementationStart = decision.start;
         } catch (error) {
-          rethrowWithLoopWarning(error);
+          return rethrowWithLoopWarning(error);
         }
       }
       // A voice grant binds the post-finalizer execution shape. Consume it only
@@ -534,7 +534,7 @@ export function wrapToolWithBeforeToolCallHook(
         runAgentToolSourceExecutionGuard(tool);
         onImplementationStart?.();
       } catch (error) {
-        rethrowWithLoopWarning(error);
+        return rethrowWithLoopWarning(error);
       }
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
@@ -649,7 +649,7 @@ export function wrapToolWithBeforeToolCallHook(
               : tool.resultContentSource,
           toolCallOrdinal,
         });
-        rethrowWithLoopWarning(err);
+        return rethrowWithLoopWarning(err);
       }
     },
   };
