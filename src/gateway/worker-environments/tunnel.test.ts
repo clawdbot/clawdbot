@@ -31,7 +31,11 @@ describe("worker tunnel manager", () => {
     fake.starts[0]?.process.becomeReady();
     await starting;
     const close = vi.fn();
-    manager.desktop.attachObserver("worker:desktop-cascade", { control: false, close });
+    manager.desktop.attachObserver("worker:desktop-cascade", {
+      control: false,
+      ownerEpoch: 2,
+      close,
+    });
 
     await manager.stop("worker:desktop-cascade", 1);
 

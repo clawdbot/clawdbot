@@ -182,16 +182,24 @@ describe("worker desktop tunnels", () => {
     await starting;
 
     const firstClose = vi.fn();
-    const first = manager.attachObserver("worker:one", { control: true, close: firstClose });
-    const second = manager.attachObserver("worker:one", { control: true, close: vi.fn() });
+    const first = manager.attachObserver("worker:one", {
+      control: true,
+      ownerEpoch: 1,
+      close: firstClose,
+    });
+    const second = manager.attachObserver("worker:one", {
+      control: true,
+      ownerEpoch: 1,
+      close: vi.fn(),
+    });
     expect(firstClose).toHaveBeenCalledWith(4000, "control-taken");
     first?.release();
     const observers = Array.from({ length: 7 }, () =>
-      manager.attachObserver("worker:one", { control: false, close: vi.fn() }),
+      manager.attachObserver("worker:one", { control: false, ownerEpoch: 1, close: vi.fn() }),
     );
     expect(observers.every(Boolean)).toBe(true);
     expect(
-      manager.attachObserver("worker:one", { control: false, close: vi.fn() }),
+      manager.attachObserver("worker:one", { control: false, ownerEpoch: 1, close: vi.fn() }),
     ).toBeUndefined();
     second?.release();
     observers.forEach((observer) => observer?.release());
@@ -207,16 +215,51 @@ describe("worker desktop tunnels", () => {
     fake.starts[0]?.process.becomeReady();
     await starting;
     const close = vi.fn();
-    const observer = manager.attachObserver("worker:one", { control: false, close });
+    const observer = manager.attachObserver("worker:one", { control: false, ownerEpoch: 1, close });
     observer?.release();
     await vi.advanceTimersByTimeAsync(49);
     expect(fake.starts[0]?.process.stopCount).toBe(0);
-    const replacement = manager.attachObserver("worker:one", { control: false, close });
+    const replacement = manager.attachObserver("worker:one", {
+      control: false,
+      ownerEpoch: 1,
+      close,
+    });
     await vi.advanceTimersByTimeAsync(50);
     expect(fake.starts[0]?.process.stopCount).toBe(0);
     fake.starts[0]?.process.exit();
     await vi.waitFor(() => expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed"));
     replacement?.release();
+  });
+
+  it("refuses observer tokens minted against a replaced owner epoch", async () => {
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    const first = acquire(manager, 1);
+    await waitForStarts(fake.starts, 1);
+    fake.starts[0]?.process.becomeReady();
+    await first;
+
+    const second = acquire(manager, 2);
+    await waitForStarts(fake.starts, 2);
+    fake.starts[1]?.process.becomeReady();
+    await second;
+
+    const controllerClose = vi.fn();
+    const controller = manager.attachObserver("worker:one", {
+      control: true,
+      ownerEpoch: 2,
+      close: controllerClose,
+    });
+    expect(controller).toBeDefined();
+
+    // A stale control token must not reach the replacement entry or evict its controller.
+    expect(
+      manager.attachObserver("worker:one", { control: true, ownerEpoch: 1, close: vi.fn() }),
+    ).toBeUndefined();
+    expect(controllerClose).not.toHaveBeenCalled();
+
+    controller?.release();
+    await manager.stopAll();
   });
 
   it("rejects Windows gateway hosts before spawning SSH", async () => {

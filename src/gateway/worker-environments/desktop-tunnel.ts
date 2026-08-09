@@ -28,6 +28,8 @@ while :; do sleep 3600; done
 
 type WorkerDesktopObserver = {
   control: boolean;
+  /** Epoch the observer token was minted against; a stale token must not reach a newer entry. */
+  ownerEpoch: number;
   close(code: number, reason: string): void;
 };
 
@@ -263,6 +265,11 @@ export function createWorkerDesktopTunnels(deps: {
   function attachObserver(environmentId: string, observer: WorkerDesktopObserver) {
     const entry = entries.get(environmentId);
     if (!entry || !entry.readySettled || entry.stopped || entry.observers.size >= MAX_OBSERVERS) {
+      return undefined;
+    }
+    // A token minted against a replaced entry must not reach this one; otherwise a stale
+    // control token would evict the current controller of a desktop it never observed.
+    if (observer.ownerEpoch !== entry.ownerEpoch) {
       return undefined;
     }
     clearTimeout(entry.lingerTimer);

@@ -109,6 +109,7 @@ export function handleWorkerDesktopUpgrade(
     // View-only is enforced here at the RFB message boundary; the UI setting is only UX.
     const observer = deps.tunnels.attachObserver(entry.environmentId, {
       control: entry.control,
+      ownerEpoch: entry.ownerEpoch,
       close: (code, reason) => ws.close(code, reason),
     });
     if (!observer) {
