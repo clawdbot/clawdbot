@@ -1840,6 +1840,26 @@ describe("cron service ops persist rollback", () => {
     expect(stored?.name).toBe("daily cleanup");
   });
 
+  it("does not clone the store before a missing or invalid update reaches commit", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const job = await add(state, makeCreateInput("daily cleanup"));
+    const clone = vi.spyOn(globalThis, "structuredClone");
+
+    await expect(update(state, "missing-job", { name: "missing" })).rejects.toThrow(
+      "unknown cron job id",
+    );
+    await expect(
+      update(state, job.id, { schedule: { kind: "cron", expr: "0 0 30 2 *" } }),
+    ).rejects.toThrow(/no upcoming run time/);
+
+    expect(clone).not.toHaveBeenCalledWith(state.store);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
   it("keeps a removed job in the live store when persist fails", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-06-09T00:00:00.000Z");
@@ -1876,6 +1896,37 @@ describe("cron service ops persist rollback", () => {
 
     expect(state.store?.jobs[0]?.state.startupCatchupAtMs).toBe(now + 5_000);
     expect(state.store?.jobs.map((entry) => entry.id)).toEqual([job.id]);
+  });
+
+  it("restores read-maintenance fields in place when persist fails", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const state = createOkIsolatedCronState({ storePath, now });
+    const job = await add(state, {
+      ...makeCreateInput("read repair"),
+      schedule: { kind: "every", everyMs: 60_000 },
+    });
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+    job.schedule = { kind: "every", everyMs: 60_000 };
+    job.state.nextRunAtMs = Number.NaN;
+    job.state.startupCatchupAtMs = now - 1;
+    const storeIdentity = state.store;
+    const jobIdentity = job;
+    const before = structuredClone({
+      enabled: job.enabled,
+      schedule: job.schedule,
+      state: job.state,
+    });
+
+    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(new Error("disk full"));
+
+    await expect(list(state, { includeDisabled: true })).rejects.toThrow("disk full");
+
+    expect(state.store).toBe(storeIdentity);
+    expect(state.store?.jobs[0]).toBe(jobIdentity);
+    expect({ enabled: job.enabled, schedule: job.schedule, state: job.state }).toEqual(before);
   });
 
   it("recovers after a failed persist so the next mutation succeeds", async () => {

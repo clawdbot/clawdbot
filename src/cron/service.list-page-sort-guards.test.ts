@@ -242,7 +242,7 @@ describe("cron listPage sort guards", () => {
     expect(page.jobs[0]?.state.lastStatus).toBeUndefined();
   });
 
-  it("clones only the requested page while revisions cover off-page changes", async () => {
+  it("listPage does not clone the complete store, detaches only requested rows, and revisions cover off-page changes", async () => {
     const jobs = [
       createBaseJob({ id: "job-a", name: "alpha" }),
       createBaseJob({ id: "job-b", name: "beta" }),
@@ -256,6 +256,7 @@ describe("cron listPage sort guards", () => {
       const page = await listPage(state, options);
       const clonedArrays = clone.mock.calls.filter(([value]) => Array.isArray(value));
 
+      expect(clone).not.toHaveBeenCalledWith(state.store);
       expect(clonedArrays).toHaveLength(1);
       expect(clonedArrays[0]?.[0]).toEqual([jobs[1]]);
       expect(page.jobs[0]).not.toBe(jobs[1]);

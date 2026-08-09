@@ -390,7 +390,6 @@ export async function updateLoadedJob(params: {
     throw new Error("heartbeat payloads are system-owned; jobs cannot be patched to them");
   }
   await ensureLoaded(state, { skipRecompute: true });
-  const snapshot = snapshotStoreForRollback(state);
   const job = findJobOrThrow(state, id);
   // Existing monitors are config-driven: any patch (disable, reschedule,
   // repurpose) would silently diverge from agents.*.heartbeat until the next
@@ -433,6 +432,7 @@ export async function updateLoadedJob(params: {
     scheduleChanged: patch.schedule !== undefined,
   });
   opts?.commitGuard?.();
+  const snapshot = snapshotStoreForRollback(state);
   await persistUpdatedJob({ state, snapshot, previousJob: job, nextJob });
   return nextJob;
 }
@@ -479,12 +479,16 @@ export async function remove(
     | undefined;
   const result = await locked(state, async () => {
     warnIfDisabled(state, "remove");
+    const previousStore = state.store;
     await ensureLoaded(state, { skipRecompute: true });
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
     const removedJob = state.store.jobs.find((j) => j.id === id);
     if (!removedJob) {
+      if (state.store !== previousStore) {
+        armTimer(state);
+      }
       return { ok: true, removed: false } as const;
     }
     // Config is the monitor's source of truth: ad-hoc deletion would disable
