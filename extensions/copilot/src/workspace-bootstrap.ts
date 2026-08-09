@@ -42,7 +42,7 @@ type CopilotWorkspaceBootstrapResult = {
 
 /**
  * Loads OpenClaw workspace bootstrap files (IDENTITY.md, SOUL.md,
- * HEARTBEAT.md, USER.md, TOOLS.md, BOOTSTRAP.md, MEMORY.md, ...) using
+ * HEARTBEAT.md, USER.md, BOOTSTRAP.md, MEMORY.md, ...) using
  * the shared core helper PI and codex both use, then renders them as a
  * single string suitable for `SessionConfig.systemMessage.content` on
  * the Copilot SDK.
@@ -89,6 +89,7 @@ export async function resolveCopilotWorkspaceBootstrapContext(params: {
       config: attempt.config,
       sessionKey: readNonEmptyString((attempt as { sessionKey?: unknown }).sessionKey),
       sessionId: readNonEmptyString(attempt.sessionId),
+      chatType: attempt.chatType,
       agentId: readNonEmptyString(attempt.agentId),
       warn: params.warn,
       contextMode: attempt.bootstrapContextMode,

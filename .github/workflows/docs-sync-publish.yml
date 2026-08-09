@@ -6,7 +6,12 @@ on:
       - main
     paths:
       - docs/**
+      - scripts/docs-list.js
       - scripts/docs-sync-publish.mjs
+      - scripts/check-docs-mdx.mjs
+      - scripts/check-docs-mdx.mts
+      - scripts/lib/mintlify-accordion.mjs
+      - scripts/lib/tsx-cli-shim.mjs
       - .github/workflows/docs-sync-publish.yml
   workflow_dispatch:
 
@@ -83,7 +88,7 @@ jobs:
       - name: Install docs MDX checker dependency
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         working-directory: publish
-        run: npm install --no-save --package-lock=false @mdx-js/mdx@3.1.1
+        run: npm install --no-save --package-lock=false @mdx-js/mdx@3.1.1 tsx@4.23.1
 
       - name: Check publish docs MDX
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''

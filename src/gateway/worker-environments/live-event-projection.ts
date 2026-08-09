@@ -5,7 +5,6 @@ import {
   sanitizeToolResult,
 } from "../../agents/embedded-agent-subscribe.tools.js";
 import { normalizeToolName } from "../../agents/tool-policy.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 
 export type WorkerLiveTrajectoryTarget = {
@@ -51,16 +50,16 @@ export function createWorkerLiveTrajectoryRecorder(params: {
   runId: string;
   target: WorkerLiveTrajectoryTarget;
 }): WorkerLiveTrajectoryRecorder {
-  const agentId = params.target.agentId ?? "main";
   return createTrajectoryRuntimeRecorder({
     runId: params.runId,
     sessionId: params.target.sessionId,
     sessionKey: params.target.sessionKey,
-    sessionFile: formatSqliteSessionFileMarker({
-      agentId,
+    sessionTarget: {
+      agentId: params.target.agentId ?? "main",
       sessionId: params.target.sessionId,
+      sessionKey: params.target.sessionKey,
       storePath: params.target.storePath,
-    }),
+    },
   });
 }
 

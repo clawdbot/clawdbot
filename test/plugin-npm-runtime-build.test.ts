@@ -1,5 +1,12 @@
 // Plugin npm runtime build tests validate plugin runtime package builds.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -7,7 +14,7 @@ import {
   listMissingPluginNpmRuntimeHostExports,
   listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
-} from "../scripts/lib/plugin-npm-runtime-build.mjs";
+} from "../scripts/lib/plugin-npm-runtime-build.mts";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -29,6 +36,43 @@ function expectPluginNpmRuntimeBuildPlan(
 }
 
 describe("plugin npm runtime build planning", () => {
+  it("rejects a symlinked package dist root before building", async () => {
+    const syntheticRepoRoot = tempDirs.make("openclaw-plugin-runtime-output-root-");
+    const packageDir = path.join(syntheticRepoRoot, "extensions", "demo");
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(
+      path.join(syntheticRepoRoot, "package.json"),
+      JSON.stringify({ version: "1.0.0" }),
+    );
+    writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/demo",
+        version: "1.0.0",
+        openclaw: {
+          compat: { pluginApi: "1.0.0" },
+          extensions: ["./index.ts"],
+          release: { publishToNpm: true },
+        },
+      }),
+    );
+    writeFileSync(path.join(packageDir, "index.ts"), "export default {};\n");
+    const targetDir = path.join(syntheticRepoRoot, "live-gateway-dist");
+    mkdirSync(targetDir);
+    writeFileSync(path.join(targetDir, "sentinel.js"), "keep\n");
+    symlinkSync(targetDir, path.join(packageDir, "dist"), "dir");
+
+    await expect(
+      buildPluginNpmRuntime({
+        repoRoot: syntheticRepoRoot,
+        packageDir,
+        logLevel: "silent",
+      }),
+    ).rejects.toThrow(/symbolic link/u);
+    expect(readFileSync(path.join(targetDir, "sentinel.js"), "utf8")).toBe("keep\n");
+    expect(readlinkSync(path.join(packageDir, "dist"))).toBe(targetDir);
+  });
+
   it("plans package-local runtime entries for every publishable plugin package", () => {
     const packageDirs = listPublishablePluginPackageDirs({ repoRoot });
     expect(packageDirs.length).toBeGreaterThan(0);
@@ -49,7 +93,7 @@ describe("plugin npm runtime build planning", () => {
       expectDistRelativePaths(plan.runtimeBuildOutputs);
       expect(plan.packageFiles).toContain("dist/**");
       expect(plan.packagePeerMetadata.peerDependencies.openclaw).toBe(
-        plan.packageJson.openclaw.compat.pluginApi,
+        plan.packageJson.openclaw?.compat?.pluginApi,
       );
       expect(plan.packagePeerMetadata.peerDependenciesMeta.openclaw.optional).toBe(true);
     }

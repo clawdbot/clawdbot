@@ -12,6 +12,7 @@ import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  listOpenClawRegisteredAgentDatabases,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -103,7 +104,12 @@ function createLegacyDatabaseFixture(params: {
   } finally {
     database.close();
   }
-  registerOpenClawAgentDatabase({ agentId, env: params.env, path: databasePath });
+  registerOpenClawAgentDatabase({
+    agentId,
+    env: params.env,
+    path: databasePath,
+    schemaVersion: PREVIOUS_VERSION,
+  });
   return databasePath;
 }
 
@@ -801,6 +807,13 @@ describe("legacy media persistence doctor migration", () => {
     const result = migrateLegacyMediaPersistence({ env });
     expect(result.warnings).toHaveLength(1);
     expect(readDatabaseSnapshot(databasePath).version.user_version).toBe(PREVIOUS_VERSION);
+    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
+    expect(
+      listOpenClawRegisteredAgentDatabases({
+        env,
+        includeIncompatibleSchemaVersions: true,
+      }),
+    ).toEqual([expect.objectContaining({ path: databasePath, schemaVersion: PREVIOUS_VERSION })]);
   });
 
   it("aborts one database on invalid trajectory JSON without advancing its version", () => {

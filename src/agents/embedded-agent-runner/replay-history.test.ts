@@ -165,7 +165,7 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("preserves nonzero-usage silent-reply turns (stopReason=stop, content=[]) untouched", () => {
-    // run.empty-error-retry.test.ts treats `stopReason:"stop"` + `content:[]`
+    // run.shared-integration.test.ts treats `stopReason:"stop"` + `content:[]`
     // as a legitimate NO_REPLY / silent-reply, NOT a crash. Substituting the
     // failure sentinel here would inject a fabricated "[assistant turn failed
     // before producing content]" into the next provider request and change
@@ -545,8 +545,7 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("drops a trailing assistant turn that already carries the persisted sentinel content (#77228)", () => {
-    // Covers the case where session-file-repair persisted the sentinel to
-    // disk; on the next turn the loaded transcript ends with a non-empty
+    // Covers a doctor-imported legacy sentinel; on the next turn the loaded transcript ends with a non-empty
     // assistant turn whose only content is the sentinel text. Provider
     // request must still end with user.
     const persistedSentinel = bedrockAssistant([{ type: "text", text: FALLBACK_TEXT }], "error");

@@ -8,6 +8,15 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
+
+function dispatchTestChannelMessageAction(
+  overrides: Omit<Parameters<typeof dispatchChannelMessageAction>[0], "cfg">,
+) {
+  return dispatchChannelMessageAction({
+    cfg: {} as OpenClawConfig,
+    ...overrides,
+  });
+}
 import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
 
 const handleAction = vi.fn(async (_ctx: ChannelMessageActionContext) => jsonResult({ ok: true }));
@@ -46,10 +55,9 @@ describe("dispatchChannelMessageAction trusted sender guard", () => {
 
   it("rejects privileged discord moderation action without trusted sender in tool context", async () => {
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "discord",
         action: "kick",
-        cfg: {} as OpenClawConfig,
         params: { guildId: "g1", userId: "u1" },
         toolContext: { currentChannelProvider: "discord" },
       }),
@@ -58,10 +66,9 @@ describe("dispatchChannelMessageAction trusted sender guard", () => {
   });
 
   it("allows privileged discord moderation action with trusted sender in tool context", async () => {
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "discord",
       action: "kick",
-      cfg: {} as OpenClawConfig,
       params: { guildId: "g1", userId: "u1" },
       requesterSenderId: "trusted-user",
       toolContext: { currentChannelProvider: "discord" },
@@ -71,10 +78,9 @@ describe("dispatchChannelMessageAction trusted sender guard", () => {
   });
 
   it("does not require trusted sender without tool context", async () => {
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "discord",
       action: "kick",
-      cfg: {} as OpenClawConfig,
       params: { guildId: "g1", userId: "u1" },
     });
 
@@ -150,10 +156,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   it("allows a non-bundled delegated read of the exact current conversation and account", async () => {
     setReadPlugin();
 
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "discord",
       action: "read",
-      cfg: {} as OpenClawConfig,
       params: { channelId: "channel:current" },
       accountId: "Work",
       requesterAccountId: "work",
@@ -176,10 +181,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       setReadPlugin();
 
       await expect(
-        dispatchChannelMessageAction({
+        dispatchTestChannelMessageAction({
           channel: "discord",
           action: "read",
-          cfg: {} as OpenClawConfig,
           params: {
             channelId: "other",
             conversationReadOrigin: "direct-operator",
@@ -205,10 +209,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   it("rejects a non-core runtime action before any plugin callback", async () => {
     setReadPlugin();
 
-    const result = await dispatchChannelMessageAction({
+    const result = await dispatchTestChannelMessageAction({
       channel: "discord",
       action: "forged-read" as never,
-      cfg: {} as OpenClawConfig,
       params: { channelId: "other" },
       conversationReadOrigin: "direct-operator",
     });
@@ -222,10 +225,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   it("matches a sanitized channelId to a typed current-channel target", async () => {
     setReadPlugin();
 
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "discord",
       action: "read",
-      cfg: {} as OpenClawConfig,
       params: {
         target: "current",
         channelId: "current",
@@ -291,10 +293,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "discord",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: testCase.params,
         accountId: testCase.accountId,
         requesterAccountId: testCase.requesterAccountId,
@@ -314,10 +315,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   it("allows direct operators through a non-bundled adapter", async () => {
     setReadPlugin();
 
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "discord",
       action: "read",
-      cfg: {} as OpenClawConfig,
       params: { channelId: "other" },
       conversationReadOrigin: "direct-operator",
     });
@@ -329,11 +329,34 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
+      dispatchTestChannelMessageAction({
+        channel: "discord",
+        action: "read",
+        params: { channelId: "channel:123" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentMessagingTarget: "user:123",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("does not rewrite an untyped channelId mirror from a typed user target", async () => {
+    setReadPlugin();
+
+    await expect(
       dispatchChannelMessageAction({
         channel: "discord",
         action: "read",
         cfg: {} as OpenClawConfig,
-        params: { channelId: "channel:123" },
+        params: {
+          target: "123",
+          channelId: "123",
+        },
         accountId: "default",
         requesterAccountId: "default",
         conversationReadOrigin: "delegated",
@@ -350,10 +373,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "discord",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: { channelId: "CHANNEL:CURRENT" },
         accountId: "default",
         requesterAccountId: "default",
@@ -371,10 +393,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "discord",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: { channelId: "current" },
         requesterAccountId: "work",
         conversationReadOrigin: "delegated",
@@ -391,10 +412,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "discord",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: { target: "user:123" },
         accountId: "default",
         requesterAccountId: "default",
@@ -412,10 +432,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "discord",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           target: "channel:123",
           channelId: "123",
@@ -437,10 +456,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "discord",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           target: "123",
         },
@@ -461,10 +479,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin();
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "discord",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           channelId: "current",
           target: "channel:other",
@@ -484,10 +501,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   it("keeps non-read actions compatible on a non-bundled adapter", async () => {
     setReadPlugin();
 
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "discord",
       action: "send",
-      cfg: {} as OpenClawConfig,
       params: { to: "other" },
       conversationReadOrigin: "delegated",
     });
@@ -498,8 +514,21 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   it("delegates configured-target policy to a bundled adapter", async () => {
     setReadPlugin({ origin: "bundled" });
 
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "discord",
+      action: "read",
+      params: { channelId: "configured" },
+      conversationReadOrigin: "delegated",
+    });
+
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
+  it("delegates Mattermost cross-channel policy to its bundled provider gate", async () => {
+    setReadPlugin({ channel: "mattermost", origin: "bundled" });
+
+    await dispatchChannelMessageAction({
+      channel: "mattermost",
       action: "read",
       cfg: {} as OpenClawConfig,
       params: { channelId: "configured" },
@@ -509,14 +538,34 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     expect(handleAction).toHaveBeenCalledOnce();
   });
 
+  it("keeps Mattermost reactions behind the host exact-current gate", async () => {
+    setReadPlugin({ channel: "mattermost", origin: "bundled" });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "mattermost",
+        action: "react",
+        cfg: {} as OpenClawConfig,
+        params: { channelId: "other", messageId: "post-1", emoji: "eyes" },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "mattermost",
+          currentChannelId: "channel:current",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
   it("keeps unaudited bundled adapters on the exact-current host limit", async () => {
     setReadPlugin({ channel: "telegram", origin: "bundled" });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "telegram",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: { channelId: "configured" },
         accountId: "default",
         requesterAccountId: "default",
@@ -535,10 +584,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     async (action) => {
       setReadPlugin({ channel: "telegram", origin: "bundled" });
 
-      await dispatchChannelMessageAction({
+      await dispatchTestChannelMessageAction({
         channel: "telegram",
         action,
-        cfg: {} as OpenClawConfig,
         params: { chatId: "-1001" },
         accountId: "default",
         requesterAccountId: "default",
@@ -558,10 +606,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin({ channel: "telegram", origin: "workspace" });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "telegram",
         action: "react",
-        cfg: {} as OpenClawConfig,
         params: { chatId: "-1001" },
         accountId: "default",
         requesterAccountId: "default",
@@ -591,10 +638,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       normalizeTarget,
     });
 
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "nextcloud-talk",
       action: "read",
-      cfg: {} as OpenClawConfig,
       params: { to: "nc:room:Current" },
       accountId: "default",
       requesterAccountId: "default",
@@ -618,10 +664,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "discord",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: { channelId: "other" },
         accountId: "default",
         requesterAccountId: "default",
@@ -647,10 +692,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
         normalizeTarget,
       });
 
-      await dispatchChannelMessageAction({
+      await dispatchTestChannelMessageAction({
         channel: "nextcloud-talk",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           target,
           to: "nextcloud-talk:current",
@@ -671,6 +715,128 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     },
   );
 
+  it("replaces an external normalization mirror with the trusted current target", async () => {
+    setReadPlugin({
+      channel: "nextcloud-talk",
+      origin: "workspace",
+      targetPrefixes: ["nextcloud-talk", "nc-talk", "nc"],
+    });
+
+    await dispatchChannelMessageAction({
+      channel: "nextcloud-talk",
+      action: "read",
+      cfg: {} as OpenClawConfig,
+      params: {
+        target: "room:current",
+        to: "room:current",
+      },
+      accountId: "default",
+      requesterAccountId: "default",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "nextcloud-talk",
+        currentChannelId: "nextcloud-talk:current",
+        currentChatType: "group",
+      },
+    });
+
+    expect(handleAction.mock.calls[0]?.[0].params).toMatchObject({
+      target: "nextcloud-talk:current",
+      to: "nextcloud-talk:current",
+    });
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a conflicting trusted target kind even when an untyped sibling exists", async () => {
+    setReadPlugin({
+      channel: "nextcloud-talk",
+      origin: "workspace",
+      targetPrefixes: ["nextcloud-talk", "nc-talk", "nc"],
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "nextcloud-talk",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: {
+          target: "room:current",
+          to: "room:current",
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "nextcloud-talk",
+          currentChannelId: "nextcloud-talk:current",
+          currentMessagingTarget: "channel:current",
+          currentChatType: "group",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects an external normalization mirror for a different conversation", async () => {
+    setReadPlugin({
+      channel: "nextcloud-talk",
+      origin: "workspace",
+      targetPrefixes: ["nextcloud-talk", "nc-talk", "nc"],
+    });
+
+    await expect(
+      dispatchChannelMessageAction({
+        channel: "nextcloud-talk",
+        action: "read",
+        cfg: {} as OpenClawConfig,
+        params: {
+          target: "room:other",
+          to: "room:other",
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelProvider: "nextcloud-talk",
+          currentChannelId: "nextcloud-talk:current",
+          currentChatType: "group",
+        },
+      }),
+    ).rejects.toThrow("requires the exact current conversation and account");
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
+  it("does not rewrite direct external targets from current context", async () => {
+    setReadPlugin({
+      channel: "nextcloud-talk",
+      origin: "workspace",
+      targetPrefixes: ["nextcloud-talk", "nc-talk", "nc"],
+    });
+
+    await dispatchChannelMessageAction({
+      channel: "nextcloud-talk",
+      action: "read",
+      cfg: {} as OpenClawConfig,
+      params: {
+        target: "room:other",
+        to: "room:other",
+      },
+      accountId: "default",
+      conversationReadOrigin: "direct-operator",
+      toolContext: {
+        currentChannelProvider: "nextcloud-talk",
+        currentChannelId: "nextcloud-talk:current",
+        currentChatType: "group",
+      },
+    });
+
+    expect(handleAction.mock.calls[0]?.[0].params).toMatchObject({
+      target: "room:other",
+      to: "room:other",
+    });
+    expect(handleAction).toHaveBeenCalledOnce();
+  });
+
   it("does not let an external provider prefix erase a conflicting target kind", async () => {
     setReadPlugin({
       channel: "nextcloud-talk",
@@ -679,10 +845,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "nextcloud-talk",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           target: "user:current",
           to: "nextcloud-talk:current",
@@ -707,10 +872,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "nextcloud-talk",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           target: "room:current",
         },
@@ -734,10 +898,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "nextcloud-talk",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           target: "group:current",
           to: "nextcloud-talk:current",
@@ -768,10 +931,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "imessage",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           target: "malformed-target",
           to: "chat_guid:iMessage;+;current",
@@ -807,10 +969,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       },
     });
 
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "imessage",
       action: "read",
-      cfg: {} as OpenClawConfig,
       params: { chatGuid: "iMessage;+;current" },
       accountId: "default",
       requesterAccountId: "default",
@@ -840,10 +1001,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       },
     });
 
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "whatsapp",
       action: "react",
-      cfg: {} as OpenClawConfig,
       params: {
         chatJid: "current@g.us",
         messageId: "current-message",
@@ -877,10 +1037,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "whatsapp",
         action: "react",
-        cfg: {} as OpenClawConfig,
         params: {
           chatJid: "sibling@g.us",
           messageId: "sibling-message",
@@ -922,10 +1081,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       });
 
       await expect(
-        dispatchChannelMessageAction({
+        dispatchTestChannelMessageAction({
           channel: "whatsapp",
           action: "react",
-          cfg: {} as OpenClawConfig,
           params: { chatJid: "current@g.us", messageId: "current-message" },
           accountId: testCase.accountId,
           requesterAccountId: testCase.requesterAccountId,
@@ -961,10 +1119,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       },
     });
 
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "imessage",
       action: "react",
-      cfg: {} as OpenClawConfig,
       params: { chatId: 42, messageId: "current-message" },
       accountId: "default",
       requesterAccountId: "default",
@@ -995,10 +1152,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       },
     });
 
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "imessage",
       action: "react",
-      cfg: {} as OpenClawConfig,
       params: { chatId: 42, messageId: "current-message" },
       accountId: "Work",
       requesterAccountId: "work",
@@ -1038,10 +1194,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     const normalizedAliasTarget = "chat_id:42";
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "imessage",
       action: "react",
-      cfg: {} as OpenClawConfig,
       params: {
         target: normalizedAliasTarget,
         to: normalizedAliasTarget,
@@ -1078,10 +1233,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "imessage",
         action: "react",
-        cfg: {} as OpenClawConfig,
         params: { chatId: 42, messageId: "current-message" },
         accountId: "default",
         requesterAccountId: "default",
@@ -1113,10 +1267,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "imessage",
         action: "react",
-        cfg: {} as OpenClawConfig,
         params: { chatId: 42, messageId: "current-message" },
         accountId: "default",
         requesterAccountId: "default",
@@ -1148,10 +1301,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "imessage",
         action: "react",
-        cfg: {} as OpenClawConfig,
         params: {
           target: "other-handle",
           chatId: 42,
@@ -1187,10 +1339,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "imessage",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           to: "chat_guid:iMessage;+;current",
           chatGuid: "iMessage;+;other",
@@ -1226,10 +1377,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       });
 
       await expect(
-        dispatchChannelMessageAction({
+        dispatchTestChannelMessageAction({
           channel: "imessage",
           action: testCase.action,
-          cfg: {} as OpenClawConfig,
           params: testCase.params,
           accountId: "work",
           requesterAccountId: "work",
@@ -1256,10 +1406,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "imessage",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: {
           target: "chat_guid:iMessage;+;other",
           messageId: "current-message",
@@ -1290,10 +1439,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "imessage",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: { messageId: "current-message" },
         accountId: "default",
         requesterAccountId: "default",
@@ -1311,10 +1459,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
   it("allows bundled targetless sticker-cache reads only in matching current context", async () => {
     setReadPlugin({ channel: "telegram", origin: "bundled" });
 
-    await dispatchChannelMessageAction({
+    await dispatchTestChannelMessageAction({
       channel: "telegram",
       action: "sticker-search",
-      cfg: {} as OpenClawConfig,
       params: { query: "party", limit: 5 },
       accountId: "work",
       requesterAccountId: "work",
@@ -1359,10 +1506,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     setReadPlugin({ channel: "telegram", origin: "bundled" });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "telegram",
         action: "sticker-search",
-        cfg: {} as OpenClawConfig,
         params: { query: "party", limit: 5 },
         accountId: testCase.accountId,
         requesterAccountId: testCase.requesterAccountId,
@@ -1383,10 +1529,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
     });
 
     await expect(
-      dispatchChannelMessageAction({
+      dispatchTestChannelMessageAction({
         channel: "discord",
         action: "read",
-        cfg: {} as OpenClawConfig,
         params: { channelId: "configured" },
         accountId: "default",
         requesterAccountId: "default",
@@ -1406,10 +1551,9 @@ describe("dispatchChannelMessageAction conversation-read provenance", () => {
       setReadPlugin(origin ? { origin } : undefined);
 
       await expect(
-        dispatchChannelMessageAction({
+        dispatchTestChannelMessageAction({
           channel: "discord",
           action: "read",
-          cfg: {} as OpenClawConfig,
           params: { channelId: "configured" },
           accountId: "default",
           requesterAccountId: "default",

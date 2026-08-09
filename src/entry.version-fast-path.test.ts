@@ -87,22 +87,64 @@ describe("entry root version fast path", () => {
   it("calls exit(1) via injected exit hook when resolveVersion rejects", async () => {
     const exit = vi.fn();
     const output = vi.fn();
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
     const resolveVersion = vi
       .fn<() => Promise<never>>()
       .mockRejectedValue(new Error("version resolution failed"));
 
-    expect(
-      tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
-        output,
-        exit,
-        resolveVersion,
-      }),
-    ).toBe(true);
-    await flushVersionFastPath();
-    expect(resolveVersion).toHaveBeenCalledTimes(1);
-    expect(exit).toHaveBeenCalledWith(1);
-    expect(output).not.toHaveBeenCalled();
-    expect(exit).toHaveBeenCalledTimes(1);
+    try {
+      expect(
+        tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
+          output,
+          exit,
+          resolveVersion,
+        }),
+      ).toBe(true);
+      await flushVersionFastPath();
+      expect(resolveVersion).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1), { timeout: 10_000 });
+      expect(output).not.toHaveBeenCalled();
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(stderrSpy.mock.calls.map(([value]) => String(value)).join("\n")).toContain(
+        "version resolution failed",
+      );
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it("structures version-resolution failures for JSON console output", async () => {
+    const logging = await import("./logging.js");
+    const exit = vi.fn();
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    const resolveVersion = vi
+      .fn<() => Promise<never>>()
+      .mockRejectedValue(new Error("version resolution failed"));
+    logging.setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+
+    try {
+      expect(
+        tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
+          exit,
+          resolveVersion,
+        }),
+      ).toBe(true);
+      await flushVersionFastPath();
+
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1), { timeout: 10_000 });
+      const line = stderrSpy.mock.calls.map(([value]) => String(value)).join("");
+      expect(JSON.parse(line)).toMatchObject({
+        level: "error",
+        message: expect.stringContaining("version resolution failed"),
+      });
+    } finally {
+      logging.resetLogger();
+      stderrSpy.mockRestore();
+    }
   });
 
   it("calls injected onError when provided and resolveVersion rejects", async () => {

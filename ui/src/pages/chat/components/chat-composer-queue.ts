@@ -15,23 +15,20 @@ type ChatQueueProps = {
 };
 
 function sendStateLabel(item: ChatQueueItem): string | null {
-  if (isInflightSteer(item)) {
-    return "Steering";
-  }
   switch (item.sendState) {
     case "waiting-model":
       // Persisted state name predates reasoning and speed picker gating.
-      return "Applying chat settings";
+      return t("chat.queue.states.applyingSettings");
     case "waiting-idle":
-      return "Waiting for current run";
+      return t("chat.queue.states.waitingForRun");
     case "executing-command":
-      return "Running command";
+      return t("chat.queue.states.runningCommand");
     case "waiting-reconnect":
-      return "Waiting for reconnect";
+      return t("chat.queue.states.waitingForReconnect");
     case "unconfirmed":
-      return "Needs review";
+      return t("chat.queue.states.needsReview");
     case "failed":
-      return "Failed";
+      return t("common.failed");
     default:
       return null;
   }
@@ -51,8 +48,8 @@ export function renderChatQueue(props: ChatQueueProps) {
 
 function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
   const stateLabel = sendStateLabel(item);
-  const steered = isSteeredQueueItem(item);
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
+  const steered = isSteeredQueueItem(item) && !failed;
   const reconnecting = item.sendState === "waiting-reconnect";
   const busy = item.sendState === "executing-command" || isInflightSteer(item);
   const canSteer =
@@ -60,7 +57,11 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
     !steered &&
     (item.sendState === undefined || item.sendState === "waiting-idle") &&
     !item.localCommandName;
-  const text = item.text || (item.attachments?.length ? `Image (${item.attachments.length})` : "");
+  const text =
+    item.text ||
+    (item.attachments?.length
+      ? t("chat.queue.imageCount", { count: String(item.attachments.length) })
+      : "");
   const itemClass = `chat-queue__item${steered ? " chat-queue__item--steered" : ""}${
     failed ? " chat-queue__item--failed" : ""
   }${reconnecting ? " chat-queue__item--reconnect" : ""}`;
@@ -76,7 +77,7 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
       ${renderChatAuthorAvatar(item.sender)}
       ${steered
         ? html`<span class="chat-queue__badge chat-queue__badge--steered"
-            >${t("chat.queue.steered")}</span
+            >${t("chat.queue.states.steering")}</span
           >`
         : nothing}
       ${stateLabel

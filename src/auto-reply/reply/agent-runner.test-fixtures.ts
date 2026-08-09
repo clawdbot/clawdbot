@@ -37,5 +37,10 @@ export async function writeTestSessionStore(
   sessionKey: string,
   entry: SessionEntry,
 ): Promise<void> {
+  const fileEntry = entry as SessionEntry & { sessionFile?: string; transcriptPath?: string };
+  if (fileEntry.sessionFile) {
+    fileEntry.transcriptPath = fileEntry.sessionFile;
+    delete fileEntry.sessionFile;
+  }
   await replaceSessionEntry({ storePath, sessionKey }, entry);
 }

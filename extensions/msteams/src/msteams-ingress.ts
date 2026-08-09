@@ -1,11 +1,14 @@
 // Microsoft Teams plugin owns durable Bot Framework activity admission and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { classifyMSTeamsSendError } from "./errors.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -15,9 +18,6 @@ const MSTEAMS_INGRESS_VERSION = 1;
 const MSTEAMS_INGRESS_DRAIN_INTERVAL_MS = 500;
 const MSTEAMS_INGRESS_MAX_CONCURRENT_DELIVERIES = 8;
 const MSTEAMS_INGRESS_SCAN_LIMIT = 100;
-const MSTEAMS_INGRESS_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60_000;
-const MSTEAMS_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const MSTEAMS_INGRESS_FAILED_MAX_ENTRIES = 4096;
 
 type MSTeamsIngressActivity = MSTeamsTurnContext["activity"];
 
@@ -48,20 +48,9 @@ type MSTeamsIngress = {
   stop: () => Promise<void>;
 };
 
-class MSTeamsIngressPayloadError extends Error {
-  constructor(
-    readonly reason: "invalid-activity" | "invalid-json" | "unsupported-activity",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "MSTeamsIngressPayloadError";
-  }
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
+const MSTeamsIngressPayloadError = createChannelIngressError<
+  "invalid-activity" | "invalid-json" | "unsupported-activity"
+>("MSTeamsIngressPayloadError", { withReason: true });
 
 function isDispatchableActivity(activity: MSTeamsIngressActivity): boolean {
   return (
@@ -144,10 +133,6 @@ function parseClaimedActivity(
   return parsed;
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIngress {
   const queue =
     options.queue ??
@@ -190,10 +175,7 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
     pollIntervalMs: MSTEAMS_INGRESS_DRAIN_INTERVAL_MS,
     retention: {
       pruneIntervalMs: 0,
-      completedTtlMs: MSTEAMS_INGRESS_TOMBSTONE_TTL_MS,
-      completedMaxEntries: MSTEAMS_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: MSTEAMS_INGRESS_TOMBSTONE_TTL_MS,
-      failedMaxEntries: MSTEAMS_INGRESS_FAILED_MAX_ENTRIES,
+      failedMaxEntries: 4096,
     },
     appendRetryDelaysMs: [0],
     waitForDeliveryIdleBeforeRepump: false,
@@ -208,14 +190,14 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
         }
         const classification = classifyMSTeamsSendError(error);
         return classification.kind === "auth"
-          ? { reason: "authentication-failed", message: errorText(error) }
+          ? { reason: "authentication-failed", message: formatErrorMessage(error) }
           : null;
       },
       onLog: (message) => options.runtime.error?.(`msteams: ${message}`),
     },
     createStoppedError: () => new Error("Microsoft Teams ingress stopped."),
     onError: (error) =>
-      options.runtime.error?.(`msteams ingress drain failed: ${errorText(error)}`),
+      options.runtime.error?.(`msteams ingress drain failed: ${formatErrorMessage(error)}`),
   });
   let stopTask: Promise<void> | undefined;
 

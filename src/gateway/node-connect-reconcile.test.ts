@@ -7,7 +7,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
-import type { NodePairingPairedNode, NodePairingRequestInput } from "../infra/node-pairing.js";
+import type { NodePairingRequestInput, PairedDeviceNode } from "../infra/device-pairing-node.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
@@ -27,7 +27,7 @@ function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParam
   };
 }
 
-function makePairedNode(overrides?: Partial<NodePairingPairedNode>): NodePairingPairedNode {
+function makePairedNode(overrides?: Partial<PairedDeviceNode>): PairedDeviceNode {
   return {
     nodeId: "openclaw-ios",
     createdAtMs: 1,
@@ -205,7 +205,7 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(approvedPairingRequest).not.toHaveBeenCalled();
   });
 
-  it("keeps an approved computer.act surface effective without re-pairing while unarmed", async () => {
+  it("keeps an approved computer.act surface effective without re-pairing", async () => {
     const connectParams = makeNodeConnectParams({
       client: {
         id: GATEWAY_CLIENT_IDS.NODE_HOST,
@@ -219,9 +219,8 @@ describe("reconcileNodePairingOnConnect", () => {
     });
     const requestPairing = vi.fn();
 
-    // No commands.allow entry (unarmed): the previously approved dangerous
-    // surface must reconcile cleanly instead of demanding a pairing upgrade
-    // on every reconnect.
+    // The previously approved, node-enabled surface must reconcile cleanly
+    // instead of demanding a pairing upgrade on every reconnect.
     const result = await reconcileNodePairingOnConnect({
       cfg: {} as never,
       connectParams,

@@ -8,6 +8,7 @@ import {
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import { createAgentTurnIo } from "../agent-turn/io.js";
 import { authorizeResolvedSessionMutation } from "../session-sharing.js";
 import { formatForLog } from "../ws-log.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
@@ -34,7 +35,8 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   client,
   isWebchatConnect,
 }) => {
-  const preflight = prepareAgentRequestPreflight({ params, respond, context, client });
+  const io = createAgentTurnIo(respond);
+  const preflight = prepareAgentRequestPreflight({ params, context, client, io });
   if (!preflight) {
     return;
   }
@@ -80,7 +82,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     ownerConnId,
     ownerDeviceId,
     context,
-    respond,
+    io,
   });
   const reservePreAcceptedAgentDedupe = dedupeLifecycle.reserve;
   const clearUnacceptedAgentDedupe = dedupeLifecycle.clearUnaccepted;
@@ -190,7 +192,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       preAcceptedReservedSessionKey,
       expectedSession,
       context,
-      respond,
+      io,
       dedupeLifecycle,
       getRequestedSessionKey: () => requestedSessionKey,
       getResolvedSessionKey: () => resolvedSessionKey,
@@ -283,7 +285,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
         agentId: canonicalSessionAgentId,
       });
       if (sharingError) {
-        respond(false, undefined, sharingError);
+        io.emitAcceptance([false, undefined, sharingError]);
         return;
       }
       effectiveBootstrapContextRunKind = preparedSession.effectiveBootstrapContextRunKind;
@@ -339,7 +341,11 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       try {
         await acquireGatewayWorkAdmission(storePath ?? `agent:${sessionAgentId}`);
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+        io.emitAcceptance([
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)),
+        ]);
         return;
       }
       if (respondToGatewayAdmissionOutcome()) {
@@ -461,7 +467,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       agentDedupeKeys,
       context,
       client,
-      respond,
+      io,
       abortForLifecycleRotation,
       acquireGatewayWorkAdmission,
       assertGatewayWorkAdmissionAllowed,
@@ -522,7 +528,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       execApprovalFollowupApprovalId,
       client,
       context,
-      respond,
+      io,
       releaseCronContinuationClaimWithRecovery,
     });
     mainRestartRecoveryOwnerLease = undefined;

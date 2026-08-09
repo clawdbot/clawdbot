@@ -1,5 +1,8 @@
 {
   "id": "deepinfra",
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },
@@ -48,7 +51,8 @@
               "cacheWrite": 0
             },
             "compat": {
-              "supportsUsageInStreaming": true
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
             }
           },
           {
@@ -65,7 +69,8 @@
               "cacheWrite": 0
             },
             "compat": {
-              "supportsUsageInStreaming": true
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
             }
           },
           {
@@ -82,7 +87,8 @@
               "cacheWrite": 0
             },
             "compat": {
-              "supportsUsageInStreaming": true
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
             }
           },
           {
@@ -205,7 +211,8 @@
               "cacheWrite": 0
             },
             "compat": {
-              "supportsUsageInStreaming": true
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
             }
           },
           {
@@ -272,7 +279,7 @@
   ],
   "contracts": {
     "mediaUnderstandingProviders": ["deepinfra"],
-    "memoryEmbeddingProviders": ["deepinfra"],
+    "embeddingProviders": ["deepinfra"],
     "imageGenerationProviders": ["deepinfra"],
     "speechProviders": ["deepinfra"],
     "videoGenerationProviders": ["deepinfra"]

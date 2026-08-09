@@ -22,15 +22,19 @@ import {
   disconnectGatewayClient,
   getFreeGatewayPort,
 } from "../test-helpers.e2e.js";
+import {
+  configureManualGatewayBackgroundEnv,
+  MANUAL_GATEWAY_ENV_KEYS,
+} from "../test-helpers.manual-gateway-env.js";
 
 const TEST_ENV_KEYS = [
   "HOME",
+  ...MANUAL_GATEWAY_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_URL",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
-  "OPENCLAW_GATEWAY_PORT",
 ];
 
 describe("plugin.approval.request delivery routing (real gateway)", () => {
@@ -55,6 +59,7 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     await fs.mkdir(stateDir, { recursive: true });
     setTestEnvValue("HOME", tempHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    configureManualGatewayBackgroundEnv(tempHome);
 
     const port = await getFreeGatewayPort();
     const token = "plugin-approval-turn-source-e2e-token";

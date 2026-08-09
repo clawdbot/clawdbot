@@ -44,9 +44,7 @@ function resolveVydraVideoRequestBody(
     };
   }
   if ((req.inputImages?.length ?? 0) > 0) {
-    throw new Error(
-      `Vydra ${model} does not support image reference inputs in the bundled plugin.`,
-    );
+    throw new Error(`Vydra ${model} does not support image reference inputs in the Vydra plugin.`);
   }
   return {
     model,
@@ -62,11 +60,7 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
     label: "Vydra",
     defaultModel: DEFAULT_VYDRA_VIDEO_MODEL,
     models: [DEFAULT_VYDRA_VIDEO_MODEL, VYDRA_KLING_MODEL],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "vydra",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "vydra", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,

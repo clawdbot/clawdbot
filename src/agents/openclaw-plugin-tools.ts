@@ -8,16 +8,25 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import {
+  createRuntimeProviderAuthLookup,
+  hasRuntimeAvailableProviderAuth,
+  resolveApiKeyForProvider as resolveProviderAuth,
+} from "./model-auth.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
 import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
 import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
+import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   currentThreadTs?: string;
@@ -50,23 +59,42 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     // while tests can still inject a fixed resolvedConfig.
     return resolveAgentRuntimeToolConfig(params.resolvedConfig ?? params.options?.config);
   };
+  const pluginToolInputs = resolveOpenClawPluginToolInputs({
+    options: params.options,
+    resolvedConfig: params.resolvedConfig,
+    runtimeConfig: resolveCurrentRuntimeConfig(),
+    getRuntimeConfig: resolveCurrentRuntimeConfig,
+  });
   const authProfileStore = params.options?.authProfileStore;
-  const resolveAuthProfileIdsForProvider = authProfileStore
-    ? (providerId: string): string[] =>
-        resolveAuthProfileOrder({
-          cfg: resolveCurrentRuntimeConfig(),
-          store: authProfileStore,
-          provider: providerId,
-        })
+  const availabilityConfig = resolveCurrentRuntimeConfig();
+  const availabilityRuntimeLookup = authProfileStore
+    ? createRuntimeProviderAuthLookup({
+        cfg: availabilityConfig,
+        workspaceDir: pluginToolInputs.context.workspaceDir,
+        includePluginSyntheticAuth: false,
+      })
     : undefined;
   const hasAuthForProvider = authProfileStore
-    ? (providerId: string) => (resolveAuthProfileIdsForProvider?.(providerId) ?? []).length > 0
+    ? (providerId: string) =>
+        hasProviderAuthForTool({
+          provider: providerId,
+          cfg: availabilityConfig,
+          workspaceDir: pluginToolInputs.context.workspaceDir,
+          agentDir: params.options?.agentDir,
+          authStore: authProfileStore,
+          runtimeLookup: availabilityRuntimeLookup,
+        })
     : undefined;
   const resolveApiKeyForProvider = authProfileStore
     ? async (providerId: string): Promise<string | undefined> => {
-        for (const profileId of resolveAuthProfileIdsForProvider?.(providerId) ?? []) {
+        const cfg = resolveCurrentRuntimeConfig();
+        for (const profileId of resolveAuthProfileOrder({
+          cfg,
+          store: authProfileStore,
+          provider: providerId,
+        })) {
           const resolved = await resolveApiKeyForProfile({
-            cfg: resolveCurrentRuntimeConfig(),
+            cfg,
             store: authProfileStore,
             profileId,
             agentDir: params.options?.agentDir,
@@ -75,16 +103,41 @@ export function resolveOpenClawPluginToolsForOptions(params: {
             return resolved.apiKey;
           }
         }
-        return undefined;
+        const workspaceDir = pluginToolInputs.context.workspaceDir;
+        const runtimeLookup = createRuntimeProviderAuthLookup({
+          cfg,
+          workspaceDir,
+          includePluginSyntheticAuth: false,
+        });
+        if (
+          !hasRuntimeAvailableProviderAuth({
+            provider: providerId,
+            cfg,
+            workspaceDir,
+            allowPluginSyntheticAuth: false,
+            runtimeLookup,
+          })
+        ) {
+          return undefined;
+        }
+        try {
+          const resolved = await resolveProviderAuth({
+            provider: providerId,
+            cfg,
+            store: authProfileStore,
+            agentDir: params.options?.agentDir,
+            workspaceDir,
+            credentialPrecedence: "env-first",
+            allowAuthProfileFallback: false,
+          });
+          return resolved.apiKey;
+        } catch {
+          return undefined;
+        }
       }
     : undefined;
-  const pluginToolInputs = resolveOpenClawPluginToolInputs({
-    options: params.options,
-    resolvedConfig: params.resolvedConfig,
-    runtimeConfig: resolveCurrentRuntimeConfig(),
-    getRuntimeConfig: resolveCurrentRuntimeConfig,
-  });
   const existingToolNames = new Set(params.existingToolNames ?? []);
+  const preparedModelRuntime = params.options?.preparedModelRuntime;
   const pluginTools = resolvePluginTools({
     ...pluginToolInputs,
     context: {
@@ -98,6 +151,15 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     toolDenylist: params.options?.pluginToolDenylist,
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
     ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
+    ...(preparedModelRuntime
+      ? {
+          preparedRuntime: {
+            loadContext: getPreparedPluginRuntimeLoadContext(preparedModelRuntime.pluginRegistry),
+            metadataSnapshot: preparedModelRuntime.metadataSnapshot,
+            registry: preparedModelRuntime.pluginRegistry,
+          },
+        }
+      : {}),
   });
   for (const tool of pluginTools) {
     existingToolNames.add(tool.name);

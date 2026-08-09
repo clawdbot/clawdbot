@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
@@ -15,7 +14,7 @@ import {
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
 /** Require exact agent ownership without requiring the latest schema. */
@@ -98,25 +97,13 @@ export function migrateOpenClawAgentDatabaseForMaintenance(options: {
     if (!hasCurrentVersion && !hasSupportedOlderVersion) {
       return;
     }
-    if (hasCurrentVersion) {
-      repairCanonicalSqliteIndexes(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
-        // The maintenance contract is the runtime owner/schema contract plus
-        // an exact user_version gate, so table drift rolls this savepoint back.
-        validateAfterRepair: () =>
-          assertOpenClawAgentDatabaseForMaintenance(database, {
-            agentId,
-            pathname: options.pathname,
-          }),
-      });
-      assertOpenClawAgentDatabaseForMaintenance(database, {
-        agentId,
-        pathname: options.pathname,
-      });
-      return;
-    }
     ensureOpenClawAgentDatabaseSchema(database, {
       agentId,
       path: options.pathname,
+    });
+    assertOpenClawAgentDatabaseForMaintenance(database, {
+      agentId,
+      pathname: options.pathname,
     });
   } finally {
     clearNodeSqliteKyselyCacheForDatabase(database);

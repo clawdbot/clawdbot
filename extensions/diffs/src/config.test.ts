@@ -1,9 +1,10 @@
-// Diffs tests cover config plugin behavior.
 import fs from "node:fs";
 import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+// Diffs tests cover config plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   diffsPluginConfigSchema,
@@ -63,12 +64,7 @@ function compileManifestConfigSchema() {
     });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectFields(value: unknown, fields: Record<string, unknown>) {
   const record = requireRecord(value, "record");

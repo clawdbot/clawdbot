@@ -21,11 +21,34 @@ import { TelegramPairingStoreReadError } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
+type TelegramMessageHandlerParams = Pick<
+  RegisterTelegramHandlerParams,
+  "bot" | "shouldSkipUpdate"
+> & {
+  opts: Pick<RegisterTelegramHandlerParams["opts"], "botInfo">;
+  runtime: Pick<RegisterTelegramHandlerParams["runtime"], "error">;
+};
+
+type TelegramMessageHandlerRuntime = Pick<
+  TelegramHandlerMessageRuntime,
+  | "normalizePromptContextMinTimestampMs"
+  | "promptContextBoundaryOptions"
+  | "releaseDispatchDedupeClaims"
+  | "claimMessageDispatchDedupe"
+  | "buildSyntheticContext"
+  | "resolveTelegramSessionState"
+  | "resolvePromptContextAmbientWatermark"
+> & {
+  recordMessageForReplyChain: (
+    ...args: Parameters<TelegramHandlerMessageRuntime["recordMessageForReplyChain"]>
+  ) => Promise<unknown>;
+};
+
 export function registerTelegramMessageHandlers(
-  { bot, runtime, shouldSkipUpdate }: RegisterTelegramHandlerParams,
-  messageRuntime: TelegramHandlerMessageRuntime,
-  authorizationRuntime: TelegramHandlerAuthorizationRuntime,
-  inboundRuntime: TelegramHandlerInboundRuntime,
+  { bot, opts, runtime, shouldSkipUpdate }: TelegramMessageHandlerParams,
+  messageRuntime: TelegramMessageHandlerRuntime,
+  authorizationRuntime: Pick<TelegramHandlerAuthorizationRuntime, "authorizeInboundMessage">,
+  inboundRuntime: Pick<TelegramHandlerInboundRuntime, "processInboundMessage">,
 ) {
   const {
     normalizePromptContextMinTimestampMs,
@@ -40,6 +63,13 @@ export function registerTelegramMessageHandlers(
   const { authorizeInboundMessage } = authorizationRuntime;
   const { processInboundMessage } = inboundRuntime;
   const getChat: TelegramGetChat = bot.api.getChat.bind(bot.api);
+  const resolveBotUserId = (ctx: { me?: { id?: number } }): number => {
+    const botUserId = ctx.me?.id ?? opts.botInfo?.id;
+    if (botUserId == null) {
+      throw new Error("Telegram bot identity is unavailable");
+    }
+    return botUserId;
+  };
   type InboundTelegramEvent = {
     ctxForDedupe: TelegramUpdateKeyContext;
     ctx: TelegramContext;
@@ -106,7 +136,6 @@ export function registerTelegramMessageHandlers(
       chatId: normalizedMsg.chat.id,
       isGroup,
       isForum,
-      messageThreadId: normalizedMsg.message_thread_id,
       senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
       senderUsername: normalizedMsg.from?.username ?? "",
       requireConfiguredGroup: params.requireConfiguredGroup,
@@ -134,7 +163,6 @@ export function registerTelegramMessageHandlers(
         chatId: event.chatId,
         isGroup: event.isGroup,
         isForum: event.isForum,
-        messageThreadId: event.messageThreadId,
         senderId: event.senderId,
         senderUsername: event.senderUsername,
         requireConfiguredGroup: event.requireConfiguredGroup,
@@ -247,15 +275,16 @@ export function registerTelegramMessageHandlers(
       getChat,
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
+    const botUserId = resolveBotUserId(ctx);
     // Bot-authored message updates can be echoed back by Telegram. Skip them here
     // and rely on the dedicated channel_post handler for channel-originated posts.
-    if (normalizedMsg.from?.id != null && normalizedMsg.from.id === ctx.me?.id) {
+    if (normalizedMsg.from?.id != null && normalizedMsg.from.id === botUserId) {
       return;
     }
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, normalizedMsg),
-      botUserId: ctx.me.id,
+      botUserId,
       msg: normalizedMsg,
       chatId: normalizedMsg.chat.id,
       isGroup,
@@ -279,7 +308,7 @@ export function registerTelegramMessageHandlers(
       ctxForDedupe: ctx,
       msg,
       requireConfiguredGroup: false,
-      botUserId: ctx.me.id,
+      botUserId: resolveBotUserId(ctx),
     });
   });
 
@@ -298,7 +327,7 @@ export function registerTelegramMessageHandlers(
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, syntheticMsg),
-      botUserId: ctx.me.id,
+      botUserId: resolveBotUserId(ctx),
       msg: syntheticMsg,
       chatId,
       isGroup: true,
@@ -326,7 +355,7 @@ export function registerTelegramMessageHandlers(
       ctxForDedupe: ctx,
       msg: normalizeChannelPostMessage(post),
       requireConfiguredGroup: true,
-      botUserId: ctx.me.id,
+      botUserId: resolveBotUserId(ctx),
     });
   });
 }

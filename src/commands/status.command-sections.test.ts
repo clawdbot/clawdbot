@@ -239,6 +239,7 @@ describe("status.command-sections", () => {
         durationMs: 42,
         eventLoop: {
           degraded: true,
+          degradedSinceMs: 180_000,
           reasons: ["event_loop_delay"],
           intervalMs: 62_000,
           delayP99Ms: 61_000,
@@ -258,7 +259,8 @@ describe("status.command-sections", () => {
       {
         Item: "Event loop",
         Status: "warn(WARN)",
-        Detail: "reasons event_loop_delay · max 62000ms · p99 61000ms · util 1 · cpu 1",
+        Detail:
+          "degraded for 3m · reasons event_loop_delay · max 62000ms · p99 61000ms · util 1 · cpu 1",
       },
     ]);
   });

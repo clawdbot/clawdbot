@@ -23,9 +23,13 @@ export async function requireValidConfig(
   secretResolution?: {
     commandName?: string;
     mode?: CommandSecretResolutionMode;
+    skipPluginValidation?: boolean;
   },
 ): Promise<OpenClawConfig | null> {
-  const cfg = await requireValidConfigSnapshot(runtime);
+  const cfg = await requireValidConfigSnapshot(
+    runtime,
+    secretResolution?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
+  );
   if (!cfg) {
     return null;
   }
@@ -66,7 +70,7 @@ export function formatChannelAccountLabel(params: {
   return `${styledChannel} ${styledAccount}`;
 }
 
-/** Append common enabled/configured/linked status fragments for account output. */
+/** Append canonical state fragments and genuine runtime failures for account output. */
 export function appendEnabledConfiguredLinkedBits(
   bits: string[],
   account: Record<string, unknown>,
@@ -86,6 +90,18 @@ export function appendEnabledConfiguredLinkedBits(
   }
   if (typeof account.linked === "boolean") {
     bits.push(account.linked ? "linked" : "not linked");
+  }
+  const reason = typeof account.stateReason === "string" ? account.stateReason : "";
+  const duplicatesState =
+    (account.enabled === false && reason === "disabled") ||
+    (account.configured === false && reason === "not configured") ||
+    (account.linked === false && reason === "not linked");
+  if (reason && !duplicatesState) {
+    bits.push(`reason:${reason}`);
+  }
+  const error = typeof account.lastError === "string" ? account.lastError : "";
+  if (error) {
+    bits.push(`error:${error}`);
   }
 }
 

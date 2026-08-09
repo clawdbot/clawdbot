@@ -30,6 +30,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../agent-run-terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
+import { recordAgentHarnessPreflightOwner } from "./errors.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import { assertSettledTurnFinalizationResult } from "./settled-turn-finalization-result.js";
 import type {
@@ -109,8 +110,19 @@ function normalizeAgentHarnessAttemptResult(
     timedOutDuringToolExecution,
     ...canonical
   } = result;
-  if ("terminal" in canonical) {
-    return canonical;
+  // Legacy harnesses omit the field and report this attempt only through lastAssistant.
+  // Explicit undefined is the current contract's no-response fact and must survive unchanged.
+  const currentAttemptProvenance = Object.hasOwn(result, "currentAttemptAssistant")
+    ? { currentAttemptAssistant: result.currentAttemptAssistant }
+    : result.lastAssistant
+      ? { currentAttemptAssistant: result.lastAssistant }
+      : {};
+  const canonicalWithAttemptProvenance = {
+    ...canonical,
+    ...currentAttemptProvenance,
+  };
+  if ("terminal" in canonicalWithAttemptProvenance) {
+    return canonicalWithAttemptProvenance;
   }
   const terminal = normalizeAgentRunAttemptTerminal({
     aborted,
@@ -123,7 +135,7 @@ function normalizeAgentHarnessAttemptResult(
     timedOutDuringCompaction,
     timedOutDuringToolExecution,
   });
-  return { ...canonical, terminal };
+  return { ...canonicalWithAttemptProvenance, terminal };
 }
 
 function agentHarnessRunOutcome(
@@ -333,6 +345,7 @@ export async function runAgentHarnessLifecycleAttempt(
       : await runAndClassify();
     result = withFallbackDiagnosticTrace(result, activeHarnessTrace);
   } catch (error) {
+    recordAgentHarnessPreflightOwner(error, harness.id);
     emitAgentHarnessRunError({
       harness,
       attemptParams: params,

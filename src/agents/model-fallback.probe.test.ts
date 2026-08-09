@@ -1,7 +1,8 @@
-// Verifies fallback cooldown probe decisions and diagnostic records.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+// Verifies fallback cooldown probe decisions and diagnostic records.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
@@ -111,7 +112,7 @@ type AuthProfilesSourceCheckModule = typeof import("./auth-profiles/source-check
 type AuthProfilesUsageModule = typeof import("./auth-profiles/usage.js");
 type AuthProfilesOrderModule = typeof import("./auth-profiles/order.js");
 type ModelFallbackCooldownModule = typeof import("./model-fallback-cooldown.js");
-type ModelFallbackModule = typeof import("./model-fallback.js");
+type ModelFallbackModule = typeof import("./model-fallback-runner.js");
 type LoggerModule = typeof import("../logging/logger.js");
 
 let mockedEnsureAuthProfileStore: ReturnType<
@@ -149,7 +150,7 @@ async function loadModelFallbackProbeModules() {
   const authProfilesOrderModule = await import("./auth-profiles/order.js");
   const loggerModule = await import("../logging/logger.js");
   const modelFallbackCooldownModule = await import("./model-fallback-cooldown.js");
-  const modelFallbackModule = await import("./model-fallback.js");
+  const modelFallbackModule = await import("./model-fallback-runner.js");
   const modelFallbackTestSupport = await import("./model-fallback.test-support.js");
   mockedEnsureAuthProfileStore = vi.mocked(authProfilesStoreModule.ensureAuthProfileStore);
   mockedHasAnyAuthProfileStoreSource = vi.mocked(
@@ -202,12 +203,7 @@ function expectPrimaryProbeSuccess(
   });
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectRecordWithFields(
   records: Array<Record<string, unknown>>,

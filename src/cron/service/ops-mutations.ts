@@ -4,12 +4,21 @@ import {
   AgentDeletionAuthorityRollbackError,
   AgentDeletionCommitUncertainError,
 } from "../../agents/agent-lifecycle-registry.js";
-import { isCronJobActive } from "../active-jobs.js";
+import {
+  type CronActiveJobMarker,
+  isCronJobActive,
+  noteActiveCronJobRemoval,
+  noteActiveCronJobScheduleMutation,
+  noteActiveCronJobTriggerMutation,
+  onCronJobInactive,
+} from "../active-jobs.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
-import { deleteCronJobScratch } from "../scratch-store.js";
+import { removeCronJobBaseSession } from "../session-reaper.js";
+import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../types.js";
+import { cronPatchTouchesDeliveryResolution } from "./jobs-validation.js";
 import {
   applyJobPatch,
   applyDeclarativeJobSpec,
@@ -21,25 +30,51 @@ import {
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
-import { locked } from "./locked.js";
+import {
+  getPendingCronSessionCleanup,
+  locked,
+  registerPendingCronSessionCleanup,
+} from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { resolveCurrentDefaultAgentId, resolveEffectiveJobAgentId } from "./ops-shared.js";
 import type {
+  CronAddResult,
   CronAddOptions,
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
+  DeferredCronNotifications,
 } from "./state.js";
 import { emit } from "./state.js";
 import {
   ensureLoaded,
   persist,
   persistOrRestore,
+  pruneCronJobScratchAfterCommit,
+  runPostPersistCronNotifications,
   snapshotStoreForRollback,
   type CronRollbackSnapshot,
   warnIfDisabled,
 } from "./store.js";
 import { armTimer } from "./timer.js";
+
+const RETRY_ADD_AFTER_SESSION_CLEANUP = new Error("retry add after session cleanup");
+
+async function resolveConfiguredChannelsForValidation(
+  state: CronServiceState,
+): Promise<readonly string[] | undefined> {
+  if (!state.deps.listConfiguredChannels) {
+    return undefined;
+  }
+  try {
+    return await state.deps.listConfiguredChannels();
+  } catch {
+    // Channel discovery is advisory at mutation time. Runtime delivery remains
+    // authoritative, so discovery failures must not create false rejections.
+    state.deps.log.debug({}, "cron: configured channel validation skipped");
+    return undefined;
+  }
+}
 
 function reconcileStreamSourceIdentity(job: CronJob, nextJob: CronJob): void {
   if (nextJob.schedule.kind !== "stream") {
@@ -111,6 +146,10 @@ function finalizeUpdatedJob(params: {
 
   nextJob.updatedAtMs = now;
   if (schedulingInputsChanged) {
+    // Anchor restart catch-up to the new inputs. Without this, startup replays a
+    // slot the previous schedule never had, because lastRunAtMs still belongs to
+    // the old one and looks perpetually stale against the new slots (#91944).
+    nextJob.state.scheduleActivatedAtMs = now;
     nextJob.state.startupCatchupAtMs = undefined;
     // A paced timestamp is owned by the exact schedule, pacing bounds, and
     // trigger mode that produced it. Configuration changes release both the
@@ -136,9 +175,10 @@ function finalizeUpdatedJob(params: {
 async function persistUpdatedJob(params: {
   state: CronServiceState;
   snapshot: CronRollbackSnapshot;
+  previousJob: CronJob;
   nextJob: CronJob;
 }) {
-  const { state, snapshot, nextJob } = params;
+  const { state, snapshot, previousJob, nextJob } = params;
   if (state.store) {
     const index = state.store.jobs.findIndex((entry) => entry.id === nextJob.id);
     if (index >= 0) {
@@ -147,6 +187,21 @@ async function persistUpdatedJob(params: {
   }
 
   await persistOrRestore(state, snapshot, { suppressScheduledJobId: nextJob.id });
+  if (!cronSchedulingInputsEqual(previousJob, nextJob)) {
+    // Mark only committed edits; a failed SQLite write cannot retire the run's
+    // schedule ownership, and idempotent re-saves must not create a new claim.
+    noteActiveCronJobScheduleMutation(nextJob.id);
+  }
+  if (
+    !isDeepStrictEqual(previousJob.trigger, nextJob.trigger) ||
+    !isDeepStrictEqual(previousJob.state.triggerState, nextJob.state.triggerState) ||
+    ((previousJob.payload.kind === "script" || nextJob.payload.kind === "script") &&
+      !isDeepStrictEqual(previousJob.payload, nextJob.payload))
+  ) {
+    // Trigger/script definitions and shared-state edits retire the admitted
+    // state writer; otherwise an obsolete evaluation or script wins later.
+    noteActiveCronJobTriggerMutation(nextJob.id);
+  }
   armTimer(state);
   emit(state, {
     jobId: nextJob.id,
@@ -156,13 +211,14 @@ async function persistUpdatedJob(params: {
   });
 }
 
-function declarativeFields(job: CronJob, includeEnabled: boolean) {
+function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
   return {
     schedule: job.schedule,
     pacing: job.pacing,
     trigger: job.trigger,
     payload: job.payload,
     scheduledToolPolicy: job.scheduledToolPolicy,
+    toolsAllowProvenance: job.toolsAllowProvenance,
     delivery: job.delivery,
     displayName: job.displayName,
     ...(includeEnabled ? { enabled: job.enabled } : {}),
@@ -170,7 +226,12 @@ function declarativeFields(job: CronJob, includeEnabled: boolean) {
 }
 
 /** Adds or converges a declaration-keyed cron job inside one store lock and write transaction. */
-export async function add(state: CronServiceState, input: CronJobCreate, opts?: CronAddOptions) {
+export async function add(
+  state: CronServiceState,
+  input: CronJobCreate,
+  opts?: CronAddOptions,
+): Promise<CronAddResult> {
+  let pendingSessionCleanup: Promise<void> | undefined;
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     // Heartbeat monitors are gateway-converged system jobs; without this
@@ -190,6 +251,10 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
     }
     if (normalizedId) {
       normalizeCronTaskRunJobId(normalizedId);
+      pendingSessionCleanup = getPendingCronSessionCleanup(state, normalizedId);
+      if (pendingSessionCleanup) {
+        throw RETRY_ADD_AFTER_SESSION_CLEANUP;
+      }
     }
     const normalizedInput = normalizedId ? { ...input, id: normalizedId } : input;
     const declarationKey = normalizeOptionalString(input.declarationKey);
@@ -202,6 +267,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       throw new Error(`cron declarationKey is ambiguous within caller scope: ${declarationKey}`);
     }
     const existing = matches[0];
+    const configuredChannels = await resolveConfiguredChannelsForValidation(state);
 
     if (existing) {
       // A declarative upsert may not repurpose an existing heartbeat monitor
@@ -219,6 +285,8 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         nowMs: now,
         cronConfig: state.deps.cronConfig,
         scheduledToolPolicy: opts?.scheduledToolPolicy,
+        toolsAllowProvenance: opts?.toolsAllowProvenance,
+        configuredChannels,
       });
       const includeEnabled = opts?.enabledExplicit === true;
       if (
@@ -227,6 +295,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
           declarativeFields(nextJob, includeEnabled),
         )
       ) {
+        opts?.commitGuard?.();
         return { ...existing, created: false, updated: false, job: existing };
       }
       const snapshot = snapshotStoreForRollback(state);
@@ -237,7 +306,8 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         schedulingInputsRequested: true,
         scheduleChanged: !isDeepStrictEqual(existing.schedule, nextJob.schedule),
       });
-      await persistUpdatedJob({ state, snapshot, nextJob });
+      opts?.commitGuard?.();
+      await persistUpdatedJob({ state, snapshot, previousJob: existing, nextJob });
       return { ...nextJob, created: false, updated: true, job: nextJob };
     }
 
@@ -247,18 +317,21 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
     const snapshot = snapshotStoreForRollback(state);
     const job = createJob(state, normalizedInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
+      toolsAllowProvenance: opts?.toolsAllowProvenance,
+      configuredChannels,
     });
+    opts?.commitGuard?.();
     state.store?.jobs.push(job);
 
-    // Auto-disable notifications describe durable state, so publish them only
+    // Mutation notifications describe durable state, so publish them only
     // after the write succeeds instead of leaking a rolled-back transition.
-    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, {
-      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+      deferredNotifications: postPersistNotifications,
     });
 
     await persistOrRestore(state, snapshot, {
-      postPersistAutoDisableNotifications,
+      postPersistNotifications,
       suppressScheduledJobId: job.id,
     });
     armTimer(state);
@@ -282,6 +355,23 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       nextRunAtMs: job.state.nextRunAtMs,
     });
     return declarationKey ? { ...job, created: true, job } : job;
+  }).catch(async (error: unknown) => {
+    if (error !== RETRY_ADD_AFTER_SESSION_CLEANUP || !pendingSessionCleanup) {
+      throw error;
+    }
+    await pendingSessionCleanup;
+    return await add(state, input, opts);
+  });
+}
+
+/** Prunes an owned job family from obsolete store partitions after active-store convergence. */
+export async function removeStaleJobFamily(
+  state: CronServiceState,
+  family: { declarationKey: string; name: string; ownerPluginTag: string },
+): Promise<number> {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    return removeStaleCronJobFamilyRows(state.deps.storePath, family);
   });
 }
 
@@ -300,7 +390,6 @@ export async function updateLoadedJob(params: {
     throw new Error("heartbeat payloads are system-owned; jobs cannot be patched to them");
   }
   await ensureLoaded(state, { skipRecompute: true });
-  const snapshot = snapshotStoreForRollback(state);
   const job = findJobOrThrow(state, id);
   // Existing monitors are config-driven: any patch (disable, reschedule,
   // repurpose) would silently diverge from agents.*.heartbeat until the next
@@ -312,6 +401,9 @@ export async function updateLoadedJob(params: {
     );
   }
   const now = state.deps.nowMs();
+  const configuredChannels = cronPatchTouchesDeliveryResolution(patch)
+    ? await resolveConfiguredChannelsForValidation(state)
+    : undefined;
   await precondition?.(structuredClone(job), now);
   const nextJob = structuredClone(job);
   applyJobPatch(nextJob, patch, {
@@ -319,6 +411,8 @@ export async function updateLoadedJob(params: {
     scheduleValidationNowMs: now,
     cronConfig: state.deps.cronConfig,
     scheduledToolPolicy: opts?.scheduledToolPolicy,
+    toolsAllowProvenance: opts?.toolsAllowProvenance,
+    configuredChannels,
   });
   if (patch.agentId !== undefined) {
     const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
@@ -337,7 +431,9 @@ export async function updateLoadedJob(params: {
       "pacing" in patch,
     scheduleChanged: patch.schedule !== undefined,
   });
-  await persistUpdatedJob({ state, snapshot, nextJob });
+  opts?.commitGuard?.();
+  const snapshot = snapshotStoreForRollback(state);
+  await persistUpdatedJob({ state, snapshot, previousJob: job, nextJob });
   return nextJob;
 }
 
@@ -371,50 +467,107 @@ export async function remove(
   id: string,
   opts?: { systemOwned?: boolean },
 ) {
-  return await locked(state, async () => {
+  let sessionCleanup:
+    | {
+        activeMarker: CronActiveJobMarker | undefined;
+        agentId: string;
+        sessionStorePath: string;
+        done: Promise<void>;
+        finish: () => void;
+        release: () => void;
+      }
+    | undefined;
+  const result = await locked(state, async () => {
     warnIfDisabled(state, "remove");
+    const previousStore = state.store;
     await ensureLoaded(state, { skipRecompute: true });
-    const before = state.store?.jobs.length ?? 0;
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
-    const snapshot = snapshotStoreForRollback(state);
     const removedJob = state.store.jobs.find((j) => j.id === id);
+    if (!removedJob) {
+      if (state.store !== previousStore) {
+        armTimer(state);
+      }
+      return { ok: true, removed: false } as const;
+    }
     // Config is the monitor's source of truth: ad-hoc deletion would disable
     // heartbeats until an unrelated reload, so only gateway reconciliation
     // (stale-monitor cleanup) may remove one.
-    if (removedJob?.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
+    if (removedJob.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
       throw new Error(
         "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
       );
     }
+    const snapshot = snapshotStoreForRollback(state);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
-    const removed = (state.store.jobs.length ?? 0) !== before;
 
-    const postPersistAutoDisableNotifications: Array<() => void> = [];
+    const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, {
-      deferredAutoDisableNotifications: postPersistAutoDisableNotifications,
+      deferredNotifications: postPersistNotifications,
     });
 
     await persistOrRestore(state, snapshot, {
-      postPersistAutoDisableNotifications,
+      postPersistNotifications,
       suppressScheduledJobId: id,
     });
-    if (removed) {
-      try {
-        deleteCronJobScratch(state.deps.storePath, id);
-      } catch (error) {
-        // The job deletion is already durable. Scratch cleanup is idempotent and
-        // must not turn a committed removal into a retryable API failure.
-        state.deps.log.warn({ jobId: id, err: String(error) }, "cron: scratch cleanup failed");
-      }
+    const activeMarker = noteActiveCronJobRemoval(id);
+    const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
+    const sessionStorePath =
+      state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
+    if (
+      sessionStorePath &&
+      (removedJob.sessionTarget === "isolated" || removedJob.sessionTarget === "current")
+    ) {
+      let finish!: () => void;
+      const done = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const release = registerPendingCronSessionCleanup(state, id, done);
+      sessionCleanup = {
+        activeMarker,
+        agentId,
+        sessionStorePath,
+        done,
+        finish,
+        release,
+      };
     }
+    pruneCronJobScratchAfterCommit(state, [id]);
     armTimer(state);
-    if (removed) {
-      emit(state, { jobId: id, action: "removed", job: removedJob });
-    }
-    return { ok: true, removed } as const;
+    emit(state, { jobId: id, action: "removed", job: removedJob });
+    return { ok: true, removed: true } as const;
   });
+  if (!sessionCleanup) {
+    return result;
+  }
+  const { activeMarker, agentId, sessionStorePath, finish, release } = sessionCleanup;
+  const cleanup = async () => {
+    try {
+      const shouldRemove = await locked(state, async () => {
+        await ensureLoaded(state, { skipRecompute: true });
+        return !state.store?.jobs.some((job) => job.id === id);
+      });
+      if (shouldRemove) {
+        await removeCronJobBaseSession({
+          agentId,
+          jobId: id,
+          sessionStorePath,
+        });
+      }
+    } catch (error) {
+      state.deps.log.warn({ jobId: id, err: String(error) }, "cron: session cleanup failed");
+    } finally {
+      release();
+      finish();
+    }
+  };
+  if (activeMarker) {
+    onCronJobInactive(activeMarker, () => void cleanup());
+    return result;
+  }
+  await cleanup();
+  return result;
 }
 
 /** Remove one agent's jobs while holding the cron lock across an external roster commit. */
@@ -441,14 +594,25 @@ export async function removeAgentJobsTransactional<T>(
     state.store.jobs = state.store.jobs.filter(
       (job) => resolveEffectiveJobAgentId(job, defaultAgentId) !== id,
     );
-    recomputeNextRunsForMaintenance(state);
+    const postPersistNotifications: DeferredCronNotifications = [];
+    recomputeNextRunsForMaintenance(state, { deferredNotifications: postPersistNotifications });
+    // Cron is durable first, but notifications stay speculative until the roster commits.
     await persistOrRestore(state, snapshot);
     let result: T;
     try {
       result = await commit();
     } catch (error) {
       if (error instanceof AgentDeletionCommitUncertainError) {
+        // Uncertain roster writes intentionally keep the cron deletion durable.
+        runPostPersistCronNotifications(state, postPersistNotifications);
         armTimer(state);
+        for (const job of removedJobs) {
+          noteActiveCronJobRemoval(job.id);
+        }
+        pruneCronJobScratchAfterCommit(
+          state,
+          removedJobs.map((job) => job.id),
+        );
         for (const job of removedJobs) {
           emit(state, { jobId: job.id, action: "removed", job });
         }
@@ -470,16 +634,14 @@ export async function removeAgentJobsTransactional<T>(
       }
       throw error;
     }
+    runPostPersistCronNotifications(state, postPersistNotifications);
     for (const job of removedJobs) {
-      try {
-        deleteCronJobScratch(state.deps.storePath, job.id);
-      } catch (error) {
-        state.deps.log.warn(
-          { jobId: job.id, err: String(error) },
-          "cron: agent scratch cleanup failed",
-        );
-      }
+      noteActiveCronJobRemoval(job.id);
     }
+    pruneCronJobScratchAfterCommit(
+      state,
+      removedJobs.map((job) => job.id),
+    );
     armTimer(state);
     for (const job of removedJobs) {
       emit(state, { jobId: job.id, action: "removed", job });

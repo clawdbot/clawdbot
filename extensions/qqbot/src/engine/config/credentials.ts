@@ -37,26 +37,26 @@ export function clearAccountCredentials(
   if (nextQQBot) {
     const qqbot = nextQQBot as Record<string, unknown>;
     if (accountId === DEFAULT_ACCOUNT_ID) {
-      if (qqbot.clientSecret) {
+      if (Object.hasOwn(qqbot, "clientSecret")) {
         delete qqbot.clientSecret;
         cleared = true;
         changed = true;
       }
-      if (qqbot.clientSecretFile) {
+      if (Object.hasOwn(qqbot, "clientSecretFile")) {
         delete qqbot.clientSecretFile;
         cleared = true;
         changed = true;
       }
     }
     const accounts = qqbot.accounts as Record<string, Record<string, unknown>> | undefined;
-    if (accounts && accountId in accounts) {
+    if (accounts && Object.hasOwn(accounts, accountId)) {
       const entry = accounts[accountId] as Record<string, unknown> | undefined;
-      if (entry && "clientSecret" in entry) {
+      if (entry && Object.hasOwn(entry, "clientSecret")) {
         delete entry.clientSecret;
         cleared = true;
         changed = true;
       }
-      if (entry && "clientSecretFile" in entry) {
+      if (entry && Object.hasOwn(entry, "clientSecretFile")) {
         delete entry.clientSecretFile;
         cleared = true;
         changed = true;

@@ -2,6 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
@@ -28,7 +29,7 @@ describe("chat pane session hydration", () => {
     const { pane, state } = createTestChatPane({ client, sessions });
     pane.context.gateway.snapshot.hello = {
       features: {
-        methods: ["controlUi.sessionPullRequests", "session.discussion.info"],
+        methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, "session.discussion.info"],
       },
     } as never;
     const commitEffects: AfterCommitEffect[] = [];
@@ -56,12 +57,13 @@ describe("chat pane session hydration", () => {
 
     const complete = vi.fn();
     commitEffects[0]?.(complete);
+    await Promise.resolve();
 
     expect(listBranches).toHaveBeenCalledOnce();
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "session.discussion.info",
       "sessions.companion.state",
-      "controlUi.sessionPullRequests",
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
     ]);
     expect(complete).toHaveBeenCalledOnce();
   });

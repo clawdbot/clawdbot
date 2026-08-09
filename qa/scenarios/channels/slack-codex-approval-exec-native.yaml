@@ -8,15 +8,15 @@ scenario:
     secondary:
       - channels.channel-native-approval-prompts
   execution:
-    profiles: { "slack:default": 9 }
     kind: flow
     channel: slack
     runtime: codex
     timeoutMs: 180000
     retryCount: 1
     suiteIsolation: isolated
-    config: { slackScenarioId: slack-codex-approval-exec-native }
 flow:
   module: ./live-transports/slack/scenario-runtime.js
-  call: runSlackCodexApprovalExecNativeScenario
-  args: [{ expr: slackScenarioContext }]
+  call: runSlackScenario
+  args:
+    - { expr: slackScenarioContext }
+    - { moduleExport: slackQaCodexApprovalExecNativeScenario }

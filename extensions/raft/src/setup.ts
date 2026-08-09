@@ -66,7 +66,6 @@ export const raftSetupPlugin: ChannelPlugin<ResolvedRaftAccount> = {
   capabilities: {
     chatTypes: ["direct"],
   },
-  setup: raftSetupAdapter,
   setupContract: raftSetupContract,
   config: {
     listAccountIds: listRaftAccountIds,

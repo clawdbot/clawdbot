@@ -63,8 +63,10 @@ const allowedAttrs = [
   "class",
   "disabled",
   "href",
+  "open",
   "rel",
   "target",
+  "tabindex",
   "title",
   "start",
   "src",
@@ -75,6 +77,7 @@ const allowedAttrs = [
   "data-file-path",
   "type",
   "aria-label",
+  "role",
 ];
 const sanitizeOptions = {
   ALLOWED_TAGS: allowedTags,
@@ -85,7 +88,9 @@ const sanitizeOptions = {
 let hooksInstalled = false;
 const MARKDOWN_CHAR_LIMIT = 140_000;
 const MARKDOWN_PARSE_LIMIT = 40_000;
-const MARKDOWN_CACHE_LIMIT = 200;
+// Covers several message-heavy sessions during rapid switching. Only inputs
+// up to 50k characters enter this 500-entry LRU, keeping memory bounded.
+const MARKDOWN_CACHE_LIMIT = 500;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const DOCS_ORIGIN = "https://docs.openclaw.ai";
 const DOCS_ROOT_SEGMENTS = new Set([
@@ -480,7 +485,10 @@ function appendMarkdownTruncationNotice(truncated: {
   total: number;
 }): string {
   const notice = truncated.truncated
-    ? `\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`
+    ? `\n\n${t("chat.markdown.truncated", {
+        total: String(truncated.total),
+        shown: String(truncated.text.length),
+      })}`
     : "";
   return `${truncated.text}${notice}`;
 }
@@ -492,7 +500,10 @@ const markdownParser = createMarkdownParser();
 // wrapper) keeps per-message churn out of the LRU cache.
 function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRenderEnv): string {
   installHooks();
-  const truncated = truncateText(renderInput, MARKDOWN_CHAR_LIMIT);
+  const documentMode = renderOptions.mode === "document";
+  const truncated = documentMode
+    ? { text: renderInput, truncated: false, total: renderInput.length }
+    : truncateText(renderInput, MARKDOWN_CHAR_LIMIT);
   const input = appendMarkdownTruncationNotice(truncated);
   if (isMarkdownBlockArtText(truncated.text)) {
     return DOMPurify.sanitize(
@@ -500,7 +511,7 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
       sanitizeOptions,
     );
   }
-  if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
+  if (!documentMode && truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
@@ -531,7 +542,7 @@ export function toSanitizedMarkdownHtml(
   }
   const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
   const cacheable = input.length <= MARKDOWN_CACHE_MAX_CHARS;
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.mode}\0${renderInput}`;
   if (cacheable) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {
@@ -572,15 +583,19 @@ export function toStreamingMarkdownHtml(
   }
   const input = formatTruncatedMarkdownInput(trimmedInput);
 
-  const { boundary, tailHasOpenFence } = splitStableStreamingMarkdown(input);
+  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(input);
   const stableMarkdown = input.slice(0, boundary);
   const streamingTail = input.slice(boundary);
   const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
   if (!streamingTail.trim()) {
     return stableHtml;
   }
-  const tailHtml = tailHasOpenFence
-    ? renderSanitizedMarkdown(streamingTail, renderOptions)
-    : renderSanitizedMarkdown(repairStreamingMarkdownTail(streamingTail), renderOptions);
+  const tailHtml =
+    tailRepairStart === null
+      ? renderSanitizedMarkdown(streamingTail, renderOptions)
+      : renderSanitizedMarkdown(
+          repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
+          renderOptions,
+        );
   return `${stableHtml}${tailHtml}`;
 }

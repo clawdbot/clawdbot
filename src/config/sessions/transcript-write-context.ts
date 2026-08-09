@@ -1,11 +1,13 @@
 // Transcript write contexts let nested append paths reuse an already-owned session write lock.
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 
 type OwnedSessionTranscriptWriteContext = {
   sessionFile?: string;
   sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteLockTarget;
+  /** Fence each durable mutation at the transaction boundary, not only callback admission. */
+  assertOwned(): void;
   canAdvanceSessionEntryCache?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   publishSessionFileSnapshot?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   withSessionWriteLock: <T>(
@@ -14,13 +16,22 @@ type OwnedSessionTranscriptWriteContext = {
   ) => Promise<T>;
 };
 
+export type SessionTranscriptWriteLockTarget = {
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  storePath?: string;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
+};
+
 export type OwnedSessionTranscriptWriteOptions<T> = {
   publishOwnedWrite?: boolean;
   resolvePublishedEntries?: (result: T) => readonly OwnedSessionTranscriptPublishedEntry[];
   resolvePublishedEntriesAfterFailure?: () => readonly OwnedSessionTranscriptPublishedEntry[];
 };
 
-export type OwnedSessionTranscriptPublishedEntry =
+type OwnedSessionTranscriptPublishedEntry =
   | { kind: "id"; id: string }
   | { kind: "header"; serialized: string }
   | { kind: "serialized"; serialized: string };
@@ -39,7 +50,7 @@ const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscript
 // identity because they are storage references rather than lockable paths.
 function normalizeConcretePathForCompare(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  if (!trimmed || parseSqliteSessionFileMarker(trimmed)) {
+  if (!trimmed || !path.isAbsolute(trimmed) || !trimmed.endsWith(".jsonl")) {
     return undefined;
   }
   return path.resolve(trimmed);
@@ -49,7 +60,33 @@ function contextMatches(params: {
   context: OwnedSessionTranscriptWriteContext;
   sessionFile?: string;
   sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteLockTarget;
 }): boolean {
+  const normalizeTarget = (target: SessionTranscriptWriteLockTarget | undefined) => {
+    const agentId = target?.agentId?.trim();
+    const sessionId = target?.sessionId?.trim();
+    const sessionKey = target?.sessionKey?.trim();
+    const storePath = target?.storePath?.trim();
+    return sessionKey && storePath
+      ? { agentId, sessionId, sessionKey, storePath: path.resolve(storePath) }
+      : undefined;
+  };
+  const contextTarget = normalizeTarget(params.context.sessionTarget);
+  const requestedTarget = normalizeTarget(params.sessionTarget);
+  if (params.context.sessionTarget || params.sessionTarget) {
+    return Boolean(
+      contextTarget &&
+      requestedTarget &&
+      contextTarget.sessionKey === requestedTarget.sessionKey &&
+      contextTarget.storePath === requestedTarget.storePath &&
+      (!contextTarget.agentId ||
+        !requestedTarget.agentId ||
+        contextTarget.agentId === requestedTarget.agentId) &&
+      (!contextTarget.sessionId ||
+        !requestedTarget.sessionId ||
+        contextTarget.sessionId === requestedTarget.sessionId),
+    );
+  }
   const contextSessionFile = normalizeConcretePathForCompare(params.context.sessionFile);
   const sessionFile = normalizeConcretePathForCompare(params.sessionFile);
   if (contextSessionFile && sessionFile) {
@@ -69,6 +106,30 @@ export async function withOwnedSessionTranscriptWrites<T>(
   return await ownedTranscriptWriteContext.run(context, run);
 }
 
+/** Runs detached work without retaining an attempt-owned transcript lock. */
+export function runWithoutOwnedSessionTranscriptWrites<T>(run: () => T): T {
+  return ownedTranscriptWriteContext.exit(run);
+}
+
+/** Returns the admitted run fence inherited by nested run-owned transcript writes. */
+export function getOwnedSessionTranscriptWriterFence():
+  | {
+      expectedLifecycleRevision?: string;
+      expectedWriterRunId: string;
+    }
+  | undefined {
+  const target = ownedTranscriptWriteContext.getStore()?.sessionTarget;
+  const expectedWriterRunId = target?.expectedWriterRunId?.trim();
+  if (!expectedWriterRunId) {
+    return undefined;
+  }
+  const expectedLifecycleRevision = target?.expectedLifecycleRevision;
+  return {
+    ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
+    expectedWriterRunId,
+  };
+}
+
 export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResult>(
   context: OwnedSessionTranscriptWriteContext,
   run: (...args: TArgs) => TResult,
@@ -77,10 +138,23 @@ export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResul
   return (...args) => ownedTranscriptWriteContext.run(context, () => run(...args));
 }
 
+/** Revalidates a matching attempt-owned lease immediately before durable mutation. */
+export function assertOwnedSessionTranscriptWrite(params: {
+  sessionFile?: string;
+  sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteLockTarget;
+}): void {
+  const context = ownedTranscriptWriteContext.getStore();
+  if (context && contextMatches({ context, ...params })) {
+    context.assertOwned();
+  }
+}
+
 export async function runWithOwnedSessionTranscriptWriteLock<T>(
   params: {
     sessionFile?: string;
     sessionKey?: string;
+    sessionTarget?: SessionTranscriptWriteLockTarget;
   },
   run: () => Promise<T> | T,
 ): Promise<T> {
@@ -90,6 +164,7 @@ export async function runWithOwnedSessionTranscriptWriteLock<T>(
 export async function acquireOwnedSessionTranscriptWriteLock(params: {
   sessionFile?: string;
   sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteLockTarget;
 }): Promise<{ release: () => Promise<void> } | undefined> {
   const context = ownedTranscriptWriteContext.getStore();
   if (!context || !contextMatches({ context, ...params })) {
@@ -128,36 +203,11 @@ export async function acquireOwnedSessionTranscriptWriteLock(params: {
   };
 }
 
-export function canAdvanceOwnedSessionEntryCache(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-  snapshot: OwnedSessionTranscriptCacheSnapshot;
-}): boolean {
-  const context = ownedTranscriptWriteContext.getStore();
-  return Boolean(
-    context &&
-    contextMatches({ context, ...params }) &&
-    context.publishSessionFileSnapshot &&
-    context.canAdvanceSessionEntryCache?.(params.snapshot),
-  );
-}
-
-export function publishOwnedSessionFileSnapshot(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-  snapshot: OwnedSessionTranscriptCacheSnapshot;
-}): boolean | undefined {
-  const context = ownedTranscriptWriteContext.getStore();
-  if (!context || !contextMatches({ context, ...params }) || !context.publishSessionFileSnapshot) {
-    return undefined;
-  }
-  return context.publishSessionFileSnapshot(params.snapshot);
-}
-
 async function runWithOwnedSessionTranscriptWriteContext<T>(
   params: {
     sessionFile?: string;
     sessionKey?: string;
+    sessionTarget?: SessionTranscriptWriteLockTarget;
   },
   run: () => Promise<T> | T,
   options?: OwnedSessionTranscriptWriteOptions<T>,

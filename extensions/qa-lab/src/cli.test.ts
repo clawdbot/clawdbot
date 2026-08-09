@@ -926,13 +926,6 @@ describe("qa cli registration", () => {
     expect(requireQaSuiteOptions()).toEqual(expect.objectContaining({ failFast: true, runner }));
   });
 
-  it("forwards --pack for suite runs", async () => {
-    await program.parseAsync(["node", "openclaw", "qa", "suite", "--pack", "personal-agent"]);
-
-    const options = requireQaSuiteOptions();
-    expect(options.pack).toBe("personal-agent");
-  });
-
   it("forwards --runtime-pair-lane for suite runs", async () => {
     await program.parseAsync([
       "node",

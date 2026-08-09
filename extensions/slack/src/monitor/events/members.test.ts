@@ -11,9 +11,6 @@ type MemberOverrides = import("./system-event-test-harness.js").SlackSystemEvent
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: (...args: unknown[]) => memberMocks.enqueue(...args),
 }));
-vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => memberMocks.enqueue(...args),
-}));
 type MemberHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
 type MemberCaseArgs = {
@@ -64,7 +61,7 @@ async function runMemberCase(args: MemberCaseArgs = {}): Promise<void> {
   }
   await handler({
     event: (args.event ?? makeMemberEvent()) as Record<string, unknown>,
-    body: args.body ?? {},
+    body: args.body ?? { event_id: "Ev-member-default" },
   });
 }
 
@@ -141,5 +138,16 @@ describe("registerSlackMemberEvents", () => {
     await runMemberCase({ trackEvent });
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("keys each queued event by the envelope occurrence", async () => {
+    await runMemberCase({ body: { event_id: "Ev-member-2" } });
+
+    expect(memberMocks.enqueue).toHaveBeenCalledWith(
+      "Slack: alice joined #direct.",
+      expect.objectContaining({
+        contextKey: "slack:member:joined:D1:U1:Ev-member-2",
+      }),
+    );
   });
 });

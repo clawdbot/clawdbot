@@ -3,7 +3,6 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionTranscriptInstance } from "./session-accessor.sqlite-contract.js";
-import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import type { SessionEntry } from "./types.js";
 
 export function listSqliteTranscriptInstancesFromDatabase(params: {
@@ -55,11 +54,6 @@ export function listSqliteTranscriptInstancesFromDatabase(params: {
       const entry: SessionEntry = {
         ...(currentIsExact && current ? structuredClone(current) : {}),
         sessionId: row.session_id,
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId: params.agentId,
-          sessionId: row.session_id,
-          storePath: params.databasePath,
-        }),
         updatedAt: updatedAtMs,
         ...(row.parent_session_key ? { parentSessionKey: row.parent_session_key } : {}),
         ...(row.spawned_by ? { spawnedBy: row.spawned_by, spawnDepth: 1 } : {}),

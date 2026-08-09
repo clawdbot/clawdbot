@@ -80,10 +80,21 @@ function buildChatSendUserTurnMedia(
             // Every offload keeps its claim-check alias so persisted marker
             // ownership survives; only non-images skip native image hydration.
             url: offloadedRef.mediaRef,
+            kind: offloadedRef.kind,
+            fileName: offloadedRef.label,
+            sizeBytes: offloadedRef.sizeBytes,
+            ...(offloadedRef.durationMs !== undefined
+              ? { durationMs: offloadedRef.durationMs }
+              : {}),
+            ...(offloadedRef.width !== undefined ? { width: offloadedRef.width } : {}),
+            ...(offloadedRef.height !== undefined ? { height: offloadedRef.height } : {}),
             ...(offloadedRef.mimeType.startsWith("image/") ? {} : { hydrationSuppressed: true }),
           }
         : {}),
       contentType: entry.contentType,
+      ...(offloadedRef?.durationMs ? { durationMs: offloadedRef.durationMs } : {}),
+      ...(offloadedRef?.width ? { width: offloadedRef.width } : {}),
+      ...(offloadedRef?.height ? { height: offloadedRef.height } : {}),
     };
   });
 }
@@ -167,6 +178,7 @@ function buildChatSendMessageContext(params: {
           authorized: false,
           body: commandBody,
         },
+    ...(params.suppressCommandInterpretation ? { CommandInterpretationSuppressed: true } : {}),
     MessageSid: params.clientRunId,
     SessionCreation: resolveOperatorSessionCreation(params.client),
     ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
@@ -249,6 +261,7 @@ export function prepareChatSendUserTurn(params: {
     attachments.explicitOriginTargetsPlugin && attachments.parsedImages.length > 0
       ? persistedMediaForTranscriptPromise.then(resolveChatSendManagedMedia)
       : Promise.resolve([]);
+  void pluginBoundMediaPromise.catch(() => undefined);
   const messageContext = buildChatSendMessageContext({
     agentId: session.agentId,
     client,

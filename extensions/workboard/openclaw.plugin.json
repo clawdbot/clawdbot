@@ -1,5 +1,8 @@
 {
   "id": "workboard",
+  "doctorContract": {
+    "stateMigrations": true
+  },
   "enabledByDefault": false,
   "activation": {
     "onStartup": true,

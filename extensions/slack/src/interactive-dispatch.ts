@@ -1,7 +1,6 @@
 // Slack plugin module implements interactive dispatch behavior.
 import {
-  createInteractiveConversationBindingHelpers,
-  dispatchPluginInteractiveHandler,
+  createChannelInteractiveDispatcher,
   type PluginConversationBinding,
   type PluginConversationBindingRequestParams,
   type PluginConversationBindingRequestResult,
@@ -86,54 +85,44 @@ export type SlackInteractiveHandlerRegistration = PluginInteractiveRegistration<
   SlackInteractiveHandlerResult
 >;
 
-type SlackInteractiveDispatchContext = Omit<
+const dispatchSlackInteractive = createChannelInteractiveDispatcher<
+  "slack",
+  "interaction",
   SlackInteractiveHandlerContext,
-  | "interaction"
-  | "respond"
-  | "channel"
-  | "requestConversationBinding"
-  | "detachConversationBinding"
-  | "getCurrentConversationBinding"
-> & {
-  interaction:
-    | Omit<SlackBlockInteractivePayload, "data" | "namespace" | "payload">
-    | Omit<SlackModalInteractivePayload, "data" | "namespace" | "payload">;
-};
+  SlackInteractiveHandlerResult
+>({
+  channel: "slack",
+  interactiveKey: "interaction",
+});
 
 export async function dispatchSlackPluginInteractiveHandler(params: {
   data: string;
   interactionId: string;
-  ctx: SlackInteractiveDispatchContext;
+  channelType?: "im" | "mpim" | "channel" | "group";
+  ctx: Parameters<typeof dispatchSlackInteractive>[0]["ctx"];
   respond: SlackInteractiveHandlerContext["respond"];
   onMatched?: () => Promise<void> | void;
 }) {
-  return await dispatchPluginInteractiveHandler<SlackInteractiveHandlerRegistration>({
-    channel: "slack",
-    data: params.data,
+  const senderId = params.ctx.senderId?.trim();
+  const baseConversationId =
+    params.channelType === "im"
+      ? senderId
+        ? `user:${senderId}`
+        : ""
+      : params.ctx.conversationId.trim();
+  const threadId = params.ctx.threadId?.trim() || undefined;
+
+  return await dispatchSlackInteractive({
+    ...params,
     dedupeId: params.interactionId,
-    onMatched: params.onMatched,
-    invoke: ({ registration, namespace, payload }) =>
-      registration.handler({
-        ...params.ctx,
-        channel: "slack",
-        interaction: {
-          ...params.ctx.interaction,
-          data: params.data,
-          namespace,
-          payload,
-        },
-        respond: params.respond,
-        ...createInteractiveConversationBindingHelpers({
-          registration,
-          senderId: params.ctx.senderId,
-          conversation: {
-            channel: "slack",
-            accountId: params.ctx.accountId,
-            conversationId: params.ctx.conversationId,
-            parentConversationId: params.ctx.parentConversationId,
-            threadId: params.ctx.threadId,
-          },
-        }),
-      }),
+    conversation: {
+      channel: "slack",
+      accountId: params.ctx.accountId,
+      conversationId: threadId ?? baseConversationId,
+      parentConversationId: threadId
+        ? (params.ctx.parentConversationId ?? baseConversationId)
+        : params.ctx.parentConversationId,
+      threadId,
+    },
   });
 }

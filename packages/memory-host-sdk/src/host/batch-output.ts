@@ -174,8 +174,8 @@ export function applyEmbeddingBatchOutputLine(params: {
   const data =
     response?.body && typeof response.body === "object" ? (response.body.data ?? []) : [];
   const embedding = data[0]?.embedding ?? [];
-  if (embedding.length === 0) {
-    params.errors.push(`${customId}: empty embedding`);
+  if (!Array.isArray(embedding) || embedding.length === 0 || !embedding.every(Number.isFinite)) {
+    params.errors.push(`${customId}: ${embedding?.length ? "invalid" : "empty"} embedding`);
     return;
   }
   params.byCustomId.set(customId, embedding);

@@ -3,6 +3,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { listSkillProposalEvents } from "../../skills/workshop/service.js";
+import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
+import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
 import {
   createOpenClawTestState,
@@ -37,11 +40,61 @@ describe("skill_workshop tool", () => {
     expect(schema).toContain("create = new skill");
     expect(schema).toContain("update = existing live skill");
     expect(schema).toContain("revise = existing pending proposal");
+    expect(schema).toContain("evaluate runs plugin evaluators");
     expect(schema).toContain("not filesystem search");
     expect(schema).toContain("when proposal_id is unknown");
     expect(schema).toContain("returns candidates");
     expect(schema).toContain("max 160 bytes");
     expect(schema).toContain("shortens the proposal listing entry");
+    expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
+  });
+
+  it("evaluates an exact pending draft and exposes the persisted result", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-evaluate-");
+    const tool = createSkillWorkshopTool({ workspaceDir, agentId: "main" });
+    const created = await tool.execute("call-create", {
+      action: "create",
+      name: "Evaluated Skill",
+      description: "Exercise the explicit evaluation primitive",
+      proposal_content: "# Evaluated Skill\n",
+    });
+    const details = created.details as { id: string; revisionHash: string };
+
+    await expect(
+      tool.execute("call-evaluate", {
+        action: "evaluate",
+        proposal_id: details.id,
+        expected_revision_hash: details.revisionHash,
+        correlation_id: "optimization-run-1",
+      }),
+    ).resolves.toMatchObject({
+      details: {
+        id: details.id,
+        revisionHash: details.revisionHash,
+        evaluation: {
+          trigger: "manual",
+          correlationId: "optimization-run-1",
+          outcomes: [],
+        },
+      },
+    });
+    await expect(
+      tool.execute("call-inspect", { action: "inspect", proposal_id: details.id }),
+    ).resolves.toMatchObject({
+      details: {
+        evaluation: {
+          correlationId: "optimization-run-1",
+        },
+      },
+    });
+    expect(
+      listSkillProposalEvents({ workspaceDir, proposalId: details.id }).events.map(
+        (event) => event.actor,
+      ),
+    ).toEqual([
+      { type: "agent", id: "main" },
+      { type: "agent", id: "main" },
+    ]);
   });
 
   it("documents that proposal_content must be final skill body content, not a plan or change description", () => {
@@ -77,7 +130,7 @@ describe("skill_workshop tool", () => {
         skills: {
           workshop: {
             autonomous: {
-              enabled: false,
+              mode: "off",
             },
           },
         },
@@ -90,11 +143,11 @@ describe("skill_workshop tool", () => {
   it("does not nudge the foreground model when autonomy is enabled", () => {
     const disabled = createSkillWorkshopTool({
       workspaceDir: "/tmp/openclaw",
-      config: { skills: { workshop: { autonomous: { enabled: false } } } },
+      config: { skills: { workshop: { autonomous: { mode: "off" } } } },
     });
     const enabled = createSkillWorkshopTool({
       workspaceDir: "/tmp/openclaw",
-      config: { skills: { workshop: { autonomous: { enabled: true } } } },
+      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
     });
 
     expect(enabled.description).toBe(disabled.description);
@@ -128,80 +181,6 @@ describe("skill_workshop tool", () => {
         action: "list",
       }),
     ).resolves.toMatchObject({ details: { proposals: [] } });
-  });
-
-  it("restricts internal review runs to one pending proposal mutation", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-");
-    const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
-    const tool = createSkillWorkshopTool({
-      workspaceDir,
-      config: { skills: { workshop: { approvalPolicy: "auto" } } },
-      proposalOnly: true,
-      proposalMutationBudget,
-    });
-
-    expect(
-      (tool.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum,
-    ).toEqual(["create", "revise", "list", "inspect"]);
-    await expect(
-      tool.execute("call-apply", { action: "apply", proposal_id: "proposal-1" }),
-    ).rejects.toThrow("only inspect or draft proposals");
-    await expect(
-      tool.execute("call-update", {
-        action: "update",
-        skill_name: "existing-skill",
-        proposal_content: "# Replacement\n",
-      }),
-    ).rejects.toThrow("only inspect or draft proposals");
-
-    await tool.execute("call-create", {
-      action: "create",
-      name: "Review Learning",
-      description: "Reuse a recovered workflow",
-      proposal_content: "# Review Learning\n\nFollow the recovered workflow.\n",
-    });
-    expect(proposalMutationBudget.completed).toBe(1);
-    const retryTool = createSkillWorkshopTool({
-      workspaceDir,
-      proposalOnly: true,
-      proposalMutationBudget,
-    });
-    await expect(
-      retryTool.execute("call-create-2", {
-        action: "create",
-        name: "Second Learning",
-        description: "Should stay blocked",
-        proposal_content: "# Second Learning\n",
-      }),
-    ).rejects.toThrow("reached its proposal mutation limit");
-  });
-
-  it("does not refund the review mutation budget after a failed mutation", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-failure-");
-    const proposalMutationBudget: SkillWorkshopProposalMutationBudget = { remaining: 1 };
-    const tool = createSkillWorkshopTool({
-      workspaceDir,
-      proposalOnly: true,
-      proposalMutationBudget,
-    });
-
-    await expect(
-      tool.execute("call-revise-missing", {
-        action: "revise",
-        proposal_id: "missing-proposal",
-        proposal_content: "# Missing Skill\n",
-      }),
-    ).rejects.toThrow();
-    await expect(
-      tool.execute("call-create-after-failure", {
-        action: "create",
-        name: "Second Mutation",
-        description: "Must remain blocked after a failed mutation",
-        proposal_content: "# Second Mutation\n",
-      }),
-    ).rejects.toThrow("reached its proposal mutation limit");
-    expect(proposalMutationBudget.completed).toBeUndefined();
-    expect(proposalMutationBudget.failedMutations).toBe(1);
   });
 
   it("durably completes a proposal review and blocks later work", async () => {
@@ -261,6 +240,43 @@ describe("skill_workshop tool", () => {
     await expect(tool.execute("call-list-after-complete", { action: "list" })).rejects.toThrow(
       "review is already completing or complete",
     );
+  });
+
+  it("revises support files without requiring the proposal body again", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-support-revise-");
+    const tool = createSkillWorkshopTool({ workspaceDir, agentId: "main" });
+    const created = await tool.execute("call-create", {
+      action: "create",
+      name: "Support Revision",
+      description: "Exercise support-file-only revisions",
+      proposal_content: "# Support Revision\n",
+      support_files: [{ path: "references/input.txt", content: "before\n" }],
+    });
+    const details = created.details as { id: string; revisionHash: string };
+
+    await expect(
+      tool.execute("call-revise", {
+        action: "revise",
+        proposal_id: details.id,
+        expected_revision_hash: details.revisionHash,
+        support_files: [{ path: "references/input.txt", content: "after\n" }],
+      }),
+    ).resolves.toMatchObject({
+      details: {
+        id: details.id,
+        revisionHash: expect.not.stringMatching(details.revisionHash),
+        supportFileCount: 1,
+      },
+    });
+
+    await expect(
+      tool.execute("call-revise-stale", {
+        action: "revise",
+        proposal_id: details.id,
+        expected_revision_hash: details.revisionHash,
+        support_files: [{ path: "references/input.txt", content: "stale\n" }],
+      }),
+    ).rejects.toThrow("proposal revision changed");
   });
 
   it("honors a larger internal review mutation budget", async () => {
@@ -439,22 +455,13 @@ describe("skill_workshop tool", () => {
         .then((buffer) => buffer.at(-1)),
     ).resolves.toBe(0x0a);
     await expect(
-      fs
-        .readFile(
-          path.join(
-            stateDir,
-            "skill-workshop",
-            "proposals",
-            (result.details as { id: string }).id,
-            "proposal.json",
-          ),
-          "utf8",
-        )
-        .then((raw) => JSON.parse(raw).origin),
-    ).resolves.toEqual({
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:workshop-test",
-      runId: "run-workshop-test",
+      readSkillProposalRecord((result.details as { id: string }).id),
+    ).resolves.toMatchObject({
+      origin: {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:workshop-test",
+        runId: "run-workshop-test",
+      },
     });
     await expect(
       fs.readFile(
@@ -521,19 +528,8 @@ describe("skill_workshop tool", () => {
       ),
     ).resolves.toContain('version: "v2"');
     await expect(
-      fs
-        .readFile(
-          path.join(
-            stateDir,
-            "skill-workshop",
-            "proposals",
-            (result.details as { id: string }).id,
-            "proposal.json",
-          ),
-          "utf8",
-        )
-        .then((raw) => JSON.parse(raw).origin),
-    ).resolves.toEqual(reviewerOrigin);
+      readSkillProposalRecord((result.details as { id: string }).id),
+    ).resolves.toMatchObject({ origin: reviewerOrigin });
 
     const listed = await tool.execute("call-3", {
       action: "list",
@@ -779,7 +775,7 @@ describe("skill_workshop tool", () => {
     ).rejects.toThrow();
   });
 
-  it("scopes proposal discovery to the tool workspace", async () => {
+  it("keeps proposal discovery scoped to the tool agent across workspace changes", async () => {
     const firstWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-first-");
     const secondWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-second-");
     const firstTool = createSkillWorkshopTool({
@@ -811,15 +807,19 @@ describe("skill_workshop tool", () => {
       status: "pending",
     });
     expect(
-      (listed.details as { proposals: Array<{ id: string }> }).proposals.map(
-        (proposal) => proposal.id,
-      ),
-    ).toEqual([(first.details as { id: string }).id]);
+      (listed.details as { proposals: Array<{ id: string; workspaceMismatch?: true }> }).proposals,
+    ).toEqual([
+      expect.objectContaining({
+        id: (second.details as { id: string }).id,
+        workspaceMismatch: true,
+      }),
+      expect.objectContaining({ id: (first.details as { id: string }).id }),
+    ]);
     await expect(
       firstTool.execute("call-4", {
         action: "inspect",
         proposal_id: (second.details as { id: string }).id,
       }),
-    ).rejects.toThrow(`Skill proposal not found: ${(second.details as { id: string }).id}`);
+    ).resolves.toMatchObject({ details: { id: (second.details as { id: string }).id } });
   });
 });

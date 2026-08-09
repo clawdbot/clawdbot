@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -21,8 +22,10 @@ import {
   resolveRequesterToolPolicies,
   type RequesterToolPolicySource,
 } from "./requester-tool-policy.js";
+import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import type { TrustedSubagentCompletionHandoff } from "./subagent-announce-handoff.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
   collectExplicitAllowlist,
@@ -51,6 +54,7 @@ export type ConversationCapabilityProfileParams = {
   chatType?: string;
   messageTo?: string | null;
   messageThreadId?: string | number | null;
+  conversationToolPolicy?: GroupToolPolicyConfig;
   currentChannelId?: string | null;
   currentMessagingTarget?: string | null;
   currentThreadTs?: string | null;
@@ -82,8 +86,8 @@ export type ConversationCapabilityProfileParams = {
   inheritRuntimeToolAllowlist?: boolean;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   inputProvenance?: InputProvenance;
-  /** Trusted in-process completion handoff; public callers cannot set this fact. */
-  trustedInternalHandoff?: boolean;
+  /** Consumed in-process completion capability; public callers cannot set this fact. */
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
@@ -229,9 +233,13 @@ export function resolveConversationCapabilityProfile(
     senderE164: params.senderE164,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
+    sessionId: params.sessionId,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
     senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
+    conversationPolicy: pickSandboxToolPolicy(params.conversationToolPolicy),
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const profilePolicy = resolveToolProfilePolicy(effective.profile);

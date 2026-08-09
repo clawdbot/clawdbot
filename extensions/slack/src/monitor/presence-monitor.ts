@@ -1,12 +1,14 @@
 // Slack plugin module polls selected participants and routes away-to-active transitions.
-import type { WebClient } from "@slack/web-api";
+import { type WebClient, WebAPIRateLimitedError } from "@slack/web-api";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
 
 export const SLACK_PRESENCE_GREETING_COOLDOWN_MS = 8 * 60 * 60 * 1000;
+export const SLACK_PRESENCE_REQUEST_TIMEOUT_MS = 30_000;
 const SLACK_PRESENCE_POLL_INTERVAL_MS = 60_000;
 const SLACK_PRESENCE_AUTO_MAX_PARTICIPANTS = 8;
 const SLACK_PRESENCE_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -142,6 +144,7 @@ export function createSlackPresenceMonitor(params: {
   let pollOffset = 0;
   let timer: NodeJS.Timeout | undefined;
   let activePoll: Promise<void> | undefined;
+  let rateLimitedUntilMs = 0;
   let stopped = false;
 
   const pruneTargets = (now: number) => {
@@ -249,6 +252,10 @@ export function createSlackPresenceMonitor(params: {
 
   const performPoll = async () => {
     const now = nowMs();
+    if (rateLimitedUntilMs > now) {
+      return;
+    }
+    rateLimitedUntilMs = 0;
     pruneTargets(now);
     const candidates = Array.from(
       new Set(
@@ -265,16 +272,23 @@ export function createSlackPresenceMonitor(params: {
       { length: count },
       (_, index) => candidates[(pollOffset + index) % candidates.length],
     ).filter((userId): userId is string => Boolean(userId));
-    pollOffset = (pollOffset + count) % candidates.length;
     for (const userId of selected) {
       if (stopped) {
         return;
       }
+      let consumed = false;
       try {
-        const response = await params.client.getPresence({ user: userId });
+        const response = await withTimeout(
+          params.client.getPresence({ user: userId }),
+          SLACK_PRESENCE_REQUEST_TIMEOUT_MS,
+          {
+            message: `Slack presence request timed out after ${SLACK_PRESENCE_REQUEST_TIMEOUT_MS}ms`,
+          },
+        );
         if (stopped) {
           return;
         }
+        consumed = true;
         const next =
           response.presence === "active" || response.presence === "away"
             ? response.presence
@@ -291,7 +305,20 @@ export function createSlackPresenceMonitor(params: {
         if (stopped) {
           return;
         }
+        if (err instanceof WebAPIRateLimitedError) {
+          rateLimitedUntilMs = Math.max(
+            rateLimitedUntilMs,
+            nowMs() + Math.max(0, err.retryAfter) * 1_000,
+          );
+          params.error?.(`slack presence polling rate limited; retrying after ${err.retryAfter}s`);
+          return;
+        }
+        consumed = true;
         params.error?.(`slack presence poll failed for user ${userId}: ${String(err)}`);
+      } finally {
+        if (consumed) {
+          pollOffset = (pollOffset + 1) % candidates.length;
+        }
       }
     }
   };

@@ -6,6 +6,7 @@ import {
   supportsModelTools,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveCodexMcpToolOverridesForAgent } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import {
   resolveCodexAppServerAuthAccountCacheKey,
@@ -18,9 +19,19 @@ import {
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
+import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
+import { canResolveScheduledConfiguredMcpCreatorAuthority } from "./scheduled-configured-mcp-authority.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-lifecycle.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
+
+function resolveCodexAttemptBundleManifestRegistry(
+  preparedModelRuntime: EmbeddedRunAttemptParams["preparedModelRuntime"],
+) {
+  const metadataSnapshot = preparedModelRuntime?.metadataSnapshot;
+  // Scoped snapshots are partial views and cannot replace complete bundle discovery.
+  return metadataSnapshot?.pluginIds === undefined ? metadataSnapshot?.manifestRegistry : undefined;
+}
 
 export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnection) {
   const {
@@ -53,6 +64,11 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
         })
       : undefined;
   const attemptAuthProfileStore = preparedAuthBinding?.authProfileStore ?? params.authProfileStore;
+  prewarmCodexAttemptClient({
+    connection,
+    authProfileStore: attemptAuthProfileStore,
+    authBindingFingerprint: preparedAuthBinding?.fingerprint,
+  });
   const effectiveContextWindowInfo = usesSupervisionConnection
     ? undefined
     : params.contextWindowInfo;
@@ -98,6 +114,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
         modelId: effectiveRuntimeModelId,
         model: supervisedRuntimeModel,
         thinkLevel: _outerThinkLevel,
+        fastMode: _outerFastMode,
         sessionKey: contextSessionKey,
       }
     : {
@@ -131,13 +148,51 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       ? undefined
       : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start });
   preDynamicStartupStages.mark("auth-cache");
+  const codexMcpToolOverrides = resolveCodexMcpToolOverridesForAgent(params.config, {
+    agentId: sessionAgentId,
+    toolOverrides: params.toolOverrides,
+  });
+  const bundleManifestRegistry = resolveCodexAttemptBundleManifestRegistry(
+    params.preparedModelRuntime,
+  );
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
     cfg: params.config,
     toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
+    manifestRegistry: bundleManifestRegistry,
+    toolOverrides: codexMcpToolOverrides,
   });
+  const authenticatedScheduledMode =
+    params.trigger === "cron" &&
+    params.scheduledToolPolicy !== undefined &&
+    Array.isArray(params.toolsAllow);
+  const ownsScheduledConfiguredMcpSurface =
+    authenticatedScheduledMode &&
+    (bundleMcpThreadConfig.staticServerNames.length > 0 ||
+      mutable.startupBinding?.configuredMcpOwnershipVersion === 1);
+  const mayResolveScheduledConfiguredMcpCreatorAuthority =
+    !authenticatedScheduledMode &&
+    canResolveScheduledConfiguredMcpCreatorAuthority({
+      trigger: params.trigger,
+      connectionClass: appServer.connectionClass,
+      bindingKind: connection.bindingIdentity.kind,
+      bindingSessionKey:
+        connection.bindingIdentity.kind === "session"
+          ? connection.bindingIdentity.sessionKey
+          : undefined,
+      sessionKey: params.sessionKey,
+      usesSupervisionConnection,
+      preservesNativeModel: mutable.startupBinding?.preserveNativeModel === true,
+      senderIsOwner: params.senderIsOwner,
+      senderId: params.senderId,
+      inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: params.trustedInternalHandoff,
+      spawnedBy: params.spawnedBy,
+      scheduledToolPolicy: params.scheduledToolPolicy,
+      hasStaticConfiguredMcp: bundleMcpThreadConfig.staticServerNames.length > 0,
+    });
   preDynamicStartupStages.mark("bundle-mcp");
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
@@ -201,6 +256,12 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     startupAuthAccountCacheKey,
     startupEnvApiKeyCacheKey,
     bundleMcpThreadConfig,
+    bundleManifestRegistry,
+    authenticatedScheduledMode,
+    ownsScheduledConfiguredMcpSurface,
+    canResolveScheduledConfiguredMcpCreatorAuthority:
+      mayResolveScheduledConfiguredMcpCreatorAuthority,
+    codexMcpToolOverrides,
     sandboxExecServerEnabled,
     nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport,

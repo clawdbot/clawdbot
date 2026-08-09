@@ -86,6 +86,7 @@ export function actionResult(
       targetSkillFile: options.targetSkillFile ?? record.target.skillFile,
       scanState: record.scan.state,
       proposedVersion: record.proposedVersion,
+      draftHash: record.draftHash,
     },
   };
 }
@@ -107,6 +108,9 @@ export function proposalResult(
       targetSkillFile: proposal.record.target.skillFile,
       scanState: proposal.record.scan.state,
       proposedVersion: proposal.record.proposedVersion,
+      draftHash: proposal.record.draftHash,
+      revisionHash: proposal.revisionHash,
+      ...(proposal.record.evaluation ? { evaluation: proposal.record.evaluation } : {}),
       ...(options.includeContent ? { proposalContent: proposal.content } : {}),
       ...(options.includeContent && proposal.supportFiles
         ? { supportFiles: proposal.supportFiles }
@@ -126,10 +130,11 @@ export async function readProposalForInspect(
   params: Record<string, unknown>,
   workspaceDir: string,
   env?: NodeJS.ProcessEnv,
+  agentId?: string,
 ): Promise<SkillProposalReadResult> {
   const proposalId = readStringParam(params, "proposal_id", { label: "proposal_id" });
   if (proposalId) {
-    const proposal = await inspectSkillProposal(proposalId, { workspaceDir, env });
+    const proposal = await inspectSkillProposal(proposalId, { agentId, workspaceDir, env });
     if (!proposal) {
       throw new ToolInputError(`Skill proposal not found: ${proposalId}`);
     }
@@ -139,8 +144,13 @@ export async function readProposalForInspect(
     name: readStringParam(params, "name", { required: true }),
     workspaceDir,
     env,
+    agentId,
   });
-  const proposal = await inspectSkillProposal(resolved.record.id, { workspaceDir, env });
+  const proposal = await inspectSkillProposal(resolved.record.id, {
+    agentId,
+    workspaceDir,
+    env,
+  });
   if (!proposal) {
     throw new ToolInputError(`Skill proposal not found: ${resolved.record.id}`);
   }

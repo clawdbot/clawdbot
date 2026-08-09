@@ -8,11 +8,17 @@ import type { createLocalMeetingRealtimeAudioTransport } from "./realtime-local-
 import type { createNodeMeetingRealtimeAudioTransport } from "./realtime-node-audio-transport.js";
 
 const browserMocks = vi.hoisted(() => ({
+  callNode: vi.fn(),
   leave: vi.fn(),
   open: vi.fn(),
   resolveLocal: vi.fn(),
+  resolveNode: vi.fn(),
 }));
 
+vi.mock("./browser-node.js", () => ({
+  callMeetingBrowserProxyOnNode: browserMocks.callNode,
+  resolveMeetingBrowserNode: browserMocks.resolveNode,
+}));
 vi.mock("./browser-controller.js", () => ({
   openMeetingWithBrowser: browserMocks.open,
   recoverMeetingBrowserTab: vi.fn(),
@@ -35,6 +41,8 @@ import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-
 type TestMode = "agent" | "transcribe";
 type TestConfig = MeetingRealtimeEngineConfig & {
   chrome: MeetingRealtimeEngineConfig["chrome"] & {
+    audioBackend: "auto";
+    audioBufferBytes: number;
     audioInputCommand: string[];
     audioOutputCommand: string[];
     autoJoin: boolean;
@@ -55,6 +63,8 @@ type TestConfig = MeetingRealtimeEngineConfig & {
 
 const config = {
   chrome: {
+    audioBackend: "auto",
+    audioBufferBytes: 4_096,
     audioFormat: "pcm16-24khz",
     audioInputCommand: [],
     audioOutputCommand: [],
@@ -120,6 +130,7 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
     vi.clearAllMocks();
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     browserMocks.resolveLocal.mockResolvedValue(vi.fn());
+    browserMocks.resolveNode.mockResolvedValue("node-1");
     browserMocks.open.mockResolvedValue({
       launched: true,
       browser: { inCall: true },
@@ -145,7 +156,6 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
       isTalkBackMode: () => true,
       meetingLabel: `${testCase.name} meeting`,
       nodeCommandName: platform.nodeCommandName,
-      outputMentionsAudioDevice: () => true,
       platform,
       preserveTrackedBrowserOnEngineFailure: testCase.preserveTrackedBrowserOnEngineFailure,
       runtime: {
@@ -170,7 +180,6 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
         }) as unknown as typeof startMeetingAgentRealtimeEngine,
         startRealtimeEngine: vi.fn() as unknown as typeof startMeetingRealtimeEngine,
       },
-      systemProfilerCommand: "/usr/sbin/system_profiler",
     });
     const runtime = {
       system: {
@@ -202,5 +211,98 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
       }),
     );
     expect(browserMocks.leave).toHaveBeenCalledTimes(testCase.expectedLeaves);
+  });
+
+  it("enables output generations when the node host advertises support", async () => {
+    const nodeAudioTransport = {
+      clearOutput: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+      onFatal: vi.fn(),
+      startInput: vi.fn(),
+      stop: vi.fn(async () => {}),
+      writeOutput: vi.fn(async () => {}),
+    };
+    const createNodeAudioTransport = vi.fn(() => nodeAudioTransport);
+    const transport = createMeetingChromeTransport<
+      TestConfig,
+      TestMode,
+      MeetingBrowserHealth,
+      MeetingTranscriptSnapshot
+    >({
+      browserNodeAdapter: platform,
+      isRealtimeRouteReady: () => true,
+      isTalkBackMode: () => true,
+      meetingLabel: `${testCase.name} meeting`,
+      nodeCommandName: platform.nodeCommandName,
+      platform,
+      preserveTrackedBrowserOnEngineFailure: testCase.preserveTrackedBrowserOnEngineFailure,
+      runtime: {
+        createBindings: vi.fn(() => ({
+          platform: { displayName: "Test", logScope: "[test]", sessionIdPrefix: "test" },
+          consultAgent: vi.fn(),
+          tools: [],
+          handleToolCall: vi.fn(),
+        })) as unknown as typeof createMeetingRealtimeEngineBindings,
+        createLocalAudioTransport:
+          vi.fn() as unknown as typeof createLocalMeetingRealtimeAudioTransport,
+        createNodeAudioTransport:
+          createNodeAudioTransport as unknown as typeof createNodeMeetingRealtimeAudioTransport,
+        startAgentRealtimeEngine: vi.fn(async () => ({
+          providerId: "openai",
+          speak: vi.fn(),
+          getHealth: vi.fn(),
+          stop: vi.fn(async () => {}),
+        })) as unknown as typeof startMeetingAgentRealtimeEngine,
+        startRealtimeEngine: vi.fn() as unknown as typeof startMeetingRealtimeEngine,
+      },
+    });
+    const runtime = {
+      nodes: {
+        invoke: vi.fn(async ({ params }: { params: { action: string } }) =>
+          params.action === "start"
+            ? {
+                payload: {
+                  audioBridge: { type: "node-command-pair", outputGeneration: true },
+                  bridgeId: "bridge-1",
+                  launched: true,
+                },
+              }
+            : { payload: { ok: true } },
+        ),
+      },
+    } as unknown as PluginRuntime;
+
+    const result = await transport.launchOnNode({
+      config,
+      fullConfig: { transcripts: { enabled: false } } as OpenClawConfig,
+      logger,
+      meetingSessionId: "session-1",
+      mode: "agent",
+      runtime,
+      url: "https://example.test/meeting",
+    });
+
+    expect(result.audioBridge?.type).toBe("node-command-pair");
+    expect(runtime.nodes.invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          action: "setup",
+          audioBackend: "auto",
+          audioBufferBytes: 4_096,
+          audioFormat: "pcm16-24khz",
+        }),
+      }),
+    );
+    const startCall = vi
+      .mocked(runtime.nodes.invoke)
+      .mock.calls.find(([call]) => (call.params as { action?: string }).action === "start")?.[0];
+    expect(startCall?.params).not.toHaveProperty("audioInputCommand");
+    expect(startCall?.params).not.toHaveProperty("audioOutputCommand");
+    expect(
+      Reflect.get(
+        nodeAudioTransport,
+        Symbol.for("openclaw.internal.meeting-node-output-generation.v1"),
+      ),
+    ).toBe(true);
   });
 });

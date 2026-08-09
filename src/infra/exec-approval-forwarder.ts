@@ -22,6 +22,7 @@ import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 // Forwards exec approval requests between runtime sessions and approval handlers.
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
+import { createPendingApprovalRegistry } from "../shared/pending-approval-registry.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import {
@@ -69,7 +70,6 @@ type ApprovalRouteRequest = {
 type PendingApproval<TRouteRequest extends ApprovalRouteRequest> = {
   routeRequest: TRouteRequest;
   targets: ForwardTarget[];
-  timeoutId: NodeJS.Timeout | null;
 };
 
 type ApprovalRenderContext<TRouteRequest extends ApprovalRouteRequest> = {
@@ -558,20 +558,18 @@ function createApprovalHandlers<
   nowMs: () => number;
   resolveSessionTarget: ResolveSessionTargetFn;
 }) {
-  const pending = new Map<string, PendingApproval<TRouteRequest>>();
+  const pending = createPendingApprovalRegistry<PendingApproval<TRouteRequest>>();
 
-  const handleRequested = async (request: TRequest): Promise<boolean> => {
-    const cfg = params.getConfig();
-    const config = params.strategy.config(cfg);
-    const requestId = params.strategy.getRequestId(request);
-    const routeRequest = params.strategy.getRouteRequestFromRequest(request);
-    const filteredTargets = [
-      ...(shouldForwardRoute({ config, routeRequest })
+  const resolveTargets = async (paramsForRoute: {
+    cfg: OpenClawConfig;
+    config?: ExecApprovalForwardingConfig;
+    routeRequest: TRouteRequest;
+  }): Promise<ForwardTarget[]> =>
+    [
+      ...(shouldForwardRoute(paramsForRoute)
         ? await resolveForwardTargets({
-            cfg,
-            config,
+            ...paramsForRoute,
             approvalKind: params.strategy.kind,
-            routeRequest,
             resolveSessionTarget: params.resolveSessionTarget,
           })
         : []),
@@ -580,46 +578,77 @@ function createApprovalHandlers<
         !shouldSkipForwardingFallback({
           approvalKind: params.strategy.kind,
           target,
-          cfg,
-          routeRequest,
+          cfg: paramsForRoute.cfg,
+          routeRequest: paramsForRoute.routeRequest,
         }),
     );
+
+  const deliverResolved = async (
+    resolved: TResolved,
+    entry?: PendingApproval<TRouteRequest>,
+  ): Promise<void> => {
+    const cfg = params.getConfig();
+    const routeRequest =
+      entry?.routeRequest ?? params.strategy.getRouteRequestFromResolved(resolved);
+    const targets =
+      entry?.targets ??
+      (routeRequest
+        ? await resolveTargets({
+            cfg,
+            config: params.strategy.config(cfg),
+            routeRequest,
+          })
+        : []);
+    if (!targets.length) {
+      return;
+    }
+    await deliverToTargets({
+      cfg,
+      targets,
+      buildPayload: (target) =>
+        params.strategy.buildResolvedPayload({
+          cfg,
+          resolved,
+          target,
+          routeRequest: routeRequest ?? ({} as TRouteRequest),
+        }),
+      deliver: params.deliver,
+    });
+  };
+
+  const handleRequested = async (request: TRequest): Promise<boolean> => {
+    const cfg = params.getConfig();
+    const config = params.strategy.config(cfg);
+    const requestId = params.strategy.getRequestId(request);
+    const routeRequest = params.strategy.getRouteRequestFromRequest(request);
+    // Register before route lookup so a fast resolution cannot overtake and resurrect delivery.
+    const pendingEntry = pending.begin(requestId, { routeRequest, targets: [] });
+    let filteredTargets: ForwardTarget[];
+    try {
+      filteredTargets = await resolveTargets({ cfg, config, routeRequest });
+    } catch (error) {
+      pending.remove(requestId, pendingEntry);
+      throw error;
+    }
     if (filteredTargets.length === 0) {
+      pending.remove(requestId, pendingEntry);
       return false;
     }
 
+    pendingEntry.value = { routeRequest, targets: filteredTargets };
     const expiresInMs = Math.max(0, params.strategy.getExpiresAtMs(request) - params.nowMs());
-    const timeoutId = setTimeout(() => {
-      void (async () => {
-        const entry = pending.get(requestId);
-        if (!entry) {
-          return;
-        }
-        pending.delete(requestId);
-        await deliverToTargets({
-          cfg,
-          targets: entry.targets,
-          buildPayload: () => ({ text: params.strategy.buildExpiredText(request) }),
-          deliver: params.deliver,
-        });
-      })().catch((err: unknown) => {
+    pending.scheduleExpiry(pendingEntry, expiresInMs, (expired) => {
+      void deliverToTargets({
+        cfg,
+        targets: expired.value.targets,
+        buildPayload: () => ({ text: params.strategy.buildExpiredText(request) }),
+        deliver: params.deliver,
+      }).catch((err: unknown) => {
         log.error(
           `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
         );
       });
-    }, expiresInMs);
-    timeoutId.unref?.();
-
-    const pendingEntry: PendingApproval<TRouteRequest> = {
-      routeRequest,
-      targets: filteredTargets,
-      timeoutId,
-    };
-    pending.set(requestId, pendingEntry);
-
-    if (pending.get(requestId) !== pendingEntry) {
-      return false;
-    }
+    });
 
     void deliverToTargets({
       cfg,
@@ -648,83 +677,32 @@ function createApprovalHandlers<
         });
       },
       deliver: params.deliver,
-      shouldSend: () => pending.get(requestId) === pendingEntry,
-    }).catch((err: unknown) => {
-      log.error(
-        `${params.strategy.kind} approvals: failed to deliver request ${requestId}: ${String(err)}`,
-      );
-    });
+      shouldSend: () => pending.isCurrent(pendingEntry),
+    })
+      .then(() => pending.completeDelivery(pendingEntry, pendingEntry.value))
+      .catch((err: unknown) => {
+        log.error(
+          `${params.strategy.kind} approvals: failed to deliver request ${requestId}: ${String(err)}`,
+        );
+      });
     return true;
   };
 
   const handleResolved = async (resolved: TResolved) => {
-    const resolvedId = params.strategy.getResolvedId(resolved);
-    const entry = pending.get(resolvedId);
-    if (entry?.timeoutId) {
-      clearTimeout(entry.timeoutId);
-    }
-    if (entry) {
-      pending.delete(resolvedId);
-    }
-
-    const cfg = params.getConfig();
-    let targets = entry?.targets;
-    if (!targets) {
-      const routeRequest = params.strategy.getRouteRequestFromResolved(resolved);
-      if (routeRequest) {
-        const config = params.strategy.config(cfg);
-        targets = [
-          ...(shouldForwardRoute({ config, routeRequest })
-            ? await resolveForwardTargets({
-                cfg,
-                config,
-                approvalKind: params.strategy.kind,
-                routeRequest,
-                resolveSessionTarget: params.resolveSessionTarget,
-              })
-            : []),
-        ].filter(
-          (target) =>
-            !shouldSkipForwardingFallback({
-              approvalKind: params.strategy.kind,
-              target,
-              cfg,
-              routeRequest,
-            }),
-        );
-      }
-    }
-    if (!targets?.length) {
+    const settled = pending.settle(params.strategy.getResolvedId(resolved), (entry) =>
+      deliverResolved(resolved, entry.value),
+    );
+    if (settled.status === "queued") {
       return;
     }
-
-    await deliverToTargets({
-      cfg,
-      targets,
-      buildPayload: (target) =>
-        params.strategy.buildResolvedPayload({
-          cfg,
-          resolved,
-          target,
-          routeRequest:
-            entry?.routeRequest ??
-            params.strategy.getRouteRequestFromResolved(resolved) ??
-            ({} as TRouteRequest),
-        }),
-      deliver: params.deliver,
-    });
-  };
-
-  const stop = () => {
-    for (const entry of pending.values()) {
-      if (entry.timeoutId) {
-        clearTimeout(entry.timeoutId);
-      }
+    if (settled.status === "taken") {
+      await settled.terminal(settled.entry);
+      return;
     }
-    pending.clear();
+    await deliverResolved(resolved);
   };
 
-  return { handleRequested, handleResolved, stop };
+  return { handleRequested, handleResolved, stop: () => pending.clear() };
 }
 
 function createApprovalStrategy<

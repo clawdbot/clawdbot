@@ -41,23 +41,27 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
   }
 }
 
-export function renderSessionState(session: SidebarRecentSession) {
-  if (session.hasActiveRun || session.status === "running") {
+export function renderSessionUnreadState(session: SidebarRecentSession) {
+  return !session.isChild && session.unread
+    ? html`<span
+        class="session-unread-dot sidebar-recent-session__unread"
+        role="img"
+        aria-label=${t("sessionsView.unread")}
+      ></span>`
+    : nothing;
+}
+
+export function renderSessionState(session: SidebarRecentSession, showTitle = true) {
+  if (session.hasActiveRun) {
     return html`<span
       class="session-run-spinner sidebar-recent-session__state"
       role="img"
       aria-label=${t("sessionsView.activeRun")}
-      title=${t("sessionsView.activeRun")}
+      title=${showTitle ? t("sessionsView.activeRun") : nothing}
     ></span>`;
   }
   if (!session.isChild) {
-    return session.unread
-      ? html`<span
-          class="session-unread-dot sidebar-recent-session__unread"
-          role="img"
-          aria-label=${t("sessionsView.unread")}
-        ></span>`
-      : nothing;
+    return renderSessionUnreadState(session);
   }
   const status = session.status;
   if (!status) {

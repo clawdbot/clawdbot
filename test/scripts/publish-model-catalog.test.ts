@@ -13,7 +13,7 @@ import {
   readModelCatalogManifests,
   serializeModelCatalogBundle,
   summarizeModelCatalogBundle,
-} from "../../scripts/publish-model-catalog.mjs";
+} from "../../scripts/publish-model-catalog.mts";
 
 const tempDirs: string[] = [];
 
@@ -119,11 +119,11 @@ describe("publish model catalog", () => {
     const out = path.join(tempDir, "catalog.json");
     const result = spawnSync(
       process.execPath,
-      ["scripts/publish-model-catalog.mjs", "--dry-run", "--out", out],
+      ["--import", "tsx", "scripts/publish-model-catalog.mts", "--dry-run", "--out", out],
       { cwd: root, encoding: "utf8" },
     );
     expect(result.status, result.stderr).toBe(0);
-    const stats = /dry-run schemaVersion=1 providers=39 models=(\d+)/u.exec(result.stdout);
+    const stats = /dry-run schemaVersion=1 providers=40 models=(\d+)/u.exec(result.stdout);
     expect(stats).not.toBeNull();
     expect(Number(stats?.[1])).toBeGreaterThanOrEqual(MODEL_CATALOG_MIN_MODELS);
     expect(fs.existsSync(out)).toBe(false);
@@ -345,10 +345,14 @@ describe("publish model catalog", () => {
   });
 
   it("ends failures with the stable wrapper marker", () => {
-    const result = spawnSync(process.execPath, ["scripts/publish-model-catalog.mjs"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/publish-model-catalog.mts"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
     expect(result.status).toBe(1);
     expect(result.stderr.trim().split("\n").at(-1)).toBe("[publish-model-catalog] FAILED (exit 1)");
   });

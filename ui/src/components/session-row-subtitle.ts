@@ -19,7 +19,7 @@ export function resolveSidebarSessionSubtitle(params: {
   narrationLine: string | undefined;
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   > | null;
 }): SidebarSessionSubtitle {
   const { session } = params;
@@ -27,7 +27,7 @@ export function resolveSidebarSessionSubtitle(params: {
   // Agent-declared status (sessions tool) outranks live narration: it is an
   // explicit message to the user, not ambient activity.
   const agentStatus = session.agentStatusNote || undefined;
-  const running = session.hasActiveRun || session.status === "running";
+  const running = session.hasActiveRun;
   const activeRunIds = session.activeRunIds ?? [];
   const digestMatchesActiveRun = (
     digest: typeof params.observerDigest,

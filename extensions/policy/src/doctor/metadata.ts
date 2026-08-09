@@ -314,6 +314,7 @@ export const POLICY_RULE_METADATA = [
     strictness: "denylist-superset",
     valueType: "string-list",
     checkIds: [
+      CHECK_IDS.policyUnmigratedToolsFile,
       CHECK_IDS.policyMissingToolRisk,
       CHECK_IDS.policyMissingToolSensitivity,
       CHECK_IDS.policyMissingToolOwner,

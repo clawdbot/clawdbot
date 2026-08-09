@@ -55,6 +55,21 @@ const dependencyManifestFields = [
   "libc",
 ];
 
+/**
+ * @typedef {{
+ *   body?: string,
+ *   created_at?: string,
+ *   html_url?: string,
+ *   user?: { login?: string },
+ * }} GuardComment
+ * @typedef {{ login: string, source: string }} GuardActorCandidate
+ * @typedef {{ path: string, fields: string[] }} DependencyManifestChange
+ * @typedef {{ kind: "not-attempted" } |
+ *   { kind: "blocked-by-dependency-manifest-fields", changes: DependencyManifestChange[] } |
+ *   { kind: "blocked-by-other-dependency-files", files: string[] } |
+ *   { kind: "failed", reason: string }} AutoscrubStatus
+ */
+
 export function isDependencyFile(filename) {
   return (
     filename.endsWith("package-lock.json") ||
@@ -82,6 +97,17 @@ export function dependencyFieldChanges(baseManifest, headManifest) {
   return changes;
 }
 
+export function isRemovalOnlyDependencyGraphChange(changes) {
+  return changes.length > 0 && changes.every((change) => change.change_type === "removed");
+}
+
+/**
+ * @param {{
+ *   dependencyFiles?: string[],
+ *   lockfileChanges: string[],
+ *   dependencyManifestChanges?: DependencyManifestChange[],
+ * }} options
+ */
 export function shouldAutoscrubDependencyLockfiles({
   dependencyFiles = [],
   lockfileChanges,
@@ -170,6 +196,14 @@ function* dependencyOverrideCandidates({ comments, expectedSha, newerThan }) {
   }
 }
 
+/**
+ * @param {{
+ *   comments: GuardComment[],
+ *   expectedSha: string | null,
+ *   isSecurityMember: (login: string) => boolean,
+ *   newerThan?: string,
+ * }} options
+ */
 export function findDependencyOverrideCommand({
   comments,
   expectedSha,
@@ -184,6 +218,14 @@ export function findDependencyOverrideCommand({
   return null;
 }
 
+/**
+ * @param {{
+ *   comments: GuardComment[],
+ *   expectedSha: string | null,
+ *   isSecurityMember: (login: string) => Promise<boolean>,
+ *   newerThan?: string,
+ * }} input
+ */
 export async function findDependencyOverrideCommandAsync(input) {
   for (const candidate of dependencyOverrideCandidates(input)) {
     if (await input.isSecurityMember(candidate.login)) {
@@ -308,6 +350,26 @@ export function renderTrustedDependencyComment({ actor, headSha }) {
   ].join("\n");
 }
 
+export function renderRemovalOnlyDependencyComment({ dependencyGraphChanges, headSha }) {
+  const removalLines = dependencyGraphChanges.map(
+    (change) =>
+      `- Removed ${markdownCode(change.name ?? "<unknown dependency>")} from ${markdownCode(change.manifest ?? "<unknown manifest>")}.`,
+  );
+  return [
+    dependencyGraphGuardMarker,
+    "",
+    "### Dependency removals noted",
+    "",
+    "This PR only removes dependencies from the dependency graph, so the dependency guard is informational and does not require `/allow-dependencies-change`.",
+    "",
+    ...removalLines,
+    "",
+    `- Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
+    "",
+    "A later push that adds or changes dependency graph entries will require a fresh security approval.",
+  ].join("\n");
+}
+
 export function renderAutoscrubbedDependencyComment({ baseBranch, lockfileChanges, commitSha }) {
   const safeBranch = sanitizeDisplayValue(baseBranch ?? "main");
   const fileLines = lockfileChanges.map((path) => `- ${markdownCode(path)}`);
@@ -344,6 +406,15 @@ export function renderClearedDependencyGuardComment({ headSha }) {
   ].join("\n");
 }
 
+/**
+ * @param {{
+ *   baseBranch?: string,
+ *   headSha?: string,
+ *   lockfileChanges: string[],
+ *   dependencyManifestChanges: DependencyManifestChange[],
+ *   autoscrubStatus?: AutoscrubStatus | null,
+ * }} options
+ */
 export function renderBlockedDependencyComment({
   baseBranch,
   headSha,
@@ -438,6 +509,12 @@ export function dependencyGuardTrustedActorCandidates({ pullRequest, event, curr
   return guardTrustedActorCandidates({ pullRequest, event, currentHeadSha });
 }
 
+/**
+ * @param {{
+ *   candidates: GuardActorCandidate[],
+ *   isDependencyApprover: (login: string) => Promise<string | null>,
+ * }} options
+ */
 export async function findTrustedDependencyGuardActor({ candidates, isDependencyApprover }) {
   for (const candidate of candidates) {
     const role = await isDependencyApprover(candidate.login);
@@ -722,6 +799,27 @@ async function main() {
         renderClearedDependencyGuardComment({ headSha: pullRequest.head?.sha }),
       );
     }
+    return;
+  }
+
+  const dependencyGraphChanges = await api.paginate(
+    `/repos/${owner}/${repo}/dependency-graph/compare/${pullRequest.base?.sha}...${pullRequest.head?.sha}`,
+  );
+  if (isRemovalOnlyDependencyGraphChange(dependencyGraphChanges)) {
+    if (mode === "detect") {
+      await setOutput("autoscrub", "false");
+    }
+    await upsertComment(
+      existingGuardComment,
+      renderRemovalOnlyDependencyComment({
+        dependencyGraphChanges,
+        headSha: pullRequest.head?.sha,
+      }),
+    );
+    await writeSummary(
+      "## Dependency Guard\n\nDependency removals are informational and do not require security approval.",
+    );
+    console.log("Dependency removals detected; guard is informational.");
     return;
   }
 

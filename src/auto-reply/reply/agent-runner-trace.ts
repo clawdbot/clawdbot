@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
@@ -416,7 +417,9 @@ function formatContextManagementTraceBlock(
 }
 
 export async function accumulateSessionUsageFromTranscript(params: {
+  agentId?: string;
   sessionId?: string;
+  sessionKey?: string;
   storePath?: string;
   sessionFile?: string;
 }): Promise<
@@ -434,8 +437,14 @@ export async function accumulateSessionUsageFromTranscript(params: {
     return undefined;
   }
   try {
+    const artifactFile = params.sessionFile?.trim();
+    const useArtifactFile = Boolean(
+      artifactFile && path.isAbsolute(artifactFile) && artifactFile.endsWith(".jsonl"),
+    );
     const usage = await readLatestSessionUsageFromTranscriptAsync({
+      agentId: params.agentId,
       sessionId,
+      sessionKey: useArtifactFile ? undefined : params.sessionKey,
       storePath: params.storePath,
       sessionFile: params.sessionFile,
     });

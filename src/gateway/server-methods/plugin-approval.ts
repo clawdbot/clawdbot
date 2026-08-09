@@ -2,9 +2,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -30,6 +27,7 @@ import {
   resolveApprovalDecisionParams,
 } from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type PluginApprovalIosPushDelivery = {
   handleRequested?: (
@@ -52,17 +50,14 @@ export function createPluginApprovalHandlers(
       respond(true, listVisiblePendingApprovalRequests({ manager, client }), undefined);
     },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
-      if (!validatePluginApprovalRequestParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid plugin.approval.request params: ${formatValidationErrors(
-              validatePluginApprovalRequestParams.errors,
-            )}`,
-          ),
-        );
+      if (
+        !assertValidParams(
+          params,
+          validatePluginApprovalRequestParams,
+          "plugin.approval.request",
+          respond,
+        )
+      ) {
         return;
       }
       const p = params as {
@@ -213,21 +208,6 @@ export function createPluginApprovalHandlers(
                   ),
                 },
               },
-        resolvedEventName: "plugin.approval.resolved",
-        buildResolvedEvent: ({
-          approvalId,
-          decision: decisionLocal,
-          resolvedBy,
-          snapshot,
-          nowMs,
-        }) =>
-          ({
-            id: approvalId,
-            decision: decisionLocal,
-            resolvedBy,
-            ts: nowMs,
-            request: snapshot.request,
-          }) satisfies PluginApprovalResolved,
         forwardResolved: (resolvedEvent) =>
           opts?.forwarder?.handlePluginApprovalResolved?.(resolvedEvent),
         forwardResolvedErrorLabel: "plugin approvals: forward resolve failed",

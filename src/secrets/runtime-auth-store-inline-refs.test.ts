@@ -174,6 +174,7 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
         ownerKind: "account",
         ownerId: resolveAuthProfileSecretOwnerId({ agentDir, profileId: coldProfileId }),
         state: "unavailable",
+        degradationState: "cold",
       },
     ]);
     const profiles = snapshot.authStores[0]?.store.profiles;
@@ -181,5 +182,48 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
       keyRef: { source: "env", provider: "default", id: "MISSING_OPENAI_PROFILE_KEY" },
     });
     expect(profiles?.[healthyProfileId]).toMatchObject({ key: "anthropic-runtime-key" });
+  });
+
+  it("isolates an auth profile whose SecretRef provider is absent from copied config", async () => {
+    const agentDir = "/tmp/openclaw-agent-copied-auth-store";
+    const profileId = "openai:copied";
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        auth: { order: { openai: [profileId] } },
+      }),
+      env: {},
+      agentDirs: [agentDir],
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+      loadAuthStore: () =>
+        loadAuthStoreWithProfiles({
+          [profileId]: {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "file", provider: "clawrouter_key", id: "value" },
+          },
+        }),
+    });
+
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "account",
+        ownerId: resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
+        state: "unavailable",
+        reason: "secret provider is not configured",
+      },
+    ]);
+    expect(snapshot.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_OWNER_UNAVAILABLE",
+          path: `${agentDir}.auth-profiles.${profileId}.key`,
+        }),
+      ]),
+    );
+    expect(snapshot.authStores[0]?.store.profiles[profileId]).toMatchObject({
+      key: undefined,
+      keyRef: { source: "file", provider: "clawrouter_key", id: "value" },
+    });
   });
 });

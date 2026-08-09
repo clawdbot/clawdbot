@@ -15,6 +15,10 @@ const TICKET_REFRESH_MIN_DELAY_MS = 1_000;
 const TICKET_REFRESH_RETRY_MS = 1_000;
 const TICKET_REFRESH_MAX_RETRY_MS = 30_000;
 
+function documentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
 function isLoopbackHostname(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
@@ -44,6 +48,7 @@ function resolveBoardFrameFailureMessage(
 type FrameRefresh = (name: string) => Promise<void>;
 
 type BoardWidgetFrameLifecycleHost = {
+  active: () => boolean;
   connected: () => boolean;
   context: () => ApplicationContext | undefined;
   refreshFrame: () => FrameRefresh | undefined;
@@ -59,28 +64,35 @@ class BoardWidgetTicketRefresh {
   private attempts = 0;
   private scheduledTicket = "";
 
-  constructor(private readonly currentTicket: () => string | undefined) {}
+  constructor(
+    private readonly currentTicket: () => string | undefined,
+    private readonly canRefresh: () => boolean,
+  ) {}
 
-  clear(): void {
+  private clearTimer(): void {
     if (this.timer !== null) {
       window.clearTimeout(this.timer);
       this.timer = null;
     }
   }
 
+  reset(): void {
+    this.clearTimer();
+    this.attempts = 0;
+    this.scheduledTicket = "";
+  }
+
   schedule(widget: BoardViewWidget | undefined, refresh: FrameRefresh | undefined): void {
     const ticket = widget?.viewTicket;
     const remainingTtlMs = widget ? remainingBoardWidgetTicketTtlMs(widget) : undefined;
-    if (!widget || !refresh || !ticket || remainingTtlMs === undefined) {
-      this.clear();
-      this.attempts = 0;
-      this.scheduledTicket = "";
+    if (!this.canRefresh() || !widget || !refresh || !ticket || remainingTtlMs === undefined) {
+      this.reset();
       return;
     }
     if (this.scheduledTicket === ticket) {
       return;
     }
-    this.clear();
+    this.clearTimer();
     this.attempts = 0;
     this.scheduledTicket = ticket;
     const delayMs = Math.max(TICKET_REFRESH_MIN_DELAY_MS, remainingTtlMs - TICKET_REFRESH_LEAD_MS);
@@ -91,6 +103,10 @@ class BoardWidgetTicketRefresh {
   }
 
   private refresh(name: string, ticket: string, refresh: FrameRefresh): void {
+    if (!this.canRefresh()) {
+      this.reset();
+      return;
+    }
     if (this.currentTicket() !== ticket || this.scheduledTicket !== ticket) {
       return;
     }
@@ -101,7 +117,7 @@ class BoardWidgetTicketRefresh {
       }
       // A fulfilled refresh may be discarded by a superseding provider mutation.
       // Retry until this exact expiring ticket is actually replaced.
-      this.clear();
+      this.clearTimer();
       this.timer = window.setTimeout(
         () => {
           this.timer = null;
@@ -121,31 +137,60 @@ export class BoardWidgetFrameLifecycle {
   private frameRefreshAttempts = 0;
   private frameProbeGeneration = 0;
   private lastFrameUrl = "";
-  private listening = false;
+  private messageListening = false;
+  private visibilityListening = false;
   private sandboxOrigin = "";
   private sandboxHost: BoardWidgetSandboxHost | null = null;
   private readonly ticketRefresh = new BoardWidgetTicketRefresh(
     () => this.host.widget()?.viewTicket,
+    () => this.host.active() && !documentHidden(),
   );
 
   constructor(private readonly host: BoardWidgetFrameLifecycleHost) {}
 
   connect(): void {
-    if (this.listening) {
-      return;
+    if (!this.messageListening) {
+      window.addEventListener("message", this.handleWindowMessage);
+      this.messageListening = true;
     }
-    window.addEventListener("message", this.handleWindowMessage);
-    this.listening = true;
+    if (this.host.active() && !this.visibilityListening) {
+      document.addEventListener("visibilitychange", this.handleVisibilityChange);
+      this.visibilityListening = true;
+    }
   }
 
   disconnect(): void {
-    if (this.listening) {
+    this.stopWork();
+    if (this.messageListening) {
       window.removeEventListener("message", this.handleWindowMessage);
-      this.listening = false;
+      this.messageListening = false;
     }
-    this.ticketRefresh.clear();
     this.sandboxHost?.dispose();
     this.sandboxHost = null;
+  }
+
+  private suspend(): void {
+    this.stopWork();
+    this.sandboxHost?.setActive(false);
+  }
+
+  private stopWork(): void {
+    if (this.visibilityListening) {
+      document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+      this.visibilityListening = false;
+    }
+    this.ticketRefresh.reset();
+  }
+
+  activityChanged(): void {
+    if (this.host.active()) {
+      this.connect();
+      this.sandboxHost?.setActive(true);
+    } else {
+      // Hidden dashboard cells retain their iframe and sandbox handshake;
+      // terminal disconnect is the only lifecycle edge that disposes them.
+      this.suspend();
+    }
   }
 
   widgetChanged(previous: BoardViewWidget, current: BoardViewWidget | undefined): void {
@@ -165,8 +210,18 @@ export class BoardWidgetFrameLifecycle {
   }
 
   update(): void {
+    if (!this.host.active()) {
+      this.suspend();
+      return;
+    }
+    this.resume();
+  }
+
+  private resume(): void {
+    this.connect();
     this.ticketRefresh.schedule(this.host.widget(), this.host.refreshFrame());
     this.updateSandboxHost();
+    this.sandboxHost?.setActive(true);
   }
 
   render(widget: BoardViewWidget): TemplateResult {
@@ -234,6 +289,9 @@ export class BoardWidgetFrameLifecycle {
   }
 
   private refreshFailedFrame(widget: BoardViewWidget): void {
+    if (!this.host.active()) {
+      return;
+    }
     this.frameProbeGeneration += 1;
     const failureKey = `${widget.name}:${widget.revision}`;
     if (this.frameFailureKey !== failureKey) {
@@ -271,6 +329,7 @@ export class BoardWidgetFrameLifecycle {
       frame.isConnected &&
       frame.getAttribute("src") === src &&
       this.frameProbeGeneration === probeGeneration &&
+      this.host.active() &&
       this.host.widget()?.name === widget.name &&
       this.host.widget()?.revision === widget.revision;
     // View tickets are reusable HMAC bindings until expiry. Iframe load events
@@ -377,12 +436,26 @@ export class BoardWidgetFrameLifecycle {
     }
   }
 
+  private readonly handleVisibilityChange = (): void => {
+    if (documentHidden()) {
+      this.ticketRefresh.reset();
+      return;
+    }
+    this.ticketRefresh.schedule(this.host.widget(), this.host.refreshFrame());
+  };
+
   private handleWindowMessage = (event: MessageEvent): void => {
     if (!this.host.connected()) {
       return;
     }
     const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
     const widget = this.host.widget();
+    if (!this.host.active()) {
+      if (frame && event.source === frame.contentWindow && event.origin === this.sandboxOrigin) {
+        this.sandboxHost?.handleMessage(event);
+      }
+      return;
+    }
     const data = event.data as { type?: unknown; height?: unknown } | null;
     if (
       frame &&

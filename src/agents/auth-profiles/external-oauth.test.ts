@@ -3,8 +3,11 @@
  * Covers provider plugin profiles, external CLI scoped discovery, persistence
  * rules, and external CLI bootstrap policy.
  */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
+import { resolveAgentCredentialMapFromStore } from "../agent-auth-credentials.js";
+import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
 import { overlayExternalAuthProfiles } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
@@ -44,12 +47,7 @@ function createUsableOAuthExpiry(): number {
   return Date.now() + 30 * 60 * 1000;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireProfile(store: AuthProfileStore, profileId: string): Record<string, unknown> {
   return requireRecord(store.profiles[profileId], profileId);
@@ -105,6 +103,54 @@ describe("auth external oauth helpers", () => {
     expect(resolveParams.config).toBe(cfg);
     expect(requireRecord(resolveParams.context, "resolve context").config).toBe(cfg);
     expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ambient Codex OAuth from outranking an env key under an api-key pin", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: { auth: "api-key" as const, baseUrl: "https://api.openai.com/v1", models: [] },
+        },
+      },
+    };
+    readCodexCliCredentialsCachedMock.mockReturnValueOnce(
+      createCredential({ expires: createUsableOAuthExpiry() }),
+    );
+
+    const store = overlayExternalAuthProfiles(createStore(), {
+      config: cfg,
+      externalCliProviderIds: ["openai"],
+    });
+    const ambientOnly = resolveAgentCredentialMapFromStore(store, { config: cfg });
+    const credentials = addEnvBackedAgentCredentials(ambientOnly, {
+      config: cfg,
+      env: { OPENAI_API_KEY: "env-api-key" },
+    });
+
+    expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
+    expect(store.profiles["openai:default"]).toBeUndefined();
+    expect(ambientOnly.openai).toBeUndefined();
+    expect(credentials.openai).toEqual({ type: "api_key", key: "env-api-key" });
+  });
+
+  it("keeps explicitly requested external profiles outside the ambient pin", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: { auth: "api-key" as const, baseUrl: "https://api.openai.com/v1", models: [] },
+        },
+      },
+    };
+    readCodexCliCredentialsCachedMock.mockReturnValueOnce(
+      createCredential({ expires: createUsableOAuthExpiry() }),
+    );
+
+    const store = overlayExternalAuthProfiles(createStore(), {
+      config: cfg,
+      externalCliProfileIds: ["openai:default"],
+    });
+
+    expect(store.profiles["openai:default"]?.type).toBe("oauth");
   });
 
   it("does not bootstrap arbitrary named OpenAI OAuth profiles from the Codex CLI account", () => {
@@ -178,6 +224,19 @@ describe("auth external oauth helpers", () => {
       createStore({
         "openai:default": tokenlessCredential,
       }),
+      {
+        config: {
+          models: {
+            providers: {
+              openai: {
+                auth: "api-key",
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      },
     );
 
     const overlaidProfile = overlaid.profiles["openai:default"];

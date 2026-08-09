@@ -84,7 +84,7 @@ describe("requestSessionCreate", () => {
       key: "agent:main:dashboard:rejected",
       initialRun: {
         status: "rejected",
-        error: "The thread was created, but its first message could not be sent.",
+        error: "The session was created, but its first message could not be sent.",
       },
     });
   });

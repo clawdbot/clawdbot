@@ -2,6 +2,7 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import { shouldLoadRequesterScopedMcpHarnessRuntime } from "../agents/agent-bundle-mcp-runtime-shared.js";
 import {
   mergeAgentRunAttemptTerminal,
   normalizeAgentRunAttemptTerminal,
@@ -28,6 +29,11 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
+import {
+  buildWatchedSessionsPromptLines,
+  prepareWatchedSessionsPrompt,
+} from "../agents/watched-sessions-prompt.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ImageContent } from "../llm/types.js";
 import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -35,6 +41,25 @@ import { truncateUtf16Safe } from "../utils.js";
 
 /** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+
+/**
+ * Renders the Watched Sessions prompt block for plugin-owned harness prompts.
+ * Harness runtimes that assemble their own instruction layers (e.g. Codex)
+ * must surface the same watched-session facts as the embedded prompt, or the
+ * model keeps refusing cross-session questions on those runtimes (openclaw#114797).
+ */
+export function buildWatchedSessionsHarnessContext(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sandboxed?: boolean;
+  toolNames: Iterable<string>;
+  capabilityToolNames?: Iterable<string>;
+}): string | undefined {
+  const lines = buildWatchedSessionsPromptLines(
+    prepareWatchedSessionsPrompt({ enabled: true, ...params }),
+  );
+  return lines.length > 0 ? lines.join("\n").trimEnd() : undefined;
+}
 
 export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
 export {
@@ -84,7 +109,10 @@ export type {
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
 export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question.js";
-export type EmbeddedRunAttemptParams = Omit<CoreEmbeddedRunAttemptParams, "trajectoryRecorder">;
+export type EmbeddedRunAttemptParams = Omit<
+  CoreEmbeddedRunAttemptParams,
+  "contextEngineLogicalTurnLease" | "onContextEngineTurnCandidate" | "trajectoryRecorder"
+>;
 export type { EmbeddedRunAttemptResult };
 export type {
   ContextEngine as HarnessContextEngine,
@@ -209,6 +237,7 @@ export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "../agents/skill-workshop-prompt.js";
+export { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "../agents/transcript-credential-safety.js";
 export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt.prompt-helpers.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt.thread-helpers.js";
 export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt.tool-run-context.js";
@@ -311,6 +340,7 @@ export async function loadCodexBundleMcpThreadConfig(
 }
 
 export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
+export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
 
 /**
  * Materialize an MCP App view for a tool executed by a harness-native MCP client.
@@ -369,10 +399,15 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
     >
   >
 > {
+  const shouldLoad = shouldLoadRequesterScopedMcpHarnessRuntime(params);
+  if (!shouldLoad) {
+    return undefined;
+  }
   const { materializeRequesterScopedMcpToolsForHarnessRun: materialize } =
     await import("../agents/agent-bundle-mcp-harness.js");
   return materialize(params);
 }
+
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
 export {
@@ -392,7 +427,7 @@ export {
   resolveSessionWriteLockAcquireTimeoutMs,
   resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
-} from "../agents/session-write-lock.js";
+} from "./session-write-lock-runtime.js";
 export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,

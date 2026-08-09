@@ -1,23 +1,15 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { flushSessionManagerTranscript } from "./attempt-transcript-helpers.js";
 
-const tempPaths: string[] = [];
-
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-transcript-"));
-  tempPaths.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function buildAssistantMessage(text: string) {
   return {
@@ -46,14 +38,8 @@ function buildAssistantMessage(text: string) {
 }
 
 describe("embedded attempt transcript persistence", () => {
-  afterEach(async () => {
-    await Promise.all(
-      tempPaths.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
-  });
-
   it("resumes a raw cursor after append-only attempt settlement", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-attempt-transcript-");
     const storePath = path.join(dir, "sessions.json");
     const target = {
       agentId: "main",
@@ -61,9 +47,7 @@ describe("embedded attempt transcript persistence", () => {
       sessionKey: "agent:main:embedded-generation",
       storePath,
     };
-    const marker = formatSqliteSessionFileMarker(target);
     await upsertSessionEntry(target, {
-      sessionFile: marker,
       sessionId: target.sessionId,
       updatedAt: 1,
     });
@@ -84,7 +68,7 @@ describe("embedded attempt transcript persistence", () => {
       throw new Error(`expected bootstrap page, got ${bootstrap.kind}`);
     }
 
-    const sessionManager = SessionManager.open(marker, dir, dir);
+    const sessionManager = SessionManager.open(target, dir);
     sessionManager.appendMessage({
       role: "user",
       content: "second turn",

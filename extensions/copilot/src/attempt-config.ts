@@ -4,10 +4,10 @@ import {
   detectAndLoadAgentHarnessPromptImages,
   getModelProviderRequestTransport,
   resolveUserPath,
+  TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   COPILOT_ASK_USER_AVAILABLE_TOOLS,
-  COPILOT_SETTLED_FINALIZATION_EXCLUDED_TOOLS,
   COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE,
   withPromptFailure,
   type AgentHarnessAttemptResult,
@@ -26,19 +26,26 @@ import { createPermissionBridge, rejectAllPolicy } from "./permission-bridge.js"
 import { resolveCopilotProvider, type ResolvedCopilotProvider } from "./provider-bridge.js";
 import { computeReplayMetadata, copilotToolMetasHavePotentialSideEffects } from "./replay-shim.js";
 import type { ClientCreateOptions, PoolKey } from "./runtime.js";
+import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
 export function createResult(
   params: AttemptParamsLike,
   state: {
     aborted?: boolean;
+    assistantTranscriptOwned?: boolean;
+    assistantTranscriptIdempotencyKey?: string;
+    contextEngineTerminalAnchor?: import("openclaw/plugin-sdk/session-transcript-runtime").TranscriptEntryAnchor;
     assistantTexts?: string[];
+    codeModeEngaged?: boolean;
     currentAttemptAssistant?: AssistantMessage;
     currentAttemptCompletedAssistant?: AssistantMessage;
     downgradedFromResume?: boolean;
     externalAbort?: boolean;
     itemLifecycle?: { activeCount: number; completedCount: number; startedCount: number };
     lastAssistant?: AssistantMessage;
+    journalValidated?: boolean;
     lastToolError?: AgentHarnessAttemptResult["lastToolError"];
     messagesSnapshot: AgentMessage[];
+    nativeReplayInvalid?: boolean;
     now: () => number;
     promptError: Error | undefined;
     resumeFailureRecovered?: boolean;
@@ -52,13 +59,21 @@ export function createResult(
   },
 ): AttemptResultWithSdkSessionId {
   const promptError = state.promptError;
+  const transcriptPersistenceFailed =
+    (promptError as PromptErrorWithCode | undefined)?.code === "transcript_persistence_failed";
   const timedOut = state.timedOut === true;
   const toolMetas = state.toolMetas ?? [];
   const replayMetadata =
     params.operation === "settled-tool-finalization"
-      ? { hadPotentialSideEffects: false, replaySafe: true }
+      ? {
+          hadPotentialSideEffects: false,
+          replaySafe: state.nativeReplayInvalid !== true && !transcriptPersistenceFailed,
+        }
       : computeReplayMetadata({
-          priorReplayInvalid: params.initialReplayState?.replayInvalid,
+          priorReplayInvalid:
+            params.initialReplayState?.replayInvalid === true ||
+            state.nativeReplayInvalid === true ||
+            transcriptPersistenceFailed,
           priorHadPotentialSideEffects: params.initialReplayState?.hadPotentialSideEffects,
           thisAttemptTimedOut: timedOut,
           thisAttemptHadPotentialSideEffects: copilotToolMetasHavePotentialSideEffects(toolMetas),
@@ -82,7 +97,20 @@ export function createResult(
     promptError !== undefined ? withPromptFailure(interruption, promptError) : interruption;
   return {
     terminal,
+    ...(state.assistantTranscriptOwned
+      ? {
+          assistantTranscriptOwned: true,
+          ...(state.assistantTranscriptIdempotencyKey
+            ? { assistantTranscriptIdempotencyKey: state.assistantTranscriptIdempotencyKey }
+            : {}),
+        }
+      : {}),
     ...(state.sdkSessionId ? { sdkSessionId: state.sdkSessionId } : {}),
+    ...(state.contextEngineTerminalAnchor
+      ? { contextEngineTerminalAnchor: state.contextEngineTerminalAnchor }
+      : {}),
+    ...(state.journalValidated !== undefined ? { journalValidated: state.journalValidated } : {}),
+    ...(state.codeModeEngaged !== undefined ? { codeModeEngaged: state.codeModeEngaged } : {}),
     assistantTexts: state.assistantTexts ?? [],
     attemptUsage: state.usage,
     cloudCodeAssistFormatError: false,
@@ -118,37 +146,6 @@ export function createPromptError(
     error.cause = cause;
   }
   return error;
-}
-function createSettledFinalizationSessionRestrictions(): Partial<CopilotSessionConfig> {
-  return {
-    availableTools: [],
-    coauthorEnabled: false,
-    customAgents: [],
-    customAgentsLocalOnly: true,
-    embeddingCacheStorage: "in-memory",
-    enableConfigDiscovery: false,
-    enableFileHooks: false,
-    enableHostGitOperations: false,
-    enableOnDemandInstructionDiscovery: false,
-    enableSessionStore: false,
-    enableSkills: false,
-    excludedTools: [...COPILOT_SETTLED_FINALIZATION_EXCLUDED_TOOLS],
-    includeSubAgentStreamingEvents: false,
-    infiniteSessions: { enabled: false },
-    instructionDirectories: [],
-    manageScheduleEnabled: false,
-    mcpOAuthTokenStorage: "in-memory",
-    mcpServers: {},
-    memory: { enabled: false },
-    pluginDirectories: [],
-    remoteSession: "off",
-    requestCanvasRenderer: false,
-    requestExtensions: false,
-    skillDirectories: [],
-    skipCustomInstructions: true,
-    skipEmbeddingRetrieval: true,
-    tools: [],
-  };
 }
 export function createSessionConfig(
   params: AttemptParamsLike,
@@ -190,7 +187,7 @@ export function createSessionConfig(
     reasoningEffort: params.reasoningEffort,
     tools: sdkTools,
     availableTools: buildCopilotAvailableTools(sdkTools, options.includeAskUser),
-    ...(settledToolFinalization ? createSettledFinalizationSessionRestrictions() : {}),
+    ...(settledToolFinalization ? createCopilotIsolatedSessionRestrictions() : {}),
     workingDirectory:
       effectiveCwd ?? effectiveWorkspaceDir ?? readResolvedAttemptPath(params.workspaceDir),
     ...(!settledToolFinalization &&
@@ -318,13 +315,16 @@ export function createSystemMessageContent(
   params: AttemptParamsLike,
   workspaceBootstrapInstructions: string | undefined,
 ): string | undefined {
-  const sections: string[] = [];
+  if (isRawCopilotModelRun(params)) {
+    return undefined;
+  }
+  const sections: string[] = [TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT];
   const bootstrap = workspaceBootstrapInstructions?.trim();
   if (bootstrap) {
     sections.push(bootstrap);
   }
   const extraSystemPrompt = readString(params.extraSystemPrompt)?.trim();
-  if (extraSystemPrompt && !isRawCopilotModelRun(params)) {
+  if (extraSystemPrompt) {
     const contextHeader =
       params.promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
     sections.push(`${contextHeader}\n${extraSystemPrompt}`);
@@ -333,36 +333,6 @@ export function createSystemMessageContent(
 }
 export function isRawCopilotModelRun(params: AttemptParamsLike): boolean {
   return params.modelRun === true || params.promptMode === "none";
-}
-export function readTailUserText(messages: AgentMessage[]): string | undefined {
-  const tail = messages[messages.length - 1];
-  if (!tail || tail.role !== "user") {
-    return undefined;
-  }
-  const content = (tail as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    for (const part of content) {
-      if (part && typeof part === "object" && (part as { type?: unknown }).type === "text") {
-        const text = (part as { text?: unknown }).text;
-        if (typeof text === "string" && text.length > 0) {
-          return text;
-        }
-      }
-    }
-  }
-  return undefined;
-}
-export function hasMirrorIdentity(message: AgentMessage): boolean {
-  const record = message as unknown as { __openclaw?: unknown };
-  const meta = record["__openclaw"];
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return false;
-  }
-  const id = (meta as Record<string, unknown>).mirrorIdentity;
-  return typeof id === "string" && id.length > 0;
 }
 export function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;

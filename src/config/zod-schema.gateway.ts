@@ -38,6 +38,11 @@ export const GatewayConfigSchema = z
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
       })
       .optional(),
+    cliAgents: z
+      .strictObject({
+        enabled: z.boolean().optional(),
+      })
+      .optional(),
     terminal: z
       .strictObject({
         enabled: z.boolean().optional(),
@@ -194,6 +199,7 @@ export const GatewayConfigSchema = z
           .optional(),
         pairing: z
           .strictObject({
+            autoApproveLocal: z.boolean().optional(),
             autoApproveCidrs: z.array(z.string()).optional(),
             sshVerify: z
               .union([

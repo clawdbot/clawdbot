@@ -33,6 +33,11 @@ export type DiscordApplicationSummary = {
   intents?: DiscordPrivilegedIntentsSummary;
 };
 
+export type DiscordApplicationIdProbeResult =
+  | { kind: "resolved"; applicationId: string }
+  | { kind: "rejected"; status: 401 | 403; error: unknown }
+  | { kind: "unavailable"; status: number | null; error: unknown };
+
 const DISCORD_APP_FLAG_GATEWAY_PRESENCE = 1 << 12;
 const DISCORD_APP_FLAG_GATEWAY_PRESENCE_LIMITED = 1 << 13;
 const DISCORD_APP_FLAG_GATEWAY_GUILD_MEMBERS = 1 << 14;
@@ -129,7 +134,10 @@ async function readDiscordProbeGetMeJson(
       new Error(`${DISCORD_PROBE_GET_ME_LABEL}: JSON response exceeds ${maxBytes} bytes`),
   });
   try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as { id?: string; username?: string };
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as {
+      id?: string;
+      username?: string;
+    };
   } catch (cause) {
     throw new Error(`${DISCORD_PROBE_GET_ME_LABEL}: malformed JSON response`, { cause });
   }
@@ -231,18 +239,18 @@ export function parseApplicationIdFromToken(token: string): string | undefined {
   }
 }
 
-export async function fetchDiscordApplicationId(
+export async function probeDiscordApplicationId(
   token: string,
   timeoutMs: number,
   fetcher: typeof fetch = fetch,
-): Promise<string | undefined> {
+): Promise<DiscordApplicationIdProbeResult> {
   const normalized = normalizeDiscordToken(token, "channels.discord.token");
   if (!normalized) {
-    return undefined;
+    return { kind: "unavailable", status: null, error: new Error("missing token") };
   }
   const parsedApplicationId = parseApplicationIdFromToken(token);
   if (parsedApplicationId) {
-    return parsedApplicationId;
+    return { kind: "resolved", applicationId: parsedApplicationId };
   }
   try {
     const json = await fetchDiscord<{ id?: string }>(
@@ -252,16 +260,36 @@ export async function fetchDiscordApplicationId(
       { timeoutMs },
     );
     if (json?.id) {
-      return json.id;
+      return { kind: "resolved", applicationId: json.id };
     }
-    return undefined;
+    return {
+      kind: "unavailable",
+      status: null,
+      error: new Error("Discord application response did not include an id"),
+    };
   } catch (error) {
-    if (error instanceof DiscordApiError) {
-      if (error.status === 429) {
-        throw error;
-      }
-      return undefined;
+    if (error instanceof DiscordApiError && (error.status === 401 || error.status === 403)) {
+      return { kind: "rejected", status: error.status, error };
     }
-    return undefined;
+    return {
+      kind: "unavailable",
+      status: error instanceof DiscordApiError ? error.status : null,
+      error,
+    };
   }
+}
+
+export async function fetchDiscordApplicationId(
+  token: string,
+  timeoutMs: number,
+  fetcher: typeof fetch = fetch,
+): Promise<string | undefined> {
+  const result = await probeDiscordApplicationId(token, timeoutMs, fetcher);
+  if (result.kind === "resolved") {
+    return result.applicationId;
+  }
+  if (result.kind === "unavailable" && result.status === 429) {
+    throw result.error;
+  }
+  return undefined;
 }

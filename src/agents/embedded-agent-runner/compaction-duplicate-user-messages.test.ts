@@ -1,9 +1,6 @@
 // Regression coverage for pruning duplicate user turns before compaction.
 import { describe, expect, it } from "vitest";
-import {
-  collectDuplicateUserMessageEntryIdsForCompaction,
-  dedupeDuplicateUserMessagesForCompaction,
-} from "./compaction-duplicate-user-messages.js";
+import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 
 const LONG_PROMPT = "please run the deployment status check for production";
 
@@ -65,31 +62,6 @@ describe("compaction duplicate user message pruning", () => {
     expect(dedupeDuplicateUserMessagesForCompaction([long, longLater])).toEqual([long, longLater]);
   });
 
-  it("collects duplicate transcript entry ids from active branch entries", () => {
-    const duplicateIds = collectDuplicateUserMessageEntryIdsForCompaction([
-      {
-        id: "entry-1",
-        type: "message",
-        message: {
-          role: "user",
-          content: "please run the deployment status check for production",
-          timestamp: 1_000,
-        },
-      },
-      {
-        id: "entry-2",
-        type: "message",
-        message: {
-          role: "user",
-          content: "please run the deployment status check for production",
-          timestamp: 2_000,
-        },
-      },
-    ]);
-
-    expect(duplicateIds).toEqual(new Set(["entry-2"]));
-  });
-
   it("keys duplicate retries by sender identity (#98310)", () => {
     const alice = userMessage({ timestamp: 1_000, senderId: "user-alice" });
     const bob = userMessage({ timestamp: 2_000, senderId: "user-bob" });
@@ -99,17 +71,6 @@ describe("compaction duplicate user message pruning", () => {
       alice,
       bob,
     ]);
-  });
-
-  it("keeps same text from different senders in successor transcript pruning", () => {
-    const alice = userMessage({ timestamp: 1_000, senderId: "user-alice" });
-    const bob = userMessage({ timestamp: 2_000, senderId: "user-bob" });
-    const duplicateIds = collectDuplicateUserMessageEntryIdsForCompaction([
-      { id: "entry-alice", type: "message", message: alice },
-      { id: "entry-bob", type: "message", message: bob },
-    ]);
-
-    expect(duplicateIds).toEqual(new Set());
   });
 
   it("does not collide when sender ids and text contain the old delimiter", () => {

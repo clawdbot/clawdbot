@@ -221,8 +221,10 @@ export async function sandboxExplainCommand(
     : workspaceLayout.agentWorkspaceDir;
   const runtimeWorkdir = sessionIsSandboxed ? sandboxWorkdir : directRuntimeCwd;
   const workspaceSource = sessionIsSandboxed ? workspaceLayout.workspaceSource : "direct";
+  const usesLocalContainerMounts =
+    sandboxCfg.backend.toLowerCase() === "docker" || sandboxCfg.backend.toLowerCase() === "podman";
   const workspaceMounts =
-    sessionIsSandboxed && sandboxCfg.backend === "docker" && sandboxWorkdir
+    sessionIsSandboxed && usesLocalContainerMounts && sandboxWorkdir
       ? buildSandboxFsMounts({
           workspaceDir: workspaceLayout.workspaceDir,
           agentWorkspaceDir: workspaceLayout.agentWorkspaceDir,

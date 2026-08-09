@@ -18,6 +18,7 @@ import {
 } from "../lib/sessions/grouping.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionPlacementState } from "./session-row-badges.ts";
 
 export type SidebarSessionAttention =
@@ -83,7 +84,7 @@ export type SidebarRecentSession = {
   worktreeId?: string;
   placementState?: SessionPlacementState;
   workspaceConflictCount?: number;
-  cloudWorkerActive: boolean;
+  cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   outboxCount?: number;
@@ -93,9 +94,10 @@ export type SidebarRecentSession = {
   agentStatusNote?: string;
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   spawnedBy?: string;
+  forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   status?: SessionRunStatus;
   startedAt?: number;
   updatedAt?: number | null;
@@ -128,7 +130,6 @@ export function rowDemandsVisibility(
       : row.visuallyActive ||
         row.containsActiveDescendant ||
         row.hasActiveRun ||
-        row.status === "running" ||
         row.runningChildCount > 0 ||
         row.attention.kind !== "none";
 }
@@ -197,12 +198,19 @@ export function sidebarSessionMetaId(key: string): string {
   return `sidebar-session-meta-${encodeURIComponent(key)}`;
 }
 
+export function sidebarSessionStateId(key: string): string {
+  return `sidebar-session-state-${encodeURIComponent(key)}`;
+}
+
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
 const SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:catalog-grouping";
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:status-filter";
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
+const SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY = "openclaw:sidebar:sessions:hidden-catalogs";
+export const SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT =
+  "openclaw:sidebar-hidden-catalogs-changed";
 
 export function limitSidebarSessionRows(rows: SidebarRecentSession[], limit: number) {
   const requiredCount = rows.filter((row) => row.active || row.pinned).length;
@@ -261,6 +269,21 @@ export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
   }
 }
 
+export function loadStoredHiddenSessionCatalogIds(): ReadonlySet<string> {
+  try {
+    const parsed: unknown = JSON.parse(
+      getSafeLocalStorage()?.getItem(SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY) ?? "[]",
+    );
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed.flatMap((value) => (typeof value === "string" && value ? [value] : []))
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 export function storeSidebarSessionsGrouping(grouping: SidebarSessionsGrouping) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY, grouping);
 }
@@ -282,6 +305,16 @@ export function storeCollapsedSessionSections(sections: ReadonlySet<string>) {
     SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY,
     JSON.stringify([...sections]),
   );
+}
+
+export function storeHiddenSessionCatalogIds(ids: ReadonlySet<string>) {
+  getSafeLocalStorage()?.setItem(
+    SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY,
+    JSON.stringify([...ids]),
+  );
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT));
+  }
 }
 
 export const SIDEBAR_SESSION_SORT_OPTIONS = [

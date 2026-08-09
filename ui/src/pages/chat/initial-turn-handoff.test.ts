@@ -189,6 +189,46 @@ describe("initial user message handoff", () => {
     ]);
   });
 
+  it("reconciles an attachment-only first prompt by visible content without a sequence", () => {
+    const sessionKey = "agent:main:image-session";
+    const client = {};
+    const handoff = createInitialUserMessageHandoff();
+    prepareInitialUserMessageHandoff(
+      handoff,
+      sessionKey,
+      {
+        text: "",
+        attachments: [
+          {
+            id: "image-1",
+            mimeType: "image/png",
+            fileName: "image.png",
+            sizeBytes: 68,
+            dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+          },
+        ],
+        createdAt: 123,
+      },
+      client,
+    );
+
+    const projectedSession = { chatMessages: [] as unknown[], client };
+    expect(admitInitialUserMessageHandoff(handoff, projectedSession, sessionKey)).toBe(true);
+    const projected = projectedSession.chatMessages[0] as { content: unknown };
+    const persisted = { role: "user", content: projected.content };
+    const createdSession = { chatMessages: [persisted] as unknown[], client };
+
+    expect(
+      reconcileInitialUserMessageHandoff(handoff, createdSession, sessionKey, [persisted], false),
+    ).toBe(true);
+    expect(createdSession.chatMessages).toEqual([
+      { role: "user", content: projected.content, timestamp: 123, __openclaw: {} },
+    ]);
+    expect(admitInitialUserMessageHandoff(handoff, { chatMessages: [], client }, sessionKey)).toBe(
+      false,
+    );
+  });
+
   it("keeps a pending prompt across reconnects from the same browser client", () => {
     const sessionKey = "agent:main:new-session";
     const client = {};

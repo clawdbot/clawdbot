@@ -58,6 +58,8 @@ openclaw models auth login --provider anthropic --method cli --set-default
 
 This is two steps: log Claude Code into Anthropic on the host, then tell OpenClaw to route Anthropic model selection through the local `claude-cli` backend and store the matching OpenClaw auth profile.
 
+At run time OpenClaw treats a reused Claude CLI login as Claude's own credential: it verifies the host's current `claude` login matches the selected profile's account and then lets the `claude` subprocess authenticate natively, so Claude keeps refreshing its own login during runs. OpenClaw never forwards a copied token for this path. If the host login is missing or belongs to a different account, the run fails before spawn with the exact re-authentication commands. OpenClaw-managed credentials (Anthropic OAuth login profiles, setup tokens, API keys) are still delivered to the subprocess directly and refreshed by OpenClaw where applicable.
+
 The gateway service must resolve `claude` on `PATH`. If a deployment needs a
 nonstandard executable path, register a wrapper through a
 [CLI backend plugin](/plugins/cli-backend-plugins).
@@ -167,10 +169,10 @@ openclaw models auth login --provider anthropic --force
 
 ### Per-session (chat command)
 
-- `/model <alias-or-id>@<profileId>` pins a specific provider credential for the current session (example profile ids: `anthropic:default`, `anthropic:work`).
+- `/model <alias-or-id>@<profileId> -s` pins a specific provider credential for the current session (example profile ids: `anthropic:default`, `anthropic:work`).
 - `/model` (or `/model list`) shows a compact picker; `/model status` shows the full view (candidates + next auth profile, plus provider endpoint details when configured).
 
-If you change auth order or profile pinning for a chat that's already running, send `/new` or `/reset` to start a fresh session — existing sessions keep their current model/profile selection until reset.
+Changes to `auth.order` affect automatic profile selection. `/new` and `/reset` clear auto-selected fallback/rotation state but preserve valid explicit user model/profile pins; choose another explicit `@profile` selection to replace a user profile pin.
 
 ### Per-agent (CLI override)
 

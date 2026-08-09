@@ -6,7 +6,8 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { buildLatestSubagentRunIndex, buildSubagentList } from "./subagent-list.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import { buildSubagentList } from "./subagent-list.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -32,34 +33,6 @@ afterAll(async () => {
 
 beforeEach(() => {
   resetSubagentRegistryForTests();
-});
-
-describe("buildLatestSubagentRunIndex", () => {
-  it("prefers the newer generation when runs share a creation timestamp", () => {
-    const childSessionKey = "agent:main:subagent:reused";
-    const makeRun = (runId: string, generation: number): SubagentRunRecord => ({
-      runId,
-      generation,
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: runId,
-      cleanup: "keep",
-      createdAt: 1_000,
-      startedAt: 1_000,
-    });
-    const older = makeRun("run-older", 1);
-    const newer = makeRun("run-newer", 2);
-
-    const index = buildLatestSubagentRunIndex(
-      new Map([
-        [older.runId, older],
-        [newer.runId, newer],
-      ]),
-    );
-
-    expect(index.latestByChildSessionKey.get(childSessionKey)).toBe(newer);
-  });
 });
 
 describe("buildSubagentList", () => {
@@ -89,7 +62,7 @@ describe("buildSubagentList", () => {
       task: "This is a deliberately long task description used to verify that subagent list output keeps the full task text instead of appending ellipsis after a short hard cutoff.",
       cleanup: "keep",
       createdAt: 1000,
-      startedAt: 1000,
+      execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const cfg = {
@@ -118,7 +91,7 @@ describe("buildSubagentList", () => {
       cleanup: "keep",
       label: "Review worker",
       createdAt: 1000,
-      startedAt: 1000,
+      execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const cfg = {
@@ -136,6 +109,67 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.line).toContain("review_subagents: Review worker");
   });
 
+  it.each([
+    {
+      name: "a killed run with a provider failure",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "agent run aborted" } as const,
+      expectedStatus: "killed",
+    },
+    {
+      name: "a killed run with an earlier successful provider outcome",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "ok" } as const,
+      expectedStatus: "killed",
+    },
+    {
+      name: "a failed run",
+      outcome: { status: "error", error: "provider rejected the request" } as const,
+      expectedStatus: "failed",
+    },
+    {
+      name: "a timed-out run",
+      outcome: { status: "timeout" } as const,
+      expectedStatus: "timeout",
+    },
+    {
+      name: "a completed run",
+      outcome: { status: "ok" } as const,
+      expectedStatus: "done",
+    },
+  ])(
+    "projects the canonical terminal status for $name",
+    ({ endedReason, outcome, expectedStatus }) => {
+      const now = Date.now();
+      const run = {
+        runId: `run-status-${expectedStatus}`,
+        childSessionKey: `agent:main:subagent:status-${expectedStatus}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "report the actual child outcome",
+        cleanup: "keep",
+        createdAt: now - 2_000,
+        execution: {
+          status: "terminal",
+          startedAt: now - 2_000,
+          endedAt: now - 1_000,
+          outcome,
+        },
+        ...(endedReason ? { endedReason } : {}),
+      } satisfies SubagentRunRecord;
+      addSubagentRunForTests(run);
+
+      const list = buildSubagentList({
+        cfg: {} as OpenClawConfig,
+        runs: [run],
+        recentMinutes: 30,
+      });
+
+      expect(list.recent[0]?.status).toBe(expectedStatus);
+      expect(list.recent[0]?.line).toContain(` ${expectedStatus}`);
+    },
+  );
+
   it("keeps ended orchestrators active while descendants remain pending", () => {
     // Parent orchestrators can finish their own turn before child workers do;
     // list output should keep them active until descendants settle.
@@ -148,9 +182,12 @@ describe("buildSubagentList", () => {
       task: "orchestrate child workers",
       cleanup: "keep",
       createdAt: now - 120_000,
-      startedAt: now - 120_000,
-      endedAt: now - 60_000,
-      outcome: { status: "ok" },
+      execution: {
+        status: "terminal",
+        startedAt: now - 120_000,
+        endedAt: now - 60_000,
+        outcome: { status: "ok" },
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(orchestratorRun);
     addSubagentRunForTests({
@@ -181,6 +218,100 @@ describe("buildSubagentList", () => {
     expect(list.recent).toStrictEqual([]);
   });
 
+  it.each([
+    {
+      name: "a killed parent with a provider failure",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "agent run aborted" } as const,
+      pendingChildren: 1,
+      expectedStatus: "killed (waiting on 1 child)",
+    },
+    {
+      name: "a killed parent with an earlier successful provider outcome",
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "ok" } as const,
+      pendingChildren: 2,
+      expectedStatus: "killed (waiting on 2 children)",
+    },
+    {
+      name: "a failed parent",
+      outcome: { status: "error", error: "provider rejected the request" } as const,
+      pendingChildren: 1,
+      expectedStatus: "failed (waiting on 1 child)",
+    },
+    {
+      name: "a timed-out parent",
+      outcome: { status: "timeout" } as const,
+      pendingChildren: 2,
+      expectedStatus: "timeout (waiting on 2 children)",
+    },
+    {
+      name: "a successfully completed parent",
+      outcome: { status: "ok" } as const,
+      pendingChildren: 2,
+      expectedStatus: "active (waiting on 2 children)",
+    },
+    {
+      name: "a still-running parent",
+      ended: false,
+      pendingChildren: 1,
+      expectedStatus: "active (waiting on 1 child)",
+    },
+  ])(
+    "preserves the status of $name while descendants remain pending",
+    ({ endedReason, outcome, ended, pendingChildren, expectedStatus }) => {
+      const now = Date.now();
+      const parentRun = {
+        runId: `run-parent-${expectedStatus.replaceAll(" ", "-")}`,
+        childSessionKey: `agent:main:subagent:parent-${expectedStatus.replaceAll(" ", "-")}`,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "orchestrate child workers",
+        cleanup: "keep",
+        createdAt: now - 120_000,
+        execution:
+          ended === false
+            ? { status: "running", startedAt: now - 120_000 }
+            : {
+                status: "terminal",
+                startedAt: now - 120_000,
+                endedAt: now - 60_000,
+                outcome,
+              },
+        ...(endedReason ? { endedReason } : {}),
+      } satisfies SubagentRunRecord;
+      addSubagentRunForTests(parentRun);
+      for (let childIndex = 0; childIndex < pendingChildren; childIndex += 1) {
+        addSubagentRunForTests({
+          runId: `${parentRun.runId}-child-${childIndex}`,
+          childSessionKey: `${parentRun.childSessionKey}:subagent:child-${childIndex}`,
+          requesterSessionKey: parentRun.childSessionKey,
+          requesterDisplayKey: "subagent:parent",
+          task: "child worker still running",
+          cleanup: "keep",
+          createdAt: now - 30_000,
+          startedAt: now - 30_000,
+        });
+      }
+
+      const list = buildSubagentList({
+        cfg: {} as OpenClawConfig,
+        runs: [parentRun],
+        recentMinutes: 30,
+      });
+
+      expect(list.active).toHaveLength(1);
+      expect(list.active[0]).toMatchObject({
+        runId: parentRun.runId,
+        status: expectedStatus,
+        pendingDescendants: pendingChildren,
+      });
+      expect(list.active[0]?.line).toContain(` ${expectedStatus}`);
+      expect(list.active[0]?.childSessions).toHaveLength(pendingChildren);
+      expect(list.recent).toStrictEqual([]);
+    },
+  );
+
   it("omits old ended descendants from child session summaries", () => {
     const now = Date.now();
     const parentRun = {
@@ -191,7 +322,7 @@ describe("buildSubagentList", () => {
       task: "parent active",
       cleanup: "keep",
       createdAt: now - 120_000,
-      startedAt: now - 120_000,
+      execution: { status: "running", startedAt: now - 120_000 },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(parentRun);
     addSubagentRunForTests({
@@ -230,7 +361,7 @@ describe("buildSubagentList", () => {
       task: "do thing",
       cleanup: "keep",
       createdAt: 1000,
-      startedAt: 1000,
+      execution: { status: "running", startedAt: 1000 },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(run);
     const storePath = path.join(testWorkspaceDir, "sessions-subagent-list-usage.json");
@@ -245,6 +376,8 @@ describe("buildSubagentList", () => {
         inputTokens: 12,
         outputTokens: 1000,
         totalTokens: 197000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
         model: "opencode/claude-opus-4-6",
       },
     );
@@ -277,7 +410,10 @@ describe("buildSubagentList", () => {
       task: "stale hidden work",
       cleanup: "keep",
       createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      execution: {
+        status: "running",
+        startedAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(staleRun);
     const cfg = {
@@ -308,9 +444,12 @@ describe("buildSubagentList", () => {
       task: "parent ended",
       cleanup: "keep",
       createdAt: now - 120_000,
-      startedAt: now - 120_000,
-      endedAt: now - 60_000,
-      outcome: { status: "ok" },
+      execution: {
+        status: "terminal",
+        startedAt: now - 120_000,
+        endedAt: now - 60_000,
+        outcome: { status: "ok" },
+      },
     } satisfies SubagentRunRecord;
     addSubagentRunForTests(parentRun);
     addSubagentRunForTests({

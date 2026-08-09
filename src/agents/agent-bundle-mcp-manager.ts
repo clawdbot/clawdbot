@@ -70,6 +70,7 @@ export function createSessionMcpRuntimeManager(
         cfg: params.cfg,
         logDiagnostics: false,
         manifestRegistry: params.manifestRegistry,
+        toolOverrides: params.toolOverrides,
       });
       // Safe names from the FULL declared set so partial resolution never changes tool names.
       const safeServerNamesByServer = assignSafeServerNames(
@@ -91,6 +92,7 @@ export function createSessionMcpRuntimeManager(
           manifestRegistry: params.manifestRegistry,
           idleTtlMs,
           safeServerNamesByServer,
+          toolOverrides: params.toolOverrides,
         });
       }
 
@@ -110,6 +112,7 @@ export function createSessionMcpRuntimeManager(
             idleTtlMs,
             excludeServerNames: scopedNameSet,
             safeServerNamesByServer,
+            toolOverrides: params.toolOverrides,
           }),
         );
       } else {
@@ -125,6 +128,7 @@ export function createSessionMcpRuntimeManager(
           idleTtlMs,
           includeServerNames: new Set(),
           safeServerNamesByServer,
+          toolOverrides: params.toolOverrides,
         });
       }
 
@@ -153,6 +157,7 @@ export function createSessionMcpRuntimeManager(
           includeServerNames: scopedNameSet,
           redactConnectionServerNames: scopedNameSet,
           safeServerNamesByServer,
+          toolOverrides: params.toolOverrides,
         });
         const scopedRuntime = await lifecycle.runExclusiveOnRuntimeKey(runtimeKey, () =>
           install.resolveAndInstallRequesterRuntime({
@@ -172,6 +177,7 @@ export function createSessionMcpRuntimeManager(
             agentAccountId: params.agentAccountId,
             messageChannel: params.messageChannel,
             requesterScope,
+            toolOverrides: params.toolOverrides,
           }),
         );
         if (scopedRuntime) {
@@ -194,6 +200,7 @@ export function createSessionMcpRuntimeManager(
             idleTtlMs,
             includeServerNames: new Set(),
             safeServerNamesByServer,
+            toolOverrides: params.toolOverrides,
           }))
         );
       }
@@ -207,8 +214,12 @@ export function createSessionMcpRuntimeManager(
       });
     },
     async getOrCreateRequesterScoped(params) {
-      // Scoped-only path for shared-thread harnesses: never open static transports
-      // (those stay harness-native) so we do not double-connect.
+      // Anonymous turns own no requester runtime; avoid leaking session keys or
+      // sweeping unrelated runtimes before confirming the requester exists.
+      const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
+      if (!requesterSenderId) {
+        return undefined;
+      }
       const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs();
       await lifecycle.sweepIdleRuntimes();
       if (idleTtlMs > 0) {
@@ -217,15 +228,12 @@ export function createSessionMcpRuntimeManager(
       if (params.sessionKey) {
         store.sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
       }
-      const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
-      if (!requesterSenderId) {
-        return undefined;
-      }
       const fullConfig = loadSessionMcpConfig({
         workspaceDir: params.workspaceDir,
         cfg: params.cfg,
         logDiagnostics: false,
         manifestRegistry: params.manifestRegistry,
+        toolOverrides: params.toolOverrides,
       });
       const { requesterScopedServerNames } = partitionMcpServersByConnectionScope(
         fullConfig.loaded.mcpServers,
@@ -260,6 +268,7 @@ export function createSessionMcpRuntimeManager(
         includeServerNames: scopedNameSet,
         redactConnectionServerNames: scopedNameSet,
         safeServerNamesByServer,
+        toolOverrides: params.toolOverrides,
       });
       const scopedRuntime = await lifecycle.runExclusiveOnRuntimeKey(runtimeKey, () =>
         install.resolveAndInstallRequesterRuntime({
@@ -279,6 +288,7 @@ export function createSessionMcpRuntimeManager(
           agentAccountId: params.agentAccountId,
           messageChannel: params.messageChannel,
           requesterScope,
+          toolOverrides: params.toolOverrides,
         }),
       );
       if (scopedRuntime) {

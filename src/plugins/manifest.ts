@@ -7,11 +7,12 @@ import { normalizeTrimmedStringList } from "../../packages/normalization-core/sr
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
 import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
-import type { PluginManifest } from "./manifest-types.js";
+import type { PluginManifest, PluginManifestDoctorContract } from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
@@ -29,6 +30,7 @@ const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
 const MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES = 512;
 const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp"]);
+const VALID_PLUGIN_KINDS: ReadonlySet<string> = new Set<PluginKind>(["memory", "context-engine"]);
 
 export function isCoreReservedPluginId(id: string): boolean {
   return CORE_RESERVED_PLUGIN_IDS.has(normalizePluginPolicyId(id));
@@ -109,13 +111,18 @@ function setCachedPluginManifestLoadResult(
 }
 
 function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
-  if (typeof raw === "string") {
-    return raw as PluginKind;
+  const values = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : [];
+  const kinds: PluginKind[] = [];
+  for (const value of values) {
+    if (typeof value !== "string" || !VALID_PLUGIN_KINDS.has(value)) {
+      continue;
+    }
+    const kind = value as PluginKind;
+    if (!kinds.includes(kind)) {
+      kinds.push(kind);
+    }
   }
-  if (Array.isArray(raw) && raw.length > 0 && raw.every((k) => typeof k === "string")) {
-    return raw.length === 1 ? (raw[0] as PluginKind) : (raw as PluginKind[]);
-  }
-  return undefined;
+  return kinds.length === 0 ? undefined : kinds.length === 1 ? kinds[0] : kinds;
 }
 
 export function loadPluginManifest(
@@ -203,6 +210,19 @@ export function loadPluginManifest(
   );
   const providers = normalizeTrimmedStringList(raw.providers);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
+  const rawDoctorContract = isRecord(raw.doctorContract) ? raw.doctorContract : undefined;
+  const doctorContract = rawDoctorContract
+    ? (Object.fromEntries(
+        [
+          "configRepair",
+          "resolveSessionStoreAgentIds",
+          "sessionRouteStateOwners",
+          "stateMigrations",
+        ].flatMap((key) =>
+          typeof rawDoctorContract[key] === "boolean" ? [[key, rawDoctorContract[key]]] : [],
+        ),
+      ) as PluginManifestDoctorContract)
+    : undefined;
   const manifestBeforeDashboard = {
     id,
     configSchema,
@@ -248,6 +268,11 @@ export function loadPluginManifest(
     providerAuthChoices: setupNormalizers.normalizeProviderAuthChoices(raw.providerAuthChoices),
     activation: setupNormalizers.normalizeManifestActivation(raw.activation),
     setup: setupNormalizers.normalizeManifestSetup(raw.setup),
+    doctorContract,
+    sessionRouteStateOwners:
+      raw.sessionRouteStateOwners === undefined
+        ? undefined
+        : coerceDoctorSessionRouteStateOwners(raw.sessionRouteStateOwners),
     qaRunners: setupNormalizers.normalizeManifestQaRunners(raw.qaRunners),
   };
   const dashboardResult = setupNormalizers.normalizeManifestDashboard(raw.dashboard);

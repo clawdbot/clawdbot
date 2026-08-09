@@ -413,6 +413,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
       "OPENCLAW_SKIP_CHANNELS",
       "OPENCLAW_SKIP_CRON",
       "OPENCLAW_SKIP_PROVIDERS",
+      "OPENCLAW_TEST_MINIMAL_GATEWAY",
       "OPENCLAW_BUNDLED_PLUGINS_DIR",
     ]);
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-app-conformance-"));
@@ -420,7 +421,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     const configPath = path.join(stateDir, "openclaw.json");
     const fixturePath = path.join(tempRoot, "fixture-server.mjs");
     await fs.mkdir(path.join(tempRoot, "empty-plugins"), { recursive: true });
-    controlUiServer = await startControlUiE2eServer();
+    controlUiServer = await startControlUiE2eServer(undefined, { source: true });
     const appEntryPath = require.resolve("@modelcontextprotocol/ext-apps/app-with-deps");
     const appModuleSource = await fs.readFile(appEntryPath, "utf8");
     const appAssetPort = await getFreeGatewayPort();
@@ -468,6 +469,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
     setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
     setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
+    setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
     setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(tempRoot, "empty-plugins"));
     clearConfigCache();
     clearRuntimeConfigSnapshot();

@@ -1,6 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   createOnboardingRecommendationsStore,
   type OnboardingRecommendationsStore,
@@ -94,7 +94,7 @@ export function onboardRecommendationsCommand(
   // model reasons, and local app labels are untrusted prompt input.
   const matches = bootstrapRecommendations(record);
   if (opts.json) {
-    runtime.log(JSON.stringify(matches, null, 2));
+    writeRuntimeJson(runtime, matches);
     return;
   }
   if (matches.length === 0) {

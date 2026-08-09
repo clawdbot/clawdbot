@@ -8,6 +8,42 @@ import Testing
 @MainActor
 struct ExecApprovalsUIRollbackTests {
     @Test
+    func `migration requirement surfaces without automatic retry`() async throws {
+        try await self.withTempStateDir { stateDirectoryURL in
+            let migrationError = ExecApprovalsLegacyMigrationRequiredError(
+                stateDirectoryURL: stateDirectoryURL,
+                legacyFileURL: stateDirectoryURL.appendingPathComponent("exec-approvals.json"))
+            var quickModeReadCount = 0
+            let state = AppState(
+                preview: true,
+                execApprovalsDefaultsAsyncResolver: {
+                    quickModeReadCount += 1
+                    return .failure(.migrationRequired(migrationError))
+                },
+                execApprovalsReadRetryDelay: .zero)
+
+            await state.recoverExecApprovalModeRead(maxAttempts: 5)
+
+            #expect(quickModeReadCount == 1)
+            #expect(state.execApprovalLoadError == ExecApprovalsReadError.migrationRequired(migrationError).message)
+
+            var settingsReadCount = 0
+            let model = ExecApprovalsSettingsModel(
+                resolveApprovalsAsync: { _ in
+                    settingsReadCount += 1
+                    return .failure(.migrationRequired(migrationError))
+                },
+                readRetryDelay: .zero,
+                automaticReadRetryAttempts: 5)
+
+            await model.loadSettings(for: "main")
+
+            #expect(settingsReadCount == 1)
+            #expect(model.readErrorMessage == ExecApprovalsReadError.migrationRequired(migrationError).message)
+        }
+    }
+
+    @Test
     func `quick mode recovers after initial approvals read is unavailable`() async throws {
         try await self.withTempStateDir { stateDir in
             _ = try ExecApprovalsStore.updateDefaults { defaults in
@@ -256,14 +292,10 @@ struct ExecApprovalsUIRollbackTests {
     {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-approvals-ui-\(UUID().uuidString)", isDirectory: true)
-        let home = root.appendingPathComponent("home", isDirectory: true)
         let stateDir = root.appendingPathComponent("state", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
 
-        return try await TestIsolation.withIsolatedState(env: [
-            "OPENCLAW_HOME": home.path,
-            "OPENCLAW_STATE_DIR": stateDir.path,
-        ]) {
+        return try await ExecApprovalsStore.withStateDirectory(stateDir) {
             try await body(stateDir)
         }
     }

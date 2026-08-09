@@ -1,17 +1,15 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { resolveMatrixRoomKeyBackupIssue } from "./matrix/backup-health.js";
 import { resolveMatrixAuthContext } from "./matrix/client.js";
 import { setMatrixSdkConsoleLogging, setMatrixSdkLogMode } from "./matrix/client/logging.js";
-import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import type { MatrixOwnDeviceVerificationStatus, MatrixRoomKeyBackupStatus } from "./matrix/sdk.js";
 import type { MatrixVerificationSummary } from "./matrix/sdk/verification-manager.js";
 import { formatZonedTimestamp } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
-
-export { formatMatrixErrorMessage };
 
 let matrixCliExitScheduled = false;
 const MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES = 1024 * 1024;
@@ -202,7 +200,7 @@ export async function runMatrixCliCommand<TResult>(
       markCliFailure();
     }
   } catch (err) {
-    const message = formatMatrixErrorMessage(err);
+    const message = formatErrorMessage(err);
     if (config.json) {
       printJson(config.onJsonError ? config.onJsonError(message) : { error: message });
     } else {

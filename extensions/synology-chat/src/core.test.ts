@@ -146,6 +146,60 @@ describe("synology-chat core", () => {
     );
   });
 
+  it("never sends an existing token-bearing incoming URL back through setup prompts", async () => {
+    const existingIncomingUrl =
+      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&token=existing-secret";
+    const replacementIncomingUrl =
+      "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&token=replacement";
+    const text = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Incoming webhook URL") {
+        return replacementIncomingUrl;
+      }
+      if (message === "Outgoing webhook path (optional)") {
+        return "";
+      }
+      throw new Error(`Unexpected prompt: ${message}`);
+    });
+    const confirm = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Synology Chat webhook token already configured. Keep it?") {
+        return true;
+      }
+      if (message.startsWith("Incoming webhook URL")) {
+        return false;
+      }
+      throw new Error(`Unexpected confirmation: ${message}`);
+    });
+    const prompter = createTestWizardPrompter({
+      text: text as WizardPrompter["text"],
+      confirm,
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: synologyChatConfigure,
+      cfg: {
+        channels: {
+          "synology-chat": {
+            enabled: true,
+            token: "existing-outgoing-token",
+            incomingUrl: existingIncomingUrl,
+          },
+        },
+      } as OpenClawConfig,
+      prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
+
+    expect(result.cfg.channels?.["synology-chat"]?.incomingUrl).toBe(replacementIncomingUrl);
+    expect(JSON.stringify({ confirms: confirm.mock.calls, texts: text.mock.calls })).not.toContain(
+      existingIncomingUrl,
+    );
+    const urlPrompt = text.mock.calls.find(
+      ([args]) => args.message === "Incoming webhook URL",
+    )?.[0];
+    expect(urlPrompt).toMatchObject({ sensitive: true });
+    expect(urlPrompt).not.toHaveProperty("initialValue");
+  });
+
   it("records allowed user ids when setup forces allowFrom", async () => {
     const prompter = createSynologySetupPrompter({
       allowedUserIds: "123456, synology-chat:789012",
@@ -166,6 +220,13 @@ describe("synology-chat core", () => {
 
 describe("synology-chat account resolution", () => {
   it("lists no accounts when the channel is missing", () => {
+    expect(listAccountIds({})).toStrictEqual([]);
+    expect(listAccountIds({ channels: {} })).toStrictEqual([]);
+  });
+
+  it("does not discover an env account when the channel is not installed", () => {
+    process.env.SYNOLOGY_CHAT_TOKEN = "env-token";
+
     expect(listAccountIds({})).toStrictEqual([]);
     expect(listAccountIds({ channels: {} })).toStrictEqual([]);
   });

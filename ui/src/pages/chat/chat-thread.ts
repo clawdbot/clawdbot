@@ -14,11 +14,16 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
-import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
+import {
+  getOrCreateSessionCacheValue,
+  getSessionCacheValue,
+  setSessionCacheValue,
+} from "./session-cache.ts";
 
 export { isPendingSendMessage, persistedMessageEntryId } from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
+  coalesceActivityRuns,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";
@@ -36,8 +41,17 @@ type RenderChatItem = ReturnType<typeof buildChatItems>[number];
 const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
 const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
+const expandedBooleanMapVersions = new WeakMap<ReadonlyMap<string, boolean>, number>();
+const expandedAssistantMessagesBySession = new Map<
+  string,
+  Map<string, AssistantMessageExpansionState>
+>();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
+const lastToolCardItemsBySession = new Map<
+  string,
+  { items: readonly (ChatItem | MessageGroup)[]; isFilteredProjection: boolean }
+>();
 
 export function resetChatThreadState(paneId?: string): void {
   if (paneId) {
@@ -48,8 +62,10 @@ export function resetChatThreadState(paneId?: string): void {
   resetWorkingProgress();
   expandedToolCardsBySession.clear();
   expandedUserMessagesBySession.clear();
+  expandedAssistantMessagesBySession.clear();
   initializedToolCardsBySession.clear();
   lastAutoExpandPrefBySession.clear();
+  lastToolCardItemsBySession.clear();
 }
 
 function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
@@ -223,7 +239,6 @@ function sameChatItemsStructuralInput(
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&
-    previous.waitingApproval === next.waitingApproval &&
     previous.runActive === next.runActive &&
     previous.questionPrompts === next.questionPrompts &&
     Boolean(previous.planStatus?.steps.length) === Boolean(next.planStatus?.steps.length) &&
@@ -336,25 +351,22 @@ export function buildCachedChatItems(
   return items;
 }
 
-export function deletedChatItemsSignature(
-  deleted: { has: (key: string) => boolean },
-  chatItems: ReturnType<typeof buildChatItems>,
-): string {
-  const deletedKeys = chatItems
-    .map((item) => item.key)
-    .filter((key) => deleted.has(key))
-    .toSorted();
-  return deletedKeys.length === 0 ? "" : deletedKeys.join("\u0000");
+export function getExpansionStateVersion(values: ReadonlyMap<string, boolean>): number {
+  return expandedBooleanMapVersions.get(values) ?? 0;
 }
 
-export function stableBooleanMapSignature(values: ReadonlyMap<string, boolean>): string {
-  if (values.size === 0) {
-    return "";
+export function setExpansionState(values: Map<string, boolean>, key: string, value: boolean): void {
+  if (values.has(key) && values.get(key) === value) {
+    return;
   }
-  return Array.from(values)
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}:${value ? "1" : "0"}`)
-    .join("\u0000");
+  values.set(key, value);
+  expandedBooleanMapVersions.set(values, getExpansionStateVersion(values) + 1);
+}
+
+function deleteExpansionState(values: Map<string, boolean>, key: string): void {
+  if (values.delete(key)) {
+    expandedBooleanMapVersions.set(values, getExpansionStateVersion(values) + 1);
+  }
 }
 
 export function getExpandedToolCards(sessionKey: string): Map<string, boolean> {
@@ -374,18 +386,60 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
   return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
 }
 
+export type AssistantMessageExpansionState =
+  | { status: "loading"; revision: number }
+  | { status: "error"; revision: number }
+  | { status: "loaded"; expanded: boolean; markdown: string; revision: number };
+
+export function getExpandedAssistantMessages(
+  sessionKey: string,
+): Map<string, AssistantMessageExpansionState> {
+  for (const [cachedKey, state] of expandedAssistantMessagesBySession) {
+    if (areUiSessionKeysEquivalent(cachedKey, sessionKey)) {
+      if (cachedKey !== sessionKey) {
+        expandedAssistantMessagesBySession.delete(cachedKey);
+        setSessionCacheValue(expandedAssistantMessagesBySession, sessionKey, state);
+      }
+      return state;
+    }
+  }
+  return getOrCreateSessionCacheValue(
+    expandedAssistantMessagesBySession,
+    sessionKey,
+    () => new Map(),
+  );
+}
+
+export function assistantMessageExpansionSignature(
+  values: ReadonlyMap<string, AssistantMessageExpansionState>,
+): string {
+  return Array.from(values)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}:${value.revision}`)
+    .join("\u0000");
+}
+
 function getInitializedToolCards(sessionKey: string): Set<string> {
   return getOrCreateSessionCacheValue(initializedToolCardsBySession, sessionKey, () => new Set());
 }
 
 export function syncToolCardExpansionState(
   sessionKey: string,
-  items: Array<ChatItem | MessageGroup>,
+  items: readonly (ChatItem | MessageGroup)[],
   autoExpandToolCalls: boolean,
+  isFilteredProjection = false,
 ): void {
   const expanded = getExpandedToolCards(sessionKey);
   const initialized = getInitializedToolCards(sessionKey);
-  const previousAutoExpand = lastAutoExpandPrefBySession.get(sessionKey) ?? false;
+  const previousProjection = getSessionCacheValue(lastToolCardItemsBySession, sessionKey);
+  const previousAutoExpand = getSessionCacheValue(lastAutoExpandPrefBySession, sessionKey) ?? false;
+  if (
+    previousProjection?.items === items &&
+    previousProjection.isFilteredProjection === isFilteredProjection &&
+    previousAutoExpand === autoExpandToolCalls
+  ) {
+    return;
+  }
   const currentToolCardIds = new Set<string>();
   for (const item of items) {
     if (item.kind !== "group") {
@@ -399,7 +453,7 @@ export function syncToolCardExpansionState(
         if (initialized.has(disclosureId)) {
           continue;
         }
-        expanded.set(disclosureId, autoExpandToolCalls);
+        setExpansionState(expanded, disclosureId, autoExpandToolCalls);
         initialized.add(disclosureId);
       }
       if (!isStandaloneToolMessageForDisplay(entry.message)) {
@@ -410,14 +464,25 @@ export function syncToolCardExpansionState(
       if (initialized.has(disclosureId)) {
         continue;
       }
-      expanded.set(disclosureId, autoExpandToolCalls);
+      setExpansionState(expanded, disclosureId, autoExpandToolCalls);
       initialized.add(disclosureId);
     }
   }
   if (autoExpandToolCalls && !previousAutoExpand) {
-    for (const toolCardId of currentToolCardIds) {
-      expanded.set(toolCardId, true);
+    for (const toolCardId of initialized) {
+      setExpansionState(expanded, toolCardId, true);
     }
   }
-  lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
+  // Search hides existing cards temporarily; pruning that projection would
+  // discard the user's disclosure choice before the full transcript returns.
+  if (!isFilteredProjection) {
+    for (const disclosureId of initialized) {
+      if (!currentToolCardIds.has(disclosureId)) {
+        initialized.delete(disclosureId);
+        deleteExpansionState(expanded, disclosureId);
+      }
+    }
+  }
+  setSessionCacheValue(lastToolCardItemsBySession, sessionKey, { items, isFilteredProjection });
+  setSessionCacheValue(lastAutoExpandPrefBySession, sessionKey, autoExpandToolCalls);
 }

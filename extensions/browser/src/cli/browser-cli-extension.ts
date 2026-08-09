@@ -5,6 +5,15 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
+import {
+  BROWSER_RELAY_AUTH_LABEL,
+  BROWSER_RELAY_AUTH_VERSION,
+  relayKeyIdFromHex,
+} from "../browser/extension-relay/auth-v2-crypto.js";
+import {
+  BROWSER_RELAY_AUTH_CHALLENGE_PATH,
+  BROWSER_RELAY_AUTH_COMPLETE_PATH,
+} from "../browser/extension-relay/auth-v2.js";
 import { ensureExtensionRelayToken } from "../browser/extension-relay/relay-auth.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { resolveGatewayPort } from "../sdk-config.js";
@@ -30,12 +39,18 @@ function resolveChromeExtensionDir(pluginRoot?: string): string {
   return path.resolve(here, "..", "..", "chrome-extension");
 }
 
-function firstExtensionProfile(): { name: string; relayPort: number } | null {
-  const cfg = getRuntimeConfig();
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+function firstExtensionProfile(
+  resolved: ReturnType<typeof resolveBrowserConfig>,
+): { name: string; relayPort: number } | null {
   for (const [name, profile] of Object.entries(resolved.profiles)) {
     if (profile.driver === "extension") {
-      return { name, relayPort: profile.cdpPort ?? resolved.extensionRelayDefaultPort };
+      return {
+        name,
+        relayPort:
+          profile.cdpPort ??
+          resolved.extensionRelayPorts[name] ??
+          resolved.extensionRelayDefaultPort,
+      };
     }
   }
   return null;
@@ -44,7 +59,7 @@ function firstExtensionProfile(): { name: string; relayPort: number } | null {
 /** Gateway route path for the remote extension relay (see gateway-relay-route.ts). */
 const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
 
-/** Resolve a safe direct-Gateway relay URL, preserving an optional proxy base path. */
+/** Resolve a safe direct-Gateway relay URL with an exact v2-bound route path. */
 function buildRemoteGatewayRelayUrl(raw: string): string {
   let url: URL;
   try {
@@ -60,23 +75,27 @@ function buildRemoteGatewayRelayUrl(raw: string): string {
   if (url.username || url.password || url.search || url.hash) {
     throw new Error("--gateway-url must not include credentials, a query, or a fragment");
   }
-  const basePath = url.pathname.replace(/\/+$/, "");
-  url.pathname = `${basePath}${GATEWAY_EXTENSION_RELAY_PATH}`;
+  if (url.pathname !== "/") {
+    throw new Error(
+      "--gateway-url must not include a path prefix; Browser Relay Authentication v2 binds the exact /browser/extension path",
+    );
+  }
+  url.pathname = GATEWAY_EXTENSION_RELAY_PATH;
   return url.toString();
 }
 
-function buildPairingString(gatewayUrl?: string): {
+async function buildPairingString(gatewayUrl?: string): Promise<{
   pairing: string;
   relayPort: number;
   remote: boolean;
-} {
+}> {
   const cfg = getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   // Create the host-local relay secret if this host has not used the extension
   // driver yet, so pairing works on a fresh gateway or node host before the
   // relay has started. Pairing must run on the machine that hosts the browser.
-  const token = ensureExtensionRelayToken();
-  const profile = firstExtensionProfile();
+  const token = await ensureExtensionRelayToken();
+  const profile = firstExtensionProfile(resolved);
   const relayPort = profile?.relayPort ?? resolved.extensionRelayDefaultPort;
 
   const gateway = gatewayUrl?.trim();
@@ -107,7 +126,65 @@ function buildPairingString(gatewayUrl?: string): {
   };
 }
 
-/** Register `openclaw browser extension {path,pair}`. */
+type BrowserRelayCdpEndpoint = {
+  browserUrl: string;
+  wsEndpoint: string;
+  auth: {
+    label: typeof BROWSER_RELAY_AUTH_LABEL;
+    version: typeof BROWSER_RELAY_AUTH_VERSION;
+    keyId: string;
+    challengeUrl: string;
+    completeUrl: string;
+    role: "cdp";
+    transport: "connection";
+    method: "SEQUENCE";
+    resource: "/json/version -> /cdp";
+    flow: "cdp";
+  };
+  headers?: { Authorization: string };
+};
+
+/** Resolve safe v2 metadata, with an explicit gated legacy credential escape hatch. */
+async function buildCdpEndpoint(options: {
+  legacyBearer: boolean;
+}): Promise<BrowserRelayCdpEndpoint> {
+  const cfg = getRuntimeConfig();
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const token = await ensureExtensionRelayToken();
+  const profile = firstExtensionProfile(resolved);
+  const relayPort = profile?.relayPort ?? resolved.extensionRelayDefaultPort;
+  const browserUrl = `http://127.0.0.1:${relayPort}`;
+  const metadata = {
+    browserUrl,
+    wsEndpoint: `ws://127.0.0.1:${relayPort}/cdp`,
+    auth: {
+      label: BROWSER_RELAY_AUTH_LABEL,
+      version: BROWSER_RELAY_AUTH_VERSION,
+      keyId: relayKeyIdFromHex(token),
+      challengeUrl: new URL(BROWSER_RELAY_AUTH_CHALLENGE_PATH, browserUrl).toString(),
+      completeUrl: new URL(BROWSER_RELAY_AUTH_COMPLETE_PATH, browserUrl).toString(),
+      role: "cdp" as const,
+      transport: "connection" as const,
+      method: "SEQUENCE" as const,
+      resource: "/json/version -> /cdp" as const,
+      flow: "cdp" as const,
+    },
+  };
+  if (!options.legacyBearer) {
+    return metadata;
+  }
+  if (!resolved.extensionRelay.allowLegacyAuth) {
+    throw new Error(
+      "Legacy browser relay auth is disabled; remove --legacy-bearer and use Browser Relay Authentication v2.",
+    );
+  }
+  return {
+    ...metadata,
+    headers: { Authorization: `Bearer ${token}` },
+  };
+}
+
+/** Register `openclaw browser extension {path,pair,cdp}`. */
 export function registerBrowserExtensionCommands(
   browser: Command,
   _parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -136,15 +213,13 @@ export function registerBrowserExtensionCommands(
       await runCommandWithRuntime(
         defaultRuntime,
         async () => {
-          const result = buildPairingString(opts.gatewayUrl);
+          const result = await buildPairingString(opts.gatewayUrl);
           if (opts.json === true) {
-            defaultRuntime.log(
-              JSON.stringify({
-                pairingString: result.pairing,
-                relayPort: result.relayPort,
-                remote: result.remote,
-              }),
-            );
+            defaultRuntime.writeJson({
+              pairingString: result.pairing,
+              relayPort: result.relayPort,
+              remote: result.remote,
+            });
             return;
           }
           const setupLine = result.remote
@@ -163,9 +238,58 @@ export function registerBrowserExtensionCommands(
               "",
               theme.heading(result.pairing),
               "",
-              info("The token is a host-local secret; keep it private."),
+              info("The relay key is a host-local secret; keep it private."),
             ].join("\n"),
           );
+        },
+        (err: unknown) => {
+          defaultRuntime.error(danger(String(err)));
+          defaultRuntime.exit(1);
+        },
+      );
+    });
+
+  extension
+    .command("cdp")
+    .description("Print non-secret Browser Relay Authentication v2 CDP metadata")
+    .option("--json", "Print the endpoint as JSON")
+    .option(
+      "--legacy-bearer",
+      "Print the legacy Bearer header while browser.extensionRelay.allowLegacyAuth is enabled",
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(
+        defaultRuntime,
+        async () => {
+          const legacyBearer = opts.legacyBearer === true;
+          const endpoint = await buildCdpEndpoint({ legacyBearer });
+          if (legacyBearer) {
+            defaultRuntime.error(
+              theme.warn(
+                "Warning: --legacy-bearer reveals the relay key in an authorization header. Migrate this client to Browser Relay Authentication v2.",
+              ),
+            );
+          }
+          if (opts.json === true) {
+            defaultRuntime.writeJson(endpoint);
+            return;
+          }
+          const lines = [
+            info("Relay CDP endpoint (pair the extension first):"),
+            `browserUrl: ${endpoint.browserUrl}`,
+            `wsEndpoint: ${endpoint.wsEndpoint}`,
+            `auth:       ${endpoint.auth.label} v${endpoint.auth.version}`,
+            `keyId:      ${endpoint.auth.keyId}`,
+            `challenge:  POST ${endpoint.auth.challengeUrl}`,
+            `complete:   POST ${endpoint.auth.completeUrl}`,
+            `sequence:   ${endpoint.auth.resource}`,
+          ];
+          if (endpoint.headers) {
+            lines.push(`legacy:     Authorization: ${endpoint.headers.Authorization}`);
+          } else {
+            lines.push("", info("No relay key or authorization header is printed."));
+          }
+          defaultRuntime.log(lines.join("\n"));
         },
         (err: unknown) => {
           defaultRuntime.error(danger(String(err)));

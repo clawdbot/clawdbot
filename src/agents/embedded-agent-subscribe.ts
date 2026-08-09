@@ -58,8 +58,14 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-subscribe.tools.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./embedded-agent-utils.js";
+import {
+  createThinkingTagStreamState,
+  stripDowngradedToolCallText,
+  THINKING_TAG_SCAN_RE,
+} from "./embedded-agent-utils.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
+import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
+import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
@@ -139,27 +145,53 @@ function splitTrailingFenceFragment(
 
 function collectPendingMediaFromInternalEvents(
   events: SubscribeEmbeddedAgentSessionParams["internalEvents"],
-): string[] {
+): {
+  mediaUrls: string[];
+  attachments: NonNullable<AgentInternalEvent["attachments"]>;
+  trustByUrl: Map<string, boolean>;
+} {
   if (!events?.length) {
-    return [];
+    return { mediaUrls: [], attachments: [], trustByUrl: new Map() };
   }
   const pending: string[] = [];
-  const seen = new Set<string>();
+  const attachments: NonNullable<AgentInternalEvent["attachments"]> = [];
+  const indexByUrl = new Map<string, number>();
+  const trustedByUrl = new Map<string, boolean>();
   for (const event of events) {
+    const generatedMediaEvent = hasGeneratedMediaCompletionEvent([event]);
+    const attachmentByUrl = new Map(
+      (event.attachments ?? []).flatMap((attachment) => {
+        const reference = normalizeOptionalString(
+          attachment.path ?? attachment.url ?? attachment.mediaUrl ?? attachment.filePath,
+        );
+        return reference ? [[reference, attachment] as const] : [];
+      }),
+    );
     const mediaUrls = [
       ...(Array.isArray(event.mediaUrls) ? event.mediaUrls : []),
       ...mediaUrlsFromGeneratedAttachments(event.attachments),
     ];
     for (const mediaUrl of mediaUrls) {
       const normalized = normalizeOptionalString(mediaUrl) ?? "";
-      if (!normalized || seen.has(normalized)) {
+      if (!normalized) {
         continue;
       }
-      seen.add(normalized);
+      const metadata = attachmentByUrl.get(normalized);
+      const existingIndex = indexByUrl.get(normalized);
+      if (existingIndex !== undefined) {
+        trustedByUrl.set(normalized, trustedByUrl.get(normalized) === true || generatedMediaEvent);
+        if (metadata && Object.keys(attachments[existingIndex] ?? {}).length === 0) {
+          attachments[existingIndex] = metadata;
+        }
+        continue;
+      }
+      indexByUrl.set(normalized, pending.length);
+      trustedByUrl.set(normalized, generatedMediaEvent);
       pending.push(normalized);
+      attachments.push(metadata ?? {});
     }
   }
-  return pending;
+  return { mediaUrls: pending, attachments, trustByUrl: trustedByUrl };
 }
 
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
@@ -168,7 +200,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const canShowReasoning = params.thinkingLevel !== "off";
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
-  const initialPendingToolMediaUrls = collectPendingMediaFromInternalEvents(params.internalEvents);
+  const initialPendingToolMedia = collectPendingMediaFromInternalEvents(params.internalEvents);
   const state: EmbeddedAgentSubscribeState = {
     assistantTexts: [],
     toolMetas: [],
@@ -178,6 +210,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     itemActiveIds: new Set(),
     itemStartedCount: 0,
     itemCompletedCount: 0,
+    assistantTurnCount: 0,
     lastToolError: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
@@ -190,6 +223,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       canShowReasoning &&
       typeof params.onReasoningStream === "function",
     deltaBuffer: "",
+    thinkingTagStream: createThinkingTagStreamState(),
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
     blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
@@ -229,6 +263,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pendingEventChain: null,
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
+    currentSourceMessagingToolSentTextsNormalized: [],
+    currentSourceMessagingToolHeldPartial: undefined,
     messagingToolSentTargets: [],
     heartbeatToolResponse: undefined,
     messagingToolSentMediaUrls: [],
@@ -238,9 +274,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pendingMessagingTargets: new Map(),
     successfulCronAdds: 0,
     pendingMessagingMediaUrls: new Map(),
-    pendingToolMediaUrls: initialPendingToolMediaUrls,
+    pendingToolMediaUrls: initialPendingToolMedia.mediaUrls,
+    pendingToolMediaAttachments: initialPendingToolMedia.attachments,
+    pendingToolMediaTrustByUrl: initialPendingToolMedia.trustByUrl,
     pendingToolAudioAsVoice: false,
-    pendingToolTrustedLocalMedia: false,
     hasToolMediaBlockReply: false,
     visibleBlockReplyCount: 0,
     pendingAssistantReplyDirectives: undefined,
@@ -271,6 +308,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const pendingMessagingTexts = state.pendingMessagingTexts;
   const pendingMessagingTargets = state.pendingMessagingTargets;
   const pendingBlockReplyTasks = new Set<Promise<void>>();
+  const pendingPartialReplyTasks = new Set<Promise<void>>();
   const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
@@ -296,11 +334,22 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       });
     }
     if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
-      runBestEffortCallback({
-        label: "assistant partial reply",
-        log,
-        callback: () => params.onPartialReply?.(data),
-      });
+      try {
+        const maybeTask = params.onPartialReply(data);
+        if (isPromiseLike(maybeTask)) {
+          const task = Promise.resolve(maybeTask)
+            .then(() => undefined)
+            .catch((error: unknown) => {
+              log.warn(`assistant partial reply callback failed: ${String(error)}`);
+            });
+          pendingPartialReplyTasks.add(task);
+          void task.finally(() => {
+            pendingPartialReplyTasks.delete(task);
+          });
+        }
+      } catch (error) {
+        log.warn(`assistant partial reply callback failed: ${String(error)}`);
+      }
     }
   };
   const emitAssistantStreamData = (
@@ -375,21 +424,23 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
         : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
+    const assistantTranscriptMediaUrls = Array.from(new Set(payload.mediaUrls ?? []));
+    const taggedPayload =
+      options?.assistantMessageIndex !== undefined
+        ? setReplyPayloadMetadata(withToolMedia, {
+            assistantMessageIndex: options.assistantMessageIndex,
+            ...(assistantTranscriptMediaUrls.length > 0 ? { assistantTranscriptMediaUrls } : {}),
+          })
+        : withToolMedia;
     if (state.deferBlockReplyDelivery) {
-      const deferredPayload =
-        options?.assistantMessageIndex !== undefined
-          ? setReplyPayloadMetadata(withToolMedia, {
-              assistantMessageIndex: options.assistantMessageIndex,
-            })
-          : withToolMedia;
       if (consumesPendingToolMedia) {
-        deferredToolMediaReplies.add(deferredPayload);
+        deferredToolMediaReplies.add(taggedPayload);
       }
-      state.deferredBlockReplies.push(deferredPayload);
+      state.deferredBlockReplies.push(taggedPayload);
       return;
     }
-    const emitted = emitBlockReplySafely(withToolMedia, options);
-    if (emitted && !withToolMedia.isReasoning && hasAssistantVisibleReply(withToolMedia)) {
+    const emitted = emitBlockReplySafely(taggedPayload, options);
+    if (emitted && !taggedPayload.isReasoning && hasAssistantVisibleReply(taggedPayload)) {
       state.visibleBlockReplyCount += 1;
       if (consumesPendingToolMedia) {
         state.hasToolMediaBlockReply = true;
@@ -417,6 +468,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
     state.deltaBuffer = "";
+    state.thinkingTagStream = createThinkingTagStreamState();
     state.blockBuffer = "";
     blockChunker?.reset();
     replyDirectiveAccumulator.reset();
@@ -445,6 +497,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.partialBlockState.pendingTagFragment = undefined;
     state.lastStreamedAssistant = undefined;
     state.lastStreamedAssistantCleaned = undefined;
+    state.currentSourceMessagingToolHeldPartial = undefined;
     state.emittedAssistantUpdate = false;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
@@ -535,6 +588,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   // to support commit logic but not used for suppression (avoiding lost messages on tool failure).
   // These tools can send messages via sendMessage/threadReply actions (or sessions_send with message).
   const MAX_MESSAGING_SENT_TEXTS = 200;
+  const MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS = 200;
   const MAX_MESSAGING_SENT_TARGETS = 200;
   const MAX_MESSAGING_SENT_MEDIA_URLS = 200;
   const MAX_MESSAGING_SOURCE_REPLY_PAYLOADS = 200;
@@ -543,6 +597,15 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       const overflow = messagingToolSentTexts.length - MAX_MESSAGING_SENT_TEXTS;
       messagingToolSentTexts.splice(0, overflow);
       messagingToolSentTextsNormalized.splice(0, overflow);
+    }
+    if (
+      state.currentSourceMessagingToolSentTextsNormalized.length >
+      MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS
+    ) {
+      const overflow =
+        state.currentSourceMessagingToolSentTextsNormalized.length -
+        MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS;
+      state.currentSourceMessagingToolSentTextsNormalized.splice(0, overflow);
     }
     if (messagingToolSentTargets.length > MAX_MESSAGING_SENT_TARGETS) {
       const overflow = messagingToolSentTargets.length - MAX_MESSAGING_SENT_TARGETS;
@@ -1296,6 +1359,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
+    state.currentSourceMessagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
     messagingToolSentMediaUrls.length = 0;
     pendingMessagingTexts.clear();
@@ -1304,8 +1368,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.heartbeatToolResponse = undefined;
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
+    state.pendingToolMediaAttachments = [];
+    state.pendingToolMediaTrustByUrl.clear();
     state.pendingToolAudioAsVoice = false;
-    state.pendingToolTrustedLocalMedia = false;
     state.visibleBlockReplyCount = 0;
     state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
     clearDeferredAssistantEvents();
@@ -1531,7 +1596,17 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
-    waitForPendingEvents: () => state.pendingEventChain ?? Promise.resolve(),
+    getAssistantTurnCount: () => state.assistantTurnCount,
+    waitForPendingEvents: async () => {
+      // Partial presentation stays concurrent with provider events, but terminal
+      // settlement must observe callbacks launched while the event chain drains.
+      while (state.pendingEventChain || pendingPartialReplyTasks.size > 0) {
+        await Promise.allSettled([
+          ...(state.pendingEventChain ? [state.pendingEventChain] : []),
+          ...pendingPartialReplyTasks,
+        ]);
+      }
+    },
     getItemLifecycle: () => ({
       startedCount: state.itemStartedCount,
       completedCount: state.itemCompletedCount,

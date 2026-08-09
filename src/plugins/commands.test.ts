@@ -11,8 +11,9 @@ import {
   matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
+import { setActivePluginRegistry, withPluginRegistrationContext } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
@@ -61,6 +62,7 @@ function registerHostTrustedReservedCommandForTest(
     activateGlobalSideEffects: true,
   });
   pluginRegistry.registerCommand(createBundledPluginRecord(command.name), command);
+  setActivePluginRegistry(pluginRegistry.registry);
 }
 
 function registerVoiceCommandForTest(
@@ -284,6 +286,21 @@ afterEach(() => {
 });
 
 describe("registerPluginCommand", () => {
+  it("writes direct registrations into the synchronous builder context", () => {
+    const active = createEmptyPluginRegistry();
+    const building = createEmptyPluginRegistry();
+    setActivePluginRegistry(active);
+
+    expect(
+      withPluginRegistrationContext(building, "demo-plugin", () =>
+        registerPluginCommand("spoofed-plugin", createVoiceCommand()),
+      ),
+    ).toEqual({ ok: true });
+    expect(active.commands).toStrictEqual([]);
+    expect(building.commands.map((entry) => entry.command.name)).toEqual(["voice"]);
+    expect(building.commands[0]?.pluginId).toBe("demo-plugin");
+  });
+
   it.each([
     {
       name: "rejects invalid command names",
@@ -404,6 +421,31 @@ describe("registerPluginCommand", () => {
       },
     ]);
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
+  });
+
+  it.each([
+    ["zeta-plugin", "alpha-plugin"],
+    ["alpha-plugin", "zeta-plugin"],
+  ])("keeps prompt guidance stable for plugin discovery order %j", (...pluginIds) => {
+    for (const pluginId of pluginIds) {
+      const alpha = pluginId === "alpha-plugin";
+      expect(
+        registerPluginCommand(pluginId, {
+          name: alpha ? "alpha_cmd" : "zeta_cmd",
+          description: alpha ? "Alpha command" : "Zeta command",
+          agentPromptGuidance: alpha
+            ? ["Use /alpha_cmd first.", "Then finish the alpha workflow."]
+            : ["Use /zeta_cmd for zeta routing."],
+          handler: async () => ({ text: "ok" }),
+        }),
+      ).toEqual({ ok: true });
+    }
+
+    expect(listRegisteredPluginAgentPromptGuidance()).toEqual([
+      "Use /alpha_cmd first.",
+      "Then finish the alpha workflow.",
+      "Use /zeta_cmd for zeta routing.",
+    ]);
   });
 
   it("normalizes and filters structured agent prompt guidance by surface", () => {
@@ -800,6 +842,7 @@ describe("registerPluginCommand", () => {
         },
       },
     );
+    setActivePluginRegistry(pluginRegistry.registry);
     const match = requirePluginCommandMatch("/external");
 
     await executePluginCommand({
@@ -826,23 +869,24 @@ describe("registerPluginCommand", () => {
       activateGlobalSideEffects: true,
     });
     let observedOwnerStatus: boolean | undefined;
-    pluginRegistry.registerCommand(createBundledPluginRecord("phone-control"), {
-      name: "phone",
-      description: "Phone command",
+    pluginRegistry.registerCommand(createBundledPluginRecord("device-pair"), {
+      name: "pair_test",
+      description: "Pair test command",
       exposeSenderIsOwner: true,
       handler: async (ctx) => {
         observedOwnerStatus = ctx.senderIsOwner;
         return { text: "ok" };
       },
     });
-    const match = requirePluginCommandMatch("/phone");
+    setActivePluginRegistry(pluginRegistry.registry);
+    const match = requirePluginCommandMatch("/pair_test");
 
     await executePluginCommand({
       command: match.command,
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,
-      commandBody: "/phone",
+      commandBody: "/pair_test",
       config: {},
     });
 

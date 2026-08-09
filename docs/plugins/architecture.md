@@ -146,7 +146,7 @@ After startup, Gateway keeps the current metadata snapshot as a replaceable runt
 The snapshot and lookup table keep repeated startup decisions on the fast path:
 
 - channel ownership
-- deferred channel startup
+- startup plugin planning
 - startup plugin ids
 - provider and CLI backend ownership
 - setup provider, command alias, model catalog provider, and manifest contract ownership

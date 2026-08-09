@@ -1,6 +1,8 @@
 // Covers outbound message send/poll orchestration, target resolution, durable
 // capability checks, gateway fallback, dry runs, and payload planning.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 
 const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
@@ -74,12 +76,7 @@ beforeAll(async () => {
   ({ sendMessage } = await import("./message.js"));
 });
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectRecordFields(
   value: unknown,
@@ -505,18 +502,33 @@ describe("sendMessage", () => {
     }
   });
 
-  it("does not load registries while resolving outbound plugins", async () => {
-    const forumPlugin = {
+  it("uses a prepared plugin for channel and target resolution without registry lookup", async () => {
+    const forumPlugin: ChannelPlugin = {
+      id: "forum",
+      meta: {
+        id: "forum",
+        label: "Forum",
+        selectionLabel: "Forum",
+        docsPath: "/channels/forum",
+        blurb: "Forum test plugin.",
+      },
+      capabilities: { chatTypes: ["channel"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
       outbound: { deliveryMode: "direct", sendText: vi.fn() },
     };
-    mocks.getChannelPlugin
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce(forumPlugin)
-      .mockReturnValue(forumPlugin);
+    mocks.getChannelPlugin.mockReturnValue(undefined);
+    mocks.resolveOutboundTarget.mockImplementation(({ plugin }: { plugin?: ChannelPlugin }) => ({
+      ok: true,
+      to: plugin === forumPlugin ? "prepared:123456" : "wrong-plugin",
+    }));
 
     const result = await sendMessage({
       cfg: { channels: { forum: { token: "test-token" } } },
       channel: "forum",
+      preparedPlugin: forumPlugin,
       to: "123456",
       content: "hi",
     });
@@ -531,7 +543,15 @@ describe("sendMessage", () => {
       "send message result",
     );
 
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledTimes(1);
+    const targetParams = requireRecord(
+      getMockCallArg(mocks.resolveOutboundTarget, 0, 0, "outbound target"),
+      "outbound target params",
+    );
+    expect(targetParams.plugin).toBe(forumPlugin);
+    expectDeliveryCallFields({ to: "prepared:123456" });
   });
 
   it("preserves suppressed direct-send status", async () => {

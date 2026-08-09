@@ -9,16 +9,21 @@ on:
       - ".github/workflows/plugin-npm-release.yml"
       - "extensions/**"
       - "package.json"
+      - "scripts/generate-npm-package-lock.mjs"
+      - "scripts/generate-npm-package-lock.mts"
       - "scripts/lib/npm-publish-plan.mjs"
+      - "scripts/lib/npm-json-output.mts"
       - "scripts/lib/release-version.mjs"
       - "scripts/lib/plugin-npm-package-manifest.mjs"
+      - "scripts/lib/plugin-npm-package-manifest.mts"
+      - "scripts/lib/tsx-cli-shim.mjs"
       - "scripts/lib/plugin-npm-release.ts"
       - "scripts/lib/actions-artifact-archive.mjs"
       - "scripts/plugin-npm-publish.sh"
       - "scripts/plugin-publication-artifact.mjs"
       - "scripts/plugin-npm-release-check.ts"
       - "scripts/plugin-npm-release-plan.ts"
-      - "scripts/verify-plugin-npm-published-runtime.mjs"
+      - "scripts/verify-plugin-npm-published-runtime.mts"
   workflow_dispatch:
     inputs:
       publish_scope:
@@ -328,6 +333,44 @@ jobs:
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           fetch-depth: 1
 
+      - name: Checkout trusted packaging helper
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/generate-npm-package-lock.mjs
+            scripts/generate-npm-package-lock.mts
+            scripts/lib/npm-json-output.mts
+            scripts/lib/plugin-npm-package-manifest.mjs
+            scripts/lib/plugin-npm-package-manifest.mts
+            scripts/lib/tsx-cli-shim.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Overlay trusted packaging helper
+        run: |
+          set -euo pipefail
+          cp \
+            .release-tooling/scripts/generate-npm-package-lock.mjs \
+            scripts/generate-npm-package-lock.mjs
+          cp \
+            .release-tooling/scripts/generate-npm-package-lock.mts \
+            scripts/generate-npm-package-lock.mts
+          cp \
+            .release-tooling/scripts/lib/npm-json-output.mts \
+            scripts/lib/npm-json-output.mts
+          cp \
+            .release-tooling/scripts/lib/plugin-npm-package-manifest.mjs \
+            scripts/lib/plugin-npm-package-manifest.mjs
+          cp \
+            .release-tooling/scripts/lib/plugin-npm-package-manifest.mts \
+            scripts/lib/plugin-npm-package-manifest.mts
+          cp \
+            .release-tooling/scripts/lib/tsx-cli-shim.mjs \
+            scripts/lib/tsx-cli-shim.mjs
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -375,26 +418,27 @@ jobs:
             OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="${artifact_dir}" \
             bash scripts/plugin-npm-publish.sh --pack "${PACKAGE_DIR}" > "${pack_output}"
 
-          node - "${pack_output}" "${pack_json}" <<'NODE'
-          const fs = require("node:fs");
+          node --import tsx --input-type=module - "${pack_output}" "${pack_json}" <<'NODE'
+          import fs from "node:fs";
+          import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mts";
+
           const raw = fs.readFileSync(process.argv[2], "utf8").trim();
           let pack;
-          for (let index = raw.lastIndexOf("["); index >= 0; index = raw.lastIndexOf("[", index - 1)) {
+          for (let index = raw.length - 1; index >= 0; index -= 1) {
+            if (raw[index] !== "[" && raw[index] !== "{") continue;
             try {
               const candidate = JSON.parse(raw.slice(index));
-              if (Array.isArray(candidate)) {
-                pack = candidate;
+              const entries = resolveNpmJsonEntries(candidate);
+              if (entries.length > 0) {
+                pack = entries;
                 break;
               }
             } catch {
               // npm can print bundled-dependency summaries before its JSON result.
             }
-            if (index === 0) {
-              break;
-            }
           }
           if (!pack) {
-            throw new Error("npm pack did not emit a JSON array.");
+            throw new Error("npm pack did not emit package JSON.");
           }
           fs.writeFileSync(process.argv[3], `${JSON.stringify(pack, null, 2)}\n`);
           NODE
@@ -1205,7 +1249,34 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          path: .publication-target
           fetch-depth: 1
+
+      - name: Overlay trusted OIDC packaging helper
+        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
+        run: |
+          set -euo pipefail
+          cp \
+            scripts/generate-npm-package-lock.mjs \
+            .publication-target/scripts/generate-npm-package-lock.mjs
+          cp \
+            scripts/generate-npm-package-lock.mts \
+            .publication-target/scripts/generate-npm-package-lock.mts
+          cp \
+            scripts/lib/npm-json-output.mts \
+            .publication-target/scripts/lib/npm-json-output.mts
+          cp \
+            scripts/lib/plugin-npm-package-manifest.mjs \
+            .publication-target/scripts/lib/plugin-npm-package-manifest.mjs
+          cp \
+            scripts/lib/plugin-npm-package-manifest.mts \
+            .publication-target/scripts/lib/plugin-npm-package-manifest.mts
+          cp \
+            scripts/lib/tsx-cli-shim.mjs \
+            .publication-target/scripts/lib/tsx-cli-shim.mjs
+          cp \
+            scripts/lib/tsx-cli-shim.mjs \
+            .publication-target/scripts/lib/tsx-cli-shim.mjs
 
       - name: Setup OIDC publication target
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
@@ -1231,6 +1302,7 @@ jobs:
 
       - name: Publish with trusted publisher
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'
+        working-directory: .publication-target
         env:
           OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
@@ -1241,7 +1313,7 @@ jobs:
         env:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
-        run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+        run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
       - name: Check bootstrap npm package version
         id: bootstrap_npm_package_version
@@ -1340,14 +1412,14 @@ jobs:
         env:
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
-        run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+        run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
       - name: Verify immutable npm readback runtime
         if: steps.publication_evidence.outputs.publish_route == 'npm-readback'
         env:
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
-        run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+        run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
       - name: Record Meta trusted publisher checkpoint
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'

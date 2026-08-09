@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import "../../components/agent-select-registration.ts";
 import { icons } from "../../components/icons.ts";
+import { renderLoadingState } from "../../components/loading-state.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -152,12 +153,7 @@ export function renderWorkboard(props: WorkboardProps) {
         </section>
       `;
     }
-    return html`
-      <section class="card lazy-view-state lazy-view-state--loading">
-        <div class="card-title">${t("lazyView.loadingTitle")}</div>
-        <div class="card-sub">${t("common.loading")}</div>
-      </section>
-    `;
+    return renderLoadingState();
   }
 
   if (!props.pluginEnabled) {
@@ -415,7 +411,7 @@ export function renderWorkboard(props: WorkboardProps) {
                     aria-controls=${workboardCardModalId}
                     ?disabled=${state.dispatching}
                     @click=${() => {
-                      openCreateModal(state);
+                      openCreateModal(state, props);
                       props.onRequestUpdate?.();
                     }}
                   >

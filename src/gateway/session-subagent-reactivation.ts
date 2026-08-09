@@ -6,7 +6,7 @@ import { getLatestSubagentRunByChildSessionKey } from "../agents/subagent-regist
 // the previous completed run id with the next run id through a lazy runtime
 // import. Active subagent runs are never replaced here.
 async function loadSessionSubagentReactivationRuntime() {
-  return import("./session-subagent-reactivation.runtime.js");
+  return import("../agents/subagent-registry-runtime.js");
 }
 
 /**
@@ -29,7 +29,7 @@ export async function reactivateCompletedSubagentSession(params: {
     return false;
   }
   const existing = getLatestSubagentRunByChildSessionKey(params.sessionKey);
-  if (!existing || typeof existing.endedAt !== "number") {
+  if (!existing || typeof existing.execution.endedAt !== "number") {
     return false;
   }
   const { replaceSubagentRunAfterSteer } = await loadSessionSubagentReactivationRuntime();

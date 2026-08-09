@@ -1,18 +1,19 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import {
+  parseSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesTarget,
+} from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
   type PluginBlobStore,
 } from "../plugin-state/plugin-blob-store.js";
-import { withPluginStateLease } from "../plugin-state/plugin-state-lease.js";
-import type {
-  PluginStateLeaseContext,
-  PluginStateLeaseOptions,
-} from "../plugin-state/plugin-state-lease.types.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -20,6 +21,7 @@ import {
   type PluginStateKeyedStore,
   type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
@@ -49,6 +51,7 @@ const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
   "sessions.fork",
   "sessions.create",
   "sessions.delete",
+  "sessions.patchMany",
   "sessions.patch",
   "sessions.pluginPatch",
   "sessions.reset",
@@ -310,11 +313,56 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         readOnly: true,
       });
       for (const { sessionKey, entry } of entries) {
-        if (
-          sessionIds.has(entry.sessionId) ||
-          (entry.sessionFile ? sessionFiles.has(entry.sessionFile) : false)
-        ) {
+        if (sessionIds.has(entry.sessionId)) {
           assertSessionEntryOwned({ action: params.action, entry, sessionKey });
+        }
+      }
+      for (const sessionFile of sessionFiles) {
+        const sessionKeyMatches = entries.filter(({ sessionKey }) => sessionKey === sessionFile);
+        if (sessionKeyMatches.length > 0) {
+          for (const match of sessionKeyMatches) {
+            assertSessionEntryOwned({
+              action: params.action,
+              entry: match.entry,
+              sessionKey: match.sessionKey,
+            });
+          }
+          const matchedSessionIds = new Set(
+            sessionKeyMatches
+              .map(({ entry }) => normalizeOptionalString(entry.sessionId))
+              .filter((sessionId): sessionId is string => Boolean(sessionId)),
+          );
+          for (const match of entries) {
+            const matchSessionId = normalizeOptionalString(match.entry.sessionId);
+            if (matchSessionId && matchedSessionIds.has(matchSessionId)) {
+              assertSessionEntryOwned({
+                action: params.action,
+                entry: match.entry,
+                sessionKey: match.sessionKey,
+              });
+            }
+          }
+          continue;
+        }
+        const marker = parseSqliteSessionFileMarker(sessionFile);
+        if (!marker) {
+          throw new Error("Plugin session ownership checks require a SQLite transcript marker.");
+        }
+        const markerEntries = registryParams.runtime.agent.session.listSessionEntries({
+          agentId: marker.agentId,
+          storePath: marker.storePath,
+          readOnly: true,
+        });
+        const matches = markerEntries.filter(({ entry }) => entry.sessionId === marker.sessionId);
+        if (matches.length === 0) {
+          throw new Error(`Plugin session ownership target not found: ${marker.sessionId}`);
+        }
+        for (const match of matches) {
+          assertSessionEntryOwned({
+            action: params.action,
+            entry: match.entry,
+            sessionKey: match.sessionKey,
+          });
         }
       }
     };
@@ -330,6 +378,24 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       const sessionKey = targetSessionKey ?? directSessionKey;
       const storePath = normalizeOptionalString(target?.storePath);
       const agentId = normalizeOptionalString(target?.agentId ?? params.agentId);
+      const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+      const normalizedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
+      if (sessionKeyAgentId && normalizedAgentId && normalizedAgentId !== sessionKeyAgentId) {
+        throw new Error(
+          `Plugin session ownership agent "${normalizedAgentId}" does not match session key agent "${sessionKeyAgentId}".`,
+        );
+      }
+      const ownershipAgentId = sessionKeyAgentId ?? normalizedAgentId;
+      // Embedded runs accept one exact key. Carry its resolved store into the
+      // keyless ID/file scan so incognito ownership stays in the process-held DB.
+      const ownershipStorePath =
+        sessionKey && sessionKeyAgentId
+          ? resolveSessionStorePathForScope({
+              agentId: sessionKeyAgentId,
+              sessionKey,
+              ...(storePath ? { storePath } : {}),
+            })
+          : storePath;
       const entry = sessionKey
         ? registryParams.runtime.agent.session.getSessionEntry({
             sessionKey,
@@ -344,6 +410,16 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       const directAgentId = normalizeOptionalString(params.agentId);
       const sessionFile = normalizeOptionalString(params.sessionFile);
       if (target) {
+        const legacySessionIdentityMatches =
+          Boolean(sessionFile) &&
+          Boolean(agentId) &&
+          Boolean(storePath) &&
+          Boolean(entry?.sessionId) &&
+          sqliteSessionFileMarkerMatchesTarget(sessionFile, {
+            agentId: agentId!,
+            sessionId: entry!.sessionId,
+            storePath: storePath!,
+          });
         const targetIdentityMatches =
           targetSessionKey === sessionKey &&
           Boolean(storePath) &&
@@ -351,7 +427,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           targetSessionId === entry?.sessionId &&
           directSessionId === entry?.sessionId &&
           targetAgentId === directAgentId &&
-          (!sessionFile || sessionFile === entry?.sessionFile);
+          (!sessionFile || sessionFile === sessionKey || legacySessionIdentityMatches);
         if (!targetIdentityMatches) {
           throw new Error(
             `Plugin "${pluginId}" may execute a persisted session only with its exact session target identity.`,
@@ -394,11 +470,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
       assertSessionIdentitiesOwned({
         action: "run",
-        agentId: target?.agentId ?? params.agentId,
+        agentId: ownershipAgentId,
         sessionFiles: [params.sessionFile],
         sessionIds: [target?.sessionId ?? params.sessionId],
         sessionKeys: [target?.sessionKey ?? params.sessionKey],
-        storePath: target?.storePath,
+        storePath: ownershipStorePath,
       });
       return undefined;
     };
@@ -413,6 +489,19 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         return;
       }
       const request = params ?? {};
+      if (method === "sessions.patchMany" && Array.isArray(request.targets)) {
+        for (const target of request.targets) {
+          if (!isRecord(target)) {
+            continue;
+          }
+          assertSessionIdentitiesOwned({
+            action: `request gateway method "${method}" for`,
+            agentId: target.agentId,
+            sessionKeys: [target.key],
+          });
+        }
+        return;
+      }
       const sessionKeys = [request.sessionKey, request.key, request.parentSessionKey];
       const sessionIds = [request.sessionId];
       assertSessionIdentitiesOwned({
@@ -481,15 +570,18 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             methodName:
               | "openBlobStore"
               | "openKeyedStore"
-              | "withLease"
+              | "openSyncKeyedStore"
+              | "openChannelIngressQueue"
               | "openChannelIngressDrain",
           ) => {
             const record =
               pluginRuntimeRecordById.get(pluginId) ??
               registry.plugins.find((entry) => entry.id === pluginId);
             if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
+              // Name the denied plugin and its origin: several plugins share this gate, and a
+              // bare capability name cannot tell an operator which install needs replacing.
               throw new Error(
-                `${methodName} is only available for trusted plugins in this release.`,
+                `${methodName} is only available for trusted plugins in this release. Plugin "${pluginId}" loaded with origin "${record?.origin ?? "unknown"}"; reinstall it from its official npm package or ClawHub listing to enable trusted plugin state.`,
               );
             }
           };
@@ -508,20 +600,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             openSyncKeyedStore: <T>(
               options: OpenKeyedStoreOptions,
             ): PluginStateSyncKeyedStore<T> => {
-              assertPluginStateAllowed("openKeyedStore");
+              assertPluginStateAllowed("openSyncKeyedStore");
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
-            },
-            withLease: <T>(
-              options: PluginStateLeaseOptions,
-              run: (lease: PluginStateLeaseContext) => Promise<T>,
-            ): Promise<T> => {
-              assertPluginStateAllowed("withLease");
-              return withPluginStateLease(pluginId, options, run);
             },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {
-              assertPluginStateAllowed("openKeyedStore");
+              assertPluginStateAllowed("openChannelIngressQueue");
               const stateDir = options?.stateDir ?? baseState.resolveStateDir();
               return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
                 ...options,
