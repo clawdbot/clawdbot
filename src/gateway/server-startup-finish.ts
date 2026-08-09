@@ -14,6 +14,7 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
+import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import {
@@ -424,7 +425,8 @@ export async function finishGatewayStartup(params: {
           log,
           isNixMode,
           startupStartedAt: opts.startupStartedAt,
-          broadcast,
+          broadcastToConnIds,
+          getClientConnIds: gatewayRequestContext.getClientConnIds!,
           broadcastPluginEvent,
           tailscaleMode,
           resetOnExit: tailscaleConfig.resetOnExit ?? false,
@@ -520,6 +522,7 @@ export async function finishGatewayStartup(params: {
           startupTrace,
           sidecarStartup,
           waitForPostReadyWork: params.waitForPostReadyWork,
+          activeWorkInspectors: createGatewayServerActiveWorkInspectors(gatewayRequestContext),
           providerAuthPrewarm: {
             getConfig: getRuntimeConfig,
           },

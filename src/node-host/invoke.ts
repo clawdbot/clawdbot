@@ -133,29 +133,6 @@ function resolveNodeSkillCwdParam<T extends { cwd?: unknown }>(params: T, nodeId
   return resolved ? { ...params, cwd: resolved } : params;
 }
 
-function bindNodeInvokeSessionKey<
-  T extends {
-    sessionKey?: unknown;
-    systemRunPlan?: SystemRunParams["systemRunPlan"];
-  },
->(params: T, frame: NodeInvokeRequestPayload): T {
-  if (!Object.hasOwn(frame, "sessionKey")) {
-    return params;
-  }
-  const sessionKey = frame.sessionKey ?? null;
-  // The Gateway envelope owns run correlation. Nested command params are
-  // caller-controlled and must not mint or retain a different session binding.
-  const systemRunPlan =
-    params.systemRunPlan === undefined || params.systemRunPlan === null
-      ? params.systemRunPlan
-      : { ...params.systemRunPlan, sessionKey: sessionKey ?? null };
-  return {
-    ...params,
-    sessionKey,
-    ...(systemRunPlan !== undefined ? { systemRunPlan } : {}),
-  };
-}
-
 function buildEnvOverrideRejectionMessage(params: {
   rejectedOverrideBlockedKeys: string[];
   rejectedOverrideInvalidKeys: string[];
@@ -769,12 +746,11 @@ async function dispatchInvoke(
   }
   try {
     const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
-    const hasSessionKeyEnvelope = Object.hasOwn(frame, "sessionKey");
     const invokeContext =
-      context && (hasSessionKeyEnvelope || runtime.signal)
+      context && (frame.sessionKey || runtime.signal)
         ? {
             ...context,
-            ...(hasSessionKeyEnvelope ? { sessionKey: frame.sessionKey ?? undefined } : {}),
+            ...(frame.sessionKey ? { sessionKey: frame.sessionKey } : {}),
             ...(runtime.signal ? { signal: runtime.signal } : {}),
           }
         : context;
@@ -790,12 +766,9 @@ async function dispatchInvoke(
 
   if (command === "system.run.prepare") {
     try {
-      const params = bindNodeInvokeSessionKey(
-        resolveNodeSkillCwdParam(
-          decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
-          frame.nodeId,
-        ),
-        frame,
+      const params = resolveNodeSkillCwdParam(
+        decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
+        frame.nodeId,
       );
       const prepared = buildSystemRunApprovalPlan(params);
       if (!prepared.ok) {
@@ -852,9 +825,9 @@ async function dispatchInvoke(
 
   let params: SystemRunParams;
   try {
-    params = bindNodeInvokeSessionKey(
-      resolveNodeSkillCwdParam(decodeParams<SystemRunParams>(frame.paramsJSON), frame.nodeId),
-      frame,
+    params = resolveNodeSkillCwdParam(
+      decodeParams<SystemRunParams>(frame.paramsJSON),
+      frame.nodeId,
     );
   } catch (err) {
     await sendInvalidRequestResult(client, frame, err);

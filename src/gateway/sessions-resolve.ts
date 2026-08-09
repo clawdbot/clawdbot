@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Gateway sessions.resolve implementation helper.
-// Resolves key/sessionId/label selectors into one canonical session key.
+// Resolves key/sessionId/label/shortId selectors into one canonical session key.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -8,11 +8,20 @@ import {
   errorShape,
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  controlUiSessionSlug,
+  SESSION_UUID_SUFFIX_RE,
+  SHORT_SESSION_ID_RE,
+} from "../../packages/session-url-contract/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
+import type { GatewayClient } from "./server-methods/types.js";
+import { createSessionListEntryFilter } from "./session-sharing.js";
 import {
+  buildGatewaySessionInfo,
   filterAndSortSessionEntries,
   listSessionsFromStore,
   loadCombinedSessionStoreForGateway,
@@ -20,9 +29,12 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
+type SessionsResolveCandidate = { key: string; displayName?: string };
+
 export type SessionsResolveResult =
   | { ok: true; key: string }
   | { ok: true; missing: true }
+  | { ok: true; ambiguous: true; candidates: SessionsResolveCandidate[] }
   | { ok: false; error: ErrorShape };
 
 function resolveSessionVisibilityFilterOptions(p: SessionsResolveParams) {
@@ -86,6 +98,7 @@ function findVisibleSessionIdMatches(params: {
   store: Record<string, SessionEntry>;
   p: SessionsResolveParams;
   sessionId: string;
+  entryFilter?: (key: string, entry: SessionEntry) => boolean;
 }): Array<[string, SessionEntry]> {
   const now = Date.now();
   const entries = filterAndSortSessionEntries({
@@ -95,39 +108,99 @@ function findVisibleSessionIdMatches(params: {
     opts: resolveSessionVisibilityFilterOptions(params.p),
   });
   return entries.filter(
-    ([key, entry]) => entry?.sessionId === params.sessionId || key === params.sessionId,
+    ([key, entry]) =>
+      (params.entryFilter?.(key, entry) ?? true) &&
+      (entry?.sessionId === params.sessionId || key === params.sessionId),
   );
+}
+
+function normalizeShortSessionId(shortId: string): string | null {
+  return SHORT_SESSION_ID_RE.test(shortId) ? shortId.toLowerCase() : null;
+}
+
+function findVisibleShortIdMatches(params: {
+  cfg: OpenClawConfig;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  p: SessionsResolveParams;
+  shortId: string;
+  entryFilter?: (key: string, entry: SessionEntry) => boolean;
+}): SessionsResolveCandidate[] {
+  const now = Date.now();
+  const entries = filterAndSortSessionEntries({
+    cfg: params.cfg,
+    store: params.store,
+    now,
+    opts: { ...resolveSessionVisibilityFilterOptions(params.p), archived: "all" },
+  });
+  return entries.flatMap(([key, entry]) => {
+    if (params.entryFilter && !params.entryFilter(key, entry)) {
+      return [];
+    }
+    const uuid = parseAgentSessionKey(key)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
+    if (!uuid?.toLowerCase().replaceAll("-", "").startsWith(params.shortId)) {
+      return [];
+    }
+    if (resolveDeletedAgentIdFromSessionKey(params.cfg, key, entry) !== null) {
+      return [];
+    }
+    const row = buildGatewaySessionInfo({
+      cfg: params.cfg,
+      storePath: params.storePath,
+      store: params.store,
+      key,
+      entry,
+      now,
+    });
+    return [{ key, ...(row.displayName ? { displayName: row.displayName } : {}) }];
+  });
 }
 
 export async function resolveSessionKeyFromResolveParams(params: {
   cfg: OpenClawConfig;
+  client: GatewayClient | null;
   p: SessionsResolveParams;
 }): Promise<SessionsResolveResult> {
-  const { cfg, p } = params;
+  const { cfg, client, p } = params;
+  const entryFilter = createSessionListEntryFilter({ client });
 
   const key = normalizeOptionalString(p.key) ?? "";
   const hasKey = key.length > 0;
   const sessionId = normalizeOptionalString(p.sessionId) ?? "";
   const hasSessionId = sessionId.length > 0;
   const hasLabel = (normalizeOptionalString(p.label) ?? "").length > 0;
-  const selectionCount = [hasKey, hasSessionId, hasLabel].filter(Boolean).length;
+  const rawShortId = normalizeOptionalString(p.shortId) ?? "";
+  const hasShortId = rawShortId.length > 0;
+  const hasSlugHint = p.slugHint !== undefined;
+  if (hasSlugHint && !hasShortId) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "slugHint requires shortId"),
+    };
+  }
+  const selectionCount = [hasKey, hasSessionId, hasLabel, hasShortId].filter(Boolean).length;
   if (selectionCount > 1) {
     return {
       ok: false,
       error: errorShape(
         ErrorCodes.INVALID_REQUEST,
-        "Provide either key, sessionId, or label (not multiple)",
+        "Provide either key, sessionId, label, or shortId (not multiple)",
       ),
     };
   }
   if (selectionCount === 0) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "Either key, sessionId, or label is required"),
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Either key, sessionId, label, or shortId is required",
+      ),
     };
   }
 
   if (hasKey) {
+    // Exact-key lookup follows the proof-of-knowledge read semantics of get/describe/history;
+    // only discovery selectors use list visibility. Incognito keys are gated pre-dispatch.
     const target = resolveGatewaySessionStoreTargetWithStore({ cfg, key, clone: false });
     const store = target.store;
     if (store[target.canonicalKey]) {
@@ -159,7 +232,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     // sessionId can collide across stores; delegate selection so exact key
     // matches and ambiguity rules stay shared with other session-id callers.
     const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-    const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId });
+    const matches = findVisibleSessionIdMatches({ cfg, store, p, sessionId, entryFilter });
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
       return noSessionFoundResult({ p, message: `No session found: ${sessionId}` });
@@ -186,6 +259,43 @@ export async function resolveSessionKeyFromResolveParams(params: {
     return { ok: true, key: selection.sessionKey };
   }
 
+  if (hasShortId) {
+    const shortId = normalizeShortSessionId(rawShortId);
+    if (!shortId) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "shortId must be 8-32 hexadecimal characters",
+        ),
+      };
+    }
+    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
+    const matches = findVisibleShortIdMatches({
+      cfg,
+      storePath,
+      store,
+      p,
+      shortId,
+      entryFilter,
+    });
+    const slugHint = normalizeOptionalString(p.slugHint);
+    const slugMatches = slugHint
+      ? matches.filter((candidate) => controlUiSessionSlug(candidate.displayName) === slugHint)
+      : [];
+    // A stale display-name hint may narrow a tie, but it must never invalidate the id.
+    const narrowed = slugMatches.length > 0 ? slugMatches : matches;
+    if (narrowed.length === 0) {
+      return noSessionFoundResult({ p, message: `No session found: ${shortId}` });
+    }
+    if (narrowed.length > 1) {
+      // Bound the ambiguity payload; callers treat a full ten rows as possibly truncated.
+      return { ok: true, ambiguous: true, candidates: narrowed.slice(0, 10) };
+    }
+    const selected = expectDefined(narrowed[0], "short session match at 0");
+    return { ok: true, key: selected.key };
+  }
+
   const parsedLabel = parseSessionLabel(p.label);
   if (!parsedLabel.ok) {
     return {
@@ -197,6 +307,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
   const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
   const list = listSessionsFromStore({
     cfg,
+    ...(entryFilter ? { entryFilter } : {}),
     storePath,
     store,
     lightweightListRows: true,

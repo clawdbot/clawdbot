@@ -3,13 +3,20 @@ import type {
   WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
+  WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import type { AssistantMessage } from "../llm/types.js";
+import type { AssistantMessage, ProviderReplayState } from "../llm/types.js";
 
 const SIZE_FRAME_ID = "00000000-0000-4000-8000-000000000000";
+type WorkerTranscriptAssistantMessage = Extract<WorkerTranscriptMessage, { role: "assistant" }>;
+export type WorkerProviderReplayOmission = {
+  bytes: number;
+  limitBytes: number;
+  reason: "provider-replay-data-budget" | "transcript-commit-frame-budget";
+};
 
 export function cloneTextContent(part: { type: "text"; text: string; textSignature?: string }) {
   return {
@@ -23,10 +30,81 @@ export function cloneImageContent(part: { type: "image"; data: string; mimeType:
   return { type: "image" as const, data: part.data, mimeType: part.mimeType };
 }
 
+function cloneProviderReplay(state: ProviderReplayState): ProviderReplayState {
+  return {
+    v: state.v,
+    type: state.type,
+    ...(state.id === undefined ? {} : { id: state.id }),
+    data: state.data,
+    ...(state.replayIndex === undefined ? {} : { replayIndex: state.replayIndex }),
+    provider: state.provider,
+    api: state.api,
+    model: state.model,
+    ...(state.baseUrlHash === undefined ? {} : { baseUrlHash: state.baseUrlHash }),
+    ...(state.sessionHash === undefined ? {} : { sessionHash: state.sessionHash }),
+    ...(state.authProfileHash === undefined ? {} : { authProfileHash: state.authProfileHash }),
+  };
+}
+
+function workerTranscriptMessageFrameBytes(message: WorkerTranscriptMessage): number | undefined {
+  const frame: WorkerTranscriptCommitRequestFrame = {
+    type: "req",
+    id: SIZE_FRAME_ID,
+    method: "worker.transcript.commit",
+    params: {
+      runEpoch: Number.MAX_SAFE_INTEGER,
+      seq: Number.MAX_SAFE_INTEGER,
+      baseLeafId: "x".repeat(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH),
+      messages: [message],
+    },
+  };
+  try {
+    return Buffer.byteLength(JSON.stringify(frame), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+export function projectWorkerProviderReplay<
+  TMessage extends WorkerTranscriptAssistantMessage,
+>(params: {
+  message: TMessage;
+  providerReplay: ProviderReplayState | undefined;
+  onOmitted?: (omission: WorkerProviderReplayOmission) => void;
+}): TMessage {
+  if (!params.providerReplay) {
+    return params.message;
+  }
+  const dataBytes = Buffer.byteLength(params.providerReplay.data, "utf8");
+  if (dataBytes > WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES) {
+    params.onOmitted?.({
+      bytes: dataBytes,
+      limitBytes: WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
+      reason: "provider-replay-data-budget",
+    });
+    return params.message;
+  }
+  const candidate = {
+    ...params.message,
+    providerReplay: cloneProviderReplay(params.providerReplay),
+  };
+  const frameBytes = workerTranscriptMessageFrameBytes(candidate);
+  if (frameBytes === undefined || frameBytes > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
+    params.onOmitted?.({
+      bytes: frameBytes ?? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES + 1,
+      limitBytes: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+      reason: "transcript-commit-frame-budget",
+    });
+    return params.message;
+  }
+  return candidate;
+}
+
 export function cloneUsage(
   message: AssistantMessage,
+  onProviderReplayOmitted?: (omission: WorkerProviderReplayOmission) => void,
 ): WorkerTranscriptMessage & { role: "assistant" } {
-  return {
+  const projected: WorkerTranscriptAssistantMessage = {
     role: "assistant",
     content: message.content.map((part) => {
       if (part.type === "text") {
@@ -98,10 +176,18 @@ export function cloneUsage(
     ...(message.errorBody ? { errorBody: message.errorBody } : {}),
     timestamp: message.timestamp,
   };
+  return projectWorkerProviderReplay({
+    message: projected,
+    providerReplay: message.providerReplay,
+    onOmitted: onProviderReplayOmitted,
+  });
 }
 
 export function toWorkerTranscriptMessage(
   message: AgentMessage,
+  options?: {
+    onProviderReplayOmitted?: (omission: WorkerProviderReplayOmission) => void;
+  },
 ): WorkerTranscriptMessage | undefined {
   if (message.role === "user") {
     const content =
@@ -113,7 +199,7 @@ export function toWorkerTranscriptMessage(
     return { role: "user", content, timestamp: message.timestamp };
   }
   if (message.role === "assistant") {
-    return cloneUsage(message);
+    return cloneUsage(message, options?.onProviderReplayOmitted);
   }
   if (message.role === "toolResult") {
     return {
@@ -132,20 +218,6 @@ export function toWorkerTranscriptMessage(
 }
 
 export function isWorkerTranscriptMessageFrameSafe(message: WorkerTranscriptMessage): boolean {
-  const frame: WorkerTranscriptCommitRequestFrame = {
-    type: "req",
-    id: SIZE_FRAME_ID,
-    method: "worker.transcript.commit",
-    params: {
-      runEpoch: Number.MAX_SAFE_INTEGER,
-      seq: Number.MAX_SAFE_INTEGER,
-      baseLeafId: "x".repeat(WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH),
-      messages: [message],
-    },
-  };
-  try {
-    return Buffer.byteLength(JSON.stringify(frame), "utf8") <= WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
-  } catch {
-    return false;
-  }
+  const frameBytes = workerTranscriptMessageFrameBytes(message);
+  return frameBytes !== undefined && frameBytes <= WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
 }

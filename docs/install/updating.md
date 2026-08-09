@@ -263,18 +263,46 @@ Off by default. Enable it in `~/.openclaw/openclaw.json`:
 }
 ```
 
-| Channel           | Behavior                                                                                                                      |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `stable`          | Applies after a built-in delay with deterministic jitter for a spread rollout.                                                |
-| `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically. |
-| `beta`            | Checks on a built-in interval and applies immediately.                                                                        |
-| `dev`             | No automatic apply. Use `openclaw update` manually.                                                                           |
+You can also choose the update channel and enable automatic updates from
+**Settings → Updates** (`/settings/updates`) in the Control UI.
+For a `dev` git install, opening this page refreshes the tracked upstream and
+shows whether the checkout is current, ahead, diverged, unavailable, or a
+specific number of commits behind. It also shows exact and relative build,
+verified install, and last-commit times. Existing checkouts show an unknown
+install time until their next verified successful update.
+
+| Channel           | Behavior                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stable`          | After a built-in delay with deterministic jitter for a spread rollout, announces an update campaign.                                                                |
+| `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically.                                       |
+| `beta`            | Checks on a built-in interval and announces an update campaign as soon as a newer release is available.                                                             |
+| `dev`             | With `auto.enabled`, git installs check hourly. When upstream commits are available, the Gateway announces an update campaign pinned to the exact announced commit. |
+
+### Update campaigns
+
+When an automatic update is due, the campaign waits for active work to finish,
+then starts a one-minute countdown. A 15-minute hard deadline starts the update
+even if work remains, using the normal restart drain and session-recovery path.
+
+An admin can use **Hold 1 h** once to postpone the campaign and shift its hard
+deadline, or choose **Update now** from the sidebar update card or
+**Settings → Updates**. For a `dev` git install, the campaign installs the exact
+commit it announced. The displayed list previews up to five commits from that
+fixed target and does not move if upstream `main` advances during the countdown.
+
+Every failed apply ends the campaign so the UI does not remain on
+**Updating…**. Failures after a managed-service handoff starts are also recorded
+in the restart sentinel and surface after the Gateway returns; direct
+unsupervised failures remain in the running Gateway's logs.
+
+`OPENCLAW_NO_AUTO_UPDATE=1` and external-supervisor mode disable automatic
+applies entirely. Startup update hints can still run unless
+`update.checkOnStart` is also disabled.
 
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this
 read-only hint path and the existing 24-hour hint interval, but never invoke
 automatic installation, handoff, restart, stable delay/jitter, or beta polling.
-For downgrade or incident recovery, set `OPENCLAW_NO_AUTO_UPDATE=1` in the gateway environment to block automatic applies even when `update.auto.enabled` is configured. Startup update hints can still run unless `update.checkOnStart` is also disabled.
 
 Package-manager updates requested through the live Gateway control-plane
 (`update.run`) do not replace the package tree inside the running Gateway

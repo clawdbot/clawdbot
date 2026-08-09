@@ -254,6 +254,27 @@ enum CommandResolver {
         #endif
     }
 
+    static func projectNodeHostWorkerLaunch(
+        projectRoot: URL? = nil,
+        searchPaths: [String]? = nil) async throws -> MacNodeHostWorkerLaunch?
+    {
+        #if DEBUG
+        let root = projectRoot ?? self.projectRoot()
+        let sourceRunner = root.appendingPathComponent("scripts/run-node.mjs")
+        guard FileManager().isReadableFile(atPath: sourceRunner.path) else { return nil }
+        switch await self.runtimeResolution(searchPaths: searchPaths) {
+        case let .success(runtime):
+            return MacNodeHostWorkerLaunch(
+                command: [runtime.path, sourceRunner.path, "node", "worker"],
+                currentDirectoryURL: root)
+        case let .failure(error):
+            throw error
+        }
+        #else
+        return nil
+        #endif
+    }
+
     static func openclawNodeCommand(
         subcommand: String,
         extraArgs: [String] = [],

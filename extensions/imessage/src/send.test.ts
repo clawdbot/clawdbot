@@ -1755,7 +1755,7 @@ describe("sendMessageIMessage receipts", () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi
       .fn()
-      .mockResolvedValueOnce({ messageId: "p:0/media-guid", transferGuid: "transfer-1" });
+      .mockResolvedValueOnce({ messageGuid: "p:0/media-guid", transferGuid: "transfer-1" });
 
     const result = await sendMessageIMessage("chat_guid:chat-1", "", {
       config: IMESSAGE_TEST_CFG,
@@ -1765,10 +1765,20 @@ describe("sendMessageIMessage receipts", () => {
       runCliJson,
     });
     expect(result.messageId).toBe("p:0/media-guid");
+    expect(result.guid).toBe("p:0/media-guid");
     expect(result.echoText).toBeUndefined();
     expect(result.echoMedia).toEqual({ contentType: "image/png", kind: "image" });
     expect(result.receipt.primaryPlatformMessageId).toBe("p:0/media-guid");
     expect(result.receipt.platformMessageIds).toEqual(["p:0/media-guid"]);
+    expect(findLatestIMessageEntryForChat({ accountId: "default", chatGuid: "chat-1" })).toEqual(
+      expect.objectContaining({ messageId: "p:0/media-guid", isFromMe: true }),
+    );
+    expect(
+      hasPersistedIMessageEcho({
+        scope: "default:chat_guid:chat-1",
+        messageId: "p:0/media-guid",
+      }),
+    ).toBe(true);
     expect(client["request"]).not.toHaveBeenCalled();
     expect(runCliJson.mock.calls).toEqual([
       [["send-attachment", "--chat", "chat-1", "--file", "/tmp/image.png", "--transport", "auto"]],
@@ -1795,6 +1805,71 @@ describe("sendMessageIMessage receipts", () => {
       },
     ]);
     expect(result.receipt.sentAt).toBeGreaterThan(0);
+  });
+
+  it.each(["ok", "unknown"])(
+    "does not cache or expose attachment placeholder %s as a message GUID",
+    async (messageId) => {
+      const client = createClient({ guid: "should-not-send" });
+      const runCliJson = vi.fn().mockResolvedValueOnce({ success: true, messageId });
+
+      const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+        mediaUrl: "/tmp/image.png",
+        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+        runCliJson,
+      });
+
+      expect(result.messageId).toBe(messageId);
+      expect(result.guid).toBeUndefined();
+      expect(result.receipt.platformMessageIds).toEqual([]);
+      expect(
+        findLatestIMessageEntryForChat({ accountId: "default", chatGuid: "chat-1" }),
+      ).toBeUndefined();
+      expect(getClientMocks(client).request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves successful AppleScript attachment sends without a message GUID", async () => {
+    const client = createClient({ guid: "should-not-send" });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ success: true, transport: "applescript" });
+
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(result.messageId).toBe("ok");
+    expect(result.guid).toBeUndefined();
+    expect(result.receipt.platformMessageIds).toEqual([]);
+    expect(
+      findLatestIMessageEntryForChat({ accountId: "default", chatGuid: "chat-1" }),
+    ).toBeUndefined();
+    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { messageId: "ok", messageGuid: "p:0/native-guid" },
+    { message_id: 12345, messageGuid: "p:0/native-guid" },
+  ])("prefers the native attachment GUID over another bridge identifier", async (response) => {
+    const client = createClient({ guid: "should-not-send" });
+    const runCliJson = vi.fn().mockResolvedValueOnce(response);
+
+    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(result.messageId).toBe("p:0/native-guid");
+    expect(result.guid).toBe("p:0/native-guid");
+    expect(result.receipt.platformMessageIds).toEqual(["p:0/native-guid"]);
   });
 
   it.each([
@@ -1864,7 +1939,7 @@ describe("sendMessageIMessage receipts", () => {
 
   it("sends audioAsVoice media through send-attachment audio transport", async () => {
     const client = createClient({ message_id: 12345 });
-    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/voice-guid" });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageGuid: "p:0/voice-guid" });
 
     const result = await sendMessageIMessage("chat_guid:chat-1", "", {
       config: IMESSAGE_TEST_CFG,
@@ -1876,6 +1951,7 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     expect(result.messageId).toBe("p:0/voice-guid");
+    expect(result.guid).toBe("p:0/voice-guid");
     expect(runCliJson.mock.calls).toEqual([
       [
         [
@@ -1890,6 +1966,7 @@ describe("sendMessageIMessage receipts", () => {
         ],
       ],
     ]);
+    expect(result.receipt.platformMessageIds).toEqual(["p:0/voice-guid"]);
     expect(result.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
     expect(client["request"]).not.toHaveBeenCalled();
   });
@@ -2058,7 +2135,7 @@ describe("sendMessageIMessage receipts", () => {
     const runCliJson = vi
       .fn()
       .mockResolvedValueOnce({ guid: "any;+;group-guid" })
-      .mockResolvedValueOnce({ messageId: "p:0/media-guid" });
+      .mockResolvedValueOnce({ messageGuid: "p:0/media-guid" });
 
     const result = await sendMessageIMessage("chat_id:42", "", {
       config: IMESSAGE_TEST_CFG,
@@ -2171,7 +2248,7 @@ describe("sendMessageIMessage receipts", () => {
 
   it("routes DM handle media-only sends through send-attachment", async () => {
     const client = createClient({ message_id: 12345 });
-    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageGuid: "p:0/dm-media-guid" });
 
     const result = await sendMessageIMessage("+15550004567", "", {
       config: IMESSAGE_TEST_CFG,
@@ -2351,7 +2428,8 @@ describe("sendMessageIMessage receipts", () => {
 
   it("sends DM handle media captions as attachment plus follow-up text", async () => {
     const client = createClient({ guid: "p:0/caption-guid" });
-    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageGuid: "p:0/dm-media-guid" });
+    const onDeliveryResult = vi.fn();
 
     const result = await sendMessageIMessage("imessage:+15550004567", "caption", {
       config: IMESSAGE_TEST_CFG,
@@ -2359,6 +2437,7 @@ describe("sendMessageIMessage receipts", () => {
       mediaUrl: "/tmp/image.png",
       resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
       runCliJson,
+      onDeliveryResult,
     });
 
     expect(runCliJson).toHaveBeenCalledTimes(1);
@@ -2383,12 +2462,25 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.sentText).toBe("caption");
     expect(result.receipt.platformMessageIds).toEqual(["p:0/dm-media-guid", "p:0/caption-guid"]);
     expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media", "text"]);
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "p:0/dm-media-guid",
+        messageIds: ["p:0/dm-media-guid"],
+        receipt: expect.objectContaining({ platformMessageIds: ["p:0/dm-media-guid"] }),
+      }),
+    );
+    expect(
+      hasPersistedIMessageEcho({
+        scope: "default:imessage:+15550004567",
+        messageId: "p:0/dm-media-guid",
+      }),
+    ).toBe(true);
   });
 
   it("does not persist caption text when the caption follow-up send fails", async () => {
     const captionError = new Error("caption failed");
     const client = createRejectingClient(captionError);
-    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageGuid: "p:0/dm-media-guid" });
     const onDeliveryResult = vi.fn();
 
     let observedError: unknown;
@@ -2660,7 +2752,27 @@ describe("sendMessageIMessage receipts", () => {
       dbPath: "/Users/me/Library/Messages/chat.db",
       messageId: "12345",
     });
+    expect(findLatestIMessageEntryForChat({ accountId: "default", chatId: 42 })).toEqual(
+      expect.objectContaining({ messageId: "12345", isFromMe: true }),
+    );
   });
+
+  it.each(["ok", "unknown"])(
+    "does not cache or expose RPC placeholder %s as a message GUID",
+    async (messageId) => {
+      const client = createClient({ messageId, status: "sent" });
+
+      const result = await sendMessageIMessage("chat_id:42", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+      });
+
+      expect(result.messageId).toBe(messageId);
+      expect(result.guid).toBeUndefined();
+      expect(result.receipt.platformMessageIds).toEqual([]);
+      expect(findLatestIMessageEntryForChat({ accountId: "default", chatId: 42 })).toBeUndefined();
+    },
+  );
 
   it("does not resolve chat.db GUIDs when the bridge already returned a GUID", async () => {
     const client = createClient({ guid: "p:0/native-guid" });
@@ -2943,8 +3055,16 @@ describe("sendMessageIMessage receipts", () => {
     expect(resolveSentMessageGuidImpl).toHaveBeenCalled();
   });
 
-  it("recovers a GUID for approval prompts when rpc send returns only sent status", async () => {
-    const client = createClient({ status: "sent" });
+  it.each([
+    { response: { status: "sent" }, messageId: "ok", label: "sent status" },
+    { response: { messageId: "ok", status: "sent" }, messageId: "ok", label: "ok placeholder" },
+    {
+      response: { messageId: "unknown", status: "sent" },
+      messageId: "unknown",
+      label: "unknown placeholder",
+    },
+  ])("recovers approval tapback GUIDs when RPC returns $label", async ({ response, messageId }) => {
+    const client = createClient(response);
     const resolveSentMessageGuidImpl = vi.fn(async () => "p:0/recovered-guid");
     const approvalText = createApprovalText();
 
@@ -2956,7 +3076,7 @@ describe("sendMessageIMessage receipts", () => {
       resolveSentMessageGuidImpl,
     });
 
-    expect(result.messageId).toBe("ok");
+    expect(result.messageId).toBe(messageId);
     expect(result.guid).toBe("p:0/recovered-guid");
     await expect(
       resolveIMessageApprovalReactionTargetWithPersistence({

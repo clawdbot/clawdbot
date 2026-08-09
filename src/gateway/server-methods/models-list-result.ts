@@ -1,6 +1,7 @@
 // Model list result building resolves visible model catalogs for an agent and
 // strips runtime-only provider params before sending the browse API payload.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
@@ -77,10 +78,6 @@ let loggedSlowModelsListCatalog = false;
 function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
   const view = params.view;
   return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
-}
-
-function resolvePositiveSafeInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 // Project explicitly onto the public protocol shape. Concrete route, base URL,

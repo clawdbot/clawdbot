@@ -19,7 +19,7 @@
    the row's 8px inline inset bleeds left into the avatar gutter (never right,
    which could overflow the thread on narrow panes) so the hover pill keeps
    its inset without indenting the icon/label. Child combinator keeps shells
-   nested in .chat-activity-group__body on the boxed 12px inset. */
+   nested in .chat-activity-group__body on the group's indented rail. */
 .chat-group-messages > .chat-bubble--tool-shell .chat-tool-msg-summary {
   width: calc(100% + 8px);
   margin-left: -8px;
@@ -1078,33 +1078,15 @@
   flex-shrink: 0;
 }
 
-/* Rows live in one bordered card with hairline separators. */
+/* Rows form a flat indented list below the summary. The rail marks the group
+   extent while shared row hover pills remain free of per-row chrome. */
 .chat-activity-group__body {
   display: flex;
   flex-direction: column;
-  gap: 0;
-  margin: 4px 0 0 2px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: var(--radius-md, 10px);
-  background: color-mix(in srgb, var(--card, var(--bg)) 55%, transparent);
-  overflow: hidden;
-}
-
-.chat-activity-group__body > .chat-bubble {
-  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
-}
-
-.chat-activity-group__body > .chat-bubble:first-child {
-  border-top: 0;
-}
-
-.chat-activity-group__body .chat-tool-msg-summary {
-  padding: 7px 12px;
-  border-radius: 0;
-}
-
-.chat-activity-group__body .chat-tool-msg-body {
-  padding: 0 12px 10px 12px;
+  gap: 2px;
+  margin: 4px 0 0 10px;
+  padding-left: 10px;
+  border-left: 2px solid color-mix(in srgb, var(--border) 82%, transparent);
 }
 
 /* Completed-turn work rollup: slim "Worked for X" disclosure standing in for

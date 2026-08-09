@@ -22,7 +22,6 @@ import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
-import { inheritToolExecutionAttribution } from "./agent-tools.before-tool-call.attribution.js";
 import {
   type HookContext,
   isToolWrappedWithBeforeToolCallHook,
@@ -58,7 +57,8 @@ import {
   createConversationsSendTool,
   createConversationsTurnTool,
 } from "./tools/conversation-tools.js";
-import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
+import { createCronTool } from "./tools/cron-tool.js";
+import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
@@ -136,7 +136,10 @@ export function createOpenClawTools(
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
     /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
-    cronCreatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
+    cronCreatorToolAllowlist?: CronToolOptions["creatorToolAllowlist"];
+    cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];
+    resolveCronCreatorToolAuthority?: CronToolOptions["resolveCreatorToolAuthority"];
+    cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
     /** Current channel ID for auto-threading. */
     currentChannelId?: string;
     /** Trusted normalized conversation kind for the active inbound turn. */
@@ -453,7 +456,6 @@ export function createOpenClawTools(
       allowlist: explicitFactoryAllowlist,
       denylist: explicitFactoryDenylist,
     });
-  const includeSubagentSpawnTool = !embedded || options?.allowGatewaySubagentBinding === true;
   const effectiveCallGateway = embedded ? createEmbeddedCallGateway() : callGateway;
   const includeUpdatePlanTool = shouldIncludeUpdatePlanToolForOpenClawTools({
     config: resolvedConfig,
@@ -486,9 +488,7 @@ export function createOpenClawTools(
                 }),
               ]),
           createCronTool({
-            // attempt-tool-base-prepare preserves the durable store key as runSessionKey.
-            // Cron bindings, wakes, and reminder history need that transcript owner; a
-            // policy-scoped DM key can be empty and cleanup-retired, leaving jobs dangling.
+            // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentAccountId: gatewayCallerAccountId,
             currentDeliveryContext: {
@@ -498,10 +498,11 @@ export function createOpenClawTools(
               threadId: options?.currentThreadTs ?? options?.agentThreadId,
             },
             creatorToolAllowlist: options?.cronCreatorToolAllowlist,
+            creatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
+            resolveCreatorToolAuthority: options?.resolveCronCreatorToolAuthority,
+            creatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
             runId: options?.runId,
-            ...(options?.cronSelfRemoveOnlyJobId
-              ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
-              : {}),
+            selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
           createSessionsTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -655,7 +656,7 @@ export function createOpenClawTools(
             config: resolvedConfig,
           }),
         ]),
-    ...(includeSubagentSpawnTool
+    ...(!embedded || options?.allowGatewaySubagentBinding === true
       ? [
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,
@@ -755,10 +756,10 @@ export function createOpenClawTools(
     ...(options?.currentChannelId ? { channelId: options.currentChannelId } : {}),
     loopDetection: resolveToolLoopDetectionConfig({ cfg: resolvedConfig, agentId: hookAgentId }),
   };
-  const hookContext = inheritToolExecutionAttribution(options?.beforeToolCallHookContext, {
+  const hookContext = {
     ...defaultHookContext,
     ...options?.beforeToolCallHookContext,
-  });
+  };
   options?.recordToolPrepStage?.("openclaw-tools:tool-hooks");
   return allTools
     .map((tool) =>

@@ -21,7 +21,6 @@ const composerTextareaResizeObservers = new WeakMap<
   HTMLTextAreaElement,
   ComposerTextareaResizeObserverState
 >();
-const questionDockResizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
 
 function updateTextareaOverflow(el: HTMLTextAreaElement) {
   el.style.overflowY = el.scrollHeight > el.clientHeight ? "auto" : "hidden";
@@ -77,29 +76,6 @@ export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
   if (state.adjustmentFrame !== null) {
     cancelAnimationFrame(state.adjustmentFrame);
   }
-}
-
-function syncQuestionDockHeight(el: HTMLElement): void {
-  el.closest<HTMLElement>(".chat")?.style.setProperty(
-    "--chat-question-dock-height",
-    `${el.offsetHeight}px`,
-  );
-}
-
-export function observeQuestionDock(el: HTMLElement): void {
-  syncQuestionDockHeight(el);
-  if (typeof ResizeObserver !== "function" || questionDockResizeObservers.has(el)) {
-    return;
-  }
-  const observer = new ResizeObserver(() => syncQuestionDockHeight(el));
-  observer.observe(el);
-  questionDockResizeObservers.set(el, observer);
-}
-
-export function disconnectQuestionDock(el: HTMLElement): void {
-  questionDockResizeObservers.get(el)?.disconnect();
-  questionDockResizeObservers.delete(el);
-  el.closest<HTMLElement>(".chat")?.style.removeProperty("--chat-question-dock-height");
 }
 
 export function scheduleTextareaHeightAdjustment(el: HTMLTextAreaElement) {

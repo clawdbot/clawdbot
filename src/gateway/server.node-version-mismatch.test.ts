@@ -2,7 +2,11 @@
 // gateway accepts matching node hosts and rejects incompatible local runtimes.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+import {
+  approveNodePairing,
+  listNodePairing,
+  requestNodePairing,
+} from "../infra/device-pairing-node.js";
 import { configureNodeHost } from "../node-host/config.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../version.js";

@@ -273,56 +273,6 @@ class InvokeDispatcherTest {
     }
 
   @Test
-  fun handleInvoke_preservesGatewaySessionEnvelopeInsideHandlers() =
-    runTest {
-      val talk = InvokeDispatcherFakeTalkHandler()
-      val dispatcher = newDispatcher(talkHandler = talk)
-
-      dispatcher.handleInvoke(
-        GatewaySession.InvokeRequest(
-          id = "attributed",
-          nodeId = "node-1",
-          command = OpenClawTalkCommand.PttOnce.rawValue,
-          paramsJson = null,
-          timeoutMs = null,
-          sessionKey = "agent:main:main",
-          hasSessionKeyEnvelope = true,
-        ),
-      )
-      dispatcher.handleInvoke(
-        GatewaySession.InvokeRequest(
-          id = "cleared",
-          nodeId = "node-1",
-          command = OpenClawTalkCommand.PttOnce.rawValue,
-          paramsJson = null,
-          timeoutMs = null,
-          sessionKey = null,
-          hasSessionKeyEnvelope = true,
-        ),
-      )
-      dispatcher.handleInvoke(
-        GatewaySession.InvokeRequest(
-          id = "legacy",
-          nodeId = "node-1",
-          command = OpenClawTalkCommand.PttOnce.rawValue,
-          paramsJson = null,
-          timeoutMs = null,
-          sessionKey = null,
-          hasSessionKeyEnvelope = false,
-        ),
-      )
-
-      assertEquals(
-        listOf(
-          NodeInvokeSessionKeyEnvelope.Authoritative("agent:main:main"),
-          NodeInvokeSessionKeyEnvelope.Authoritative(null),
-          NodeInvokeSessionKeyEnvelope.Legacy,
-        ),
-        talk.sessionKeyEnvelopes,
-      )
-    }
-
-  @Test
   fun handleInvoke_blocksTalkOnceButLeavesPttStartToRuntimeStateGateWhenBackgrounded() =
     runTest {
       val talk = InvokeDispatcherFakeTalkHandler()
@@ -507,30 +457,24 @@ private class InvokeDispatcherFakeSystemNotificationPoster : SystemNotificationP
 
 private class InvokeDispatcherFakeTalkHandler : TalkHandler {
   val calls = mutableListOf<String>()
-  val sessionKeyEnvelopes = mutableListOf<NodeInvokeSessionKeyEnvelope>()
-
-  private suspend fun record(call: String) {
-    calls.add(call)
-    sessionKeyEnvelopes.add(currentNodeInvokeSessionKeyEnvelope())
-  }
 
   override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult {
-    record("start")
+    calls.add("start")
     return GatewaySession.InvokeResult.ok("""{"captureId":"start"}""")
   }
 
   override suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult {
-    record("stop")
+    calls.add("stop")
     return GatewaySession.InvokeResult.ok("""{"status":"stop"}""")
   }
 
   override suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult {
-    record("cancel")
+    calls.add("cancel")
     return GatewaySession.InvokeResult.ok("""{"status":"cancel"}""")
   }
 
   override suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult {
-    record("once")
+    calls.add("once")
     return GatewaySession.InvokeResult.ok("""{"status":"once"}""")
   }
 }

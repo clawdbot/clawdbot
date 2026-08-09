@@ -15,7 +15,7 @@ import {
   hasLegacyAccountStreamingAliases,
   normalizeChannelAccounts,
   stripRetiredChannelKeys,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 const RETIRED_TUNING_KEYS = new Set([
@@ -33,11 +33,6 @@ const streamingAliasMigration = defineChannelAliasMigration({
     // Runtime mode resolution dropped legacy streamMode reads; the doctor
     // resolver keeps them so migration preserves configured intent.
     defaultMode: "off",
-    // Discord previews default to progress only while `streaming` is absent;
-    // any present object (even without mode) resolves off, so migration pins
-    // progress when delivery-only aliases create the object with no root
-    // streaming object to inherit from.
-    absentObjectDefault: "progress",
     includePreviewChunk: true,
   },
   // Discord's account merge replaces the root streaming object wholesale

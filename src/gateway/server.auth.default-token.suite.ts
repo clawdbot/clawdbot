@@ -216,7 +216,6 @@ export function registerDefaultAuthTokenSuite(): void {
         {
           env: {
             OPENCLAW_VERSION: " ",
-            OPENCLAW_SERVICE_VERSION: "2.4.6-service",
             npm_package_version: "1.0.0-package",
           },
           expectedVersion: VERSION,
@@ -224,7 +223,6 @@ export function registerDefaultAuthTokenSuite(): void {
         {
           env: {
             OPENCLAW_VERSION: "9.9.9-cli",
-            OPENCLAW_SERVICE_VERSION: "2.4.6-service",
             npm_package_version: "1.0.0-package",
           },
           expectedVersion: "9.9.9-cli",
@@ -232,7 +230,6 @@ export function registerDefaultAuthTokenSuite(): void {
         {
           env: {
             OPENCLAW_VERSION: " ",
-            OPENCLAW_SERVICE_VERSION: "\t",
             npm_package_version: "1.0.0-package",
           },
           expectedVersion: VERSION,
@@ -502,7 +499,7 @@ export function registerDefaultAuthTokenSuite(): void {
       ws.close();
     });
 
-    test("allows authenticated previous-protocol nodes to register for maintenance", async () => {
+    test("retains authenticated previous-protocol node-host maintenance commands", async () => {
       const nodeWs = await openWs(port);
       const operatorWs = await openWs(port);
       try {
@@ -511,23 +508,35 @@ export function registerDefaultAuthTokenSuite(): void {
           minProtocol: MIN_NODE_PROTOCOL_VERSION,
           maxProtocol: MIN_NODE_PROTOCOL_VERSION,
           role: "node",
-          client: { ...NODE_CLIENT, version: legacyVersion },
+          client: { ...NODE_CLIENT, version: legacyVersion, platform: "linux" },
+          caps: ["system"],
+          commands: ["system.which"],
         });
         expect(nodeRes.ok).toBe(true);
 
         const operatorRes = await connectReq(operatorWs);
         expect(operatorRes.ok).toBe(true);
-        const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean; version?: string }> }>(
-          operatorWs,
-          "node.list",
-          {},
+        type LegacyNodeStatus = {
+          commands?: string[];
+          connected?: boolean;
+          deviceFamily?: string;
+          pendingDeclaredCommands?: string[];
+          pendingRequestId?: string;
+          platform?: string;
+          version?: string;
+        };
+        const pendingList = await rpcReq<{
+          nodes?: LegacyNodeStatus[];
+        }>(operatorWs, "node.list", {});
+        const pendingNode = pendingList.payload?.nodes?.find(
+          (node) => node.connected === true && node.version === legacyVersion,
         );
-        expect(listRes.ok).toBe(true);
-        expect(
-          listRes.payload?.nodes?.some(
-            (node) => node.connected === true && node.version === legacyVersion,
-          ),
-        ).toBe(true);
+        expect(pendingNode).toMatchObject({
+          deviceFamily: "Linux",
+          pendingDeclaredCommands: ["system.which"],
+          platform: "linux",
+        });
+        expect(pendingNode?.pendingRequestId).toBeTypeOf("string");
       } finally {
         nodeWs.close();
         operatorWs.close();

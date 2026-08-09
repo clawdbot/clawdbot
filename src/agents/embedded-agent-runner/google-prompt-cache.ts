@@ -16,7 +16,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
-import { readResponseWithLimit } from "../../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../../infra/http-body.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { Model } from "../../llm/types.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -284,12 +284,6 @@ function buildManagedContextForCachedContent(context: GooglePromptCacheContext) 
     systemPrompt: undefined,
     tools: undefined,
   };
-}
-
-async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
-  if (response && !response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 /**

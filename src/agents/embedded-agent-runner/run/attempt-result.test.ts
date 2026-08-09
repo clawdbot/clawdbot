@@ -14,7 +14,7 @@ function completeResult(params?: {
     toolName: string;
     meta?: string;
     replaySafe?: boolean;
-    isError?: true;
+    isError?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -97,6 +97,7 @@ describe("attempt result projection", () => {
       completeResult({
         toolMetas: [
           { toolName: "", replaySafe: true },
+          { toolName: "read", isError: false },
           {
             toolName: "exec",
             meta: "done",
@@ -109,6 +110,12 @@ describe("attempt result projection", () => {
         ],
       }).toolMetas,
     ).toEqual([
+      {
+        toolName: "read",
+        meta: undefined,
+        replaySafe: false,
+        isError: false,
+      },
       {
         toolName: "exec",
         meta: "done",

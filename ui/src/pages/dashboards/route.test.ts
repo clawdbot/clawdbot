@@ -14,6 +14,13 @@ const loaderOptions: RouteLoaderOptions = {
   cause: "navigation",
 };
 
+async function loadDashboards(
+  context: ApplicationContext,
+  options: RouteLoaderOptions,
+): Promise<Awaited<ReturnType<NonNullable<typeof page.loader>>>> {
+  return await Promise.resolve(page.loader!(context, options));
+}
+
 describe("dashboards route", () => {
   it("requests the dashboard face from the server before pagination", async () => {
     const list = vi.fn(async () => null);
@@ -28,7 +35,7 @@ describe("dashboards route", () => {
       throw new Error("dashboards route has no loader");
     }
 
-    await page.loader(context, loaderOptions);
+    await loadDashboards(context, loaderOptions);
 
     expect(list).toHaveBeenCalledWith({
       limit: 50,

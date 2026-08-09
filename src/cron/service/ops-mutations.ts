@@ -15,7 +15,7 @@ import { deleteCronJobScratch } from "../scratch-store.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../types.js";
 import { cronPatchTouchesDeliveryResolution } from "./jobs-validation.js";
 import {
   applyJobPatch,
@@ -43,6 +43,7 @@ import {
   ensureLoaded,
   persist,
   persistOrRestore,
+  runPostPersistCronNotifications,
   snapshotStoreForRollback,
   type CronRollbackSnapshot,
   warnIfDisabled,
@@ -200,13 +201,14 @@ async function persistUpdatedJob(params: {
   });
 }
 
-function declarativeFields(job: CronJob, includeEnabled: boolean) {
+function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
   return {
     schedule: job.schedule,
     pacing: job.pacing,
     trigger: job.trigger,
     payload: job.payload,
     scheduledToolPolicy: job.scheduledToolPolicy,
+    toolsAllowProvenance: job.toolsAllowProvenance,
     delivery: job.delivery,
     displayName: job.displayName,
     ...(includeEnabled ? { enabled: job.enabled } : {}),
@@ -264,6 +266,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         nowMs: now,
         cronConfig: state.deps.cronConfig,
         scheduledToolPolicy: opts?.scheduledToolPolicy,
+        toolsAllowProvenance: opts?.toolsAllowProvenance,
         configuredChannels,
       });
       const includeEnabled = opts?.enabledExplicit === true;
@@ -273,6 +276,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
           declarativeFields(nextJob, includeEnabled),
         )
       ) {
+        opts?.commitGuard?.();
         return { ...existing, created: false, updated: false, job: existing };
       }
       const snapshot = snapshotStoreForRollback(state);
@@ -283,6 +287,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         schedulingInputsRequested: true,
         scheduleChanged: !isDeepStrictEqual(existing.schedule, nextJob.schedule),
       });
+      opts?.commitGuard?.();
       await persistUpdatedJob({ state, snapshot, previousJob: existing, nextJob });
       return { ...nextJob, created: false, updated: true, job: nextJob };
     }
@@ -293,8 +298,10 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
     const snapshot = snapshotStoreForRollback(state);
     const job = createJob(state, normalizedInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
+      toolsAllowProvenance: opts?.toolsAllowProvenance,
       configuredChannels,
     });
+    opts?.commitGuard?.();
     state.store?.jobs.push(job);
 
     // Mutation notifications describe durable state, so publish them only
@@ -370,16 +377,17 @@ export async function updateLoadedJob(params: {
     );
   }
   const now = state.deps.nowMs();
-  await precondition?.(structuredClone(job), now);
-  const nextJob = structuredClone(job);
   const configuredChannels = cronPatchTouchesDeliveryResolution(patch)
     ? await resolveConfiguredChannelsForValidation(state)
     : undefined;
+  await precondition?.(structuredClone(job), now);
+  const nextJob = structuredClone(job);
   applyJobPatch(nextJob, patch, {
     defaultAgentId: state.deps.defaultAgentId,
     scheduleValidationNowMs: now,
     cronConfig: state.deps.cronConfig,
     scheduledToolPolicy: opts?.scheduledToolPolicy,
+    toolsAllowProvenance: opts?.toolsAllowProvenance,
     configuredChannels,
   });
   if (patch.agentId !== undefined) {
@@ -399,6 +407,7 @@ export async function updateLoadedJob(params: {
       "pacing" in patch,
     scheduleChanged: patch.schedule !== undefined,
   });
+  opts?.commitGuard?.();
   await persistUpdatedJob({ state, snapshot, previousJob: job, nextJob });
   return nextJob;
 }
@@ -514,9 +523,7 @@ export async function removeAgentJobsTransactional<T>(
     } catch (error) {
       if (error instanceof AgentDeletionCommitUncertainError) {
         // Uncertain roster writes intentionally keep the cron deletion durable.
-        for (const notify of postPersistNotifications) {
-          notify();
-        }
+        runPostPersistCronNotifications(state, postPersistNotifications);
         armTimer(state);
         for (const job of removedJobs) {
           noteActiveCronJobRemoval(job.id);
@@ -540,9 +547,7 @@ export async function removeAgentJobsTransactional<T>(
       }
       throw error;
     }
-    for (const notify of postPersistNotifications) {
-      notify();
-    }
+    runPostPersistCronNotifications(state, postPersistNotifications);
     for (const job of removedJobs) {
       noteActiveCronJobRemoval(job.id);
       try {

@@ -42,6 +42,7 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/gateway/gateway-cli-backend.live.test.ts", ["OPENCLAW_LIVE_CLI_BACKEND"]],
   ["src/gateway/gateway-codex-bind.live.test.ts", ["OPENCLAW_LIVE_CODEX_BIND"]],
   ["src/gateway/gateway-codex-harness.live.test.ts", ["OPENCLAW_LIVE_CODEX_HARNESS"]],
+  ["src/gateway/gateway-openai-long-context.live.test.ts", ["OPENCLAW_LIVE_OPENAI_LONG_CONTEXT"]],
   ["src/gateway/gateway-trajectory-export.live.test.ts", ["OPENCLAW_LIVE_CODEX_HARNESS"]],
   ["src/infra/push-apns-http2.live.test.ts", ["OPENCLAW_LIVE_APNS_REACHABILITY"]],
   ["test/image-generation.infer-cli.live.test.ts", ["OPENCLAW_LIVE_INFER_CLI_TEST"]],
@@ -218,7 +219,10 @@ function isGatewayBackendLiveTest(file) {
 }
 
 function isGatewayProfilesLiveTest(file) {
-  return file === "src/gateway/gateway-models.profiles.live.test.ts";
+  return (
+    file === "src/gateway/gateway-models.profiles.live.test.ts" ||
+    file === "src/gateway/gateway-openai-long-context.live.test.ts"
+  );
 }
 
 function isExtensionMediaLiveTest(file) {

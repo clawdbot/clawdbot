@@ -270,11 +270,6 @@ export function renderRecentSession(params: {
       @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
       @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
     >
-      ${session.visibility === "draft"
-        ? html`<span class="session-row-draft-indicator" title=${t("chat.sessionSharing.draft")}
-            >👻</span
-          >`
-        : nothing}
       <a
         href=${session.href}
         class="sidebar-recent-session__link"
@@ -284,9 +279,14 @@ export function renderRecentSession(params: {
         aria-describedby=${[stateId, metaId].filter(Boolean).join(" ") || nothing}
         @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}
       >
-        ${leadingIndicator === nothing
-          ? nothing
-          : html`<span class="sidebar-session-indicator">${leadingIndicator}</span>`}
+        <span class="sidebar-session-indicator"
+          >${leadingIndicator}
+          ${session.visibility === "draft"
+            ? html`<span class="session-row-draft-indicator" title=${t("chat.sessionSharing.draft")}
+                >👻</span
+              >`
+            : nothing}</span
+        >
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee"
             >${session.archived

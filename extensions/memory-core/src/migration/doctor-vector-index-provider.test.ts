@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor";
+import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, describe, expect, it } from "vitest";
 import { vectorIndexProviderDiagnostic } from "./doctor-vector-index-provider.js";
 import { vectorIndexProviderDiagnosticTesting } from "./doctor-vector-index-provider.test-support.js";

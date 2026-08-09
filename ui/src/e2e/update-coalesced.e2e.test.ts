@@ -155,8 +155,8 @@ suite.define(() => {
     },
     {
       artifactName: "disconnect-first",
-      expectedStatusRequests: 0,
-      expectedText: "The update request may have been accepted",
+      expectedStatusRequests: 2,
+      expectedText: "Expected v2.0.0, running v1.0.0",
       name: "when disconnect arrives before the response",
       responseFirst: false,
     },

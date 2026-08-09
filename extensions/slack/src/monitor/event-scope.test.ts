@@ -17,10 +17,7 @@ describe("resolveSlackEventScope", () => {
     expect(result).toMatchObject({
       ok: true,
       scope: {
-        apiAppId: "A123",
-        enterpriseId: "E123",
         teamId,
-        isEnterpriseInstall: true,
         client: listenerClient,
       },
     });
@@ -39,10 +36,7 @@ describe("resolveSlackEventScope", () => {
     expect(result).toMatchObject({
       ok: true,
       scope: {
-        apiAppId: "A123",
-        enterpriseId: "E123",
         teamId: "T111",
-        isEnterpriseInstall: true,
         client,
       },
     });

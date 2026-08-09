@@ -40,6 +40,38 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
     ).toBe("operator.admin");
   });
 
+  it("scopes sessions.patchMany from the shared patch only", () => {
+    expect(
+      resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
+        targets: [
+          {
+            key: "agent:main:thread",
+            agentId: "main",
+            expectedSessionId: "session-1",
+            expectedLifecycleRevision: "revision-1",
+          },
+        ],
+        patch: { label: "Renamed", archived: true, unread: false },
+      }),
+    ).toBe("operator.write");
+    for (const patch of [
+      { statusNote: "Working" },
+      { thinkingLevel: "high" },
+      { futureField: true },
+    ]) {
+      expect(
+        resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {
+          targets: [{ key: "agent:main:thread" }],
+          patch,
+        }),
+      ).toBe("operator.admin");
+    }
+    expect(resolveDynamicSessionMutationRequiredScope("sessions.patchMany")).toBe("operator.write");
+    expect(resolveDynamicSessionMutationRequiredScope("sessions.patchMany", {})).toBe(
+      "operator.write",
+    );
+  });
+
   it("allows write-scoped deletion only for safe archived-only requests", () => {
     expect(
       resolveDynamicSessionMutationRequiredScope("sessions.delete", {

@@ -2105,6 +2105,7 @@ describe("sqlite session normalization", () => {
       reason: "manual",
       tokensBefore: 42,
       tokensAfter: 84,
+      tokensVersion: 1,
       preCompaction: {
         sessionId: "pre-compaction-session",
         leafId: "pre-msg",
@@ -2172,6 +2173,7 @@ describe("sqlite session normalization", () => {
         parentSessionKey: sourceEntryScope.sessionKey,
         totalTokens: 42,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       }),
     );
     expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
@@ -2205,6 +2207,7 @@ describe("sqlite session normalization", () => {
       reason: "manual",
       tokensBefore: 100,
       tokensAfter: 25,
+      tokensVersion: 1,
       preCompaction: {
         sessionId: "missing-pre-session",
         leafId: "missing-pre-msg",
@@ -2249,6 +2252,7 @@ describe("sqlite session normalization", () => {
       expect.objectContaining({ id: "post-msg", type: "message" }),
     ]);
     expect(result.entry.totalTokens).toBe(25);
+    expect(result.entry.totalTokensVersion).toBe(1);
   });
 
   it("restores a checkpoint by copying SQLite rows and replacing the entry transactionally", async () => {
@@ -2278,6 +2282,7 @@ describe("sqlite session normalization", () => {
       reason: "manual",
       tokensBefore: 12,
       tokensAfter: 24,
+      tokensVersion: 1,
       preCompaction: {
         sessionId: "pre-compaction-session",
         leafId: "pre-msg",
@@ -2326,6 +2331,7 @@ describe("sqlite session normalization", () => {
         compactionCheckpoints: [checkpoint],
         totalTokens: 12,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       }),
     );
     await expect(loadSqliteTranscriptEvents(restoredScope)).resolves.toEqual([

@@ -1385,7 +1385,7 @@ describe("reconcileSkillsAgentId", () => {
     reconcileSkillsAgentId(state, {
       defaultId: "main",
       mainKey: "main",
-      scope: "project",
+      scope: "per-sender",
       agents: [{ id: "main" }],
     });
 

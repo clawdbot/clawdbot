@@ -336,11 +336,15 @@ enum CLIInstaller {
             prefix: prefix,
             scriptPath: installerURL.path,
             compatibleWith: target.requiresExactVersion ? nil : appVersion)
-        let response = await ShellExecutor.runDetailed(
+        let response = await ShellExecutor.runStreamingDetailed(
             command: cmd,
             cwd: nil,
             env: nil,
             timeout: self.installWatchdogTimeout(for: target))
+        { line in
+            guard let status = self.installStatus(forEventLine: line) else { return }
+            await statusHandler(status)
+        }
 
         if response.success {
             let expectedVersion = target.requiresExactVersion ? GatewayEnvironment.appVersionString() : nil
@@ -370,8 +374,7 @@ enum CLIInstaller {
             return true
         }
 
-        let parsed = self.parseInstallEvents(response.stdout)
-        if let error = parsed.last(where: { $0.event == "error" })?.message {
+        if let error = self.installErrorMessage(from: response.stdout) {
             await statusHandler("Install failed: \(error)")
             return false
         }
@@ -593,6 +596,37 @@ enum CLIInstaller {
         return events
     }
 
+    nonisolated static func installStatus(forEventLine line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let event = try? JSONDecoder().decode(InstallEvent.self, from: data),
+              event.event == "step",
+              let name = event.name,
+              let status = event.status
+        else {
+            return nil
+        }
+
+        return switch (name, status) {
+        case ("disk-space", "start"): "Checking available disk space…"
+        case ("node", "start"): "Installing Node.js runtime…"
+        case ("git-tools", "start"): "Preparing Git and pnpm…"
+        case ("git-clone", "start"): "Downloading OpenClaw source…"
+        case ("git-update", "start"): "Updating OpenClaw source…"
+        case ("dependencies", "start"): "Installing dependencies…"
+        case ("control-ui", "start"): "Building interface…"
+        case ("cli-build", "start"): "Building OpenClaw CLI…"
+        case ("openclaw", "retry"): "Retrying OpenClaw CLI install…"
+        case ("disk-space", "warn"): "Couldn’t verify free disk space; continuing…"
+        case ("git-update", "warn"): "Using the existing modified OpenClaw source…"
+        case ("control-ui", "warn"): "Interface build did not finish; continuing…"
+        default: nil
+        }
+    }
+
+    static func installErrorMessage(from output: String) -> String? {
+        self.parseInstallEvents(output).last(where: { $0.event == "error" })?.message
+    }
+
     static func parseManagedUpdateSummary(_ output: String) -> ManagedCLIUpdateSummary? {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -627,6 +661,8 @@ enum CLIInstaller {
 
 private struct InstallEvent: Decodable {
     let event: String
+    let name: String?
+    let status: String?
     let version: String?
     let message: String?
 }

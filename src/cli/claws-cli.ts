@@ -33,7 +33,7 @@ export type ClawsRemoveOptions = {
   forceReferenced?: boolean;
   json?: boolean;
 };
-export type ClawsExportOptions = { out: string; json?: boolean };
+export type ClawsExportOptions = { out: string; bootstrap?: string; json?: boolean };
 
 function collectOption(value: string, previous: string[]): string[] {
   return [...previous, value];
@@ -128,6 +128,7 @@ export function registerClawsCli(program: Command) {
     .description("Export portable state for one installed Claw agent")
     .argument("<agent>", "Final id of the installed Claw agent")
     .requiredOption("--out <path>", "New package directory to create")
+    .option("--bootstrap <path>", "Reviewed Markdown file to export as package BOOTSTRAP.md")
     .option("--json", "Print JSON", false)
     .action(async (agent: string, opts: ClawsExportOptions) => {
       const { runClawsExportCommand } = await import("./claws-cli.runtime.js");

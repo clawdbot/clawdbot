@@ -72,7 +72,7 @@ async function captureUiProof(targetPage: Page, fileName: string) {
 }
 
 async function openSidebarSortMenu(targetPage: Page) {
-  const sortThreads = targetPage.getByRole("button", { name: "Sort threads" });
+  const sortThreads = targetPage.getByRole("button", { name: "Sort sessions" });
   await expect.poll(() => sortThreads.count(), { timeout: 2_000 }).toBe(1);
   await sortThreads.locator("..").hover();
   await sortThreads.click();
@@ -187,7 +187,7 @@ suite.define(() => {
 
     const threads = currentPage.locator('[data-session-section="ungrouped"]');
     await expect.poll(() => threads.count(), { timeout: 2_000 }).toBe(1);
-    const sortThreads = threads.getByRole("button", { name: "Sort threads" });
+    const sortThreads = threads.getByRole("button", { name: "Sort sessions" });
     await sortThreads.focus();
     await currentPage.keyboard.press("Enter");
 
@@ -201,7 +201,7 @@ suite.define(() => {
       .toBe(0);
     await expect.poll(() => threads.locator(".sidebar-recent-session").count()).toBe(2);
 
-    const newThread = threads.getByRole("button", { name: "New thread" });
+    const newThread = threads.getByRole("button", { name: "New session" });
     await newThread.focus();
     await currentPage.keyboard.press("Enter");
     await expect.poll(() => new URL(currentPage.url()).pathname).toBe("/new");
@@ -274,7 +274,7 @@ suite.define(() => {
     await draftToggle.check();
     await currentPage.locator(".new-session-page__message").fill("work privately first");
     await captureUiProof(currentPage, "03-create-draft-selected.png");
-    await currentPage.getByRole("button", { name: "Start thread" }).click();
+    await currentPage.getByRole("button", { name: "Start session" }).click();
 
     const create = await gateway.waitForRequest("sessions.create");
     expect(create.params).toMatchObject({
@@ -333,7 +333,7 @@ suite.define(() => {
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    await currentPage.getByLabel("Thread sharing").click();
+    await currentPage.getByLabel("Session sharing").click();
     const publish = currentPage.getByText("Publish draft", { exact: true });
     await publish.waitFor();
     await captureUiProof(currentPage, "04-publish-draft-action.png");
@@ -369,7 +369,7 @@ suite.define(() => {
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    await currentPage.getByRole("button", { name: "Thread sharing" }).click();
+    await currentPage.getByRole("button", { name: "Session sharing" }).click();
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
     await expect.poll(() => dropdown.getAttribute("open")).not.toBeNull();
     expect(await dropdown.locator(".chat-pane__sharing-title").count()).toBe(1);
@@ -386,7 +386,7 @@ suite.define(() => {
     const alert = currentPage.getByRole("alert").filter({ hasText: message });
     await expectBrowser(alert).toBeVisible();
 
-    await currentPage.getByRole("button", { name: "Thread sharing" }).click();
+    await currentPage.getByRole("button", { name: "Session sharing" }).click();
     await expectBrowser(dropdown.locator(".chat-pane__sharing-status--error")).toBeVisible();
   });
 
@@ -426,7 +426,7 @@ suite.define(() => {
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    await currentPage.getByLabel("Thread sharing").click();
+    await currentPage.getByLabel("Session sharing").click();
     await gateway.waitForRequest("session.members.list");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
     const publish = dropdown.locator('wa-dropdown-item[value="visibility:shared"]');

@@ -260,6 +260,8 @@ export type RunEmbeddedAgentParams = {
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** Ephemeral reason fresh local-operator cron authority cannot survive this queued turn. */
+  cronCreatorAuthorityUnavailableReason?: "queued-local-operator";
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
@@ -311,7 +313,7 @@ export type RunEmbeddedAgentParams = {
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
-  onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
+  onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
   onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;

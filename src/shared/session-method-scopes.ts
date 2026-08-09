@@ -15,6 +15,16 @@ const SESSIONS_PATCH_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "unread",
 ]);
 
+const SESSIONS_PATCH_MANY_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
+  "label",
+  "category",
+  "boardFace",
+  "icon",
+  "pinned",
+  "archived",
+  "unread",
+]);
+
 const SESSIONS_DELETE_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "key",
   "agentId",
@@ -29,6 +39,17 @@ function resolveSessionsPatchRequiredScope(params: unknown): SessionMutationOper
     return "operator.write";
   }
   return Object.keys(params).every((key) => SESSIONS_PATCH_WRITE_SCOPE_FIELDS.has(key))
+    ? "operator.write"
+    : "operator.admin";
+}
+
+function resolveSessionsPatchManyRequiredScope(params: unknown): SessionMutationOperatorScope {
+  if (!isRecord(params) || !isRecord(params.patch)) {
+    // Malformed params cannot mutate anything; schema validation should report
+    // the exact closed/non-empty patch failure under the least privilege scope.
+    return "operator.write";
+  }
+  return Object.keys(params.patch).every((key) => SESSIONS_PATCH_MANY_WRITE_SCOPE_FIELDS.has(key))
     ? "operator.write"
     : "operator.admin";
 }
@@ -73,6 +94,9 @@ export function resolveDynamicSessionMutationRequiredScope(
   }
   if (method === "sessions.patch") {
     return resolveSessionsPatchRequiredScope(params);
+  }
+  if (method === "sessions.patchMany") {
+    return resolveSessionsPatchManyRequiredScope(params);
   }
   if (method === "sessions.delete") {
     return resolveSessionsDeleteRequiredScope(params);

@@ -66,7 +66,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-31)).toEqual([
+    expect(listGatewayMethods().slice(-33)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -98,6 +98,8 @@ describe("listGatewayMethods", () => {
       "tasks.retry",
       "tasks.dismiss",
       "audit.run.inspect",
+      "sessions.patchMany",
+      "update.hold",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -139,6 +141,11 @@ describe("listGatewayMethods", () => {
     expect(coreGatewayHandlers["audit.run.inspect"]).toBeTypeOf("function");
   });
 
+  it("advertises the update campaign hold method", () => {
+    expect(listGatewayMethods()).toContain("update.hold");
+    expect(coreGatewayHandlers["update.hold"]).toBeTypeOf("function");
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("config.openFile");
@@ -165,7 +172,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-38)).toEqual([
+    expect(coreMethods.slice(-40)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -204,10 +211,14 @@ describe("listGatewayMethods", () => {
       "tasks.retry",
       "tasks.dismiss",
       "audit.run.inspect",
+      "sessions.patchMany",
+      "update.hold",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
     expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
+    expect(methods.indexOf("sessions.patchMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
+    expect(methods.indexOf("update.hold")).toBe(methods.indexOf("sessions.patchMany") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {

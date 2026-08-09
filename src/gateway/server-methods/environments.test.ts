@@ -3,8 +3,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
-import { listNodePairing } from "../../infra/node-pairing.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
 import type { WorkerTunnelStatus } from "../worker-environments/tunnel-contract.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
@@ -14,7 +14,7 @@ vi.mock("../../infra/device-pairing.js", () => ({
   resolveNodePairingState: vi.fn(),
 }));
 
-vi.mock("../../infra/node-pairing.js", () => ({
+vi.mock("../../infra/device-pairing-node.js", () => ({
   listNodePairing: vi.fn(),
 }));
 

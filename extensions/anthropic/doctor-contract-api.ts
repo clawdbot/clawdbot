@@ -2,7 +2,7 @@
  * Doctor contract metadata for Anthropic and Claude CLI state. It declares
  * session/auth ownership so doctor cleanup can route stale state correctly.
  */
-import type { DoctorSessionRouteStateOwner } from "openclaw/plugin-sdk/runtime-doctor";
+import type { DoctorSessionRouteStateOwner } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 /** Anthropic currently has no legacy config migrations. */
 export const legacyConfigRules = [];

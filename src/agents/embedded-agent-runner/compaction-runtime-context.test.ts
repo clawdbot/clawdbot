@@ -9,6 +9,7 @@ import { createProcessSessionFixture } from "../bash-process-registry.test-helpe
 import { resetProcessRegistryForTests } from "../bash-process-registry.test-support.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
+  resolveCompactionContextTokenBudget,
   resolveCompactionHarnessRuntime,
   resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
@@ -16,6 +17,46 @@ import {
 import { buildContextEngineCompactionSessionTarget } from "./run/session-bootstrap.js";
 
 const compactionTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("resolveCompactionContextTokenBudget", () => {
+  const cfg = {
+    agents: {
+      list: [{ id: "capped", contextTokens: 200_000 }],
+      defaults: { contextTokens: 128_000 },
+    },
+  } as unknown as OpenClawConfig;
+  const modelWithWindow = (contextWindow: number) =>
+    ({ contextWindow }) as Parameters<typeof resolveCompactionContextTokenBudget>[0]["model"];
+  it.each([
+    { requested: 500_000, modelWindow: 500_000, expected: 200_000 },
+    { requested: 100_000, modelWindow: 500_000, expected: 100_000 },
+    { requested: 500_000, modelWindow: 64_000, expected: 64_000 },
+  ])(
+    "caps requested=$requested by agent and model ceilings to $expected",
+    ({ requested, modelWindow, expected }) => {
+      const budget = resolveCompactionContextTokenBudget({
+        config: cfg,
+        provider: "openai",
+        modelId: "mock-model",
+        model: modelWithWindow(modelWindow),
+        agentId: "capped",
+        requestedTokenBudget: requested,
+      });
+      expect(budget).toBe(expected);
+    },
+  );
+
+  it("falls back to the default cap when no agent id is given", () => {
+    const budget = resolveCompactionContextTokenBudget({
+      config: cfg,
+      provider: "openai",
+      modelId: "mock-model",
+      model: modelWithWindow(272_000),
+      requestedTokenBudget: 200_000,
+    });
+    expect(budget).toBe(128_000);
+  });
+});
 
 describe("resolveEmbeddedCompactionThinkingLevel", () => {
   it("lets the compaction override replace the inherited session level", () => {

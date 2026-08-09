@@ -273,7 +273,7 @@ describe("i18n", () => {
 
   it("keeps mobile pairing copy localized in shipped locale bundles", () => {
     const checkedKeys = flatten(en).filter(
-      (key) => key.startsWith("nodes.pairing.") && key !== "nodes.pairing.title",
+      (key) => key.startsWith("devices.pairing.") && key !== "devices.pairing.title",
     );
 
     for (const [locale, value] of Object.entries(shippedLocales)) {
