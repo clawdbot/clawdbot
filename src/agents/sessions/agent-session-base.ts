@@ -406,7 +406,8 @@ export abstract class AgentSessionBase {
         if (event.message.role === "assistant") {
           this.lastAssistantEntryId = entryId;
         } else if (event.message.role === "user") {
-          // Receipt listeners may consume the queued source as soon as this event arrives.
+          // A queued user message_end normally follows a committed append before listeners consume it.
+          // before_message_write suppression marks its recorder blocked first and is terminal without retry.
           this.emit(event);
         }
       }

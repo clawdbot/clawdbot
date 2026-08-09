@@ -153,26 +153,34 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         return () => listeners.delete(listener);
       },
     };
+    const abortController = new AbortController();
     const failedWait = steerWithDeliveryWait(activeSession, "same text", 10_000, {
       queueIdentity: "failed-turn",
+      abortSignal: abortController.signal,
     });
     const survivingWait = steerWithDeliveryWait(activeSession, "same text", 10_000, {
       queueIdentity: "surviving-turn",
+      abortSignal: abortController.signal,
     });
     const rejection = expect(failedWait).rejects.toThrow("SQLite transcript append failed");
 
-    reportSteeringMessagePersistenceFailure(
-      failedMessage,
-      new Error("SQLite transcript append failed"),
-    );
-    await rejection;
-    expect(listeners).toHaveLength(1);
+    try {
+      reportSteeringMessagePersistenceFailure(
+        failedMessage,
+        new Error("SQLite transcript append failed"),
+      );
+      await rejection;
+      expect(listeners).toHaveLength(1);
 
-    for (const listener of listeners) {
-      listener({ type: "message_end", message: survivingMessage });
+      for (const listener of listeners) {
+        listener({ type: "message_end", message: survivingMessage });
+      }
+      await expect(survivingWait).resolves.toBeUndefined();
+      expect(listeners).toHaveLength(0);
+    } finally {
+      abortController.abort();
+      await Promise.allSettled([failedWait, survivingWait, rejection]);
     }
-    await expect(survivingWait).resolves.toBeUndefined();
-    expect(listeners).toHaveLength(0);
   });
 
   it("removes only the timed-out steering message and preserves unrelated payloads", async () => {

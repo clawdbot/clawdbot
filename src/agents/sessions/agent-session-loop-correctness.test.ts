@@ -57,22 +57,29 @@ describe("AgentSession loop correctness", () => {
         );
       }
     });
+    const abortController = new AbortController();
     const wait = steerActiveSessionWithOptionalDeliveryWait(session, "commit before receipt", {
       deliveryTimeoutMs: 10_000,
       waitForTranscriptCommit: true,
+      abortSignal: abortController.signal,
     });
 
-    await vi.waitFor(() => expect(queuedMessages).toHaveLength(1));
-    const message = queuedMessages.shift();
-    expect(message).toBeDefined();
-    if (!message) {
-      return;
-    }
-    await handleAgentEvent({ type: "message_start", message });
-    await handleAgentEvent({ type: "message_end", message });
-    await expect(wait).resolves.toBeUndefined();
+    try {
+      await vi.waitFor(() => expect(queuedMessages).toHaveLength(1));
+      const message = queuedMessages.shift();
+      expect(message).toBeDefined();
+      if (!message) {
+        return;
+      }
+      await handleAgentEvent({ type: "message_start", message });
+      await handleAgentEvent({ type: "message_end", message });
+      await expect(wait).resolves.toBeUndefined();
 
-    expect(observedPersistedMessages).toEqual([true]);
+      expect(observedPersistedMessages).toEqual([true]);
+    } finally {
+      abortController.abort();
+      await Promise.allSettled([wait]);
+    }
   });
 
   it("rejects a consumed steer immediately when its transcript append fails", async () => {
@@ -96,27 +103,36 @@ describe("AgentSession loop correctness", () => {
       }
     });
     let sourceConsumed = false;
+    const abortController = new AbortController();
     const wait = steerActiveSessionWithOptionalDeliveryWait(session, "retain queued source", {
       deliveryTimeoutMs: 10_000,
       waitForTranscriptCommit: true,
+      abortSignal: abortController.signal,
     }).then(() => {
       sourceConsumed = true;
     });
     const rejection = expect(wait).rejects.toBe(persistenceError);
 
-    await vi.waitFor(() => expect(queuedMessages).toHaveLength(1));
-    const message = queuedMessages.shift();
-    expect(message).toBeDefined();
-    if (!message) {
-      return;
-    }
-    await handleAgentEvent({ type: "message_start", message });
-    await expect(handleAgentEvent({ type: "message_end", message })).rejects.toBe(persistenceError);
-    await rejection;
+    try {
+      await vi.waitFor(() => expect(queuedMessages).toHaveLength(1));
+      const message = queuedMessages.shift();
+      expect(message).toBeDefined();
+      if (!message) {
+        return;
+      }
+      await handleAgentEvent({ type: "message_start", message });
+      await expect(handleAgentEvent({ type: "message_end", message })).rejects.toBe(
+        persistenceError,
+      );
+      await rejection;
 
-    expect(sourceConsumed).toBe(false);
-    expect(publishedUserMessages).toEqual([]);
-    expect(sessionManager.getEntries().filter((entry) => entry.type === "message")).toEqual([]);
+      expect(sourceConsumed).toBe(false);
+      expect(publishedUserMessages).toEqual([]);
+      expect(sessionManager.getEntries().filter((entry) => entry.type === "message")).toEqual([]);
+    } finally {
+      abortController.abort();
+      await Promise.allSettled([wait, rejection]);
+    }
   });
 
   it.each([2, 3])(
