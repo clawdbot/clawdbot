@@ -6,8 +6,8 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
-import { addTuiOptions } from "./tui-cli-options.js";
 import { resolveSessionTarget } from "./session-target.js";
+import { addTuiOptions } from "./tui-cli-options.js";
 
 type TuiCliOptions = {
   local?: boolean;
@@ -86,6 +86,7 @@ export async function runTuiCliAction(
           tlsFingerprint: opts.tlsFingerprint,
         }),
     session: resolved?.sessionKey ?? opts.session,
+    ...(resolved?.parsed.kind === "url" ? { agentId: resolved.parsed.agentId } : {}),
     deliver: Boolean(opts.deliver),
     thinking: opts.thinking,
     message: opts.message,

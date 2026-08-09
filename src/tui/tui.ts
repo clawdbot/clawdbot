@@ -193,11 +193,12 @@ export function resolveInitialTuiAgentId(params: {
   cfg: OpenClawConfig;
   fallbackAgentId: string;
   initialSessionInput?: string;
+  agentId?: string;
   cwd?: string;
 }) {
-  const parsed = parseAgentSessionKey((params.initialSessionInput ?? "").trim());
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId);
+  const explicitAgentId = resolveExplicitInitialTuiAgentId(params);
+  if (explicitAgentId) {
+    return explicitAgentId;
   }
 
   const cwd = params.cwd ?? tryProcessCwd();
@@ -207,6 +208,15 @@ export function resolveInitialTuiAgentId(params: {
   }
 
   return normalizeAgentId(params.fallbackAgentId);
+}
+
+function resolveExplicitInitialTuiAgentId(params: {
+  initialSessionInput?: string;
+  agentId?: string;
+}): string | null {
+  const parsed = parseAgentSessionKey((params.initialSessionInput ?? "").trim());
+  const explicitAgentId = parsed?.agentId ?? params.agentId?.trim();
+  return explicitAgentId ? normalizeAgentId(explicitAgentId) : null;
 }
 
 export function resolveGatewayDisconnectState(
@@ -596,10 +606,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const sessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   const sessionMainKey = normalizeMainKey(config.session?.mainKey);
   const agentDefaultId = resolveDefaultAgentId(config);
+  const initialSessionAgentId = resolveExplicitInitialTuiAgentId({
+    initialSessionInput,
+    agentId: opts.agentId,
+  });
   let currentAgentId = resolveInitialTuiAgentId({
     cfg: config,
     fallbackAgentId: agentDefaultId,
     initialSessionInput,
+    agentId: opts.agentId,
   });
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";
@@ -1245,14 +1260,6 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       chatLog.dismissBtw();
     },
   };
-
-  const initialSessionAgentId = (() => {
-    if (!initialSessionInput) {
-      return null;
-    }
-    const parsed = parseAgentSessionKey(initialSessionInput);
-    return parsed ? normalizeAgentId(parsed.agentId) : null;
-  })();
 
   const sessionActions = createSessionActions({
     client,

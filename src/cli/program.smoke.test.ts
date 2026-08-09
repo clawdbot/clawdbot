@@ -103,7 +103,14 @@ describe("cli program (smoke)", () => {
     expect(firstMockArg(runTui)).toMatchObject({
       local: false,
       session: "global",
+      agentId: "ops",
     });
+  });
+
+  it("leaves tui agent inference unchanged without a URL agent", async () => {
+    await runProgram(["tui"]);
+
+    expect(firstMockArg(runTui)).not.toHaveProperty("agentId");
   });
 
   it("rejects a URL target combined with --url", async () => {
