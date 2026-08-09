@@ -89,9 +89,9 @@ export async function ensureOnboardingAgent(params: {
     entry: {
       id: "main",
       name: "main",
-      default: true,
       workspace: params.workspace,
     },
+    bootstrapMain: true,
     skipBootstrap: params.config.agents?.defaults?.skipBootstrap,
     skipOptionalBootstrapFiles: params.config.agents?.defaults?.skipOptionalBootstrapFiles,
   });

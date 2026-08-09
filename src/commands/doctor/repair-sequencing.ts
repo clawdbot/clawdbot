@@ -1,6 +1,6 @@
 // Doctor repair sequence coordinator for config, auth, plugin, and warning repairs.
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, tryResolveSoleAgentId } from "../../agents/agent-scope.js";
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
@@ -75,9 +75,10 @@ export async function runDoctorRepairSequence(params: {
   const env = params.env ?? process.env;
   const resolveCurrentPluginMetadataScope = () => {
     const config = state.candidate;
+    const soleAgentId = tryResolveSoleAgentId(config);
     return {
       config,
-      workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config), env),
+      workspaceDir: soleAgentId ? resolveAgentWorkspaceDir(config, soleAgentId, env) : undefined,
     };
   };
   const sanitizeLines = (lines: string[]) => lines.map((line) => sanitizeForLog(line)).join("\n");

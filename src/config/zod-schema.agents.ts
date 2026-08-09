@@ -27,6 +27,7 @@ const AgentEntryConfigSchema = z.preprocess(
 
 export const AgentsSchema = z
   .object({
+    ownership: z.literal("explicit").optional(),
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     entries: z
       .record(
@@ -37,13 +38,11 @@ export const AgentsSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    const agents = Object.values(value.entries ?? {});
-    const defaultCount = agents.filter((agent) => agent.default === true).length;
-    if (defaultCount !== 1) {
+    if (Object.keys(value.entries ?? {}).length === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["entries"],
-        message: `agents.entries must contain exactly one default=true entry (found ${defaultCount})`,
+        message: "agents.entries must contain at least one configured agent",
       });
     }
   })

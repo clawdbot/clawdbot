@@ -7,7 +7,8 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
+import { tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentDir, listAgentIds } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
   clearAuthProfileMigrationDiagnostics,
@@ -42,6 +43,7 @@ import type {
   AuthProfileState,
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
+import { resolveLegacyInheritedAuthDir } from "../agents/legacy-inherited-auth-dir.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -310,7 +312,11 @@ function listAuthProfileRepairCandidates(
   env: NodeJS.ProcessEnv,
 ): AuthProfileRepairCandidate[] {
   const candidates = new Map<string, AuthProfileRepairCandidate>();
-  addCandidate(candidates, resolveDefaultAgentDir(cfg, env));
+  addCandidate(candidates, resolveAgentDir(cfg, "main", env));
+  const soleAgentId = tryResolveSoleAgentId(cfg);
+  if (soleAgentId) {
+    addCandidate(candidates, resolveAgentDir(cfg, soleAgentId, env));
+  }
   const envAgentDir =
     readNonEmptyString(env.OPENCLAW_AGENT_DIR) ?? readNonEmptyString(env.PI_CODING_AGENT_DIR);
   if (envAgentDir) {
@@ -485,7 +491,9 @@ function isDefaultAgentCandidate(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  return path.resolve(candidate.agentDir ?? "") === path.resolve(resolveDefaultAgentDir(cfg, env));
+  return (
+    path.resolve(candidate.agentDir ?? "") === path.resolve(resolveLegacyInheritedAuthDir(cfg, env))
+  );
 }
 
 function stripImportedConfigAuthProfileCredentials(

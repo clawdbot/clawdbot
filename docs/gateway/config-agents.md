@@ -11,6 +11,8 @@ Agent-scoped configuration keys under `agents.*`, `multiAgent.*`, `session.*`,
 `messages.*`, and `talk.*`. For channels, tools, gateway runtime, and other
 top-level keys, see [Configuration reference](/gateway/configuration-reference).
 
+OpenClaw stamps `agents.ownership: "explicit"` when creating a multi-agent fleet. Such fleets have no default: channels and ambient services need bindings or surface-specific `agentId` targets. Doctor materializes legacy owners during upgrade; sole-agent configs need no marker.
+
 ## Agent defaults
 
 ### `agents.defaults.workspace`
@@ -23,9 +25,7 @@ Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `~/.openclaw/workspace` (o
 }
 ```
 
-An explicit `agents.defaults.workspace` value takes precedence over
-`OPENCLAW_WORKSPACE_DIR`. Use the environment variable to point default agents
-at a mounted workspace when you do not want to write that path into config.
+An explicit `agents.defaults.workspace` value takes precedence over `OPENCLAW_WORKSPACE_DIR`. A sole agent uses this path directly. In a multi-agent fleet, agents without their own `workspace` use an agent-id subdirectory so no implicit owner claims the shared root.
 
 ### `agents.defaults.repoRoot`
 
@@ -45,9 +45,10 @@ Optional default skill allowlist for agents that do not set
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: { skills: ["github", "weather"] },
     entries: {
-      writer: { default: true }, // inherits github, weather
+      writer: {}, // inherits github, weather
       docs: { skills: ["docs-search"] }, // replaces defaults
       "locked-down": { skills: [] }, // no skills
     },
@@ -143,7 +144,6 @@ injection behavior from the shared defaults. Omitted fields inherit from
     },
     entries: {
       "strict-worker": {
-        default: true,
         contextInjection: "always",
         bootstrapMaxChars: 50000,
         bootstrapTotalMaxChars: 300000,
@@ -245,7 +245,6 @@ from `agents.defaults.contextLimits`.
     },
     entries: {
       "tiny-local": {
-        default: true,
         contextLimits: {
           memoryGetMaxChars: 6000,
         },
@@ -274,7 +273,7 @@ Per-agent override for the skills prompt budget.
 {
   agents: {
     entries: {
-      "tiny-local": { default: true, skillsLimits: { maxSkillsPromptChars: 6000 } },
+      "tiny-local": { skillsLimits: { maxSkillsPromptChars: 6000 } },
     },
   },
 }
@@ -557,7 +556,7 @@ Periodic heartbeat runs.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
 - Busy deferral is automatic: scheduled heartbeats wait for main/cron activity, same-agent active runs, and target-session work. Immediate and manual wakes bypass only the broad same-agent active-run precheck.
-- The default agent's Heartbeats system-prompt section is included automatically while its cadence is enabled. Ack suppression uses a fixed 300-character remainder budget, reasoning payloads remain internal, and tool error warnings remain enabled.
+- An enrolled agent's Heartbeats system-prompt section is included automatically while that agent's cadence is enabled. Ack suppression uses a fixed 300-character remainder budget, reasoning payloads remain internal, and tool error warnings remain enabled.
 - Per-agent: set `agents.entries.*.heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
@@ -575,7 +574,7 @@ Selects the agent whose model and credentials own ambient OpenClaw system-agent 
 }
 ```
 
-Delegated consults with a requesting agent keep that requester as their owner. When `agentId` is absent, OpenClaw preserves configured-default routing.
+Delegated consults with a requesting agent keep that requester as their owner. When `agentId` is absent, a sole configured agent resolves implicitly; ambient consults in a multi-agent fleet fail with an actionable error. Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for inherited credentials and `agents.defaults.sessionStore.agentId` for unscoped rows in a fixed `session.store`.
 
 ### `agents.defaults.compaction`
 
@@ -968,7 +967,6 @@ for provider examples and precedence.
   agents: {
     entries: {
       main: {
-        default: true,
         name: "Main Agent",
         workspace: "~/.openclaw/workspace",
         agentDir: "~/.openclaw/agents/main/agent",
@@ -1014,8 +1012,8 @@ for provider examples and precedence.
 }
 ```
 
-- Each key in `agents.entries` is the stable agent id.
-- `default`: exactly one agent entry must set `default: true`.
+- The `agents.entries` object key is the stable agent id.
+- `default` is retired. Exactly one configured agent resolves implicitly; multi-agent operations require a binding, surface `agentId` target, scoped session/store owner, or explicit `--agent`/request field.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `utilityModel`: optional per-agent override for short internal tasks such as generated session and thread titles. Falls back to `agents.defaults.utilityModel`, then the effective session provider's declared small-model default. Dashboard titles retry once with the effective regular session model. An empty string skips the alternate utility route for this agent without disabling dashboard title generation.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
@@ -1046,8 +1044,10 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: { heartbeat: { agentId: "home" }, systemAgent: { agentId: "home" } },
     entries: {
-      home: { default: true, workspace: "~/.openclaw/workspace-home" },
+      home: { workspace: "~/.openclaw/workspace-home" },
       work: { workspace: "~/.openclaw/workspace-work" },
     },
   },
@@ -1055,6 +1055,7 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
     { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
     { agentId: "work", match: { channel: "whatsapp", accountId: "biz" } },
   ],
+  talk: { agentId: "home" },
 }
 ```
 
@@ -1074,7 +1075,7 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 3. `match.teamId`
 4. `match.accountId` (exact, no peer/guild/team)
 5. `match.accountId: "*"` (channel-wide)
-6. Default agent
+6. Sole-agent fallback (only when exactly one agent is configured; explicit multi-agent fleets without a matching binding fail closed)
 
 Within each tier, the first matching `bindings` entry wins.
 
@@ -1089,7 +1090,6 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
   agents: {
     entries: {
       personal: {
-        default: true,
         workspace: "~/.openclaw/workspace-personal",
         sandbox: { mode: "off" },
       },
@@ -1107,7 +1107,6 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
   agents: {
     entries: {
       family: {
-        default: true,
         workspace: "~/.openclaw/workspace-family",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "ro" },
         tools: {
@@ -1136,7 +1135,6 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
   agents: {
     entries: {
       public: {
-        default: true,
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {

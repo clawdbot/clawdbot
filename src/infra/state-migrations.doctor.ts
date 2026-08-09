@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   discardLegacyRegistryWorktrees,
   hasLegacyRegistryWorktrees,
@@ -11,8 +10,13 @@ import {
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import {
+  resolveSessionStoreCompatibilityAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+} from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
 import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -267,13 +271,18 @@ function createPluginDoctorStateMigrationContext(
   };
 }
 
-function resolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string {
-  try {
-    return normalizeAgentId(resolveDefaultAgentId(cfg));
-  } catch {
-    // Detection must still inspect malformed/pre-roster state so Doctor can repair it.
-    return LEGACY_IMPLICIT_AGENT_ID;
-  }
+function tryResolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string | undefined {
+  const agentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  return agentId ? normalizeAgentId(agentId) : undefined;
+}
+
+function tryResolveDoctorSessionMigrationAgentId(cfg: OpenClawConfig): string | undefined {
+  return (
+    tryResolveDoctorStateMigrationAgentId(cfg) ??
+    (!isPerAgentSessionStoreConfig(cfg.session?.store)
+      ? resolveSessionStoreCompatibilityAgentId(cfg)
+      : undefined)
+  );
 }
 
 function resolveConcreteBindingAccountId(value: unknown): string | undefined {
@@ -349,7 +358,9 @@ export async function detectLegacyStateMigrations(params: {
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
-  const targetAgentId = resolveDoctorStateMigrationAgentId(params.cfg);
+  const migrationAgentId = tryResolveDoctorStateMigrationAgentId(params.cfg);
+  const sessionMigrationAgentId = tryResolveDoctorSessionMigrationAgentId(params.cfg);
+  const targetAgentId = migrationAgentId ?? sessionMigrationAgentId ?? LEGACY_IMPLICIT_AGENT_ID;
   const rawMainKey = params.cfg.session?.mainKey;
   const targetMainKey =
     typeof rawMainKey === "string" && rawMainKey.trim().length > 0
@@ -369,13 +380,23 @@ export async function detectLegacyStateMigrations(params: {
       env,
       pluginIds: collectRelevantDoctorPluginIds(pluginConfig),
     });
-  const currentSessionStoreOwnership = resolveSessionStoreOwnership({
-    cfg: params.cfg,
-    env,
-    stateDir,
-    targetAgentId,
-    pluginSessionStoreAgentIds,
-  });
+  const currentSessionStoreOwnership = sessionMigrationAgentId
+    ? resolveSessionStoreOwnership({
+        cfg: params.cfg,
+        env,
+        stateDir,
+        targetAgentId: sessionMigrationAgentId,
+        pluginSessionStoreAgentIds,
+      })
+    : {
+        preserveAmbiguousKeys: true,
+        preserveForeignMainAliases: true,
+        targetStoreAliases: {
+          hasDistinctAliases: false,
+          hasFinalSymlink: false,
+          hasUnresolvedIdentity: false,
+        },
+      };
   const sessionStoreOwnership: SessionStoreOwnership = {
     preserveAmbiguousKeys:
       params.sessionStoreOwnership?.preserveAmbiguousKeys === true ||
@@ -604,17 +625,25 @@ export async function detectLegacyStateMigrations(params: {
           warnings: pluginPlanWarnings,
         });
 
+  const sessionsHaveLegacy =
+    Boolean(sessionMigrationAgentId) &&
+    (hasLegacySessions || legacyKeys.length > 0 || hasStaleSessionFiles);
+  const agentDirHasLegacy = Boolean(migrationAgentId) && hasLegacyAgentDir;
+  const deferred =
+    (!sessionMigrationAgentId &&
+      (hasLegacySessions || legacyKeys.length > 0 || hasStaleSessionFiles)) ||
+    (!migrationAgentId && hasLegacyAgentDir);
   const preview: string[] = [];
-  if (hasLegacySessions) {
+  if (sessionsHaveLegacy && hasLegacySessions) {
     preview.push(`- Sessions: ${sessionsLegacyDir} → ${sessionsTargetDir}`);
   }
-  if (legacyKeys.length > 0) {
+  if (sessionsHaveLegacy && legacyKeys.length > 0) {
     preview.push(`- Sessions: canonicalize legacy keys in ${sessionsTargetStorePath}`);
   }
-  if (hasStaleSessionFiles) {
+  if (sessionsHaveLegacy && hasStaleSessionFiles) {
     preview.push(`- Sessions: repair migrated transcript paths in ${sessionsTargetStorePath}`);
   }
-  if (hasLegacyAgentDir) {
+  if (agentDirHasLegacy) {
     preview.push(`- Agent dir: ${legacyAgentDir} → ${targetAgentDir}`);
   }
   if (hasPluginStateSidecar) {
@@ -733,8 +762,8 @@ export async function detectLegacyStateMigrations(params: {
       legacyStorePath: sessionsLegacyStorePath,
       targetDir: sessionsTargetDir,
       targetStorePath: sessionsTargetStorePath,
-      hasLegacy: hasLegacySessions || legacyKeys.length > 0 || hasStaleSessionFiles,
-      legacyKeys,
+      hasLegacy: sessionsHaveLegacy,
+      legacyKeys: sessionMigrationAgentId ? legacyKeys : [],
       preserveAmbiguousKeys: sessionStoreOwnership.preserveAmbiguousKeys,
       preserveForeignMainAliases,
       targetStoreAliases: sessionStoreOwnership.targetStoreAliases,
@@ -742,7 +771,7 @@ export async function detectLegacyStateMigrations(params: {
     agentDir: {
       legacyDir: legacyAgentDir,
       targetDir: targetAgentDir,
-      hasLegacy: hasLegacyAgentDir,
+      hasLegacy: agentDirHasLegacy,
     },
     pluginPlans: {
       hasLegacy: pluginPlans.length > 0,
@@ -808,7 +837,11 @@ export async function detectLegacyStateMigrations(params: {
     subagentRegistry,
     rescuePending,
     channelPairing,
-    warnings: [...pluginPlanWarnings, ...legacySessionSurfaces.failures],
+    warnings: [
+      ...pluginPlanWarnings,
+      ...legacySessionSurfaces.failures,
+      ...(deferred ? ["Deferred legacy agent/session migration: select an agent owner"] : []),
+    ],
     notices: [],
     preview,
   };
@@ -1319,7 +1352,9 @@ export async function autoMigrateLegacyState(params: {
             agentId: target.agentId,
             path: resolveSqliteTargetFromSessionStorePath(target.storePath, {
               agentId: target.agentId,
-              defaultAgentId: resolveDefaultAgentId(params.cfg),
+              defaultAgentId: isPerAgentSessionStoreConfig(params.cfg.session?.store)
+                ? target.agentId
+                : resolveSessionStoreCompatibilityAgentId(params.cfg),
               env,
             }).path,
           })),
@@ -1360,13 +1395,16 @@ export async function autoMigrateLegacyState(params: {
     });
   // Capture ownership before orphan-key rewrites. Atomic replacement can split
   // a configured filesystem alias from the standard target pathname.
-  const sessionStoreOwnership = resolveSessionStoreOwnership({
-    cfg: params.cfg,
-    env,
-    stateDir,
-    targetAgentId: normalizeAgentId(resolveDefaultAgentId(params.cfg)),
-    pluginSessionStoreAgentIds,
-  });
+  const ownershipAgentId = tryResolveDoctorSessionMigrationAgentId(params.cfg);
+  const sessionStoreOwnership = ownershipAgentId
+    ? resolveSessionStoreOwnership({
+        cfg: params.cfg,
+        env,
+        stateDir,
+        targetAgentId: ownershipAgentId,
+        pluginSessionStoreAgentIds,
+      })
+    : undefined;
   // Canonicalize orphaned session keys regardless of whether legacy migration
   // is needed — the orphan-key bug (#29683) affects all installs with
   // non-default agent IDs or mainKey configuration.
