@@ -181,6 +181,85 @@ describe("createMattermostDraftStream", () => {
     });
   });
 
+  it("retains terminal text after discarding a throttled stale update", async () => {
+    const { calls, stream } = createDraftStreamFixture({ throttleMs: 1000 });
+
+    stream.update("Working...");
+    await stream.flush();
+    stream.update("Stale partial");
+    await expect(stream.retainTerminalText("Failed.")).resolves.toBe(true);
+    await stream.stop();
+    stream.update("Late partial");
+    await stream.flush();
+
+    expect(calls.map((call) => [call.path, call.init?.method])).toEqual([
+      ["/posts", "POST"],
+      ["/posts/post-1", "PUT"],
+    ]);
+    expect(parseRequestJson(calls[1]?.init)).toEqual({
+      id: "post-1",
+      message: "Failed.",
+    });
+  });
+
+  it("retries a transient strict cleanup failure", async () => {
+    let deleteAttempts = 0;
+    const requestImpl: MattermostClient["request"] = async <T>(
+      path: string,
+      init?: RequestInit,
+    ): Promise<T> => {
+      if (path === "/posts") {
+        return { id: "post-1" } as T;
+      }
+      if (path === "/posts/post-1" && init?.method === "DELETE") {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) {
+          throw new Error("transient delete failure");
+        }
+      }
+      return { id: "post-1" } as T;
+    };
+    const { stream } = createDraftStreamFixture({
+      request: requestImpl,
+      surfaceDeleteFailure: true,
+    });
+
+    stream.update("Working...");
+    await stream.flush();
+    await expect(stream.clear()).resolves.toBeUndefined();
+
+    expect(deleteAttempts).toBe(2);
+    expect(stream.postId()).toBeUndefined();
+  });
+
+  it("surfaces a repeated strict cleanup failure and retains the post id", async () => {
+    let deleteAttempts = 0;
+    const requestImpl: MattermostClient["request"] = async <T>(
+      path: string,
+      init?: RequestInit,
+    ): Promise<T> => {
+      if (path === "/posts") {
+        return { id: "post-1" } as T;
+      }
+      if (path === "/posts/post-1" && init?.method === "DELETE") {
+        deleteAttempts += 1;
+        throw new Error(`delete failure ${deleteAttempts}`);
+      }
+      return { id: "post-1" } as T;
+    };
+    const { stream } = createDraftStreamFixture({
+      request: requestImpl,
+      surfaceDeleteFailure: true,
+    });
+
+    stream.update("Working...");
+    await stream.flush();
+    await expect(stream.clear()).rejects.toThrow("delete failure 2");
+
+    expect(deleteAttempts).toBe(2);
+    expect(stream.postId()).toBe("post-1");
+  });
+
   it("warns and stops when preview creation fails", async () => {
     const warn = vi.fn();
     const requestImpl: MattermostClient["request"] = async () => {

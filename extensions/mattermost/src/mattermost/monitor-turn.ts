@@ -14,7 +14,7 @@ import {
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import { updateMattermostPost, type MattermostPost } from "./client.js";
+import type { MattermostPost } from "./client.js";
 import {
   createMattermostDraftPreviewBoundaryController,
   createMattermostDraftStream,
@@ -64,6 +64,7 @@ function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermo
     postId: () => undefined,
     clear: noopAsync,
     discardPending: noopAsync,
+    retainTerminalText: async () => false,
     seal: noopAsync,
     stop: noopAsync,
     forceNewMessage: noopAsync,
@@ -130,6 +131,7 @@ export async function dispatchMattermostInboundTurn(
         channelId,
         rootId: effectiveReplyToId,
         ...(progressPostType ? { postType: progressPostType } : {}),
+        surfaceDeleteFailure: separateProgressFinalDelivery,
         throttleMs: 1200,
         chunkText: (value) =>
           core.channel.text.chunkMarkdownTextWithMode(
@@ -141,17 +143,25 @@ export async function dispatchMattermostInboundTurn(
         warn: monitor.logVerboseMessage,
       })
     : createDisabledMattermostDraftStream();
+  let terminalProgressPromise: Promise<void> | undefined;
   const markSeparateProgressFailed = async () => {
     if (!separateProgressFinalDelivery) {
       return;
     }
-    const progressPostId = draftStream.postId();
-    if (!progressPostId) {
-      return;
+    if (!terminalProgressPromise) {
+      terminalProgressPromise = draftStream
+        .retainTerminalText(formatMattermostTerminalProgressText(pinnedProgressLabel))
+        .then(() => {});
     }
-    await updateMattermostPost(client, progressPostId, {
-      message: formatMattermostTerminalProgressText(pinnedProgressLabel),
-    });
+    const attempt = terminalProgressPromise;
+    try {
+      await attempt;
+    } catch (error) {
+      if (terminalProgressPromise === attempt) {
+        terminalProgressPromise = undefined;
+      }
+      throw error;
+    }
   };
   const previewBoundaryController = createMattermostDraftPreviewBoundaryController({
     enabled: draftPreviewEnabled && account.streamingMode === "block",
@@ -320,9 +330,8 @@ export async function dispatchMattermostInboundTurn(
         await draftStream.settleBoundaries();
         progressDraft.markFinalReplyStarted();
         if (separateProgressFinalDelivery && payloadEntry.isError) {
-          draftStream.update(formatMattermostTerminalProgressText(pinnedProgressLabel));
           try {
-            await draftStream.flush();
+            await markSeparateProgressFailed();
           } catch (err) {
             monitor.logVerboseMessage(`mattermost terminal progress update failed: ${String(err)}`);
           }
@@ -348,7 +357,6 @@ export async function dispatchMattermostInboundTurn(
         resolvePreviewFinalText,
         previewState,
         separateProgressFinalDelivery,
-        markSeparateProgressFailed,
         logVerboseMessage: monitor.logVerboseMessage,
         recordThreadParticipation: markThreadParticipation,
         deliverPayload: async (payloadToDeliver) => {
@@ -424,6 +432,21 @@ export async function dispatchMattermostInboundTurn(
         markThreadParticipation();
       }
       if (info.kind === "final") {
+        if (
+          separateProgressFinalDelivery &&
+          (!result.visibleReplySent || payloadEntry.isError === true)
+        ) {
+          try {
+            await markSeparateProgressFailed();
+          } catch (error) {
+            if (!result.visibleReplySent) {
+              throw error;
+            }
+            monitor.logVerboseMessage(
+              `mattermost terminal progress retry failed after visible final: ${String(error)}`,
+            );
+          }
+        }
         progressDraft.markFinalReplyDelivered();
       }
       return result;
@@ -542,6 +565,7 @@ export async function dispatchMattermostInboundTurn(
                   payloadResult.text || "Thinking…",
                   {
                     snapshot: payloadResult.isReasoningSnapshot === true,
+                    startImmediately: separateProgressFinalDelivery,
                   },
                 );
               }

@@ -304,7 +304,8 @@ Slack-only:
   preview that finalizes in place when the final answer is safe to send.
 - With `streaming.progress.finalDelivery: "separate"`, creates the progress
   preview atomically as `custom_openclaw_progress`, pins the configured label,
-  sends the final answer as a separate normal post in the same thread, and
+  sends the final answer as a separate normal post in the same conversation
+  and the same thread when a thread root exists, then
   deletes progress only after that send succeeds. OpenClaw agents ignore typed
   progress posts; human posts with the same visible prefix remain normal input.
   Terminal failures retain a sanitized status post.

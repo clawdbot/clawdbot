@@ -355,6 +355,27 @@ describe("resolveMattermostProgressDeliveryPolicy", () => {
     expect(pinMattermostProgressLabel("Running status", "|")).toBe("|\n\nRunning status");
     expect(pinMattermostProgressLabel("|\n\nRunning status", "|")).toBe("|\n\nRunning status");
   });
+
+  it("keeps separate progress and final posts top-level in flat direct messages", () => {
+    const policy = resolvePolicy({
+      mode: "progress",
+      progress: { finalDelivery: "separate" },
+    });
+    const progressRootId = resolveMattermostEffectiveReplyToId({
+      kind: "direct",
+      postId: "dm-post-1",
+      replyToMode: "off",
+    });
+    const finalRootId = resolveMattermostReplyRootId({
+      kind: "direct",
+      threadRootId: progressRootId,
+      replyToId: "payload-reply-1",
+    });
+
+    expect(policy.separate).toBe(true);
+    expect(progressRootId).toBeUndefined();
+    expect(finalRootId).toBeUndefined();
+  });
 });
 
 describe("shouldSuppressMattermostDefaultToolProgressMessages", () => {

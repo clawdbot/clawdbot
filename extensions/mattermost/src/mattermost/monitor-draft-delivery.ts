@@ -50,7 +50,6 @@ type MattermostDraftPreviewDeliverParams = {
   resolvePreviewFinalText: (text?: string) => MattermostPreviewFinalResolution | undefined;
   previewState: MattermostDraftPreviewState;
   separateProgressFinalDelivery?: boolean;
-  markSeparateProgressFailed?: () => Promise<void> | void;
   logVerboseMessage: (message: string) => void;
   deliverPayload: (payload: ReplyPayload) => Promise<MattermostReplyDeliveryResult>;
   // Visible same-thread finals can be delivered by editing the draft preview in
@@ -227,20 +226,7 @@ export async function deliverMattermostReplyWithDraftPreview(
               : payload.isError !== true && typeof resolvedDeliveryText === "string"
                 ? { ...payload, text: resolvedDeliveryText }
                 : payload;
-        try {
-          normalDeliveryResult = await params.deliverPayload(deliveryPayload);
-        } catch (error: unknown) {
-          if (params.separateProgressFinalDelivery && params.payload.isError !== true) {
-            try {
-              await params.markSeparateProgressFailed?.();
-            } catch (statusError: unknown) {
-              params.logVerboseMessage(
-                `mattermost terminal progress update failed: ${String(statusError)}`,
-              );
-            }
-          }
-          throw error;
-        }
+        normalDeliveryResult = await params.deliverPayload(deliveryPayload);
         return normalDeliveryResult.visibleReplySent;
       },
     });
