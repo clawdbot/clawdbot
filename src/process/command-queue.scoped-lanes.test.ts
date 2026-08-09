@@ -272,15 +272,22 @@ describe("scoped command lane lifecycle", () => {
     expect(lanes.has(lane)).toBe(false);
   });
 
-  it("retires a scoped lane after its active task times out", async () => {
+  it("keeps a timed-out scoped lane occupied until its active task settles", async () => {
     const lanes = getCommandLaneRegistryForTest();
     const lane = "session:agent:main:autoqa-timed-out";
+    const taskGate = createDeferred();
 
     vi.useFakeTimers();
     try {
-      const timedOut = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
-        taskTimeoutMs: 5,
-      });
+      const timedOut = enqueueCommandInLane(
+        lane,
+        async () => {
+          await taskGate.promise;
+        },
+        {
+          taskTimeoutMs: 5,
+        },
+      );
       const rejection = expect(timedOut).rejects.toMatchObject({
         name: "CommandLaneTaskTimeoutError",
       });
@@ -288,6 +295,9 @@ describe("scoped command lane lifecycle", () => {
       await vi.advanceTimersByTimeAsync(5);
       await rejection;
 
+      expect(lanes.has(lane)).toBe(true);
+      taskGate.resolve();
+      await vi.advanceTimersByTimeAsync(0);
       expect(lanes.has(lane)).toBe(false);
     } finally {
       vi.useRealTimers();

@@ -3,12 +3,14 @@ type CloseoutStatus =
   | "queued"
   | "confirmed"
   | "uncertain"
+  | "rejected"
   | "manually_confirmed"
   | "completed";
 
 export type CloseoutRecord = {
   closeoutId: string;
   operationId: string;
+  operationGeneration?: number;
   agentId: string;
   sourceSessionKey?: string;
   conversationRef: string;
@@ -200,6 +202,17 @@ function deliveryRequestError(): string {
   return "gateway_request_failed";
 }
 
+function isTerminalGatewayInputError(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const candidate = error as Error & {
+    gatewayCode?: unknown;
+    retryable?: unknown;
+  };
+  return candidate.gatewayCode === "INVALID_REQUEST" && candidate.retryable === false;
+}
+
 function withoutLastError(record: CloseoutRecord): Omit<CloseoutRecord, "lastError"> {
   const { lastError: _lastError, ...rest } = record;
   return rest;
@@ -215,6 +228,7 @@ export function summarizeCloseoutRecord(record: CloseoutRecord) {
     ...(record.messageId ? { messageId: record.messageId } : {}),
     ...(record.messageIdSource ? { messageIdSource: record.messageIdSource } : {}),
     ...(record.queueId ? { queueId: record.queueId } : {}),
+    ...(record.lastError ? { lastError: record.lastError } : {}),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
@@ -270,6 +284,7 @@ export function createCloseoutTracker(params: {
   async function deliver(record: CloseoutRecord): Promise<CloseoutRecord> {
     if (
       record.status === "confirmed" ||
+      record.status === "rejected" ||
       record.status === "manually_confirmed" ||
       record.status === "completed"
     ) {
@@ -291,14 +306,17 @@ export function createCloseoutTracker(params: {
         record.conversationRef,
       );
     } catch (error) {
+      const rejected = isTerminalGatewayInputError(error);
       return await persist({
         ...record,
-        status: "uncertain",
+        status: rejected ? "rejected" : "uncertain",
         attemptCount,
         lastError:
           error instanceof InvalidGatewayResponseError
             ? "gateway_response_invalid"
-            : deliveryRequestError(),
+            : rejected
+              ? "gateway_request_rejected"
+              : deliveryRequestError(),
         updatedAt,
       });
     }
@@ -355,7 +373,8 @@ export function createCloseoutTracker(params: {
         const createdAt = now();
         const initial: CloseoutRecord = {
           closeoutId: normalized.closeoutId,
-          operationId: `closeout:${normalized.closeoutId}`,
+          operationId: `closeout:${normalized.closeoutId}:${createdAt}:1`,
+          operationGeneration: 1,
           agentId: normalized.agentId,
           ...(normalized.sourceSessionKey ? { sourceSessionKey: normalized.sourceSessionKey } : {}),
           conversationRef: normalized.conversationRef,
@@ -366,13 +385,31 @@ export function createCloseoutTracker(params: {
           updatedAt: createdAt,
         };
         const created = await params.store.create(initial);
-        const record = created
+        let record = created
           ? initial
           : await requireRecord(normalized.agentId, normalized.closeoutId);
         if (!hasSameInput(record, normalized)) {
-          throw new Error(
-            `closeout ${normalized.closeoutId} was already recorded with different input`,
-          );
+          if (record.status !== "rejected") {
+            throw new Error(
+              `closeout ${normalized.closeoutId} was already recorded with different input`,
+            );
+          }
+          const operationGeneration = (record.operationGeneration ?? 1) + 1;
+          record = await persist({
+            closeoutId: normalized.closeoutId,
+            operationId: `closeout:${normalized.closeoutId}:${record.createdAt}:${operationGeneration}`,
+            operationGeneration,
+            agentId: normalized.agentId,
+            ...(normalized.sourceSessionKey
+              ? { sourceSessionKey: normalized.sourceSessionKey }
+              : {}),
+            conversationRef: normalized.conversationRef,
+            message: normalized.message,
+            status: "recorded",
+            attemptCount: 0,
+            createdAt: record.createdAt,
+            updatedAt: now(),
+          });
         }
         return await deliver(record);
       });

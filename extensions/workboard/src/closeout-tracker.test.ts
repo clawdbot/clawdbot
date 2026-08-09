@@ -85,7 +85,7 @@ describe("closeout tracker", () => {
 
     expect(confirmed).toMatchObject({
       closeoutId: "NAC-78",
-      operationId: "closeout:NAC-78",
+      operationId: "closeout:NAC-78:1000:1",
       status: "confirmed",
       messageId: "telegram-123",
       queueId: "closeout:NAC-78",
@@ -97,7 +97,7 @@ describe("closeout tracker", () => {
     expect(send).toHaveBeenCalledWith({
       agentId: "main",
       sourceSessionKey: input.sourceSessionKey,
-      operationId: "closeout:NAC-78",
+      operationId: "closeout:NAC-78:1000:1",
       conversationRef: input.conversationRef,
       message: input.message,
     });
@@ -135,8 +135,8 @@ describe("closeout tracker", () => {
       attemptCount: 2,
     });
     expect(send).toHaveBeenCalledTimes(2);
-    expect(send.mock.calls[0]?.[0].operationId).toBe("closeout:NAC-78");
-    expect(send.mock.calls[1]?.[0].operationId).toBe("closeout:NAC-78");
+    expect(send.mock.calls[0]?.[0].operationId).toBe("closeout:NAC-78:2000:1");
+    expect(send.mock.calls[1]?.[0].operationId).toBe("closeout:NAC-78:2000:1");
   });
 
   it("removes a stale request error when reconciliation obtains a platform receipt", async () => {
@@ -256,6 +256,68 @@ describe("closeout tracker", () => {
       "closeout NAC-78 was already recorded with different input",
     );
     expect(send).toHaveBeenCalledOnce();
+  });
+
+  it("rejects terminal Gateway input failures without claiming an uncertain send", async () => {
+    const store = createMemoryStore();
+    const error = Object.assign(new Error("Conversation not found"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+      retryable: false,
+    });
+    const correctedConversationRef = "conv_corrected_0123456789abcdef";
+    const send = vi.fn<ConversationSend>().mockRejectedValueOnce(error).mockResolvedValueOnce({
+      status: "sent",
+      conversationRef: correctedConversationRef,
+      channel: "telegram",
+      messageId: "telegram-corrected",
+      messageIdSource: "platform",
+    });
+    const tracker = createCloseoutTracker({ store, send, now: () => 4_100 });
+
+    await expect(tracker.send(input)).resolves.toMatchObject({
+      status: "rejected",
+      lastError: "gateway_request_rejected",
+      attemptCount: 1,
+    });
+    await expect(tracker.reconcile("main", "NAC-78")).resolves.toMatchObject({
+      status: "rejected",
+      attemptCount: 1,
+    });
+    await expect(tracker.complete("main", "NAC-78")).rejects.toThrow(
+      "closeout NAC-78 cannot complete from rejected",
+    );
+    await expect(
+      tracker.send({ ...input, conversationRef: correctedConversationRef }),
+    ).resolves.toMatchObject({
+      status: "confirmed",
+      operationId: "closeout:NAC-78:4100:2",
+      messageId: "telegram-corrected",
+      attemptCount: 1,
+    });
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses a fresh operation generation when an expired closeout record is recreated", async () => {
+    const store = createMemoryStore();
+    const send = vi.fn<ConversationSend>(async ({ conversationRef }) => ({
+      status: "sent",
+      conversationRef,
+      channel: "telegram",
+      messageId: "telegram-generation",
+      messageIdSource: "platform",
+    }));
+
+    const firstTracker = createCloseoutTracker({ store, send, now: () => 4_200 });
+    const first = await firstTracker.send(input);
+    store.records.delete("main:NAC-78");
+    const secondTracker = createCloseoutTracker({ store, send, now: () => 4_300 });
+    const second = await secondTracker.send(input);
+
+    expect(first.operationId).toBe("closeout:NAC-78:4200:1");
+    expect(second.operationId).toBe("closeout:NAC-78:4300:1");
+    expect(second.operationId).not.toBe(first.operationId);
+    expect(send).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a sent result uncertain when no observable message id is returned", async () => {

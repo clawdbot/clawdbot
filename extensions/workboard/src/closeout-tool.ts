@@ -64,7 +64,7 @@ function createCloseoutTrackerTool(params: {
     name: "workboard_closeout",
     label: "Workboard Closeout Tracker",
     description:
-      "Track and safely reconcile one external closeout. Uses one stable durable send operation; uncertain outcomes are never completed or resent under a new id automatically.",
+      "Track and safely reconcile one external closeout. Uses one stable durable send operation per stored generation; uncertain outcomes are never completed or resent under a new id automatically. A rejected outcome means no send was accepted, so the same closeoutId may be sent again with corrected input as a new durable generation.",
     parameters: CloseoutTrackerParams,
     async execute(_toolCallId, rawParams) {
       const toolParams = requireParams(rawParams);
