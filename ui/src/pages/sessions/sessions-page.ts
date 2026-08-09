@@ -1052,10 +1052,16 @@ class SessionsPage extends OpenClawLightDomElement {
     if (remembered !== "completed") {
       return remembered === "failed" ? (this.error ?? t("sessionsView.newGroupFailed")) : null;
     }
-    if (
-      sessionKey &&
-      (await this.patchSession(sessionKey, { category: name }, scope)) === "failed"
-    ) {
+    if (!sessionKey) {
+      return null;
+    }
+    // The catalog write is awaited first, so the row can disappear in between.
+    // sessions.patch would recreate a store entry for a key the list no longer
+    // has; assignCategory guards the same way before its own patch.
+    if (!this.result?.sessions.some((row) => row.key === sessionKey)) {
+      return null;
+    }
+    if ((await this.patchSession(sessionKey, { category: name }, scope)) === "failed") {
       return this.error ?? t("sessionsView.newGroupFailed");
     }
     return null;

@@ -86,6 +86,25 @@ describe("sessions page new group", () => {
     expect(sessions.patch).not.toHaveBeenCalled();
   });
 
+  it("skips the assignment when the row disappeared during the catalog write", async () => {
+    let landCatalogWrite!: () => void;
+    const pending = new Promise<SessionGroupMutationResult>((resolve) => {
+      landCatalogWrite = () => resolve("completed");
+    });
+    const { page, sessions } = await mountGroupsPage(() => pending);
+
+    const created = page.requestNewCategory(SESSION_KEY);
+    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
+
+    // The session was deleted while the catalog write was in flight; patching
+    // its key now would recreate the entry the operator just removed.
+    page.result = { count: 0, sessions: [] } as SessionsListResult;
+    landCatalogWrite();
+    await created;
+
+    expect(sessions.patch).not.toHaveBeenCalled();
+  });
+
   it("skips the assignment when the catalog itself reports the write stale", async () => {
     // The capability retires the write on its own connection epoch, which the
     // page's scope predicate cannot observe; the assignment must still stop.
