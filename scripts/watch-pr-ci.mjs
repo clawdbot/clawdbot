@@ -5,7 +5,7 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { execGhJson } from "./lib/plain-gh.mjs";
 
 const USAGE =
-  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120]";
+  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run]";
 const FAILURE_CONCLUSIONS = new Set([
   "ACTION_REQUIRED",
   "CANCELLED",
@@ -51,6 +51,7 @@ export function parseArgs(argv) {
         "attach-timeout": { type: "string", default: "900" },
         timeout: { type: "string", default: "3600" },
         interval: { type: "string", default: "120" },
+        completion: { type: "string", default: "rollup" },
       },
     });
   } catch {
@@ -67,6 +68,7 @@ export function parseArgs(argv) {
     attachTimeout: positiveInteger(parsed.values["attach-timeout"], "--attach-timeout"),
     timeout: positiveInteger(parsed.values.timeout, "--timeout"),
     interval: positiveInteger(parsed.values.interval, "--interval"),
+    completion: parsed.values.completion,
   };
   if (parsed.values.after !== undefined) {
     args.after = positiveInteger(parsed.values.after, "--after");
@@ -76,6 +78,9 @@ export function parseArgs(argv) {
   }
   if (!/^[^/\s]+\/[^/\s]+$/u.test(args.repo)) {
     throw new Error("--repo must be owner/repo");
+  }
+  if (!new Set(["rollup", "ci-run"]).has(args.completion)) {
+    throw new Error("--completion must be rollup or ci-run");
   }
   return args;
 }
@@ -255,6 +260,15 @@ export function classifyRunAttachment(runId, run, after) {
   };
 }
 
+export function classifyAttachedCiRun(run) {
+  if (run.status !== "completed") {
+    return { verdict: "PENDING" };
+  }
+  return run.conclusion === "success"
+    ? { verdict: "GREEN" }
+    : { verdict: "FAILING", conclusion: run.conclusion ?? "unknown" };
+}
+
 export function collectRollupContexts(fetchPage) {
   const firstPage = fetchPage(null);
   const firstContexts = firstPage?.statusCheckRollup?.contexts;
@@ -419,6 +433,24 @@ async function main(argv = process.argv.slice(2)) {
     interval: args.interval,
     poll: () => {
       try {
+        if (args.completion === "ci-run") {
+          const blocked = precheck(readPr(args.pr, args.repo), args.headSha, true);
+          if (blocked !== null) {
+            return blocked;
+          }
+          const run = readRun(args.repo, runId);
+          const result = classifyAttachedCiRun(run);
+          console.log(
+            `STATUS run=${String(run.status)} conclusion=${String(run.conclusion ?? "pending")}`,
+          );
+          if (result.verdict === "FAILING") {
+            return emit(`FAILING checks=CI workflow (${result.conclusion})`, 15);
+          }
+          if (result.verdict === "GREEN") {
+            return emit("GREEN", 0);
+          }
+          return undefined;
+        }
         const pr = readRollup(args.pr, args.repo);
         const blocked = precheck(pr, args.headSha, true);
         if (blocked !== null) {

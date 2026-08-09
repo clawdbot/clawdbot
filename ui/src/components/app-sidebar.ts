@@ -475,8 +475,15 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
             ${renderAppSidebarAttention(this)}
             <openclaw-sidebar-update-card
               .updateAvailable=${this.updateAvailable}
+              .updateSchedule=${this.updateSchedule}
+              .heldUpdateCampaignId=${this.heldUpdateCampaignId}
               .updateRunning=${this.updateRunning}
+              .canUpdate=${this.canUpdate}
+              .canHoldUpdate=${this.canHoldUpdate}
               .onUpdate=${this.onUpdate}
+              .refreshRequired=${this.refreshRequired}
+              .onRefresh=${this.onRefresh}
+              .onHoldUpdate=${this.onHoldUpdate}
             ></openclaw-sidebar-update-card>
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}

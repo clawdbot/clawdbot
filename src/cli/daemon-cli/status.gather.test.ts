@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import type { PortListener, PortUsageStatus } from "../../infra/ports.js";
+import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { defaultRuntime } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
@@ -15,7 +15,7 @@ import { gatherDaemonStatus } from "./status.gather.js";
 import { printDaemonStatus } from "./status.print.js";
 
 type PortConnections = Awaited<
-  ReturnType<typeof import("../../infra/ports.js").inspectPortConnections>
+  ReturnType<typeof import("../../infra/ports-inspect.js").inspectPortConnections>
 >;
 
 const callGatewayStatusProbe = vi.fn<
@@ -270,7 +270,7 @@ vi.mock("../../gateway/probe-auth.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../infra/ports.js", () => ({
+vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortConnections: (port: number) => inspectPortConnections(port),
   inspectPortUsage: (port: number, options?: PortUsageInspectionOptions) =>
     inspectPortUsage(port, options),
@@ -278,6 +278,9 @@ vi.mock("../../infra/ports.js", () => ({
     ports: readonly number[],
     options?: { probeHostsByPort?: ReadonlyMap<number, readonly string[]> },
   ) => inspectPortUsages(ports, options),
+}));
+
+vi.mock("../../infra/ports-format.js", () => ({
   formatPortDiagnostics: () => [],
 }));
 

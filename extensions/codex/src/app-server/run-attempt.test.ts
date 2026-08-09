@@ -38,7 +38,11 @@ import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-bridge.js";
-import { CodexAppServerRpcError } from "./client.js";
+import {
+  consumeCodexAppServerLiveThread,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
+import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import {
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
@@ -634,6 +638,10 @@ function createRunPaths() {
   };
 }
 
+function openRunSession(sessionFile: string) {
+  return openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" });
+}
+
 function createRunParams() {
   const { sessionFile, workspaceDir } = createRunPaths();
   return createParams(sessionFile, workspaceDir);
@@ -830,6 +838,7 @@ async function runSharedClientRestartTest(closeCount: number) {
   const { sessionFile, workspaceDir } = createRunPaths();
   await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
   const requests: string[][] = [];
+  const clients: CodexAppServerClient[] = [];
   let starts = 0;
   const state: {
     notify: (notification: CodexServerNotification) => Promise<void>;
@@ -838,7 +847,7 @@ async function runSharedClientRestartTest(closeCount: number) {
     const startIndex = starts++;
     const methods: string[] = [];
     requests.push(methods);
-    return {
+    const client = {
       ...mockClientRuntimeMethods(),
       request: vi.fn(async (method: string) => {
         methods.push(method);
@@ -858,7 +867,9 @@ async function runSharedClientRestartTest(closeCount: number) {
         return () => undefined;
       },
       addRequestHandler: () => () => undefined,
-    } as never;
+    } as unknown as CodexAppServerClient;
+    clients.push(client);
+    return client;
   });
   const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
   await vi.waitFor(() => expect(requests[closeCount]).toContain("turn/start"), fastWait);
@@ -870,7 +881,23 @@ async function runSharedClientRestartTest(closeCount: number) {
       turn: { id: "turn-1", status: "completed" },
     },
   });
-  return { result: await run, requests };
+  return { result: await run, requests, client: clients[closeCount]! };
+}
+
+async function expectRetainedSuccessfulThread(client: CodexAppServerClient, threadId: string) {
+  const ownership = await consumeCodexAppServerLiveThread(client, threadId);
+  expect(ownership).toEqual(expect.objectContaining({ release: expect.any(Function) }));
+  // Restore the exact branded owner so this assertion itself cannot orphan
+  // the persistent subscription or alter later cleanup in the same test.
+  await expect(
+    retainCodexAppServerLiveThread(
+      client,
+      threadId,
+      ownership?.release,
+      ownership?.configFingerprint,
+      ownership?.serviceTier,
+    ),
+  ).resolves.toBe(true);
 }
 
 async function createSandboxReleaseFixture(
@@ -2455,7 +2482,7 @@ describe("runCodexAppServerAttempt", () => {
       ]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -2524,7 +2551,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("projects bounded continuity when starting Codex without a native thread binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
@@ -2598,7 +2625,7 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
@@ -2656,7 +2683,7 @@ describe("runCodexAppServerAttempt", () => {
       createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(userMessage("prior visible context", Date.now()));
     sessionManager.appendMessage(assistantMessage("prior assistant context", Date.now() + 1));
     const harness = createStartedThreadHarness();
@@ -2698,7 +2725,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt - 2_000),
     );
@@ -2831,7 +2858,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(userMessage("old native-owned context", bindingUpdatedAt - 2_000));
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt + 1_000),
@@ -2920,7 +2947,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     const codexMirrorUserMessage = {
       ...userMessage("codex mirrored user echo", bindingUpdatedAt + 1_000),
       idempotencyKey: "client-run:user",
@@ -2967,7 +2994,7 @@ describe("runCodexAppServerAttempt", () => {
       ...originalBinding,
       historyCoveredThrough: new Date(originalBindingUpdatedAt).toISOString(),
     });
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     const firstHarness = createResumeHarness();
     const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await firstHarness.waitForMethod("turn/start");
@@ -3005,7 +3032,7 @@ describe("runCodexAppServerAttempt", () => {
       ...oldBinding,
       historyCoveredThrough: new Date(oldBindingUpdatedAt).toISOString(),
     });
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", oldBindingUpdatedAt + 1_000),
     );
@@ -3995,8 +4022,8 @@ describe("runCodexAppServerAttempt", () => {
       "thread/resume",
       "turn/start",
       "turn/start",
-      "thread/unsubscribe",
     ]);
+    await expectRetainedSuccessfulThread(harness.client, "thread-existing");
   });
 
   it("waits for the exact active native turn before starting a resumed thread turn", async () => {
@@ -4056,8 +4083,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.requests.map((request) => request.method)).toEqual([
       "thread/resume",
       "turn/start",
-      "thread/unsubscribe",
     ]);
+    await expectRetainedSuccessfulThread(harness.client, "thread-existing");
   });
   it("does not retry turn/start for non-compact active turns", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -4906,7 +4933,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "pre-binding native-owned context: keep the original plan",
@@ -4998,22 +5025,21 @@ describe("runCodexAppServerAttempt", () => {
     expect(savedBinding?.threadId).toBe("thread-1");
   });
   it("restarts the app-server once when a shared client closes during startup", async () => {
-    const { result, requests } = await runSharedClientRestartTest(1);
+    const { result, requests, client } = await runSharedClientRestartTest(1);
     expect(readAttemptTerminal(result).aborted).toBe(false);
-    expect(requests).toEqual([
-      ["thread/resume"],
-      ["thread/resume", "turn/start", "thread/unsubscribe"],
-    ]);
+    expect(requests).toEqual([["thread/resume"], ["thread/resume", "turn/start"]]);
+    await expectRetainedSuccessfulThread(client, "thread-existing");
   });
 
   it("tolerates a second app-server close while retrying startup", async () => {
-    const { result, requests } = await runSharedClientRestartTest(2);
+    const { result, requests, client } = await runSharedClientRestartTest(2);
     expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests).toEqual([
       ["thread/resume"],
       ["thread/resume"],
-      ["thread/resume", "turn/start", "thread/unsubscribe"],
+      ["thread/resume", "turn/start"],
     ]);
+    await expectRetainedSuccessfulThread(client, "thread-existing");
   });
   it("does not retire the shared Codex client when a spawned helper run fails with a logical thread/start error", async () => {
     const { retireSpy, state } = installFailingThreadStartClient(() => {
@@ -5607,11 +5633,17 @@ describe("runCodexAppServerAttempt", () => {
       fastMode: () => true,
       expectedServiceTier: "priority",
     },
+    {
+      name: "configured non-priority tier",
+      fastMode: undefined,
+      configuredServiceTier: "flex",
+      expectedServiceTier: "flex",
+    },
   ] satisfies Array<{
     name: string;
     fastMode: EmbeddedRunAttemptParams["fastMode"];
-    configuredServiceTier?: "priority";
-    expectedServiceTier?: "priority" | null;
+    configuredServiceTier?: "flex" | "priority";
+    expectedServiceTier?: "flex" | "priority" | null;
   }>)(
     "maps $name to app-server resume and turn service tier",
     async ({ fastMode, configuredServiceTier, expectedServiceTier }) => {
@@ -5621,6 +5653,8 @@ describe("runCodexAppServerAttempt", () => {
       const { requests, waitForMethod, completeTurn } = createResumeHarness();
       const params = createParams(sessionFile, workspaceDir);
       params.fastMode = fastMode;
+      const onAgentEvent = vi.fn();
+      params.onAgentEvent = onAgentEvent;
       const options = configuredServiceTier
         ? { pluginConfig: { appServer: { serviceTier: configuredServiceTier } } }
         : {};
@@ -5631,6 +5665,13 @@ describe("runCodexAppServerAttempt", () => {
         const requestParams = request?.params as Record<string, unknown> | undefined;
         expect(requestParams?.serviceTier).toBe(expectedServiceTier);
       }
+      expect(onAgentEvent).toHaveBeenCalledWith({
+        stream: "codex_app_server.lifecycle",
+        data: expect.objectContaining({
+          phase: "turn_starting",
+          serviceTier: expectedServiceTier,
+        }),
+      });
     },
   );
   it("reuses the bound auth profile for app-server startup when params omit it", async () => {

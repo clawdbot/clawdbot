@@ -437,7 +437,6 @@ src/agents/openclaw-tools.media-factory-plan.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
 src/agents/provider-attribution.test.ts
-src/agents/provider-local-service.ts
 src/agents/provider-request-config.ts
 src/agents/provider-transport-fetch.test.ts
 src/agents/provider-transport-fetch.ts
@@ -962,7 +961,6 @@ ui/src/pages/chat/chat-state.test.ts
 ui/src/pages/chat/chat-thread.test.ts
 ui/src/pages/chat/chat-view.test.ts
 ui/src/pages/chat/components/chat-message.test.ts
-ui/src/pages/chat/components/chat-model-controls.ts
 ui/src/pages/chat/components/chat-session-workspace.ts
 ui/src/pages/chat/components/chat-sidebar.ts
 ui/src/pages/chat/components/chat-thread.ts

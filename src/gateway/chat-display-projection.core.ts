@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty as normalizeErrorSignal } from "@openclaw/normalization-core/string-coerce";
 import { isContextOverflowError } from "../agents/embedded-agent-helpers/context-overflow.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
@@ -87,10 +88,6 @@ type ChatDisplayProjectionResult = {
 const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT = "The agent run failed before producing a reply.";
 const GATEWAY_ASSISTANT_CONTEXT_OVERFLOW_FALLBACK_TEXT =
   "Context overflow: this conversation is too large for the model. Try /compact, use /new to start a fresh session, or retry the command with a tighter output limit.";
-
-function normalizeErrorSignal(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
 
 function isContextOverflowErrorSignal(value: unknown): boolean {
   if (typeof value !== "string") {

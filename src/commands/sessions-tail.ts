@@ -4,6 +4,7 @@
  * It selects active or requested sessions, renders recent trajectory events,
  * and can follow newly appended SQLite trajectory rows.
  */
+import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
@@ -77,10 +78,6 @@ function parseTailCount(value: string | number | undefined): number | null {
     return DEFAULT_TAIL_COUNT;
   }
   return parseStrictNonNegativeInteger(value) ?? null;
-}
-
-function toOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function formatTimestamp(ts: string): string {

@@ -8,8 +8,8 @@ import {
   validateEnvironmentsListParams,
   validateEnvironmentsStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
-import { listNodePairing } from "../../infra/node-pairing.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";

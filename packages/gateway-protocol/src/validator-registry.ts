@@ -214,6 +214,7 @@ export const validateSessionsViewerPresenceSetParams = compile(
 );
 export const validateSessionsAbortParams = compile(S.SessionsAbortParamsSchema);
 export const validateSessionsPatchParams = compile(S.SessionsPatchParamsSchema);
+export const validateSessionsPatchManyParams = compile(S.SessionsPatchManyParamsSchema);
 export const validateSessionsPluginPatchParams = compile(S.SessionsPluginPatchParamsSchema);
 export const validateSessionsResetParams = compile(S.SessionsResetParamsSchema);
 export const validateSessionsDeleteParams = compile(S.SessionsDeleteParamsSchema);
@@ -396,6 +397,9 @@ export const validateChatSendParams = compile(S.ChatSendParamsSchema);
 export const validateChatAbortParams = compile(S.ChatAbortParamsSchema);
 export const validateChatInjectParams = compile(S.ChatInjectParamsSchema);
 export const validateUpdateStatusParams = compile(S.UpdateStatusParamsSchema);
+export const validateUpdateStatusResult = compile(S.UpdateStatusResultSchema);
+export const validateUpdateHoldParams = compile(S.UpdateHoldParamsSchema);
+export const validateUpdateHoldResult = compile(S.UpdateHoldResultSchema);
 export const validateUpdateRunParams = compile(S.UpdateRunParamsSchema);
 export const validateUiCommandParams = compile(S.UiCommandParamsSchema);
 export const validateWebLoginStartParams = compile(S.WebLoginStartParamsSchema);

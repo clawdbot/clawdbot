@@ -14,6 +14,7 @@ import {
   resolveResponsesTerminalStopReason,
 } from "../providers/openai-responses-terminal-usage.js";
 import type {
+  AssistantMessage,
   AssistantMessageEvent,
   Model,
   TextContent,
@@ -23,6 +24,7 @@ import type {
   Usage,
 } from "../types.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
+import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   type OpenAIResponsesReasoningReplayMetadata,
@@ -41,6 +43,7 @@ export type ResponsesThinkingBlock = ThinkingContent & {
 
 type TerminalOutput = {
   content: Array<TextContent | ThinkingContent | ToolCall>;
+  providerReplay?: AssistantMessage["providerReplay"];
   usage: Usage & { reasoningTokens?: number };
   stopReason: string;
   responseModel?: string;
@@ -114,8 +117,11 @@ export function createResponsesTerminalController(params: {
   model: Model;
   options?: TerminalOptions;
   reasoningBlocksById: Map<string, ResponsesThinkingBlock>;
-  completedOutputItemIdentities: Set<string>;
   startedTextBlocksByItemId: Map<string, TextBlockReference>;
+  outputItemContentIndexes: {
+    get: (item: ResponseOutputItem) => number | undefined;
+    set: (item: ResponseOutputItem, contentIndex: number) => void;
+  };
   getLastTextBlock: () => TextBlockReference | null;
   setLastTextBlock: (block: TextBlockReference | null) => void;
   markFinalized: () => void;
@@ -143,7 +149,7 @@ export function createResponsesTerminalController(params: {
       }
     }
   };
-  const appendText = (item: ResponseOutputMessage) => {
+  const appendText = (item: ResponseOutputMessage): number | undefined => {
     const text = (Array.isArray(item.content) ? item.content : [])
       .map((part) => {
         const content = part as { type: string; text?: string; refusal?: string };
@@ -154,7 +160,7 @@ export function createResponsesTerminalController(params: {
       .join("");
     const started = params.startedTextBlocksByItemId.get(item.id);
     if (!text && !started) {
-      return;
+      return undefined;
     }
     const phase = item.phase ?? undefined;
     if (started) {
@@ -175,7 +181,7 @@ export function createResponsesTerminalController(params: {
         content: text,
         partial: output as never,
       });
-      return;
+      return started.index;
     }
     const previous = params.getLastTextBlock();
     const collapse = resolveResponsesMessageSnapshotCollapse({
@@ -192,7 +198,7 @@ export function createResponsesTerminalController(params: {
         content: collapse.text,
         partial: output as never,
       });
-      return;
+      return previous.index;
     }
     const block: TextContent = {
       type: "text",
@@ -204,8 +210,9 @@ export function createResponsesTerminalController(params: {
     params.setLastTextBlock({ block, index, phase });
     stream.push({ type: "text_start", contentIndex: index, partial: output as never });
     stream.push({ type: "text_end", contentIndex: index, content: text, partial: output as never });
+    return index;
   };
-  const appendToolCall = (item: Extract<ResponseOutputItem, { type: "function_call" }>) => {
+  const appendToolCall = (item: Extract<ResponseOutputItem, { type: "function_call" }>): number => {
     const validated = resolveCompletedResponsesToolCall(item);
     const toolCall: ToolCall = {
       type: "toolCall",
@@ -217,22 +224,21 @@ export function createResponsesTerminalController(params: {
     const contentIndex = blocks.length - 1;
     stream.push({ type: "toolcall_start", contentIndex, partial: output as never });
     stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output as never });
+    return contentIndex;
   };
   const recoverTerminalOutput = (items: ResponseOutputItem[], includeToolCalls: boolean) => {
     let hasCompletedLaterOutput = false;
     for (const item of items.toReversed()) {
       if (item.type === "reasoning") {
         // Terminal snapshots only backfill streamed reasoning; missing reasoning is never emitted.
-        hasCompletedLaterOutput ||= params.reasoningBlocksById.has(item.id);
+        hasCompletedLaterOutput ||= params.outputItemContentIndexes.get(item) !== undefined;
         continue;
       }
       if (item.type !== "message" && item.type !== "function_call") {
         continue;
       }
-      const identity =
-        item.type === "message" ? `message:${item.id}` : `function_call:${item.call_id}`;
       if (
-        params.completedOutputItemIdentities.has(identity) ||
+        params.outputItemContentIndexes.get(item) !== undefined ||
         (item.type === "message" && params.startedTextBlocksByItemId.has(item.id))
       ) {
         hasCompletedLaterOutput = true;
@@ -249,23 +255,39 @@ export function createResponsesTerminalController(params: {
         resolveCompletedResponsesToolCall(item);
       }
     }
-    for (const item of items) {
+    for (const [terminalIndex, item] of items.entries()) {
       if (item.type === "message") {
-        const identity = `message:${item.id}`;
-        if (params.completedOutputItemIdentities.has(identity)) {
+        const contentIndex = params.outputItemContentIndexes.get(item);
+        if (contentIndex !== undefined && !params.startedTextBlocksByItemId.has(item.id)) {
           continue;
         }
-        appendText(item);
-        params.completedOutputItemIdentities.add(identity);
+        const appendedIndex = appendText(item);
+        if (appendedIndex !== undefined) {
+          params.outputItemContentIndexes.set(item, appendedIndex);
+        }
       } else {
         params.setLastTextBlock(null);
-        if (includeToolCalls && item.type === "function_call") {
-          const identity = `function_call:${item.call_id}`;
-          if (params.completedOutputItemIdentities.has(identity)) {
+        if (item.type === "compaction" && output.providerReplay?.id !== item.id) {
+          let replayIndex = blocks.length;
+          for (const laterItem of items.slice(terminalIndex + 1)) {
+            const laterContentIndex = params.outputItemContentIndexes.get(laterItem);
+            if (laterContentIndex !== undefined) {
+              replayIndex = laterContentIndex;
+              break;
+            }
+          }
+          captureOpenAIResponsesCompaction(
+            output,
+            item,
+            replayIndex,
+            model,
+            options?.reasoningReplayMetadata,
+          );
+        } else if (includeToolCalls && item.type === "function_call") {
+          if (params.outputItemContentIndexes.get(item) !== undefined) {
             continue;
           }
-          appendToolCall(item);
-          params.completedOutputItemIdentities.add(identity);
+          params.outputItemContentIndexes.set(item, appendToolCall(item));
         }
       }
     }

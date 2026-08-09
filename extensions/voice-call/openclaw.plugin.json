@@ -1,5 +1,9 @@
 {
   "id": "voice-call",
+  "doctorContract": {
+    "resolveSessionStoreAgentIds": true,
+    "stateMigrations": true
+  },
   "name": "Voice Call",
   "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
   "skills": ["./skills"],

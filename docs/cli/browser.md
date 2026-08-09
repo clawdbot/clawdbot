@@ -118,6 +118,34 @@ When the macOS app uses a local Gateway, it can offer this import once and make 
 
 System-profile import is enabled by default. Set `browser.allowSystemProfileImport=false` to disable both CLI and agent-triggered imports. Import is host-local and cannot run through the browser node proxy.
 
+## Chrome extension relay
+
+```bash
+openclaw browser extension path
+openclaw browser extension pair
+openclaw browser extension pair --gateway-url wss://gateway.example.com
+openclaw browser extension cdp
+openclaw browser extension cdp --json
+```
+
+- `extension path` prints the unpacked extension directory for Chrome's **Load
+  unpacked** flow.
+- `extension pair` creates the host-local relay key when needed and prints the
+  pairing string. `--gateway-url` creates a direct remote-Gateway pairing URL;
+  non-loopback URLs must use `wss://`.
+- `extension cdp` prints non-secret Browser Relay Authentication v2 metadata:
+  the loopback browser/CDP endpoints, protocol version, key ID, and fixed
+  challenge/complete binding. It never prints the relay key or an authorization
+  header by default.
+
+`extension cdp --legacy-bearer` is a temporary migration escape hatch. It
+prints the old Bearer header with a warning only while
+`browser.extensionRelay.allowLegacyAuth=true`; otherwise it exits with an error
+without printing a credential. Use `--json` for machine output; warnings remain
+on stderr so stdout stays valid JSON.
+
+Setup, security model, and migration steps: [Chrome extension](/tools/chrome-extension).
+
 ## Tabs
 
 ```bash

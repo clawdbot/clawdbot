@@ -11,8 +11,28 @@ type RealtimeOutcome = {
   tools: Array<{ itemId: string; callId: string; name: string; args: unknown }>;
 };
 
+type CaptureRealtimeOutcomeOptions = {
+  queuedUserMessage?: string;
+  onClientEvent?: (event: Record<string, unknown>) => void;
+};
+
+async function waitForFixtureEvent(promise: Promise<void>, label: string): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`timed out waiting for ${label}`)), 2_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function captureRealtimeOutcome(
   eventInput: Record<string, unknown> | Record<string, unknown>[],
+  options: CaptureRealtimeOutcomeOptions = {},
 ): Promise<RealtimeOutcome> {
   const events = Array.isArray(eventInput) ? eventInput : [eventInput];
   const outcome: RealtimeOutcome = { errors: [], transcripts: [], tools: [] };
@@ -20,20 +40,47 @@ async function captureRealtimeOutcome(
   const serverEventHandled = new Promise<void>((resolve) => {
     markServerEventHandled = resolve;
   });
+  let markResponseCreatedHandled: () => void = () => {};
+  const responseCreatedHandled = new Promise<void>((resolve) => {
+    markResponseCreatedHandled = resolve;
+  });
   const server = createServer();
   const sockets = new Set<WebSocket>();
+  let queuedTurnTriggered = false;
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   server.on("upgrade", (request, socket, head) => {
     wss.handleUpgrade(request, socket, head, (ws) => {
       sockets.add(ws);
       ws.on("message", (message) => {
-        if (JSON.parse(Buffer.from(message as Buffer).toString("utf8")).type !== "session.update") {
+        const clientEvent = JSON.parse(Buffer.from(message as Buffer).toString("utf8")) as Record<
+          string,
+          unknown
+        >;
+        options.onClientEvent?.(clientEvent);
+        if (clientEvent.type === "response.create" && options.queuedUserMessage) {
+          markServerEventHandled();
+          return;
+        }
+        if (
+          clientEvent.type === "conversation.item.create" &&
+          options.queuedUserMessage &&
+          !queuedTurnTriggered
+        ) {
+          queuedTurnTriggered = true;
+          for (const event of events) {
+            ws.send(JSON.stringify(event));
+          }
+          return;
+        }
+        if (clientEvent.type !== "session.update") {
           return;
         }
         ws.send(JSON.stringify({ type: "session.updated" }));
         ws.send(JSON.stringify({ type: "response.created", response: { id: "response_1" } }));
-        for (const event of events) {
-          ws.send(JSON.stringify(event));
+        if (!options.queuedUserMessage) {
+          for (const event of events) {
+            ws.send(JSON.stringify(event));
+          }
         }
       });
     });
@@ -50,15 +97,26 @@ async function captureRealtimeOutcome(
     onTranscript: (speaker, text, final) => outcome.transcripts.push({ speaker, text, final }),
     onToolCall: (tool) => outcome.tools.push(tool),
     onEvent: (observed) => {
+      if (observed.direction === "server" && observed.type === "response.created") {
+        markResponseCreatedHandled();
+      }
       if (observed.direction === "server" && observed.type === events.at(-1)?.type) {
-        markServerEventHandled();
+        if (!options.queuedUserMessage) {
+          markServerEventHandled();
+        }
       }
     },
   });
 
   try {
     await bridge.connect();
-    await serverEventHandled;
+    if (options.queuedUserMessage) {
+      await waitForFixtureEvent(responseCreatedHandled, "response.created");
+      bridge.sendUserMessage?.(options.queuedUserMessage);
+      await waitForFixtureEvent(serverEventHandled, "the queued response.create");
+    } else {
+      await serverEventHandled;
+    }
     return outcome;
   } finally {
     bridge.close();
@@ -89,6 +147,32 @@ const expectedTool = {
 };
 
 describe("xAI realtime terminal event ownership", () => {
+  it("flushes a queued turn after malformed terminal output over a real WebSocket", async () => {
+    const clientEventTypes: string[] = [];
+
+    const outcome = await captureRealtimeOutcome(
+      {
+        type: "response.done",
+        response: { status: "completed", output: [null] },
+      },
+      {
+        queuedUserMessage: "Continue after malformed terminal output.",
+        onClientEvent: (event) => {
+          if (typeof event.type === "string") {
+            clientEventTypes.push(event.type);
+          }
+        },
+      },
+    );
+
+    expect(outcome).toEqual({ errors: [], transcripts: [], tools: [] });
+    expect(clientEventTypes).toEqual([
+      "session.update",
+      "conversation.item.create",
+      "response.create",
+    ]);
+  });
+
   it.each([
     {
       name: "preserves assistant transcripts carried only by terminal output",

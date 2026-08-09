@@ -1,35 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  AUTH_INSTANCE_ID,
+  AUTH_SERVER_NONCE,
+  AUTH_SESSION_ID,
+  configureFakeWebSockets,
+  FakeWebSocket,
+} from "./background.test-support.js";
+import type { PageCaptureResult, RuntimeMessageListener } from "./background.test-support.js";
+import { computeRelayAuthProof } from "./modules/relay-auth-v2-crypto.js";
 
 const RELAY_WATCHDOG_ALARM = "openclaw-relay-watchdog";
 const RELAY_OPENING_DEADLINE_ALARM = "openclaw-relay-opening-deadline";
 const START_TIME_MS = Date.parse("2026-07-16T08:00:00.000Z");
 const RELAY_SECRET = "a".repeat(64);
 const REPLACEMENT_RELAY_SECRET = "b".repeat(64);
-const PAIRING_CONFIG_KEYS = ["relayUrl", "gatewayUrl", "token", "groupColor"];
-
-type SocketEvent = { data?: unknown };
-type SocketListener = (event: SocketEvent) => void;
-type RuntimeMessageListener = (
-  message: { type: string; tabId?: number; note?: string; pairingString?: string },
-  sender: unknown,
-  sendResponse: (response: unknown) => void,
-) => boolean;
-type PageCaptureResult = {
-  content: string;
-  selection: string;
-  title: string;
-  url: string;
-};
+const PAIRING_CONFIG_KEYS = ["relayUrl", "token", "pairingStatus"];
 
 async function loadBackground({
   deferSocketClose = false,
   onConsentChanged,
   rejectStorageRemove = false,
+  relayNegotiatedProtocol,
   storedConfig,
 }: {
   deferSocketClose?: boolean;
   onConsentChanged?: () => Promise<void>;
   rejectStorageRemove?: boolean;
+  relayNegotiatedProtocol?: string;
   storedConfig?: Record<string, unknown>;
 } = {}) {
   const sockets: FakeWebSocket[] = [];
@@ -42,56 +39,11 @@ async function loadBackground({
     ...(storedConfig ?? {
       relayUrl: "ws://127.0.0.1:18797/extension",
       token: RELAY_SECRET,
+      authVersion: 2,
       groupColor: "orange",
     }),
   };
-
-  class FakeWebSocket {
-    static readonly CONNECTING = 0;
-    static readonly OPEN = 1;
-    static readonly CLOSING = 2;
-    static readonly CLOSED = 3;
-
-    readyState = FakeWebSocket.CONNECTING;
-    readonly send = vi.fn();
-    readonly close = vi.fn(() => {
-      if (deferSocketClose) {
-        this.readyState = FakeWebSocket.CLOSING;
-        return;
-      }
-      this.readyState = FakeWebSocket.CLOSED;
-      this.emit("close");
-    });
-    private readonly listeners = new Map<string, SocketListener[]>();
-
-    constructor(
-      readonly url: string,
-      readonly protocols: string[] = [],
-    ) {
-      sockets.push(this);
-    }
-
-    addEventListener(type: string, listener: SocketListener) {
-      const listeners = this.listeners.get(type) ?? [];
-      listeners.push(listener);
-      this.listeners.set(type, listeners);
-    }
-
-    open() {
-      this.readyState = FakeWebSocket.OPEN;
-      this.emit("open");
-    }
-
-    receive(message: unknown) {
-      this.emit("message", { data: JSON.stringify(message) });
-    }
-
-    private emit(type: string, event: SocketEvent = {}) {
-      for (const listener of this.listeners.get(type) ?? []) {
-        listener(event);
-      }
-    }
-  }
+  configureFakeWebSockets({ sockets, deferSocketClose, relayNegotiatedProtocol });
 
   const addListener = vi.fn();
   const createAlarm = vi.fn();
@@ -230,10 +182,8 @@ async function loadBackground({
   const backgroundModulePath = "./background.js";
   await import(backgroundModulePath);
   await vi.waitFor(() => {
-    const pairingReads = storageGet.mock.calls.filter(
-      ([keys]) =>
-        keys.length === PAIRING_CONFIG_KEYS.length &&
-        PAIRING_CONFIG_KEYS.every((key) => keys.includes(key)),
+    const pairingReads = storageGet.mock.calls.filter(([keys]) =>
+      PAIRING_CONFIG_KEYS.every((key) => keys.includes(key)),
     );
     expect(pairingReads.length).toBeGreaterThanOrEqual(2);
   });
@@ -263,11 +213,73 @@ async function loadBackground({
       return release;
     },
     get gatewaySockets() {
-      return sockets.filter((socket) => !socket.protocols.includes("openclaw-extension-relay"));
+      return sockets.filter((socket) => !socket.protocols.includes("openclaw-extension-relay.v2"));
     },
     messageListener,
     get relaySockets() {
-      return sockets.filter((socket) => socket.protocols.includes("openclaw-extension-relay"));
+      return sockets.filter((socket) => socket.protocols.includes("openclaw-extension-relay.v2"));
+    },
+    authenticate: async (socket: FakeWebSocket) => {
+      if (socket.readyState !== FakeWebSocket.OPEN) {
+        socket.open();
+      }
+      await vi.waitFor(() => {
+        expect(socket.send).toHaveBeenCalled();
+      });
+      const helloRaw = socket.send.mock.calls.find(
+        ([raw]) => JSON.parse(raw).type === "auth.hello",
+      )?.[0];
+      if (typeof helloRaw !== "string") {
+        throw new Error("expected auth.hello");
+      }
+      const hello = JSON.parse(helloRaw) as { keyId: string; clientNonce: string };
+      const issuedAtMs = Date.now();
+      const fields = {
+        keyId: hello.keyId,
+        instanceId: AUTH_INSTANCE_ID,
+        sessionId: AUTH_SESSION_ID,
+        clientNonce: hello.clientNonce,
+        serverNonce: AUTH_SERVER_NONCE,
+        issuedAtMs,
+        expiresAtMs: issuedAtMs + 10_000,
+        role: "extension",
+        transport: "websocket",
+        method: "GET",
+        resource: new URL(socket.url).pathname + new URL(socket.url).search,
+        flow: "extension",
+      };
+      socket.receive({
+        type: "auth.challenge",
+        v: 2,
+        ...fields,
+        serverProof: await computeRelayAuthProof(String(storageValues.token), "server", fields),
+      });
+      await vi.waitFor(() => {
+        expect(
+          socket.send.mock.calls.some(([raw]) => JSON.parse(raw).type === "auth.response"),
+        ).toBe(true);
+      });
+      const responseRaw = socket.send.mock.calls.find(
+        ([raw]) => JSON.parse(raw).type === "auth.response",
+      )?.[0];
+      if (typeof responseRaw !== "string") {
+        throw new Error("expected auth.response");
+      }
+      const response = JSON.parse(responseRaw) as { clientProof: string };
+      socket.receive({
+        type: "auth.ok",
+        v: 2,
+        sessionId: AUTH_SESSION_ID,
+        acceptProof: await computeRelayAuthProof(
+          String(storageValues.token),
+          "accept",
+          fields,
+          response.clientProof,
+        ),
+      });
+      await vi.waitFor(() => {
+        expect(socket.send.mock.calls.some(([raw]) => JSON.parse(raw).type === "hello")).toBe(true);
+      });
     },
     setBadgeText,
     sockets,
@@ -303,9 +315,10 @@ describe("persisted relay pairing validation", () => {
   it("opens the canonical persisted pairing on startup", async () => {
     const harness = await loadBackground({
       storedConfig: {
-        relayUrl: "wss://gateway.example.com/base/browser/extension",
+        relayUrl: "wss://gateway.example.com/browser/extension",
         token: RELAY_SECRET,
-        gatewayUrl: "wss://gateway.example.com/base",
+        authVersion: 2,
+        gatewayUrl: "wss://gateway.example.com",
         groupColor: "blue",
       },
     });
@@ -315,10 +328,24 @@ describe("persisted relay pairing validation", () => {
       expect(harness.gatewaySockets).toHaveLength(1);
     });
     expect(harness.relaySockets[0]).toMatchObject({
-      url: "wss://gateway.example.com/base/browser/extension",
-      protocols: ["openclaw-extension-relay", `openclaw-extension-token.${RELAY_SECRET}`],
+      url: "wss://gateway.example.com/browser/extension",
+      protocols: ["openclaw-extension-relay.v2"],
     });
     expect(harness.storageRemove).not.toHaveBeenCalled();
+  });
+
+  it("migrates a canonical existing pairing to authVersion 2 before connecting", async () => {
+    const harness = await loadBackground({
+      storedConfig: {
+        relayUrl: "ws://127.0.0.1:18797/extension",
+        token: RELAY_SECRET,
+        gatewayUrl: "",
+        groupColor: "orange",
+      },
+    });
+    await vi.waitFor(() => expect(harness.relaySockets).toHaveLength(1));
+    expect(harness.storageSet).toHaveBeenCalledWith({ authVersion: 2 });
+    expect(harness.storageValues.authVersion).toBe(2);
   });
 
   it.each([
@@ -370,11 +397,15 @@ describe("persisted relay pairing validation", () => {
     ],
     ["partial state", { relayUrl: "ws://127.0.0.1:18797/extension", groupColor: "orange" }],
     [
+      "a proxy-prefixed direct pairing",
+      { relayUrl: "wss://gateway.example.com/proxy/browser/extension", token: RELAY_SECRET },
+    ],
+    [
       "mismatched direct state",
       {
-        relayUrl: "wss://gateway.example.com/base/browser/extension",
+        relayUrl: "wss://gateway.example.com/browser/extension",
         token: RELAY_SECRET,
-        gatewayUrl: "wss://other.example.com/base",
+        gatewayUrl: "wss://other.example.com",
       },
     ],
   ])("clears %s before startup can open a socket", async (_label, storedConfig) => {
@@ -382,16 +413,23 @@ describe("persisted relay pairing validation", () => {
 
     expect(harness.relaySockets).toHaveLength(0);
     expect(harness.gatewaySockets).toHaveLength(0);
-    expect(harness.storageRemove).toHaveBeenCalledWith(["relayUrl", "gatewayUrl", "token"]);
+    expect(harness.storageRemove).toHaveBeenCalledWith([
+      "relayUrl",
+      "gatewayUrl",
+      "token",
+      "authVersion",
+    ]);
     const response = vi.fn();
     harness.messageListener({ type: "getStatus" }, {}, response);
     await vi.waitFor(() => {
-      expect(response).toHaveBeenCalledWith({
-        paired: false,
-        state: "off",
-        sharedTabCount: 0,
-        relayUrl: "",
-      });
+      expect(response).toHaveBeenCalledWith(
+        expect.objectContaining({
+          paired: false,
+          state: "off",
+          sharedTabCount: 0,
+          relayUrl: "",
+        }),
+      );
     });
   });
 
@@ -430,7 +468,12 @@ describe("persisted relay pairing validation", () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(harness.sockets).toHaveLength(1);
-    expect(harness.storageRemove).toHaveBeenCalledWith(["relayUrl", "gatewayUrl", "token"]);
+    expect(harness.storageRemove).toHaveBeenCalledWith([
+      "relayUrl",
+      "gatewayUrl",
+      "token",
+      "authVersion",
+    ]);
     expect(harness.setBadgeText).toHaveBeenLastCalledWith({ text: "" });
   });
 
@@ -491,6 +534,81 @@ describe("persisted relay pairing validation", () => {
   });
 });
 
+describe("relay authentication v2 transport", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("offers only the non-secret v2 protocol", async () => {
+    const harness = await loadBackground();
+    const socket = harness.relaySockets[0];
+    expect(socket?.protocols).toEqual(["openclaw-extension-relay.v2"]);
+    expect(JSON.stringify(socket?.protocols)).not.toContain(RELAY_SECRET);
+  });
+
+  it("rejects a mismatched negotiated protocol before sending any frame", async () => {
+    const harness = await loadBackground({ relayNegotiatedProtocol: "" });
+    const socket = harness.relaySockets[0];
+    if (!socket) {
+      throw new Error("expected relay socket");
+    }
+    socket.open();
+    await vi.waitFor(() => expect(socket.close).toHaveBeenCalled());
+    expect(socket.send).not.toHaveBeenCalled();
+  });
+
+  it("sends no client proof or application hello after a bad server proof", async () => {
+    const harness = await loadBackground();
+    const socket = harness.relaySockets[0];
+    if (!socket) {
+      throw new Error("expected relay socket");
+    }
+    socket.open();
+    await vi.waitFor(() => expect(socket.send).toHaveBeenCalled());
+    const helloRaw = socket.send.mock.calls[0]?.[0];
+    const hello = JSON.parse(helloRaw) as { keyId: string; clientNonce: string };
+    const issuedAtMs = Date.now();
+    socket.receive({
+      type: "auth.challenge",
+      v: 2,
+      keyId: hello.keyId,
+      instanceId: AUTH_INSTANCE_ID,
+      sessionId: AUTH_SESSION_ID,
+      clientNonce: hello.clientNonce,
+      serverNonce: AUTH_SERVER_NONCE,
+      issuedAtMs,
+      expiresAtMs: issuedAtMs + 10_000,
+      role: "extension",
+      transport: "websocket",
+      method: "GET",
+      resource: "/extension",
+      flow: "extension",
+      serverProof: "A".repeat(43),
+    });
+    await vi.waitFor(() => expect(socket.close).toHaveBeenCalled());
+    const types = socket.send.mock.calls.map(([raw]) => JSON.parse(raw).type);
+    expect(types).toEqual(["auth.hello"]);
+    expect(harness.setBadgeText).not.toHaveBeenLastCalledWith({ text: "ON" });
+  });
+
+  it("rejects application commands before authentication", async () => {
+    const harness = await loadBackground();
+    const socket = harness.relaySockets[0];
+    if (!socket) {
+      throw new Error("expected relay socket");
+    }
+    socket.open();
+    await vi.waitFor(() => expect(socket.send).toHaveBeenCalled());
+    socket.receive({ type: "attach", seq: 1, tabId: 1 });
+    await vi.waitFor(() => expect(socket.close).toHaveBeenCalled());
+    expect(harness.debuggerAttach).not.toHaveBeenCalled();
+  });
+});
+
 async function startPendingPageShare(
   harness: Awaited<ReturnType<typeof loadBackground>>,
   socket = harness.sockets.at(-1),
@@ -499,7 +617,7 @@ async function startPendingPageShare(
     throw new Error("expected the page-share relay socket");
   }
   if (socket.readyState !== 1) {
-    socket.open();
+    await harness.authenticate(socket);
   }
   harness.executeScript.mockResolvedValueOnce([
     {
@@ -544,10 +662,10 @@ describe("relay opening deadline", () => {
       periodInMinutes: 0.5,
     });
     expect(harness.createAlarm).toHaveBeenCalledWith(RELAY_OPENING_DEADLINE_ALARM, {
-      when: START_TIME_MS + 30_000,
+      when: START_TIME_MS + 10_000,
     });
 
-    vi.setSystemTime(START_TIME_MS + 30_000);
+    vi.setSystemTime(START_TIME_MS + 10_000);
     harness.alarmListener({ name: RELAY_OPENING_DEADLINE_ALARM });
 
     expect(harness.sockets[0]?.close).toHaveBeenCalledOnce();
@@ -557,16 +675,23 @@ describe("relay opening deadline", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(harness.sockets).toHaveLength(2);
     expect(harness.createAlarm).toHaveBeenLastCalledWith(RELAY_OPENING_DEADLINE_ALARM, {
-      when: START_TIME_MS + 61_000,
+      when: START_TIME_MS + 21_000,
     });
   });
 
-  it("clears the deadline after the socket opens", async () => {
+  it("clears the deadline only after relay authentication completes", async () => {
     const harness = await loadBackground();
     const socket = harness.sockets[0];
     expect(socket).toBeDefined();
 
+    const clearsBeforeOpen = harness.clearAlarm.mock.calls.length;
     socket?.open();
+    expect(harness.clearAlarm).toHaveBeenCalledTimes(clearsBeforeOpen);
+    expect(harness.setBadgeText).toHaveBeenLastCalledWith({ text: "…" });
+
+    if (socket) {
+      await harness.authenticate(socket);
+    }
     expect(harness.clearAlarm).toHaveBeenCalledWith(RELAY_OPENING_DEADLINE_ALARM);
     expect(harness.setBadgeText).toHaveBeenLastCalledWith({ text: "ON" });
 
@@ -875,7 +1000,7 @@ describe("relay command authorization", () => {
     if (!socket) {
       throw new Error("expected relay socket");
     }
-    socket.open();
+    await harness.authenticate(socket);
     harness.shareTab(41);
     harness.unshareTab(41);
 
@@ -906,7 +1031,7 @@ describe("relay command authorization", () => {
     if (!socket) {
       throw new Error("expected relay socket");
     }
-    socket.open();
+    await harness.authenticate(socket);
     harness.unshareTab(41);
 
     socket.receive({ type: "detach", seq: 5, tabId: 41 });
@@ -924,7 +1049,7 @@ describe("relay command authorization", () => {
     if (!socket) {
       throw new Error("expected relay socket");
     }
-    socket.open();
+    await harness.authenticate(socket);
     harness.tabsCreate.mockResolvedValueOnce({ id: 42 });
 
     socket.receive({ type: "createTab", seq: 6, url: "https://example.com" });
@@ -942,7 +1067,7 @@ describe("relay command authorization", () => {
     if (!socket) {
       throw new Error("expected relay socket");
     }
-    socket.open();
+    await harness.authenticate(socket);
     harness.shareTab(43);
     let releaseAttach = () => {};
     harness.debuggerAttach.mockImplementationOnce(

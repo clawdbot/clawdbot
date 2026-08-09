@@ -1,5 +1,16 @@
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 
+export type BackgroundTasksRailView =
+  | { kind: "list" }
+  | { kind: "detail"; taskId: string }
+  | {
+      kind: "transcript";
+      taskId: string;
+      sessionKey: string;
+      returnTo: "list" | "detail";
+      load: { status: "loading" } | { status: "loaded"; messages: unknown[] } | { status: "error" };
+    };
+
 export type BackgroundTasksProps = {
   sessionKey: string;
   statusRowId: string;
@@ -13,7 +24,7 @@ export type BackgroundTasksProps = {
   error: string | null;
   /** null until the first load for this session finished. */
   tasks: TaskSummary[] | null;
-  selectedTaskId: string | null;
+  view: BackgroundTasksRailView;
   taskDetails: ReadonlyMap<string, TaskSummary>;
   taskDetailErrors: ReadonlyMap<string, string>;
   taskDetailLoadingIds: ReadonlySet<string>;
@@ -24,6 +35,6 @@ export type BackgroundTasksProps = {
   onRefresh: () => void;
   onCancel: (taskId: string) => void;
   onSelectTask: (task: TaskSummary) => void;
-  onBackToList: () => void;
-  onOpenSession: (sessionKey: string) => void;
+  onBack: () => void;
+  onOpenTranscript: (task: TaskSummary, returnTo: "list" | "detail") => void;
 };

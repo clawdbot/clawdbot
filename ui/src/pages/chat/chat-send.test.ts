@@ -7203,7 +7203,7 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("stale branch prompt");
     expect(host.chatQueue).toEqual([
       expect.objectContaining({
-        sendError: "The thread switched branches — review and resend.",
+        sendError: "The session switched branches — review and resend.",
         sendState: "failed",
       }),
     ]);

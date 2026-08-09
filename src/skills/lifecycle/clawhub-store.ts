@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString as normalizeOptionalStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   CLAWHUB_SKILLS_SH_TRUST_STATE,
   type ClawHubDownloadResult,
@@ -9,6 +10,8 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readJsonIfExists, tryReadJson, writeJson } from "../../infra/json-files.js";
 import { normalizeTrackedSkillSlug, validateRequestedSkillSlug } from "./archive-install.js";
+
+export { normalizeOptionalStringValue };
 
 const DOT_DIR = ".clawhub";
 const LEGACY_DOT_DIR = ".clawdhub";
@@ -154,10 +157,6 @@ export function formatClawHubSkillRef(ref: ClawHubSkillRef): string {
 export function normalizeStoredRegistry(registry: string): string {
   const trimmed = registry.trim();
   return trimmed.replace(/\/+$/, "") || trimmed;
-}
-
-export function normalizeOptionalStringValue(raw: unknown): string | undefined {
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
 export function normalizeGitHubCommitSegment(raw: unknown): string | undefined {

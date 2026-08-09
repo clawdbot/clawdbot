@@ -14,6 +14,9 @@
       "openclaw/plugin-sdk/runtime-doctor": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor.d.ts"
       ],
+      "openclaw/plugin-sdk/runtime-doctor-migrations": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/runtime-doctor-migrations.d.ts"
+      ],
       "openclaw/plugin-sdk/approval-reference-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/approval-reference-runtime.d.ts"
       ],
@@ -377,11 +380,20 @@
       "openclaw/plugin-sdk/memory-core-host-embedding-registry": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-embedding-registry.d.ts"
       ],
+      "openclaw/plugin-sdk/memory-core-host-engine-curated": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-curated.d.ts"
+      ],
       "openclaw/plugin-sdk/memory-core-host-engine-embeddings": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-embeddings.d.ts"
       ],
+      "openclaw/plugin-sdk/memory-core-host-engine-fs": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-fs.d.ts"
+      ],
       "openclaw/plugin-sdk/memory-core-host-engine-qmd": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-qmd.d.ts"
+      ],
+      "openclaw/plugin-sdk/memory-core-host-engine-schema": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-schema.d.ts"
       ],
       "openclaw/plugin-sdk/memory-core-host-engine-storage": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-storage.d.ts"

@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => {
     exportClawAgent: vi.fn(),
     callGatewayFromCli: vi.fn(),
     sleep: vi.fn(),
+    preflightClawPackage: vi.fn(),
   };
 });
 
@@ -66,6 +67,11 @@ vi.mock("./gateway-rpc.js", () => ({
 
 vi.mock("../utils/sleep.js", () => ({
   sleep: mocks.sleep,
+}));
+
+vi.mock("../claws/packages.js", async () => ({
+  ...(await vi.importActual<typeof import("../claws/packages.js")>("../claws/packages.js")),
+  preflightClawPackage: mocks.preflightClawPackage,
 }));
 
 vi.mock("../state/openclaw-state-db.js", async () => ({
@@ -114,41 +120,6 @@ async function writeManifest(value: unknown = cliTestHelpers.minimalManifest): P
   return await cliTestHelpers.writeManifestFile(tempDirs, value);
 }
 
-async function writePackage(): Promise<{ root: string; workspace: string }> {
-  const root = tempDirs.make("openclaw-claws-cli-package-");
-  await mkdir(join(root, "workspace"));
-  await writeFile(join(root, "workspace", "AGENTS.md"), "# Demo\n", "utf8");
-  await writeFile(
-    join(root, "package.json"),
-    JSON.stringify({
-      name: "@acme/demo-agent",
-      version: "1.2.3",
-      openclaw: { claw: "openclaw.claw.json" },
-    }),
-    "utf8",
-  );
-  await writeFile(
-    join(root, "openclaw.claw.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      agent: { id: "demo-agent", name: "Demo Agent" },
-      workspace: {
-        bootstrapFiles: { "AGENTS.md": { source: "workspace/AGENTS.md" } },
-      },
-      packages: [
-        {
-          kind: "skill",
-          source: "clawhub",
-          ref: "@acme/demo-skill",
-          version: "1.0.0",
-        },
-      ],
-    }),
-    "utf8",
-  );
-  return { root, workspace: join(root, "target-workspace") };
-}
-
 async function runCli(args: string[]) {
   const program = new Command();
   program.exitOverride();
@@ -183,6 +154,12 @@ describe("claws cli", () => {
     mocks.callGatewayFromCli.mockReset();
     mocks.sleep.mockReset();
     mocks.sleep.mockResolvedValue(undefined);
+    mocks.preflightClawPackage.mockReset();
+    mocks.preflightClawPackage.mockResolvedValue({
+      ok: false,
+      code: "package_install_unavailable",
+      message: "Package preflight is unavailable.",
+    });
     mocks.closeReadOnlyDatabase.mockReset();
     mocks.stateTableGet.mockReset();
     mocks.stateTableGet.mockReturnValue({ 1: 1 });
@@ -412,7 +389,7 @@ describe("claws cli", () => {
   });
 
   it("takes identity from package.json and plans one new agent", async () => {
-    const { root, workspace } = await writePackage();
+    const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
     const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
 
     await runCli(["claws", "add", root, "--dry-run", "--workspace", workspace, "--json"]);
@@ -450,7 +427,7 @@ describe("claws cli", () => {
   });
 
   it("blocks adding into an existing agent instead of merging", async () => {
-    const { root, workspace } = await writePackage();
+    const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
     mocks.loadConfig.mockReturnValue({ agents: { entries: { "demo-agent": {} } } });
 
     await runCli(["claws", "add", root, "--dry-run", "--workspace", workspace, "--json"]);
@@ -463,7 +440,7 @@ describe("claws cli", () => {
   });
 
   it("honors an explicit unused agent id in the plan", async () => {
-    const { root, workspace } = await writePackage();
+    const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
     mocks.loadConfig.mockReturnValue({ agents: { entries: { "demo-agent": {} } } });
 
     await runCli([
@@ -795,7 +772,7 @@ describe("claws cli", () => {
   });
 
   it("prints a read-only grouped update plan", async () => {
-    const { root } = await writePackage();
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
 
     await runCli(["claws", "update", "demo-agent", "--from", root, "--dry-run", "--json"]);
 
@@ -819,7 +796,7 @@ describe("claws cli", () => {
   });
 
   it("prints capability escalation details in human update previews", async () => {
-    const { root } = await writePackage();
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
 
     await runCli(["claws", "update", "demo-agent", "--from", root, "--dry-run"]);
 
@@ -836,7 +813,7 @@ describe("claws cli", () => {
   });
 
   it("returns failure when an update plan contains blocked actions", async () => {
-    const { root } = await writePackage();
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
     mocks.buildClawUpdatePlan.mockResolvedValueOnce({
       schemaVersion: "openclaw.clawUpdatePlan.v1",
       stability: "experimental",
@@ -879,7 +856,7 @@ describe("claws cli", () => {
   });
 
   it("uses the source recorded by the installed Claw when --from is omitted", async () => {
-    const { root } = await writePackage();
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
     mocks.readClawStatus.mockResolvedValue({
       schemaVersion: "openclaw.clawStatus.v1",
       records: [
@@ -933,7 +910,7 @@ describe("claws cli", () => {
   });
 
   it("fails closed when update is invoked without dry-run", async () => {
-    const { root } = await writePackage();
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
 
     await runCli(["claws", "update", "demo-agent", "--from", root, "--json"]);
 
@@ -946,7 +923,7 @@ describe("claws cli", () => {
   });
 
   it("requires exact plan integrity with update consent", async () => {
-    const { root } = await writePackage();
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
 
     await runCli(["claws", "update", "demo-agent", "--from", root, "--yes", "--json"]);
 
@@ -958,7 +935,7 @@ describe("claws cli", () => {
   });
 
   it("applies a supported update only after explicit consent", async () => {
-    const { root } = await writePackage();
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
 
     await runCli([
       "claws",
@@ -999,7 +976,7 @@ describe("claws cli", () => {
   });
 
   it("reports uncertain update mutations as partial JSON", async () => {
-    const { root } = await writePackage();
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
     mocks.applyClawUpdatePlan.mockRejectedValueOnce(
       new ClawUpdateMutationError("update_partial", "artifact outcome requires reconciliation"),
     );
@@ -1108,12 +1085,10 @@ describe("claws cli", () => {
   });
 
   it("exports one installed agent to a new package directory", async () => {
-    await runCli(["claws", "export", "demo-agent", "--out", "/tmp/exported", "--json"]);
+    await runCli(["claws", "export", "demo-agent", "--out", "/e", "--bootstrap", "/b", "--json"]);
 
-    expect(mocks.exportClawAgent).toHaveBeenCalledWith("demo-agent", "/tmp/exported", {
-      config: {},
-      sourceMcpServers: {},
-    });
+    expect(mocks.exportClawAgent.mock.calls[0]?.slice(0, 2)).toEqual(["demo-agent", "/e"]);
+    expect(mocks.exportClawAgent.mock.calls[0]?.[2]).toMatchObject({ bootstrapPath: "/b" });
     expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
       schemaVersion: "openclaw.clawExportResult.v1",
       stability: "experimental",

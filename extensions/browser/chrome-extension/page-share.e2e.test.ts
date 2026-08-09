@@ -1,7 +1,12 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
+import path from "node:path";
 import { chromium, type CDPSession } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocketServer } from "ws";
 import {
+  EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
   startExtensionRelayServer,
   type ExtensionRelayHandle,
 } from "../src/browser/extension-relay/relay-server.js";
@@ -9,6 +14,7 @@ import { useAutoCleanupTempDirTracker } from "../test-support.js";
 import {
   copyCopilotSidepanelExtension,
   createRelayHarness,
+  rawDataText,
   waitForContextExtensionId,
   waitForLoadedExtensionId,
 } from "./sidepanel.e2e-support.js";
@@ -73,6 +79,24 @@ async function listen(server: Server): Promise<number> {
   return address.port;
 }
 
+async function configureRelayCredential(token: string): Promise<void> {
+  const priorStateDir = process.env.OPENCLAW_STATE_DIR;
+  const stateDir = tempDirs.make("openclaw-extension-relay-state-");
+  const credentialsDir = path.join(stateDir, "credentials");
+  await fs.mkdir(credentialsDir, { recursive: true });
+  await fs.writeFile(path.join(credentialsDir, "browser-extension-relay.secret"), `${token}\n`, {
+    mode: 0o600,
+  });
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  cleanups.push(async () => {
+    if (priorStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = priorStateDir;
+    }
+  });
+}
+
 async function evaluateToolbarPopup<T>(
   browserCdp: CDPSession,
   sessionId: string,
@@ -125,8 +149,102 @@ async function evaluateToolbarPopup<T>(
 }
 
 describe.runIf(runE2E)("Chrome extension relay authorization", () => {
+  it("sends no client proof or raw key to a malicious loopback listener", async () => {
+    const server = createServer();
+    const port = await listen(server);
+    const wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
+      handleProtocols: (protocols) =>
+        protocols.has("openclaw-extension-relay.v2") ? "openclaw-extension-relay.v2" : false,
+    });
+    const protocolHeaders: string[] = [];
+    const receivedTypes: string[] = [];
+    server.on("upgrade", (request, socket, head) => {
+      const protocolHeader = request.headers["sec-websocket-protocol"];
+      protocolHeaders.push(
+        Array.isArray(protocolHeader) ? protocolHeader.join(", ") : (protocolHeader ?? ""),
+      );
+      wss.handleUpgrade(request, socket, head, (client) => wss.emit("connection", client, request));
+    });
+    wss.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const message = JSON.parse(rawDataText(data)) as Record<string, unknown>;
+        receivedTypes.push(String(message.type));
+        if (message.type !== "auth.hello") {
+          return;
+        }
+        const issuedAtMs = Date.now();
+        socket.send(
+          JSON.stringify({
+            type: "auth.challenge",
+            v: 2,
+            keyId: createHash("sha256")
+              .update(Buffer.from(PAGE_SHARE_RELAY_SECRET, "hex"))
+              .digest("base64url")
+              .slice(0, 22),
+            instanceId: "ICEiIyQlJicoKSorLC0uLw",
+            sessionId: "MDEyMzQ1Njc4OTo7PD0-Pw",
+            clientNonce: message.clientNonce,
+            serverNonce: "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8",
+            issuedAtMs,
+            expiresAtMs: issuedAtMs + 10_000,
+            role: "extension",
+            transport: "websocket",
+            method: "GET",
+            resource: "/extension",
+            flow: "extension",
+            serverProof: "A".repeat(43),
+          }),
+        );
+      });
+    });
+    cleanups.push(async () => {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    });
+
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const context = await chromium.launchPersistentContext(
+      tempDirs.make("openclaw-extension-malicious-relay-profile-"),
+      {
+        channel: "chromium",
+        headless: true,
+        ignoreDefaultArgs: ["--disable-extensions"],
+        args: [
+          "--enable-unsafe-extension-debugging",
+          `--disable-extensions-except=${unpackedExtension}`,
+          `--load-extension=${unpackedExtension}`,
+        ],
+      },
+    );
+    cleanups.push(async () => await context.close());
+    const extensionId = await waitForContextExtensionId(context, unpackedExtension);
+    const launcher = context.pages()[0] ?? (await context.newPage());
+    await launcher.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+    await launcher.evaluate(
+      async (pairingString) => await chrome.runtime.sendMessage({ type: "pair", pairingString }),
+      `ws://127.0.0.1:${port}/extension#${PAGE_SHARE_RELAY_SECRET}`,
+    );
+
+    await expect.poll(() => receivedTypes.length, { timeout: 10_000 }).toBeGreaterThan(0);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 750);
+    });
+    expect(new Set(receivedTypes)).toEqual(new Set(["auth.hello"]));
+    expect(new Set(protocolHeaders)).toEqual(new Set(["openclaw-extension-relay.v2"]));
+    expect(protocolHeaders.join("\n")).not.toContain(PAGE_SHARE_RELAY_SECRET);
+  }, 60_000);
+
   it("clears an invalid persisted pairing before reconnecting after restart", async () => {
-    const relay = await createRelayHarness();
+    const relay = await createRelayHarness(PAGE_SHARE_RELAY_SECRET);
     cleanups.push(relay.close);
     const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
     const userDataDir = tempDirs.make("openclaw-extension-persisted-auth-profile-");
@@ -168,7 +286,8 @@ describe.runIf(runE2E)("Chrome extension relay authorization", () => {
       .poll(
         async () =>
           await launcher.evaluate(
-            async () => await chrome.storage.local.get(["relayUrl", "gatewayUrl", "token"]),
+            async () =>
+              await chrome.storage.local.get(["relayUrl", "gatewayUrl", "token", "authVersion"]),
           ),
         { timeout: 10_000 },
       )
@@ -183,7 +302,7 @@ describe.runIf(runE2E)("Chrome extension relay authorization", () => {
   }, 60_000);
 
   it("enforces pairing and current tab-group consent at the extension edge", async () => {
-    const relay = await createRelayHarness();
+    const relay = await createRelayHarness(PAGE_SHARE_RELAY_SECRET);
     cleanups.push(relay.close);
     const fixture = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -276,6 +395,7 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
     const delivery = new Promise<void>((resolve) => {
       releaseDelivery = resolve;
     });
+    await configureRelayCredential(PAGE_SHARE_RELAY_SECRET);
     const relay = await startExtensionRelayServer({
       port: 0,
       token: PAGE_SHARE_RELAY_SECRET,
@@ -500,6 +620,7 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
   });
 
   it("keeps a real stale-tab sharing error visible across the popup status poll", async () => {
+    await configureRelayCredential(PAGE_SHARE_RELAY_SECRET);
     const relay = await startExtensionRelayServer({
       port: 0,
       token: PAGE_SHARE_RELAY_SECRET,

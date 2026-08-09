@@ -5,6 +5,7 @@ import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -166,9 +167,11 @@ export async function finalizeCronRun(params: {
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
+      prepared.cronSession.sessionEntry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     } else {
       prepared.cronSession.sessionEntry.totalTokens = undefined;
       prepared.cronSession.sessionEntry.totalTokensFresh = false;
+      prepared.cronSession.sessionEntry.totalTokensVersion = undefined;
     }
     prepared.cronSession.sessionEntry.cacheRead = cacheRead;
     prepared.cronSession.sessionEntry.cacheWrite = cacheWrite;

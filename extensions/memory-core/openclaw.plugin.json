@@ -1,5 +1,8 @@
 {
   "id": "memory-core",
+  "doctorContract": {
+    "stateMigrations": true
+  },
   "name": "OpenClaw Memory",
   "activation": {
     "onStartup": false

@@ -1,6 +1,7 @@
 // Gateway reachability probe client.
 // Connects to a gateway and summarizes auth, health, status, and presence.
 import { randomUUID } from "node:crypto";
+import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -9,13 +10,14 @@ import {
   readMissingScopeError,
   type MissingScopeErrorDetails,
 } from "../../packages/gateway-protocol/src/gateway-error-details.js";
-import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
+import { loadDeviceAuthToken, loadOriginDeviceToken } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
+import { isLoopbackHost } from "./net.js";
 
 export type GatewayProbeAuth = {
   token?: string;
@@ -109,6 +111,14 @@ function isDeviceIdentityRequiredClose(close: GatewayProbeClose | null): boolean
 
 function hasProbeAuth(auth: GatewayProbeAuth | undefined): boolean {
   return Boolean(auth?.token?.trim() || auth?.password?.trim());
+}
+
+function resolveProbeDeviceAuthScope(url: string): string | undefined {
+  try {
+    return isLoopbackHost(new URL(url).hostname) ? undefined : gatewayOriginScope(url);
+  } catch {
+    return undefined;
+  }
 }
 
 function shouldShortCircuitDeviceRequiredProbe(cacheKey: string, nowMs: number): boolean {
@@ -234,6 +244,10 @@ function resolveGatewayProbeCapability(params: {
 
 export async function probeGateway(opts: {
   url: string;
+  /** Treat an explicitly remote loopback URL as a stable origin-scoped auth target. */
+  originScopedDeviceAuth?: boolean;
+  /** Disable persisted device auth when the transport does not identify a stable Gateway origin. */
+  suppressStoredDeviceAuth?: boolean;
   auth?: GatewayProbeAuth;
   timeoutMs: number;
   preauthHandshakeTimeoutMs?: number;
@@ -253,6 +267,11 @@ export async function probeGateway(opts: {
   let authMetadataPresent = false;
 
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
+  const deviceAuthScope = opts.suppressStoredDeviceAuth
+    ? undefined
+    : opts.originScopedDeviceAuth
+      ? gatewayOriginScope(opts.url)
+      : resolveProbeDeviceAuthScope(opts.url);
 
   const deviceIdentity = await (async () => {
     try {
@@ -267,11 +286,20 @@ export async function probeGateway(opts: {
       // Keep probes non-mutating: only attach a device identity when this CLI
       // already has a cached operator device token. Fresh diagnostics should not
       // create a read-only pairing baseline that later blocks admin commands.
-      const cachedOperatorToken = loadDeviceAuthToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        env: opts.env,
-      });
+      const cachedOperatorToken = opts.suppressStoredDeviceAuth
+        ? null
+        : deviceAuthScope
+          ? loadOriginDeviceToken({
+              gatewayScope: deviceAuthScope,
+              deviceId: identity.deviceId,
+              role: "operator",
+              env: opts.env,
+            })
+          : loadDeviceAuthToken({
+              deviceId: identity.deviceId,
+              role: "operator",
+              env: opts.env,
+            });
       return cachedOperatorToken ? identity : null;
     } catch {
       // Read-only or restricted environments should still be able to run
@@ -370,6 +398,7 @@ export async function probeGateway(opts: {
 
     const client = new GatewayClient({
       url: opts.url,
+      ...(deviceAuthScope ? { deviceAuthScope } : {}),
       token: opts.auth?.token,
       password: opts.auth?.password,
       tlsFingerprint: opts.tlsFingerprint,

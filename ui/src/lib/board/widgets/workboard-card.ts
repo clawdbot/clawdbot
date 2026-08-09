@@ -93,17 +93,20 @@ if (!customElements.get("openclaw-workboard-card-widget")) {
 export const renderWorkboardCardWidget: PluginBoardWidgetRenderer = ({
   widget,
   sessionKey,
+  active,
   canMutate,
   requestUpdate,
 }: {
   widget: BoardViewWidget;
   sessionKey: string;
+  active: boolean;
   canMutate: boolean;
   requestUpdate: () => void;
 }) => html`
   <openclaw-workboard-card-widget
     .widget=${widget}
     .sessionKey=${sessionKey}
+    .active=${active}
     .canMutate=${canMutate}
     .hostRequestUpdate=${requestUpdate}
   ></openclaw-workboard-card-widget>

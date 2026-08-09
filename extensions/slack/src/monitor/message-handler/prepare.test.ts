@@ -445,14 +445,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.From).toBe("slack:U123");
   });
 
-  it("uses the validated event workspace as the standardized conversation space", async () => {
+  it("carries the validated event workspace through reusable DM routing", async () => {
     const ctx = createDefaultSlackCtx();
     ctx.teamId = "";
     const eventScope = {
-      apiAppId: "A1",
-      enterpriseId: "E1",
-      isEnterpriseInstall: true,
-      teamId: "T_ENTERPRISE",
+      teamId: "T123ENTERPRISE",
       client: {} as SlackEventScope["client"],
     } satisfies SlackEventScope;
 
@@ -464,7 +461,53 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
 
     assertPrepared(prepared, "org-wide Slack DM");
-    expect(prepared.ctxPayload.GroupSpace).toBe("T_ENTERPRISE");
+    expect(prepared.ctxPayload.GroupSpace).toBe("T123ENTERPRISE");
+    expect(prepared.ctxPayload.To).toBe("team:T123ENTERPRISE:user:U123");
+    expect(prepared.ctxPayload.OriginatingTo).toBe("team:T123ENTERPRISE:user:U123");
+    expect(prepared.ctxPayload.NativeChannelId).toBe("D999");
+    expect(prepared.replyTarget).toBe("channel:D999");
+    expect(prepared.turn.record).toMatchObject({
+      updateLastRoute: {
+        channel: "slack",
+        to: "team:T123ENTERPRISE:user:U123",
+      },
+    });
+  });
+
+  it("carries the validated event workspace through reusable channel routing", async () => {
+    const ctx = createReplyToAllSlackCtx({
+      groupPolicy: "open",
+      defaultRequireMention: false,
+      asChannel: true,
+    });
+    const eventScope = {
+      teamId: "T123ENTERPRISE",
+      client: {} as SlackEventScope["client"],
+    } satisfies SlackEventScope;
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: createSlackAccount({ groupPolicy: "open" }),
+      message: createSlackMessage({
+        channel: "C123CHANNEL",
+        channel_type: "channel",
+        user: "U123",
+        text: "hello",
+      }),
+      opts: { source: "message", eventScope },
+    });
+
+    assertPrepared(prepared, "org-wide Slack channel message");
+    expect(prepared.ctxPayload.To).toBe("team:T123ENTERPRISE:channel:C123CHANNEL");
+    expect(prepared.ctxPayload.OriginatingTo).toBe("team:T123ENTERPRISE:channel:C123CHANNEL");
+    expect(prepared.ctxPayload.NativeChannelId).toBe("C123CHANNEL");
+    expect(prepared.replyTarget).toBe("channel:C123CHANNEL");
+    expect(prepared.turn.record).toMatchObject({
+      updateLastRoute: {
+        channel: "slack",
+        to: "team:T123ENTERPRISE:channel:C123CHANNEL",
+      },
+    });
   });
 
   it("routes a self-threaded Agent View root before capability detection completes", async () => {
@@ -1026,6 +1069,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     source: "app_mention" | "message";
     mentionType: "explicit" | "implicit" | "regex";
     bindingOwner: "none" | "plugin" | "runtime";
+    enterpriseTeamId?: string;
     expectRootMentioned?: boolean;
     expectFollowUpMentioned?: boolean;
   };
@@ -1046,7 +1090,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const expectedSessionKey =
       scenario.bindingOwner === "runtime"
         ? "agent:review:slack:channel:c0ahzfcas1k"
-        : `agent:main:slack:channel:${channelId.toLowerCase()}:thread:${rootTs}`;
+        : `agent:main:slack:channel:${scenario.enterpriseTeamId ? `team:${scenario.enterpriseTeamId.toLowerCase()}:channel:` : ""}${channelId.toLowerCase()}:thread:${rootTs}`;
     const { storePath } = storeFixture.makeTmpStorePath();
     const channelsConfig = implicit
       ? { [channelId]: { enabled: true, requireMention: false } }
@@ -1086,6 +1130,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
       replyToMode,
       ...(channelsConfig ? { channelsConfig } : {}),
     });
+    if (scenario.enterpriseTeamId) {
+      Object.assign(slackCtx, { botUserId: "" });
+    }
     slackCtx.resolveChannelName = async () => ({
       name: implicit ? "genai" : "proj-openclaw",
       type: "channel",
@@ -1148,9 +1195,19 @@ describe("slack prepareSlackMessage inbound contract", () => {
         opts: {
           source: scenario.source,
           ...(scenario.source === "app_mention" ? { wasMentioned: true } : {}),
+          ...(scenario.enterpriseTeamId
+            ? {
+                eventScope: {
+                  teamId: scenario.enterpriseTeamId,
+                  client: slackCtx.app.client,
+                },
+              }
+            : {}),
         },
       });
-      recordSlackThreadParticipation("default", channelId, rootTs);
+      recordSlackThreadParticipation("default", channelId, rootTs, {
+        teamId: scenario.enterpriseTeamId,
+      });
       const followUp = await prepareSlackMessage({
         ctx: slackCtx,
         account,
@@ -1163,7 +1220,17 @@ describe("slack prepareSlackMessage inbound contract", () => {
           ts: "1777244714.000100",
           thread_ts: rootTs,
         } as SlackMessageEvent,
-        opts: { source: "message" },
+        opts: {
+          source: "message",
+          ...(scenario.enterpriseTeamId
+            ? {
+                eventScope: {
+                  teamId: scenario.enterpriseTeamId,
+                  client: slackCtx.app.client,
+                },
+              }
+            : {}),
+        },
       });
       const expectedAgentId =
         scenario.bindingOwner === "runtime"
@@ -3628,6 +3695,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       source: "app_mention",
       mentionType: "explicit",
       bindingOwner: "none",
+      expectFollowUpMentioned: true,
+    },
+    {
+      name: "keeps a Grid root app mention and unmentioned thread follow-up on one parent session",
+      source: "app_mention",
+      mentionType: "explicit",
+      bindingOwner: "none",
+      enterpriseTeamId: "T123ENTERPRISE",
       expectFollowUpMentioned: true,
     },
     {

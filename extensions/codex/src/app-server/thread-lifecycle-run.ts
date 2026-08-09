@@ -451,19 +451,6 @@ export async function startOrResumeThread(
     }
     if (
       binding?.threadId &&
-      binding.environmentSelectionFingerprint !== environmentSelectionFingerprint
-    ) {
-      embeddedAgentLog.debug(
-        "codex app-server environment selection changed; starting a new thread",
-        {
-          threadId: binding.threadId,
-        },
-      );
-      await clearCurrentBinding("rotating a stale thread binding");
-      binding = undefined;
-    }
-    if (
-      binding?.threadId &&
       (binding.networkProxyConfigFingerprint !== networkProxyConfigFingerprint ||
         binding.networkProxyProfileName !== params.appServer.networkProxy?.profileName)
     ) {
@@ -587,8 +574,8 @@ export async function startOrResumeThread(
           binding,
           bindingIdentity,
           clientId,
-          contextEngineBinding,
           dynamicToolsFingerprint,
+          environmentSelectionFingerprint,
           hostSystemAgentActive,
           lifecycleTiming,
           nativeSkillIsolation,

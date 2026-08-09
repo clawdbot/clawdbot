@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -399,10 +400,6 @@ function buildTtsConfigWithHydratedProvider(params: {
     tts.providers = providers;
   }
   return tts;
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function ttsProviderConfigHasApiKey(value: unknown): boolean {

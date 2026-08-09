@@ -277,9 +277,9 @@ export abstract class AgentSessionBase {
   // Event Subscription
   // =========================================================================
 
-  /** Emit an event to all listeners */
+  /** Snapshot listeners because delivery confirmation can unsubscribe during dispatch. */
   protected emit(event: AgentSessionEvent): void {
-    for (const l of this.eventListeners) {
+    for (const l of this.eventListeners.slice()) {
       void l(event);
     }
   }

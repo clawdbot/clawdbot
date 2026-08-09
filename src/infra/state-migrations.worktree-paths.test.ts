@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
@@ -14,6 +14,10 @@ import {
 import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
 
 describe("managed worktree path state migrations", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  });
+
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
       closeOpenClawStateDatabaseForTest();
@@ -21,7 +25,7 @@ describe("managed worktree path state migrations", () => {
     });
   });
 
-  it("does not create the worktrees directory during detection", { timeout: 240_000 }, async () => {
+  it("does not create the worktrees directory during detection", async () => {
     const root = tempDirs.make("openclaw-worktree-path-detection-");
     const stateDir = path.join(root, "state");
     const worktreesDir = path.join(stateDir, "worktrees");
@@ -40,7 +44,6 @@ describe("managed worktree path state migrations", () => {
 
   it.skipIf(process.platform === "win32")(
     "canonicalizes persisted paths from symlinked state directories",
-    { timeout: 240_000 },
     async () => {
       const root = tempDirs.make(
         "openclaw-worktree-path-migration-",

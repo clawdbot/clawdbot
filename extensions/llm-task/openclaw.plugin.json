@@ -1,5 +1,9 @@
 {
   "id": "llm-task",
+  "doctorContract": {
+    "legacyConfigRules": true,
+    "normalizeCompatibilityConfig": true
+  },
   "activation": {
     "onStartup": true
   },

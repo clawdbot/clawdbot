@@ -332,6 +332,26 @@ describe("chat display message-tool projection", () => {
 });
 
 describe("chat display tool-result detail projection", () => {
+  it("omits opaque provider replay state from display history", () => {
+    const [message] = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "visible" }],
+        providerReplay: {
+          type: "openai-responses-compaction",
+          data: "opaque-display-compaction",
+        },
+      },
+    ]) as Array<Record<string, unknown>>;
+
+    expect(message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "visible" }],
+    });
+    expect(message).not.toHaveProperty("providerReplay");
+    expect(JSON.stringify(message)).not.toContain("opaque-display-compaction");
+  });
+
   it("keeps authoritative write booleans and strips unrelated details", () => {
     const [overwrite, created, invalid] = sanitizeChatHistoryMessages([
       {

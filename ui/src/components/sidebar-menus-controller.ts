@@ -31,8 +31,10 @@ import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sid
 import type { SessionDataController } from "./session-data-controller.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuWork } from "./session-menu.ts";
-import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import type { SessionOrganizerControllerHost } from "./session-organizer-operations.runtime.ts";
+import type {
+  SessionOrganizerController,
+  SessionOrganizerControllerHost,
+} from "./session-organizer-controller.ts";
 import type { SessionCreatorOption } from "./session-owner-chip.ts";
 
 type SidebarMenuAgent = {
