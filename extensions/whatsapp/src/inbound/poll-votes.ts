@@ -391,18 +391,24 @@ const WHATSAPP_POLL_VOTE_RECEIVED_HOOK_LIMITS = {
 /**
  * Fires the poll_vote_received plugin hook. Passive observation only (per
  * #78963) — never triggers an agent run.
+ *
+ * Returns whether the vote was handed off to the hook runner: `false` means
+ * either no handler is registered or the bounded queue was full and dropped
+ * it. Callers must not record dedupe state for a `false` result — the vote
+ * was never delivered, so a later redelivery is the only remaining chance
+ * to deliver it.
  */
 function emitWhatsAppPollVoteReceivedHook(params: {
   accountId: string;
   vote: WhatsAppDecodedPollVote;
   /** The vote-update message's own id — distinct per vote/retraction, unlike pollMessageId (shared by every vote on the same poll). */
   voteUpdateId: string;
-}): void {
+}): boolean {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("poll_vote_received")) {
-    return;
+    return false;
   }
-  fireAndForgetBoundedHook(
+  return fireAndForgetBoundedHook(
     () =>
       hookRunner.runPollVoteReceived(
         {
@@ -490,17 +496,7 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     // dispatched instead of being silently suppressed as a duplicate.
     return;
   }
-  if (voteUpdateId) {
-    const dedupKey = `${params.accountId}:${remoteJid}:${voteUpdateId}`;
-    rememberWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupKey, true, ttlMs);
-    resolvePollStore(params.store).rememberVoteDedup(
-      params.accountId,
-      remoteJid,
-      voteUpdateId,
-      ttlMs,
-    );
-  }
-  emitWhatsAppPollVoteReceivedHook({
+  const admitted = emitWhatsAppPollVoteReceivedHook({
     accountId: params.accountId,
     vote: decoded,
     // Falls back to the poll id in the (practically unseen) case a vote
@@ -508,4 +504,33 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     // distinct per-vote.
     voteUpdateId: voteUpdateId ?? decoded.pollMessageId,
   });
+  if (!admitted || !voteUpdateId) {
+    // The hook was never handed off (no registered handler, or the bounded
+    // queue was full and dropped it). Recording dedupe here would mark the
+    // vote as delivered when nothing ran, and the dedupe gate above would
+    // then suppress the redelivery that is the only remaining chance to
+    // deliver it. Leave it replayable instead.
+    return;
+  }
+  const dedupKey = `${params.accountId}:${remoteJid}:${voteUpdateId}`;
+  try {
+    // Durable first, in-memory second, deliberately: the durable write is
+    // the one that can realistically throw (plugin-state I/O). Writing the
+    // in-memory marker only after it succeeds keeps the pair atomic from
+    // this caller's perspective — either both markers exist or neither
+    // does. The reverse order would leave an in-memory marker suppressing
+    // redelivery for a vote whose durable record never landed.
+    resolvePollStore(params.store).rememberVoteDedup(
+      params.accountId,
+      remoteJid,
+      voteUpdateId,
+      ttlMs,
+    );
+    rememberWhatsAppBaileysCacheEntry(recentlyDispatchedPollVoteKeys, dedupKey, true, ttlMs);
+  } catch {
+    // Dedupe bookkeeping failed. The hook already ran, so a redelivery may
+    // produce a duplicate event — strictly better than the alternative of
+    // permanently suppressing a vote that was never delivered. Consumers
+    // already receive a per-vote-update `messageId` for their own dedupe.
+  }
 }

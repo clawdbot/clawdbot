@@ -133,13 +133,24 @@ function drainFireAndForgetHookQueue(
   }
 }
 
-/** Queue a fire-and-forget hook with bounded concurrency, queue depth, and timeout logs. */
+/**
+ * Queue a fire-and-forget hook with bounded concurrency, queue depth, and
+ * timeout logs.
+ *
+ * Returns whether the task was *admitted* to the queue — not whether it ran
+ * to completion, which is asynchronous and deliberately not awaited. A
+ * `false` return means the queue was full and the task was dropped without
+ * ever running. Callers that record "this work is done" state (dedupe
+ * markers, cursors, tombstones) must condition that write on a `true`
+ * return; otherwise a dropped task is indistinguishable from a completed
+ * one and the underlying event is silently lost on redelivery.
+ */
 export function fireAndForgetBoundedHook(
   task: () => Promise<unknown>,
   label: string,
   logger: (message: string) => void = logVerbose,
   options: FireAndForgetBoundedHookOptions = {},
-): void {
+): boolean {
   const state = getFireAndForgetHookState();
   const maxConcurrency = positiveIntegerOrDefault(
     options.maxConcurrency,
@@ -153,9 +164,10 @@ export function fireAndForgetBoundedHook(
 
   if (state.active >= maxConcurrency && state.queue.length >= maxQueue) {
     logger(`${label}: queue full; dropping hook`);
-    return;
+    return false;
   }
 
   state.queue.push({ task, label, logger, timeoutMs });
   drainFireAndForgetHookQueue(state, { maxConcurrency });
+  return true;
 }

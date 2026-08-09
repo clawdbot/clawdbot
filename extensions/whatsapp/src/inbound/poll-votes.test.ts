@@ -18,13 +18,17 @@ import {
   wrapAsPollCreationMessageV4ForTests,
 } from "./poll-votes.test-support.js";
 
-const { runPollVoteReceivedMock } = vi.hoisted(() => ({
+const { runPollVoteReceivedMock, hasHooksMock } = vi.hoisted(() => ({
   runPollVoteReceivedMock: vi.fn(async () => undefined),
+  // Defaults to "a poll_vote_received handler is registered"; individual
+  // tests can override once via mockReturnValueOnce to exercise the
+  // no-handler path.
+  hasHooksMock: vi.fn((hookName: string) => hookName === "poll_vote_received"),
 }));
 
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   getGlobalHookRunner: () => ({
-    hasHooks: (hookName: string) => hookName === "poll_vote_received",
+    hasHooks: hasHooksMock,
     runPollVoteReceived: runPollVoteReceivedMock,
   }),
 }));
@@ -468,5 +472,104 @@ describe("poll vote decoding survives a simulated gateway restart (durable-store
         expect.anything(),
       );
     });
+  });
+});
+
+describe("poll vote dedupe follows hook admission, not attempted dispatch", () => {
+  let dir: string;
+  let store: WhatsAppPollStore;
+  const CFG = {
+    channels: { whatsapp: { allowFrom: ["*"], pluginHooks: { pollVoteReceived: true } } },
+  } as never;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-poll-dedupe-"));
+    store = new WhatsAppPollStore({ ...process.env, OPENCLAW_STATE_DIR: dir });
+  });
+
+  afterEach(() => {
+    resetPluginStateStoreForTests();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Builds an owned poll plus a decodable vote on it, ready to dispatch. */
+  function buildOwnedPollVote(pollMessageId: string) {
+    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["A", "B"],
+    });
+    rememberWhatsAppOwnPollCreation("acct", CHAT_JID, pollMessageId, CFG, store);
+    rememberWhatsAppPollCreationMessage(
+      "acct",
+      CHAT_JID,
+      pollMessageId,
+      pollCreationMessage,
+      CFG,
+      store,
+    );
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["A"],
+      pollEncKey,
+      pollCreatorJid: POLL_CREATOR_JID,
+      pollMsgId: pollMessageId,
+      voterJid: VOTER_JID,
+    });
+    return {
+      pollCreationMessage,
+      voteMessage: buildPollUpdateMessageForTests({
+        creationKey: creationKeyFor(pollMessageId),
+        vote,
+      }),
+    };
+  }
+
+  it("leaves the vote replayable when a durable dedupe write fails", async () => {
+    // Regression: the in-memory marker used to be written before the durable
+    // one. If the durable write threw, the in-memory marker still suppressed
+    // the redelivery — permanently losing a vote whose delivery state was
+    // never actually recorded. Durable-first keeps the pair atomic.
+    const { pollCreationMessage, voteMessage } = buildOwnedPollVote("POLL-DEDUPE-THROWS");
+    const failingStore = Object.create(store) as WhatsAppPollStore;
+    failingStore.rememberVoteDedup = () => {
+      throw new Error("simulated durable dedupe write failure");
+    };
+
+    maybeEmitWhatsAppPollVoteReceivedHook({
+      cfg: CFG,
+      accountId: "acct",
+      message: voteMessage,
+      key: voteKeyFor("VOTE-DEDUPE-THROWS"),
+      getCachedMessage: () => pollCreationMessage,
+      selfJid: POLL_CREATOR_JID,
+      store: failingStore,
+    });
+
+    await vi.waitFor(() => {
+      expect(runPollVoteReceivedMock).toHaveBeenCalled();
+    });
+    // The failed durable write must not have left an in-memory marker behind:
+    // the underlying store has no dedupe record, so a redelivery is still
+    // eligible rather than being swallowed by a half-written pair.
+    expect(store.isVoteDedup("acct", CHAT_JID, "VOTE-DEDUPE-THROWS")).toBe(false);
+  });
+
+  it("does not record dedupe when no hook handler is registered to accept the vote", () => {
+    // A vote that was never handed off to any handler must stay replayable —
+    // recording dedupe here would suppress the redelivery that could reach a
+    // handler registered later.
+    hasHooksMock.mockReturnValueOnce(false);
+    const { pollCreationMessage, voteMessage } = buildOwnedPollVote("POLL-NO-HANDLER");
+
+    maybeEmitWhatsAppPollVoteReceivedHook({
+      cfg: CFG,
+      accountId: "acct",
+      message: voteMessage,
+      key: voteKeyFor("VOTE-NO-HANDLER"),
+      getCachedMessage: () => pollCreationMessage,
+      selfJid: POLL_CREATOR_JID,
+      store,
+    });
+
+    expect(store.isVoteDedup("acct", CHAT_JID, "VOTE-NO-HANDLER")).toBe(false);
   });
 });

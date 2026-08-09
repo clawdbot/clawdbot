@@ -10,7 +10,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/runtime-doctor";
+import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { BufferJSON } from "../session.runtime.js";
 
 const WHATSAPP_PLUGIN_ID = "whatsapp";
