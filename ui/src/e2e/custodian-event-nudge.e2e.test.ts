@@ -496,8 +496,10 @@ suite.define(() => {
           );
         } else {
           expect(
-            page.locator(".custodian__structured-response", { hasText: "Twitch ops" }),
-          ).toHaveCount(1);
+            await page
+              .locator(".custodian__structured-response", { hasText: "Twitch ops" })
+              .count(),
+          ).toBe(1);
         }
 
         await gateway.resolveDeferred("openclaw.chat", {
