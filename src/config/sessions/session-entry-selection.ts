@@ -1,5 +1,4 @@
 import { resolveSessionAuthProfileOverrideSource } from "./auth-profile-override-provenance.js";
-import type { SessionPatchProjectionSnapshot } from "./session-accessor.types.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionProjectionTarget = {
@@ -46,13 +45,13 @@ function cloneOptionalSessionEntry(entry: SessionEntry | undefined): SessionEntr
 }
 
 export function resolveProjectionExistingEntry(
-  snapshot: SessionPatchProjectionSnapshot,
+  store: Readonly<Record<string, SessionEntry>>,
   target: SessionProjectionTarget,
 ): SessionEntry | undefined {
   const candidateKeys = target.candidateKeys ?? [target.primaryKey];
   let freshest: SessionEntry | undefined;
   for (const candidateKey of candidateKeys) {
-    const entry = snapshot.store[candidateKey];
+    const entry = store[candidateKey];
     if (entry && (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0))) {
       freshest = entry;
     }

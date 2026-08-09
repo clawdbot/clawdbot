@@ -557,10 +557,15 @@ export type SessionEntryReplacementSnapshot = {
 };
 
 export type SessionEntryReplacement = {
-  /** Exact persisted key to replace. Missing keys are ignored. */
+  /** Exact persisted key to replace. Missing keys are ignored unless previousSessionKeys is set. */
   sessionKey: string;
   /** Full replacement row to persist for this transaction. */
   entry: SessionEntry;
+  /**
+   * Canonical rekey sources removed after this row is written. Supplying this
+   * field (including an empty list) also authorizes inserting a missing key.
+   */
+  previousSessionKeys?: readonly string[];
 };
 
 export type SessionEntryReplacementUpdate<T> = {
@@ -828,40 +833,6 @@ export type SessionEntryCreateWithTranscriptOptions = {
   cwd?: string;
   /** SQLite commits are authoritative; retained for the shared caller contract. */
   requireWriteSuccess?: boolean;
-};
-
-export type SessionPatchProjectionSnapshot = {
-  /** Mutable-owner view exposed read-only so target lookup never rebuilds the whole store. */
-  store: Readonly<Record<string, SessionEntry>>;
-};
-
-export type SessionPatchProjectionTarget = {
-  candidateKeys?: readonly string[];
-  primaryKey: string;
-};
-
-export type SessionPatchProjectionContext = SessionPatchProjectionSnapshot &
-  SessionPatchProjectionTarget & {
-    existingEntry?: SessionEntry;
-    /** Store-indexed label conflict check excluding this target's canonical aliases. */
-    isLabelInUse: (label: string) => boolean;
-  };
-
-export type SessionPatchProjectionFailure = { ok: false };
-
-export type SessionPatchProjectionResult<TFailure extends SessionPatchProjectionFailure> =
-  | { ok: true; entry: SessionEntry }
-  | TFailure;
-
-export type SessionPatchProjectionOperation<TFailure extends SessionPatchProjectionFailure> = {
-  /** Revalidates request-scoped authorization after projection and before persistence. */
-  authorize?: () => TFailure | undefined;
-  /** Converts a target-local projection exception without aborting sibling targets. */
-  onError?: (error: unknown) => TFailure;
-  resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
-  project: (
-    context: SessionPatchProjectionContext,
-  ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
 };
 
 export type {

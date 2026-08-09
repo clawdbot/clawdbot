@@ -187,31 +187,10 @@ export type SessionEntryTargetPatchScope = {
   target: SessionLifecycleStoreTarget;
 };
 
-export type SessionEntryReplacementSnapshot = {
-  entry: SessionEntry;
-  sessionKey: string;
-};
-
-type SessionEntryReplacement = {
-  entry: SessionEntry;
-  sessionKey: string;
-};
-
-export type SessionEntryReplacementUpdate<T> = {
-  replacements?: Iterable<SessionEntryReplacement>;
-  result: T;
-};
-
-type SessionEntryBatchProjectionMutation = {
-  entry: SessionEntry;
-  previousSessionKeys?: readonly string[];
-  sessionKey: string;
-};
-
-export type SessionEntryBatchProjectionUpdate<T> = {
-  mutations?: Iterable<SessionEntryBatchProjectionMutation>;
-  result: T;
-};
+export type {
+  SessionEntryReplacementSnapshot,
+  SessionEntryReplacementUpdate,
+} from "./session-accessor.types.js";
 
 export type {
   DeletedAgentSessionEntryPurgeParams,

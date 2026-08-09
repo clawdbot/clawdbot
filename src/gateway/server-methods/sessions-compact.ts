@@ -77,7 +77,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     const compactRead = await applySessionPatchProjection({
       agentId: target.agentId,
       storePath,
-      resolveTarget: ({ store }) => {
+      resolveTarget: (store) => {
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key,

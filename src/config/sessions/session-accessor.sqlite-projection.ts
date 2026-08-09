@@ -10,6 +10,7 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionArchivedTranscriptCleanupRule } from "./session-accessor.lifecycle-types.js";
 import {
   materializeSqliteSessionStateDeletePlans,
@@ -40,7 +41,7 @@ import {
 import { emitArchivedSqliteTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
   emitCommittedLifecycleIdentityMutations,
-  emitCommittedSessionEntryChange,
+  emitCommittedSessionIdentityDiff,
   emitCommittedSessionEntryRemovals,
 } from "./session-accessor.sqlite-identity.js";
 import {
@@ -61,6 +62,11 @@ import {
   applySqliteSessionEntryMaintenance,
   finalizeSqliteSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
 } from "./session-accessor.sqlite-maintenance.js";
+import {
+  commitSqliteSessionEntryReplacement,
+  normalizeSqliteSessionEntryReplacements,
+  validateSqliteSessionEntryReplacements,
+} from "./session-accessor.sqlite-replacement.js";
 import {
   cloneSessionEntry,
   resolveSqliteScope,
@@ -104,7 +110,9 @@ export async function applySqliteSessionEntryReplacements<T>(params: {
   });
   const committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const selectedKeys = params.sessionKeys ? new Set(params.sessionKeys) : undefined;
+    const selectedKeys = params.sessionKeys
+      ? new Set(uniqueStrings(params.sessionKeys.map((key) => key.trim()).filter(Boolean)))
+      : undefined;
     const selectedStatuses = params.statuses ? new Set(params.statuses) : undefined;
     const entries = selectedStatuses
       ? readSqliteSessionEntriesByStatus(database, [...selectedStatuses], params.sessionKeys)
@@ -128,19 +136,42 @@ export async function applySqliteSessionEntryReplacements<T>(params: {
         sessionKey,
       })),
     );
-    const replacements = [...(operation.replacements ?? [])];
+    const replacements = normalizeSqliteSessionEntryReplacements(operation.replacements);
+    const isCanonicalProjection = (replacement: (typeof replacements)[number]) =>
+      replacement.previousSessionKeys !== undefined;
     for (const replacement of replacements) {
+      if (!replacement.sessionKey) {
+        throw new Error("Session entry replacement requires a key");
+      }
       if (replacementAuthorityKeys && !replacementAuthorityKeys.has(replacement.sessionKey)) {
         const selectionName = selectedStatuses ? "row" : "key";
         throw new Error(
           `Session entry replacement is outside the selected ${selectionName} set: ${replacement.sessionKey}`,
         );
       }
+      if (isCanonicalProjection(replacement)) {
+        const previousSessionKeys = replacement.previousSessionKeys ?? [];
+        if (
+          isInternalSessionEffectsKey(replacement.sessionKey) ||
+          previousSessionKeys.some(isInternalSessionEffectsKey)
+        ) {
+          throw new Error("Session entry canonical projection cannot replace internal rows");
+        }
+        for (const previousSessionKey of previousSessionKeys) {
+          if (replacementAuthorityKeys && !replacementAuthorityKeys.has(previousSessionKey)) {
+            const selectionName = selectedStatuses ? "row" : "key";
+            throw new Error(
+              `Session entry replacement is outside the selected ${selectionName} set: ${previousSessionKey}`,
+            );
+          }
+        }
+      }
     }
 
     const expectedEntries = new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
-    const applicable = replacements.filter((replacement) =>
-      expectedEntries.has(replacement.sessionKey),
+    const applicable = replacements.filter(
+      (replacement) =>
+        isCanonicalProjection(replacement) || expectedEntries.has(replacement.sessionKey),
     );
     if (params.requireWriteSuccess && replacements.length > 0 && applicable.length === 0) {
       throw new Error("session entry replacements did not persist any rows");
@@ -149,24 +180,45 @@ export async function applySqliteSessionEntryReplacements<T>(params: {
       return { maintenancePlans: [], result: operation.result };
     }
 
+    const claimedKeys = new Set<string>();
+    for (const replacement of applicable) {
+      for (const sessionKey of [
+        replacement.sessionKey,
+        ...(replacement.previousSessionKeys ?? []),
+      ]) {
+        if (claimedKeys.has(sessionKey)) {
+          throw new Error(`Session entry replacements overlap at ${sessionKey}`);
+        }
+        claimedKeys.add(sessionKey);
+      }
+      if (!isCanonicalProjection(replacement)) {
+        continue;
+      }
+      for (const previousSessionKey of replacement.previousSessionKeys ?? []) {
+        if (!expectedEntries.has(previousSessionKey)) {
+          throw new Error(
+            `Session entry canonical projection cannot replace missing alias ${previousSessionKey}`,
+          );
+        }
+      }
+    }
+
     const maintenancePlans: SqliteSessionEntryMaintenancePlan[] = [];
+    const previous = new Map<string, SessionEntry>();
+    const current = new Map<string, SessionEntry>();
     runOpenClawAgentWriteTransaction(
       (transactionDb) => {
+        validateSqliteSessionEntryReplacements(transactionDb, applicable, expectedEntries);
         for (const replacement of applicable) {
-          const current = readExactSessionEntryRow(transactionDb, replacement.sessionKey)?.entry;
-          if (!sqliteSessionEntriesEqual(current, expectedEntries.get(replacement.sessionKey))) {
-            throw new Error(
-              `SQLite session entry changed before replacement for ${replacement.sessionKey}`,
-            );
-          }
-        }
-        for (const replacement of applicable) {
-          writeSessionEntry(
+          const sourceEntries = commitSqliteSessionEntryReplacement(
             transactionDb,
-            replacement.sessionKey,
-            cloneSessionEntry(replacement.entry),
-            { previousEntry: expectedEntries.get(replacement.sessionKey) ?? null },
+            replacement,
+            expectedEntries,
           );
+          for (const { entry, sessionKey } of sourceEntries) {
+            previous.set(sessionKey, entry);
+          }
+          current.set(replacement.sessionKey, replacement.entry);
         }
         maintenancePlans.push(
           applySqliteSessionEntryMaintenance(transactionDb, {
@@ -180,20 +232,7 @@ export async function applySqliteSessionEntryReplacements<T>(params: {
       toDatabaseOptions(resolved),
       { operationLabel: "session.entry-replacements" },
     );
-    const finalReplacements = new Map(
-      applicable.map((replacement) => [replacement.sessionKey, replacement] as const),
-    );
-    for (const replacement of finalReplacements.values()) {
-      const previousEntry = expectedEntries.get(replacement.sessionKey);
-      if (previousEntry) {
-        emitCommittedSessionEntryChange({
-          currentEntry: replacement.entry,
-          currentKey: replacement.sessionKey,
-          previousEntry,
-          previousKey: replacement.sessionKey,
-        });
-      }
-    }
+    emitCommittedSessionIdentityDiff(previous, current);
     return { maintenancePlans, result: operation.result };
   });
   await finalizeSqliteSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(

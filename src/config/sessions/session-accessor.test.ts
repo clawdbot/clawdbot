@@ -26,7 +26,6 @@ import {
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   applySessionEntryReplacements,
-  applySessionPatchProjections,
   appendTranscriptEvent,
   appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
@@ -56,7 +55,6 @@ import {
   replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
   SessionInitializationAgentScopeMismatchError,
-  type SessionPatchProjectionOperation,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionEntrySelection,
@@ -2090,54 +2088,161 @@ describe("session accessor seam", () => {
     ).rejects.toThrow("outside the selected row set");
   });
 
-  it("projects ordered patches against one mutable store view", async () => {
-    const keys = ["a", "b", "c", "d"].map((suffix) => `agent:main:batch-${suffix}`);
-    for (const [index, sessionKey] of keys.entries()) {
-      await upsertSessionEntry(
-        { sessionKey, storePath },
-        { sessionId: `batch-${index}`, updatedAt: index + 1 },
-      );
-    }
-    const snapshots = new Set<object>();
-    const operation = (
-      index: number,
-      label: string,
-      authorize?: () => { ok: false; error: string } | undefined,
-    ): SessionPatchProjectionOperation<{ ok: false; error: string }> => ({
-      resolveTarget: (snapshot) => {
-        snapshots.add(snapshot.store);
-        return { primaryKey: keys[index]! };
-      },
-      project: ({ existingEntry, isLabelInUse }) => {
-        if (isLabelInUse(label)) {
-          return { ok: false as const, error: `duplicate:${label}` };
-        }
-        return { ok: true as const, entry: { ...existingEntry!, label } };
-      },
-      ...(authorize ? { authorize } : {}),
-    });
-
-    const results = await applySessionPatchProjections({
+  it("inserts and canonically rekeys through the bulk replacement owner", async () => {
+    const insertedKey = "agent:main:replacement-insert";
+    await applySessionEntryReplacements({
+      sessionKeys: [insertedKey],
       storePath,
-      operations: [
-        operation(0, "Shared"),
-        operation(1, "Shared"),
-        operation(2, "Blocked", () => ({ ok: false, error: "authorization changed" })),
-        operation(3, "Blocked"),
-      ],
+      update: () => ({
+        replacements: [
+          {
+            entry: { sessionId: "inserted", updatedAt: 1 },
+            previousSessionKeys: [],
+            sessionKey: insertedKey,
+          },
+        ],
+        result: undefined,
+      }),
+    });
+    expect(loadSessionEntry({ sessionKey: insertedKey, storePath })).toMatchObject({
+      sessionId: "inserted",
     });
 
-    expect(snapshots.size).toBe(1);
-    expect(results.map((result) => (result.ok ? result.entry.label : result.error))).toEqual([
-      "Shared",
-      "duplicate:Shared",
-      "authorization changed",
-      "Blocked",
-    ]);
-    expect(loadSessionEntry({ sessionKey: keys[0]!, storePath })?.label).toBe("Shared");
-    expect(loadSessionEntry({ sessionKey: keys[1]!, storePath })?.label).toBeUndefined();
-    expect(loadSessionEntry({ sessionKey: keys[2]!, storePath })?.label).toBeUndefined();
-    expect(loadSessionEntry({ sessionKey: keys[3]!, storePath })?.label).toBe("Blocked");
+    const canonicalKey = "agent:main:replacement-canonical";
+    const previousKey = "agent:main:replacement-previous";
+    await upsertSessionEntry(
+      { sessionKey: canonicalKey, storePath },
+      { sessionId: "canonical-older", updatedAt: 10 },
+    );
+    await upsertSessionEntry(
+      { sessionKey: previousKey, storePath },
+      { sessionId: "rekeyed", updatedAt: 20 },
+    );
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    database.db
+      .prepare(
+        "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(previousKey, "member-1", "test", 1);
+    const identityListener = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(identityListener);
+    await applySessionEntryReplacements({
+      sessionKeys: [canonicalKey, previousKey],
+      storePath,
+      update: (entries) => ({
+        replacements: [
+          {
+            entry: {
+              ...entries.find((entry) => entry.sessionKey === previousKey)!.entry,
+              label: "Moved",
+            },
+            previousSessionKeys: [previousKey],
+            sessionKey: canonicalKey,
+          },
+        ],
+        result: undefined,
+      }),
+    });
+    unsubscribe();
+    expect(loadSessionEntry({ sessionKey: previousKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: canonicalKey, storePath })).toMatchObject({
+      label: "Moved",
+      sessionId: "rekeyed",
+    });
+    expect(
+      database.db
+        .prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
+        .get("rekeyed"),
+    ).toEqual({ session_key: canonicalKey });
+    expect(
+      database.db
+        .prepare("SELECT session_key, identity_id FROM session_members WHERE identity_id = ?")
+        .get("member-1"),
+    ).toEqual({ session_key: canonicalKey, identity_id: "member-1" });
+    expect(identityListener.mock.calls.map(([event]) => event.kind)).toEqual(["move", "replace"]);
+  });
+
+  it("rolls back mixed exact replacements and canonical rekeys as one transaction", async () => {
+    const exactKey = "agent:main:replacement-rollback-exact";
+    const canonicalKey = "agent:main:replacement-rollback-canonical";
+    const previousKey = "agent:main:replacement-rollback-previous";
+    await upsertSessionEntry(
+      { sessionKey: exactKey, storePath },
+      { label: "Exact original", sessionId: "rollback-exact", updatedAt: 10 },
+    );
+    await upsertSessionEntry(
+      { sessionKey: canonicalKey, storePath },
+      { label: "Canonical original", sessionId: "rollback-canonical", updatedAt: 20 },
+    );
+    await upsertSessionEntry(
+      { sessionKey: previousKey, storePath },
+      { label: "Previous original", sessionId: "rollback-previous", updatedAt: 30 },
+    );
+    const before = new Map(
+      [exactKey, canonicalKey, previousKey].map((sessionKey) => [
+        sessionKey,
+        structuredClone(loadSessionEntry({ sessionKey, storePath })),
+      ]),
+    );
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    database.db.exec(`
+      CREATE TRIGGER fail_mixed_replacement_after_exact_write
+      BEFORE UPDATE OF entry_json ON session_nodes
+      WHEN NEW.session_key = '${canonicalKey}'
+        AND (
+          SELECT json_extract(entry_json, '$.label')
+          FROM session_nodes
+          WHERE session_key = '${exactKey}'
+        ) = 'Exact updated'
+      BEGIN
+        SELECT RAISE(ABORT, 'injected mixed replacement failure');
+      END;
+    `);
+    const identityListener = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(identityListener);
+
+    try {
+      await expect(
+        applySessionEntryReplacements({
+          sessionKeys: [exactKey, canonicalKey, previousKey],
+          storePath,
+          update: (entries) => ({
+            replacements: [
+              {
+                entry: {
+                  ...entries.find((entry) => entry.sessionKey === exactKey)!.entry,
+                  label: "Exact updated",
+                },
+                sessionKey: exactKey,
+              },
+              {
+                entry: {
+                  ...entries.find((entry) => entry.sessionKey === previousKey)!.entry,
+                  label: "Canonical updated",
+                },
+                previousSessionKeys: [previousKey],
+                sessionKey: canonicalKey,
+              },
+            ],
+            result: undefined,
+          }),
+        }),
+      ).rejects.toThrow("injected mixed replacement failure");
+    } finally {
+      unsubscribe();
+      database.db.exec("DROP TRIGGER fail_mixed_replacement_after_exact_write");
+    }
+
+    for (const sessionKey of [exactKey, canonicalKey, previousKey]) {
+      expect(loadSessionEntry({ sessionKey, storePath })).toEqual(before.get(sessionKey));
+    }
+    expect(identityListener).not.toHaveBeenCalled();
   });
 
   it("prepares entry replacements without holding a write transaction", async () => {

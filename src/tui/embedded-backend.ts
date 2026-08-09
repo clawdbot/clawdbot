@@ -759,7 +759,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
     const applied = await applySessionPatchProjection({
       storePath: target.storePath,
-      resolveTarget: ({ store }) => {
+      resolveTarget: (store) => {
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key: opts.key,
