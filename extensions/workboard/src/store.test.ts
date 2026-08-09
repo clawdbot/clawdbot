@@ -3941,6 +3941,26 @@ describe("WorkboardStore", () => {
     await expect(store.get(child.id)).resolves.toEqual(childBeforeRetry);
   });
 
+  it("rejects ambiguous historical orchestration retries without changing prior links", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Historical parent", idempotencyKey: "parent-key" });
+    const child = await store.create({ title: "Historical child", idempotencyKey: "child-key" });
+    await store.linkCards(parent.id, child.id);
+    const parentBeforeRetry = await store.get(parent.id);
+    const childBeforeRetry = await store.get(child.id);
+
+    await expect(
+      store.decompose(parent.id, {
+        completeParent: false,
+        decompositionMode: "orchestration",
+        children: [{ title: "Ignored retry", idempotencyKey: "child-key" }],
+      }),
+    ).rejects.toThrow(/does not prove matching orchestration provenance/);
+
+    await expect(store.get(parent.id)).resolves.toEqual(parentBeforeRetry);
+    await expect(store.get(child.id)).resolves.toEqual(childBeforeRetry);
+  });
+
   it("unlinks reciprocal dependencies idempotently and records removal events", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const parent = await store.create({ title: "Parent" });
@@ -4020,6 +4040,43 @@ describe("WorkboardStore", () => {
       candidateChildIds: [],
       repairedChildIds: [],
     });
+  });
+
+  it("preflights every decomposition repair candidate before removing any links", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Aggregate", status: "todo" });
+    const result = await store.decompose(parent.id, {
+      completeParent: false,
+      decompositionMode: "orchestration",
+      children: [{ title: "First child" }, { title: "Claimed child" }],
+    });
+    const [firstChild, claimedChild] = result.children;
+    if (!firstChild || !claimedChild) {
+      throw new Error("expected both decomposition children");
+    }
+    await store.linkCards(parent.id, firstChild.id);
+    await store.linkCards(parent.id, claimedChild.id);
+    const now = Date.now();
+    await store.update(claimedChild.id, {
+      metadata: {
+        ...(await store.get(claimedChild.id))?.metadata,
+        claim: {
+          ownerId: "other-worker",
+          token: "other-worker-token",
+          claimedAt: now,
+          lastHeartbeatAt: now,
+        },
+      },
+    });
+    const parentBeforeRepair = await store.get(parent.id);
+    const firstBeforeRepair = await store.get(firstChild.id);
+
+    await expect(
+      store.repairDecomposition(parent.id, { apply: true }, { ownerId: "repair-worker" }),
+    ).rejects.toThrow(/card is claimed by other-worker/);
+
+    await expect(store.get(parent.id)).resolves.toEqual(parentBeforeRepair);
+    await expect(store.get(firstChild.id)).resolves.toEqual(firstBeforeRepair);
   });
 
   it("omits derived child idempotency keys when the parent key is already at the limit", async () => {

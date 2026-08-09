@@ -86,7 +86,8 @@ export function normalizeDiagnosticAction(value: unknown): WorkboardDiagnosticAc
       value.kind !== "reclaim" &&
       value.kind !== "reassign" &&
       value.kind !== "add_proof" &&
-      value.kind !== "open_session") ||
+      value.kind !== "open_session" &&
+      value.kind !== "repair_dependency") ||
     typeof value.label !== "string"
   ) {
     return null;

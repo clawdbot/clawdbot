@@ -594,6 +594,7 @@ export class WorkboardWorkflowStore extends WorkboardRepairStore {
             scope === null ? undefined : scope,
           );
           const existingDecompositionMode = created.metadata?.automation?.decompositionMode;
+          const hasHardDependency = cardParentIds(created).includes(parent.id);
           if (
             existingCardIds.has(created.id) &&
             existingDecompositionMode !== undefined &&
@@ -603,7 +604,18 @@ export class WorkboardWorkflowStore extends WorkboardRepairStore {
               `idempotent child ${created.id} already uses decompositionMode "${existingDecompositionMode}" and cannot be reused with "${decompositionMode}".`,
             );
           }
-          const hasHardDependency = cardParentIds(created).includes(parent.id);
+          if (
+            existingCardIds.has(created.id) &&
+            decompositionMode === "orchestration" &&
+            (parentAutomation?.decompositionMode !== "orchestration" ||
+              existingDecompositionMode !== "orchestration" ||
+              created.metadata?.automation?.createdByCardId !== parent.id ||
+              hasHardDependency)
+          ) {
+            throw new Error(
+              `idempotent child ${created.id} does not prove matching orchestration provenance and cannot be reused.`,
+            );
+          }
           if (existingCardIds.has(created.id) && !hasHardDependency) {
             reusedChildSnapshots.set(created.id, created);
           }

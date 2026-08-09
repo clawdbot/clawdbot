@@ -1,3 +1,4 @@
+import { assertCanMutateClaimedCard } from "./store-card-helpers.js";
 import type { WorkboardMutationScope, WorkboardRepairDecompositionInput } from "./store-inputs.js";
 import { WorkboardPromoteStore } from "./store-promote.js";
 
@@ -20,6 +21,7 @@ export class WorkboardRepairStore extends WorkboardPromoteStore {
       }
       const dryRun = input.apply !== true;
       const candidateChildIds: string[] = [];
+      const candidateChildren = [];
       const repairedChildIds: string[] = [];
       const skippedChildIds: string[] = [];
       const parentMode = parent.metadata?.automation?.decompositionMode;
@@ -51,9 +53,16 @@ export class WorkboardRepairStore extends WorkboardPromoteStore {
           continue;
         }
         candidateChildIds.push(childId);
-        if (!dryRun) {
-          await this.unlinkDependencyDirect(parent.id, childId, scope);
-          repairedChildIds.push(childId);
+        candidateChildren.push(child);
+      }
+      if (!dryRun) {
+        assertCanMutateClaimedCard(parent, scope);
+        for (const child of candidateChildren) {
+          assertCanMutateClaimedCard(child, scope);
+        }
+        for (const child of candidateChildren) {
+          await this.unlinkDependencyDirect(parent.id, child.id, scope);
+          repairedChildIds.push(child.id);
         }
       }
       return { parentId, dryRun, candidateChildIds, repairedChildIds, skippedChildIds };

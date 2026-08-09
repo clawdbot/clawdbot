@@ -2494,7 +2494,10 @@ describe("workboard controller", () => {
                   firstSeenAt: 12,
                   lastSeenAt: 13,
                   count: 1,
-                  actions: [{ kind: "add_proof", label: "Add proof" }],
+                  actions: [
+                    { kind: "add_proof", label: "Add proof" },
+                    { kind: "repair_dependency", label: "Repair dependency" },
+                  ],
                 },
                 { kind: "future_kind", title: "Invalid contract value" },
                 {
@@ -2545,7 +2548,14 @@ describe("workboard controller", () => {
         lastDispatchAt: 20,
       },
       claim: { token: "[redacted]" },
-      diagnostics: [{ actions: [{ kind: "add_proof", label: "Add proof" }] }],
+      diagnostics: [
+        {
+          actions: [
+            { kind: "add_proof", label: "Add proof" },
+            { kind: "repair_dependency", label: "Repair dependency" },
+          ],
+        },
+      ],
       notifications: [{ sequence: 3 }],
     });
     expect(getWorkboardState(host).cards[0]?.metadata?.diagnostics).toHaveLength(1);
