@@ -297,7 +297,7 @@ jobs:
             "$candidate_repo/ui/src/test-helpers/control-ui-e2e.ts"
 
           cd "$candidate_repo"
-          node scripts/ensure-playwright-chromium.mjs
+          node --import tsx scripts/ensure-playwright-chromium.mts
 
           set +e
           OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR="$root" \

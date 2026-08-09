@@ -184,7 +184,6 @@ knob.
 | `agents.defaults.startupContext.*`                             | One-shot reset/startup model-run prelude, including recent daily `memory/*.md` files. Bare chat `/new` and `/reset` are acknowledged without invoking the model |
 | `skills.limits.*`                                              | The compact skills list injected into the system prompt                                                                                                         |
 | `agents.defaults.contextLimits.*`                              | Bounded runtime excerpts and injected runtime-owned blocks                                                                                                      |
-| `memory.qmd.limits.*`                                          | Indexed memory-search snippet and injection sizing                                                                                                              |
 
 Matching per-agent overrides:
 

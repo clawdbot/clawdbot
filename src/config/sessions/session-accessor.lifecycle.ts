@@ -43,7 +43,10 @@ import type {
   SessionPatchProjectionOperation,
   SessionPatchProjectionResult,
 } from "./session-accessor.types.js";
-import { resolveProjectionExistingEntry } from "./session-entry-selection.js";
+import {
+  resolveProjectionExistingEntry,
+  SessionLabelOwnerIndex,
+} from "./session-entry-selection.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 // Session lifecycle storage is canonical SQLite; direct exports keep reset,
@@ -211,36 +214,8 @@ export async function applySessionPatchProjections<
     storePath: params.storePath,
     skipMaintenance: true,
     update: async (workingStore) => {
-      const labelOwners = new Map<string, Set<string>>();
-      const addLabelOwner = (sessionKey: string, entry: SessionEntry) => {
-        if (!entry.label) {
-          return;
-        }
-        const owners = labelOwners.get(entry.label) ?? new Set<string>();
-        owners.add(sessionKey);
-        labelOwners.set(entry.label, owners);
-      };
-      const removeSnapshotEntry = (sessionKey: string) => {
-        const entry = workingStore[sessionKey];
-        if (entry?.label) {
-          const owners = labelOwners.get(entry.label);
-          owners?.delete(sessionKey);
-          if (owners?.size === 0) {
-            labelOwners.delete(entry.label);
-          }
-        }
-        delete workingStore[sessionKey];
-      };
-      const setSnapshotEntry = (sessionKey: string, entry: SessionEntry) => {
-        removeSnapshotEntry(sessionKey);
-        const cloned = structuredClone(entry);
-        workingStore[sessionKey] = cloned;
-        addLabelOwner(sessionKey, cloned);
-      };
-      for (const [sessionKey, entry] of Object.entries(workingStore)) {
-        addLabelOwner(sessionKey, entry);
-      }
       const snapshot = { store: workingStore };
+      const labelOwners = new SessionLabelOwnerIndex(workingStore);
       const mutations: Array<{
         entry: SessionEntry;
         previousSessionKeys?: readonly string[];
@@ -254,23 +229,11 @@ export async function applySessionPatchProjections<
           const candidateKeys = uniqueStrings(
             (target.candidateKeys ?? [target.primaryKey]).map((key) => key.trim()).filter(Boolean),
           );
-          const candidateKeySet = new Set(candidateKeys);
           const projected = await operation.project({
             ...target,
             ...snapshot,
             ...(existingEntry ? { existingEntry } : {}),
-            isLabelInUse: (label) => {
-              const owners = labelOwners.get(label);
-              if (!owners) {
-                return false;
-              }
-              for (const owner of owners) {
-                if (!candidateKeySet.has(owner)) {
-                  return true;
-                }
-              }
-              return false;
-            },
+            isLabelInUse: (label) => labelOwners.isLabelInUse(label, candidateKeys),
           });
           if (!projected.ok) {
             results.push(projected);
@@ -289,13 +252,12 @@ export async function applySessionPatchProjections<
             ...(previousSessionKeys.length > 0 ? { previousSessionKeys } : {}),
             sessionKey: target.primaryKey,
           });
-          for (const candidateKey of candidateKeys) {
-            if (candidateKey !== target.primaryKey) {
-              removeSnapshotEntry(candidateKey);
-            }
-          }
-          setSnapshotEntry(target.primaryKey, projected.entry);
-          results.push({ ok: true, entry: structuredClone(projected.entry) });
+          const cloned = labelOwners.replaceEntry(
+            candidateKeys,
+            target.primaryKey,
+            projected.entry,
+          );
+          results.push({ ok: true, entry: structuredClone(cloned) });
         } catch (error) {
           if (!operation.onError) {
             throw error;

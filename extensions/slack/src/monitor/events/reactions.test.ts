@@ -69,7 +69,7 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
   const handler = requireReactionHandler(handlers[handlerName], handlerName);
   await handler({
     event: (input.event ?? buildReactionEvent()) as Record<string, unknown>,
-    body: input.body ?? {},
+    body: input.body ?? { event_id: "Ev-reaction-default" },
   });
 }
 
@@ -227,7 +227,7 @@ describe("registerSlackReactionEvents", () => {
 
     expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
       sessionKey: "agent:main:main",
-      contextKey: "slack:reaction:added:D1:123.456:U1:thumbsup",
+      contextKey: "slack:reaction:added:D1:123.456:U1:thumbsup:Ev-reaction-default",
     });
   });
 

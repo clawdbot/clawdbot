@@ -65,6 +65,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI browser annotations:** keep marked screenshots and generated page context together in structured composer cards, preserve user-written drafts when annotations are removed or replaced, retain complete unsent annotation packages across same-tab route and active split-pane remounts, and offer bounded Undo without restoring removed context into another session. Fixes #120744. Thanks @shakkernerd.
+- **Control UI profile avatar refreshes:** carry canonical content revisions through mutation responses and live presence so rapid replacements refresh every connected browser without stale cache rollback. Thanks @shakkernerd.
 - **Control UI appearance accessibility:** keep the unavailable custom-theme card announced as an Import command while preserving selected-state semantics for selectable themes and text sizes. Thanks @shakkernerd.
 - **Control UI dashboard index refresh:** keep an open Dashboards page current after session changes, agent-scope updates, and Gateway reconnects while preserving the last safe list until replacement hydration completes. Fixes #120602. Thanks @shakkernerd.
 - **Browser extension relay security:** require canonical 64-character relay secrets and safe WebSocket pairing URLs, and recheck OpenClaw tab-group consent at the extension edge before every authority-bearing existing-tab command.

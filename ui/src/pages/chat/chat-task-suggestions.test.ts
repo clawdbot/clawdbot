@@ -43,7 +43,7 @@ describe("chat task suggestions", () => {
     expect(onDismiss).toHaveBeenCalledWith(suggestion);
   });
 
-  it("hides dismissal without write access and requires admin access to start", () => {
+  it("renders nothing when no task actions are permitted", () => {
     const container = document.createElement("div");
     render(
       renderChatTaskSuggestions({
@@ -57,9 +57,57 @@ describe("chat task suggestions", () => {
       container,
     );
 
-    expect(container.querySelector<HTMLButtonElement>(".task-suggestion__start")?.disabled).toBe(
-      true,
+    expect(container.querySelector(".task-suggestions")).toBeNull();
+  });
+
+  it("allows dismissal while requiring admin access to start", () => {
+    const container = document.createElement("div");
+    render(
+      renderChatTaskSuggestions({
+        suggestions: [suggestion],
+        busyIds: new Set(),
+        canAccept: false,
+        canDismiss: true,
+        onAccept: vi.fn(),
+        onDismiss: vi.fn(),
+      }),
+      container,
     );
-    expect(container.querySelector(".task-suggestion__dismiss")).toBeNull();
+
+    const start = container.querySelector<HTMLButtonElement>(".task-suggestion__start");
+    expect(start?.disabled).toBe(true);
+    expect(start?.title).toBe(
+      "Administrator access is required to create a worktree from this project.",
+    );
+    expect(container.querySelector(".task-suggestion__dismiss")).not.toBeNull();
+  });
+
+  it("strips bidi controls from every displayed field", () => {
+    const container = document.createElement("div");
+    render(
+      renderChatTaskSuggestions({
+        suggestions: [
+          {
+            ...suggestion,
+            title: "safe\u202eevil",
+            tldr: "why\u200f now",
+            cwd: "/repo/\u2066project",
+            prompt: "run\u202d exactly",
+          },
+        ],
+        busyIds: new Set(),
+        canAccept: true,
+        canDismiss: true,
+        onAccept: vi.fn(),
+        onDismiss: vi.fn(),
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("safeevil");
+    expect(container.textContent).toContain("why now");
+    expect(container.textContent).toContain("/repo/project");
+    expect(container.textContent).toContain("run exactly");
+    expect(container.textContent).not.toMatch(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u);
   });
 });

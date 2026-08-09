@@ -288,6 +288,8 @@ type AgentHarnessRunCapability = {
    */
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
+  /** Certifies exact runAttempt enforcement; direct-policy-restricted channel side questions fail in core. */
+  conversationToolPolicySupport?: "exact";
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";

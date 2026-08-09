@@ -1,7 +1,7 @@
 import "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,

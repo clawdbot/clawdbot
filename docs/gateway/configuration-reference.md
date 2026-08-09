@@ -7,7 +7,7 @@ read_when:
 doc-schema-version: 1
 ---
 
-Field-level reference for `~/.openclaw/openclaw.json`: keys, defaults, and links to deeper subsystem pages. For task-oriented setup guidance, see [Configuration](/gateway/configuration). Channel- and plugin-owned command catalogs and deep memory/QMD knobs live on their own pages, not here.
+Field-level reference for `~/.openclaw/openclaw.json`: keys, defaults, and links to deeper subsystem pages. For task-oriented setup guidance, see [Configuration](/gateway/configuration). Channel- and plugin-owned command catalogs and deep memory knobs live on their own pages, not here.
 
 Config format is **JSON5** (comments + trailing commas allowed). All fields are optional; OpenClaw uses safe defaults when omitted.
 
@@ -25,7 +25,7 @@ ancestor declaration. A path with no declared ancestor is advanced by default.
 
 Dedicated deep references:
 
-- [Memory configuration reference](/reference/memory-config) for `memory.search.*`, `memory.qmd.*`, `memory.citations`, and dreaming config under `plugins.entries.memory-core.config.dreaming`.
+- [Memory configuration reference](/reference/memory-config) for `memory.search.*`, `memory.citations`, and dreaming config under `plugins.entries.memory-core.config.dreaming`.
 - [Slash commands](/tools/slash-commands) for the current built-in + bundled command catalog.
 - Owning channel/plugin pages for channel-specific command surfaces.
 
@@ -399,9 +399,7 @@ cannot be read, account-wide exposure fails closed.
 - Full memory config lives in [Memory configuration reference](/reference/memory-config):
   - `memory.search.*`
   - `agents.entries.*.memory.search.*` for per-agent overrides
-  - `memory.backend`
   - `memory.citations`
-  - `memory.qmd.*`
   - `plugins.entries.memory-core.config.dreaming`
 - Enabled Claude bundle plugins can also contribute embedded OpenClaw defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
@@ -685,6 +683,9 @@ See [Plugins](/tools/plugin).
 - `controlUi.toolTitles`: opt in to AI-generated purpose titles for tool calls in Control UI chat. Default: `false` (tool rendering stays fully deterministic with no background model calls). When enabled, the `chat.toolTitles` method labels complex calls through standard utility-model routing — the agent's `utilityModel` (an operator decision that may send bounded tool arguments to the chosen provider, like every utility task), or the session provider's declared small-model default (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`) — and caches results in the per-agent state database so repeat views never re-bill. `utilityModel: \"\"` disables titles like every other utility task; titles never fall back to the primary model.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
 - `cliAgents.enabled`: opt in to the experimental **CLI agents** group in the Control UI new-session model picker. Default: `false`. The group appears only when the Gateway advertises `sessions.catalog.list`, and it includes only catalog providers that support creating sessions. Selecting one opens the same catalog-target new-session flow used by the sidebar catalog action.
+
+  Catalog providers can also advertise terminal-based session creation. The method is available only when Labs `cliAgents.enabled` is on, the Gateway terminal is available, and the selected provider exposes the capability. Callers supply `cwd`; create a fresh worktree first with `worktrees.create` when needed, because terminal start does not provision one.
+
 - `terminal.enabled`: the admin-scoped operator terminal. Default: `true`; set `false` to opt out. The terminal starts a host PTY in the selected agent workspace, inherits the Gateway process environment, and is refused for agents with `sandbox.mode: "all"`. Disable it on deployments where admin operators should not get a host shell; changing it restarts the Gateway and updates the Control UI content security policy.
 - `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows.
 - `terminal.detachedSessionTimeoutSeconds`: how long a terminal session survives after its connection drops (page reload, laptop sleep), staying reattachable via `terminal.attach` with its recent output replayed. Default: `300`. Set `0` to kill sessions the moment their connection drops. Detached sessions keep running their commands, so shorten this on shared or exposed hosts.

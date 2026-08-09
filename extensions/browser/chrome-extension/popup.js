@@ -1,4 +1,4 @@
-// Popup: pairing, connection status, per-tab share toggle, and settings.
+// Popup: pairing, connection status, access mode, per-tab control, and settings.
 
 const statusDot = document.getElementById("statusDot");
 const pairSection = document.getElementById("pairSection");
@@ -19,6 +19,8 @@ const versionValue = document.getElementById("versionValue");
 const statusHint = document.getElementById("statusHint");
 const unpairNote = document.getElementById("unpairNote");
 const relayValue = document.getElementById("relayValue");
+const accessModeSelect = document.getElementById("accessModeSelect");
+const accessWarning = document.getElementById("accessWarning");
 let sendingPage = false;
 let settingsOpen = false;
 // Preserve rejected actions across status polls until a successful retry.
@@ -58,6 +60,9 @@ async function refresh() {
   settingsSection.classList.toggle("hidden", !settingsOpen);
   settingsButton.classList.toggle("active", settingsOpen);
   relayValue.textContent = status.paired ? relayHost(status.relayUrl) : "—";
+  accessModeSelect.value = status.accessMode === "selected" ? "selected" : "all";
+  accessModeSelect.disabled = !status.paired;
+  accessWarning.classList.toggle("hidden", status.accessMode !== "all" || !status.paired);
   unpairButton.classList.toggle("hidden", !status.paired);
   unpairNote.classList.toggle("hidden", !status.paired);
   if (!status.paired) {
@@ -67,7 +72,7 @@ async function refresh() {
   const label = STATE_LABEL[status.state] ?? STATE_LABEL.off;
   statusLine.textContent =
     actionError ??
-    `${label} · ${status.sharedTabCount} tab${status.sharedTabCount === 1 ? "" : "s"} shared`;
+    `${label} · ${status.accessibleTabCount} tab${status.accessibleTabCount === 1 ? "" : "s"} ${status.accessMode === "all" ? "available" : "shared"}`;
   statusHint.textContent =
     status.hint || "Relay unreachable — is the OpenClaw gateway running and up to date?";
   statusHint.classList.toggle("hidden", status.state !== "error");
@@ -77,6 +82,8 @@ async function refresh() {
     copilotButton.disabled = true;
     sendPageButton.disabled = true;
     delete sendPageButton.dataset.tabId;
+    delete shareButton.dataset.accessMode;
+    delete shareButton.dataset.grant;
     return;
   }
   sendPageButton.dataset.tabId = String(tab.id);
@@ -85,10 +92,20 @@ async function refresh() {
   copilotButton.disabled = !panel?.ok;
   copilotButton.dataset.tabId = String(tab.id);
   copilotButton.dataset.path = panel?.path ?? "";
-  const { shared } = await chrome.runtime.sendMessage({ type: "isTabShared", tabId: tab.id });
-  shareButton.classList.remove("hidden");
-  shareButton.textContent = shared ? "Stop sharing this tab" : "Share this tab with OpenClaw";
+  const tabAccess = await chrome.runtime.sendMessage({ type: "getTabAccess", tabId: tab.id });
+  shareButton.classList.toggle("hidden", !tabAccess.eligible);
+  copilotButton.disabled = !panel?.ok || !tabAccess.accessible;
+  shareButton.textContent =
+    status.accessMode === "all"
+      ? tabAccess.denied
+        ? "Allow OpenClaw on this tab"
+        : "Pause OpenClaw on this tab"
+      : tabAccess.accessible
+        ? "Stop sharing this tab"
+        : "Share this tab with OpenClaw";
   shareButton.dataset.tabId = String(tab.id);
+  shareButton.dataset.accessMode = status.accessMode === "selected" ? "selected" : "all";
+  shareButton.dataset.grant = String(!tabAccess.accessible);
 }
 
 async function onSendPage() {
@@ -125,6 +142,10 @@ async function onPair() {
   const result = await chrome.runtime.sendMessage({
     type: "pair",
     pairingString: pairingInput.value,
+    accessMode:
+      document.querySelector('input[name="pairAccessMode"]:checked')?.value === "selected"
+        ? "selected"
+        : "all",
   });
   if (!result.ok) {
     actionError = result.error ?? "Pairing failed.";
@@ -151,16 +172,37 @@ async function onUnpair() {
   await refresh();
 }
 
-async function onToggleShare() {
+async function onToggleTabAccess() {
   const tabId = Number.parseInt(shareButton.dataset.tabId ?? "", 10);
-  if (Number.isFinite(tabId)) {
-    const result = await chrome.runtime.sendMessage({ type: "toggleShareTab", tabId });
+  const accessMode = shareButton.dataset.accessMode;
+  const grant = shareButton.dataset.grant === "true";
+  if (Number.isFinite(tabId) && (accessMode === "all" || accessMode === "selected")) {
+    const result = await chrome.runtime.sendMessage({
+      type: "toggleTabAccess",
+      tabId,
+      accessMode,
+      grant,
+    });
     if (result?.ok === false) {
       actionError = result.error ?? "Could not update browser tab sharing.";
       statusLine.textContent = actionError;
       await refresh();
       return;
     }
+    actionError = null;
+  }
+  await refresh();
+}
+
+async function onAccessModeChange() {
+  const result = await chrome.runtime.sendMessage({
+    type: "setAccessMode",
+    accessMode: accessModeSelect.value,
+  });
+  if (!result?.ok) {
+    actionError = result?.error ?? "Could not update browser access.";
+    statusLine.textContent = actionError;
+  } else {
     actionError = null;
   }
   await refresh();
@@ -183,9 +225,10 @@ settingsButton.addEventListener("click", () => {
 });
 pairButton.addEventListener("click", () => void onPair());
 unpairButton.addEventListener("click", () => void onUnpair());
-shareButton.addEventListener("click", () => void onToggleShare());
+shareButton.addEventListener("click", () => void onToggleTabAccess());
 copilotButton.addEventListener("click", () => void onOpenCopilot());
 sendPageButton.addEventListener("click", () => void onSendPage());
+accessModeSelect.addEventListener("change", () => void onAccessModeChange());
 
 void refresh();
 setInterval(() => void refresh(), 2000);

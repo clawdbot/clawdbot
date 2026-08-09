@@ -241,12 +241,15 @@ suite.define(() => {
         pinned: false,
       });
 
-      // The current-main full context menu remains intact: active rows cannot
-      // archive, while an idle row can.
+      // Active rows can archive through the Gateway's stop-and-drain lifecycle,
+      // while Delete keeps its separate active-run guard.
       await sidebarMigration.hover();
       await sidebarMigration.getByRole("button", { name: "Open session menu" }).click();
       await expect
         .poll(() => page.getByRole("menuitem", { name: "Archive session" }).isDisabled())
+        .toBe(false);
+      await expect
+        .poll(() => page.getByRole("menuitem", { name: "Delete…" }).isDisabled())
         .toBe(true);
       await page.keyboard.press("Escape");
       await sidebarResearch.hover();

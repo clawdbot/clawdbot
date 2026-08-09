@@ -20,6 +20,7 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import type { AgentTurnContext, AgentTurnPrincipal } from "../agent-turn/types.js";
 import { formatForLog } from "../ws-log.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -53,8 +54,8 @@ export async function resolveAgentDeliveryPhase(params: {
   recipientThreadId?: string | number;
   bestEffortDeliver: boolean;
   runId: string;
-  client: GatewayRequestHandlerOptions["client"];
-  context: GatewayRequestHandlerOptions["context"];
+  client: AgentTurnPrincipal | null;
+  context: AgentTurnContext;
   respond: GatewayRequestHandlerOptions["respond"];
   isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
 }): Promise<AgentDeliveryPhaseResult | undefined> {

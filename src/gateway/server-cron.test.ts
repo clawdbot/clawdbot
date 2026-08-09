@@ -5,6 +5,7 @@ import path from "node:path";
 // delivery, lifecycle cleanup, hook emission, and SSRF-guarded webhooks.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -13,7 +14,6 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
-import { createDeferred } from "../test-utils/deferred.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
   abortSignal?: AbortSignal;
@@ -1723,8 +1723,8 @@ describe("buildGatewayCronService", () => {
       );
       expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          message: "queue changed",
           jobId: job.id,
+          payload: { text: "queue changed" },
           target: expect.objectContaining({ threadId: 456 }),
         }),
       );
@@ -1970,7 +1970,8 @@ describe("buildGatewayCronService", () => {
         callArg(sendCronAnnouncePayloadStrictMock, 0, 0, "cron announce payload"),
         "cron announce payload",
       );
-      const message = typeof announcePayload.message === "string" ? announcePayload.message : "";
+      const payload = requireRecord(announcePayload.payload, "cron announce reply payload");
+      const message = typeof payload.text === "string" ? payload.text : "";
       expect(message).toContain("token=***");
       expect(message).not.toContain("opaque-secret-value");
       expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");

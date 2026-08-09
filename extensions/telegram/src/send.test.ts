@@ -44,12 +44,11 @@ import {
   importTelegramSendModule,
   installTelegramSendTestHooks,
 } from "./send.test-harness.js";
+import { recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
 import {
   TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
   TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
-  recordSentMessage,
-  wasSentByBot,
-} from "./sent-message-cache.js";
+} from "./sent-message-cache.legacy-state.js";
 
 installTelegramSendTestHooks();
 

@@ -46,6 +46,7 @@ describeTelegramDispatch("Telegram provider preview hook safety", () => {
         replyOptions: expect.objectContaining({
           onPartialReply: undefined,
           disableBlockStreaming: undefined,
+          forceToolResultProgress: false,
         }),
       });
     },

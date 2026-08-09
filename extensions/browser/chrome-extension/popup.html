@@ -31,7 +31,8 @@
       }
 
       button,
-      textarea {
+      textarea,
+      select {
         font: inherit;
       }
 
@@ -184,6 +185,77 @@
         color: #797168;
       }
 
+      .access-choice {
+        margin: 10px 0 0;
+        padding: 0;
+        border: 0;
+      }
+
+      .access-choice legend {
+        margin-bottom: 6px;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 9px;
+        letter-spacing: 0.12em;
+      }
+
+      .mode-option {
+        display: grid;
+        grid-template-columns: 16px 1fr;
+        gap: 1px 7px;
+        padding: 7px 8px;
+        border: 1px solid #332f2b;
+        background: var(--panel);
+        cursor: pointer;
+      }
+
+      .mode-option:first-of-type {
+        border-radius: 7px 7px 0 0;
+      }
+
+      .mode-option:last-of-type {
+        margin-top: -1px;
+        border-radius: 0 0 7px 7px;
+      }
+
+      .mode-option:has(input:checked) {
+        position: relative;
+        border-color: #86503b;
+        background: var(--orange-soft);
+      }
+
+      .mode-option input {
+        grid-row: 1 / 3;
+        align-self: center;
+        margin: 0;
+        accent-color: var(--orange);
+      }
+
+      .mode-title {
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .mode-detail {
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.35;
+      }
+
+      .recommended {
+        color: #ffad8f;
+      }
+
+      select {
+        max-width: 150px;
+        padding: 5px 24px 5px 7px;
+        border: 1px solid #3b3631;
+        border-radius: 6px;
+        background: var(--panel-raised);
+        color: var(--ink);
+        font-size: 11px;
+      }
+
       #pairingString {
         font-family: var(--mono);
         font-size: 11px;
@@ -317,6 +389,19 @@
           string:
         </p>
         <textarea id="pairingString" placeholder="ws://127.0.0.1:18797/extension#…"></textarea>
+        <fieldset class="access-choice">
+          <legend>ACCESS</legend>
+          <label class="mode-option">
+            <input type="radio" name="pairAccessMode" value="all" checked />
+            <span class="mode-title">All tabs</span>
+            <span class="mode-detail recommended">Recommended for a personal browser</span>
+          </label>
+          <label class="mode-option">
+            <input type="radio" name="pairAccessMode" value="selected" />
+            <span class="mode-title">Selected tabs</span>
+            <span class="mode-detail">Only tabs in the OpenClaw group</span>
+          </label>
+        </fieldset>
         <p id="error" class="hidden"></p>
         <button id="pairButton" class="action primary" type="button">Pair</button>
       </section>
@@ -352,7 +437,20 @@
             <dt>Relay</dt>
             <dd id="relayValue">—</dd>
           </div>
+          <div class="settings-row">
+            <dt>Access</dt>
+            <dd>
+              <select id="accessModeSelect" aria-label="Browser tab access">
+                <option value="all">All tabs</option>
+                <option value="selected">Selected tabs</option>
+              </select>
+            </dd>
+          </div>
         </dl>
+        <p id="accessWarning" class="lede" style="margin: 8px 2px 2px">
+          All tabs includes signed-in sites in this Chrome profile. Pause individual tabs from the
+          toolbar popup when needed.
+        </p>
         <button id="unpairButton" class="action danger" type="button">Unpair this browser</button>
         <p id="unpairNote" class="lede" style="margin: 10px 2px 0">
           Unpairing disconnects the gateway and forgets the relay token.

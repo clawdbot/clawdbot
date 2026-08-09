@@ -3072,13 +3072,17 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("records explicit agent.wait cancellation before session timing is persisted", async () => {
+  it.each([
+    { label: "cancellation", status: "timeout" as const, stopReason: "rpc" },
+    { label: "supersession", status: "error" as const, stopReason: "superseded" },
+  ])("records explicit agent.wait $label without retrying", async ({ status, stopReason }) => {
+    const runId = `run-terminal-${stopReason}`;
     mockGatewayMethods(mocks.callGateway, {
       "agent.wait": {
-        status: "timeout",
+        status,
         startedAt: 111,
         endedAt: 222,
-        stopReason: "rpc",
+        stopReason,
       },
     });
     mocks.loadSessionStore.mockReturnValue(
@@ -3088,15 +3092,15 @@ describe("subagent registry seam flow", () => {
     );
 
     mod.registerSubagentRun({
-      runId: "run-terminal-timeout",
-      task: "time out terminally",
+      runId,
+      task: "terminate without retrying",
     });
 
     // Main defers timed-out lifecycle completion behind a retry grace timer.
     await vi.advanceTimersByTimeAsync(20_000);
 
     await waitForFast(() => {
-      const run = findRequesterRun("run-terminal-timeout");
+      const run = findRequesterRun(runId);
       expect(run?.execution.endedAt).toBe(222);
       expectRecordFields(
         run?.execution.outcome,

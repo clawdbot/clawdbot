@@ -19,7 +19,7 @@ import {
   resolveShardChildCommand,
   resolveShardPlans,
   runShardPlans,
-} from "../../scripts/ci-run-node-test-shard.mjs";
+} from "../../scripts/ci-run-node-test-shard.mts";
 
 const scratchDirs: string[] = [];
 
@@ -35,11 +35,11 @@ afterEach(() => {
   }
 });
 
-describe("scripts/ci-run-node-test-shard.mjs", () => {
+describe("scripts/ci-run-node-test-shard.mts", () => {
   it("launches the child runner directly with Node", () => {
     expect(resolveShardChildCommand(["one.config.ts"], "/runtime/node")).toEqual({
       command: "/runtime/node",
-      args: ["scripts/test-projects.mjs", "one.config.ts"],
+      args: ["--import", "tsx", "scripts/test-projects.mts", "one.config.ts"],
     });
   });
 

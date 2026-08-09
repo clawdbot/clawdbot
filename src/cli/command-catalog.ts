@@ -173,6 +173,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
+  ...["create", "validate", "build", "dev"].map(
+    (subcommand): CliCommandCatalogEntry => ({
+      commandPath: ["claws", subcommand],
+      exact: true,
+      policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    }),
+  ),
   {
     commandPath: ["migrate"],
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
@@ -482,6 +489,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["secrets"], policy: { configGuard: "skip", networkProxy: "bypass" } },
   { commandPath: ["security"], policy: { networkProxy: "bypass" } },
   { commandPath: ["system"], policy: { networkProxy: "bypass" } },
+  { commandPath: ["resume"], policy: { networkProxy: "bypass" } },
   { commandPath: ["terminal"], policy: { networkProxy: "bypass" } },
   { commandPath: ["tui"], policy: { networkProxy: "bypass" } },
   { commandPath: ["uninstall"], policy: { networkProxy: "bypass" } },

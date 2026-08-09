@@ -18,6 +18,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import type { AgentTurnContext } from "../agent-turn/types.js";
 import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
@@ -55,7 +56,7 @@ export async function prepareAgentRequestRouting(params: {
   execApprovalFollowupApprovalId?: string;
   runId: string;
   agentDedupeKeys: string[];
-  context: GatewayRequestHandlerOptions["context"];
+  context: AgentTurnContext;
   respond: GatewayRequestHandlerOptions["respond"];
   reserveDedupe: (sessionKey?: string, agentId?: string) => void;
   clearDedupe: () => void;
@@ -268,7 +269,7 @@ function dropReboundExecApprovalFollowup(params: {
   execApprovalFollowupApprovalId?: string;
   runId: string;
   agentDedupeKeys: string[];
-  context: GatewayRequestHandlerOptions["context"];
+  context: AgentTurnContext;
   respond: GatewayRequestHandlerOptions["respond"];
 }): boolean {
   if (!params.execApprovalFollowupApprovalId || !params.requestedSessionKeyRaw) {

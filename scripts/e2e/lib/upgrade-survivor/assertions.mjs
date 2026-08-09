@@ -823,13 +823,12 @@ function assertSessionMetadataMigrated(stateDir) {
   const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
   const agentSessionsDir = path.join(stateDir, "agents", "main", "sessions");
   const targetStorePath = path.join(agentSessionsDir, "sessions.json");
-  const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   assert(
     !fs.existsSync(legacyStorePath),
     `legacy sessions.json survived migration: ${legacyStorePath}`,
   );
 
-  const store = readMigratedSessionStore(stateDir, targetStorePath);
+  const { source, store } = readMigratedSessionStore(stateDir, targetStorePath);
   const main = store["agent:main:main"];
   const direct = store["agent:main:+15551234567"];
   const group = store["agent:main:slack:channel:cupgrade"];
@@ -841,7 +840,8 @@ function assertSessionMetadataMigrated(stateDir) {
     LEGACY_SESSION_DIRECT_ID,
     LEGACY_SESSION_GROUP_ID,
   ];
-  if (fs.existsSync(dbPath)) {
+  if (source !== "file") {
+    const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
       const count = db.prepare(
@@ -885,42 +885,71 @@ function assertSessionMetadataMigrated(stateDir) {
 }
 
 function readMigratedSessionStore(stateDir, targetStorePath) {
-  if (fs.existsSync(targetStorePath)) {
-    return readJson(targetStorePath);
-  }
-
   const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-  assert(fs.existsSync(dbPath), `agent session store missing: ${targetStorePath} or ${dbPath}`);
-
-  let db;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    const hasSessionEntries = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_nodes'")
-      .get();
-    const rows = hasSessionEntries
-      ? db
+  if (fs.existsSync(dbPath)) {
+    let db;
+    try {
+      db = new DatabaseSync(dbPath, { readOnly: true });
+      const tables = new Set(
+        db
           .prepare(
-            `SELECT session_key AS key, current_session_id AS session_id, entry_json AS value_json
-             FROM session_nodes`,
+            `SELECT name
+             FROM sqlite_master
+             WHERE type = 'table'
+               AND name IN ('session_nodes', 'session_entries', 'cache_entries')`,
           )
           .all()
-      : db
-          .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ?")
-          .all("session_entries");
-    const store = {};
-    for (const row of rows) {
-      if (typeof row?.key !== "string" || typeof row?.value_json !== "string") {
-        continue;
+          .map((row) => row.name),
+      );
+      // SQLite is authoritative once it owns a supported session table. A stale
+      // sessions.json must not hide missing, malformed, or unreadable database state.
+      const source = tables.has("session_nodes")
+        ? "session_nodes"
+        : tables.has("session_entries")
+          ? "session_entries"
+          : tables.has("cache_entries")
+            ? "cache_entries"
+            : null;
+      if (source) {
+        const rows =
+          source === "session_nodes"
+            ? db
+                .prepare(
+                  `SELECT session_key AS key, current_session_id AS session_id, entry_json AS value_json
+                   FROM session_nodes`,
+                )
+                .all()
+            : source === "session_entries"
+              ? db
+                  .prepare(
+                    `SELECT session_key AS key, session_id, entry_json AS value_json
+                     FROM session_entries`,
+                  )
+                  .all()
+              : db
+                  .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ?")
+                  .all("session_entries");
+        const store = {};
+        for (const row of rows) {
+          if (typeof row?.key !== "string" || typeof row?.value_json !== "string") {
+            continue;
+          }
+          const entry = JSON.parse(row.value_json);
+          store[row.key] =
+            typeof row.session_id === "string" ? { ...entry, sessionId: row.session_id } : entry;
+        }
+        return { source, store };
       }
-      const entry = JSON.parse(row.value_json);
-      store[row.key] =
-        typeof row.session_id === "string" ? { ...entry, sessionId: row.session_id } : entry;
+    } finally {
+      db?.close();
     }
-    return store;
-  } finally {
-    db?.close();
   }
+
+  assert(
+    fs.existsSync(targetStorePath),
+    `agent session store missing: ${targetStorePath} or ${dbPath}`,
+  );
+  return { source: "file", store: readJson(targetStorePath) };
 }
 
 function readInstalledPluginIndex() {

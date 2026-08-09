@@ -13,7 +13,6 @@ import {
   onCronJobInactive,
 } from "../active-jobs.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
-import { deleteCronJobScratch } from "../scratch-store.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
@@ -51,6 +50,7 @@ import {
   ensureLoaded,
   persist,
   persistOrRestore,
+  pruneCronJobScratchAfterCommit,
   runPostPersistCronNotifications,
   snapshotStoreForRollback,
   type CronRollbackSnapshot,
@@ -390,7 +390,6 @@ export async function updateLoadedJob(params: {
     throw new Error("heartbeat payloads are system-owned; jobs cannot be patched to them");
   }
   await ensureLoaded(state, { skipRecompute: true });
-  const snapshot = snapshotStoreForRollback(state);
   const job = findJobOrThrow(state, id);
   // Existing monitors are config-driven: any patch (disable, reschedule,
   // repurpose) would silently diverge from agents.*.heartbeat until the next
@@ -433,6 +432,7 @@ export async function updateLoadedJob(params: {
     scheduleChanged: patch.schedule !== undefined,
   });
   opts?.commitGuard?.();
+  const snapshot = snapshotStoreForRollback(state);
   await persistUpdatedJob({ state, snapshot, previousJob: job, nextJob });
   return nextJob;
 }
@@ -479,23 +479,28 @@ export async function remove(
     | undefined;
   const result = await locked(state, async () => {
     warnIfDisabled(state, "remove");
+    const previousStore = state.store;
     await ensureLoaded(state, { skipRecompute: true });
-    const before = state.store?.jobs.length ?? 0;
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
-    const snapshot = snapshotStoreForRollback(state);
     const removedJob = state.store.jobs.find((j) => j.id === id);
+    if (!removedJob) {
+      if (state.store !== previousStore) {
+        armTimer(state);
+      }
+      return { ok: true, removed: false } as const;
+    }
     // Config is the monitor's source of truth: ad-hoc deletion would disable
     // heartbeats until an unrelated reload, so only gateway reconciliation
     // (stale-monitor cleanup) may remove one.
-    if (removedJob?.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
+    if (removedJob.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
       throw new Error(
         "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
       );
     }
+    const snapshot = snapshotStoreForRollback(state);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
-    const removed = (state.store.jobs.length ?? 0) !== before;
 
     const postPersistNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, {
@@ -506,42 +511,32 @@ export async function remove(
       postPersistNotifications,
       suppressScheduledJobId: id,
     });
-    if (removed && removedJob) {
-      const activeMarker = noteActiveCronJobRemoval(id);
-      const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
-      const sessionStorePath =
-        state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
-      if (
-        sessionStorePath &&
-        (removedJob.sessionTarget === "isolated" || removedJob.sessionTarget === "current")
-      ) {
-        let finish!: () => void;
-        const done = new Promise<void>((resolve) => {
-          finish = resolve;
-        });
-        const release = registerPendingCronSessionCleanup(state, id, done);
-        sessionCleanup = {
-          activeMarker,
-          agentId,
-          sessionStorePath,
-          done,
-          finish,
-          release,
-        };
-      }
-      try {
-        deleteCronJobScratch(state.deps.storePath, id);
-      } catch (error) {
-        // The job deletion is already durable. Scratch cleanup is idempotent and
-        // must not turn a committed removal into a retryable API failure.
-        state.deps.log.warn({ jobId: id, err: String(error) }, "cron: scratch cleanup failed");
-      }
+    const activeMarker = noteActiveCronJobRemoval(id);
+    const agentId = resolveEffectiveJobAgentId(removedJob, resolveCurrentDefaultAgentId(state));
+    const sessionStorePath =
+      state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
+    if (
+      sessionStorePath &&
+      (removedJob.sessionTarget === "isolated" || removedJob.sessionTarget === "current")
+    ) {
+      let finish!: () => void;
+      const done = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const release = registerPendingCronSessionCleanup(state, id, done);
+      sessionCleanup = {
+        activeMarker,
+        agentId,
+        sessionStorePath,
+        done,
+        finish,
+        release,
+      };
     }
+    pruneCronJobScratchAfterCommit(state, [id]);
     armTimer(state);
-    if (removed) {
-      emit(state, { jobId: id, action: "removed", job: removedJob });
-    }
-    return { ok: true, removed } as const;
+    emit(state, { jobId: id, action: "removed", job: removedJob });
+    return { ok: true, removed: true } as const;
   });
   if (!sessionCleanup) {
     return result;
@@ -613,6 +608,12 @@ export async function removeAgentJobsTransactional<T>(
         armTimer(state);
         for (const job of removedJobs) {
           noteActiveCronJobRemoval(job.id);
+        }
+        pruneCronJobScratchAfterCommit(
+          state,
+          removedJobs.map((job) => job.id),
+        );
+        for (const job of removedJobs) {
           emit(state, { jobId: job.id, action: "removed", job });
         }
         throw error;
@@ -636,15 +637,11 @@ export async function removeAgentJobsTransactional<T>(
     runPostPersistCronNotifications(state, postPersistNotifications);
     for (const job of removedJobs) {
       noteActiveCronJobRemoval(job.id);
-      try {
-        deleteCronJobScratch(state.deps.storePath, job.id);
-      } catch (error) {
-        state.deps.log.warn(
-          { jobId: job.id, err: String(error) },
-          "cron: agent scratch cleanup failed",
-        );
-      }
     }
+    pruneCronJobScratchAfterCommit(
+      state,
+      removedJobs.map((job) => job.id),
+    );
     armTimer(state);
     for (const job of removedJobs) {
       emit(state, { jobId: job.id, action: "removed", job });

@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
@@ -33,6 +34,13 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
   if (!normalized) {
     return false;
   }
+  const pairingFailure = classifyGatewayConnectFailure({ reason: normalized });
+  if (
+    pairingFailure.kind === "pairing-required" &&
+    (normalized === "pairing required" || normalized.startsWith("pairing required:"))
+  ) {
+    return true;
+  }
   // The restart probe runs against loopback only and only decides restart
   // liveness, not authorization. Keep this allowlist exact so a local listener
   // cannot satisfy the health check with broad device/auth-looking text.
@@ -41,8 +49,6 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
     normalized === "owner auth required" ||
     normalized === "connect failed" ||
     normalized === "device required" ||
-    normalized === "pairing required" ||
-    normalized.startsWith("pairing required:") ||
     normalized.startsWith("unauthorized: gateway token missing") ||
     normalized.startsWith("unauthorized: gateway token mismatch") ||
     normalized.startsWith("unauthorized: gateway token not configured") ||

@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
@@ -556,14 +557,6 @@ function captureConfigWriteListener(
       }
     };
   };
-}
-
-function createDeferredVoid() {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve: () => resolve?.() };
 }
 
 function createReloadHandlersForTest(
@@ -1819,8 +1812,8 @@ describe("gateway hot reload superseded tail recovery", () => {
   it.each(["mcp", "gmail", "channel", "context"] as const)(
     "does not restart into invalid config B after revocation during the $surface tail",
     async (surface) => {
-      const entered = createDeferredVoid();
-      const release = createDeferredVoid();
+      const entered = createDeferred();
+      const release = createDeferred();
       const invalidConfigB = {
         gateway: {
           auth: {
@@ -1922,8 +1915,8 @@ describe("gateway hot reload superseded tail recovery", () => {
   );
 
   it("finishes a channel restart after config B revokes A between stop and start", async () => {
-    const stopped = createDeferredVoid();
-    const releaseStop = createDeferredVoid();
+    const stopped = createDeferred();
+    const releaseStop = createDeferred();
     let current = true;
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     const startChannel = vi.fn(async () => {});
@@ -2956,7 +2949,7 @@ describe("gateway channel hot reload handlers", () => {
   it("restarts only the changed account", async () => {
     const events: string[] = [];
     const startRootCounts: number[] = [];
-    const accountStopSettled = createDeferredVoid();
+    const accountStopSettled = createDeferred();
     const channels = {
       stop: vi.fn(async (channel: ChannelKind, accountId?: string) => {
         events.push(`stop:${channel}:${accountId}`);

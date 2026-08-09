@@ -21,7 +21,7 @@ import {
   canonicalProviderName,
   isProviderAdvertised,
   parseProvidersFromHelp,
-} from "../../scripts/crabbox-wrapper-providers.mjs";
+} from "../../scripts/crabbox-wrapper-providers.mts";
 import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];

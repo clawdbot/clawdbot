@@ -50,6 +50,8 @@ export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "se
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
   sessionId?: string;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
 };
 
 export type ExactSessionEntry = {

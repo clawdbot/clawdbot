@@ -11,7 +11,27 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { withAgentSessionModelPatchOrigin } from "./session-model-patch-origin.js";
-import { applySessionsPatchToStore } from "./sessions-patch.js";
+import { projectSessionsPatchEntry } from "./sessions-patch.js";
+
+async function applySessionsPatchToStore(
+  params: Omit<
+    Parameters<typeof projectSessionsPatchEntry>[0],
+    "existingEntry" | "isLabelInUse"
+  > & { store: Record<string, SessionEntry> },
+) {
+  const projected = await projectSessionsPatchEntry({
+    ...params,
+    existingEntry: params.store[params.storeKey],
+    isLabelInUse: (label) =>
+      Object.entries(params.store).some(
+        ([sessionKey, entry]) => sessionKey !== params.storeKey && entry.label === label,
+      ),
+  });
+  if (projected.ok) {
+    params.store[params.storeKey] = projected.entry;
+  }
+  return projected;
+}
 
 const acpSessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionMetaForEntry: vi.fn(),

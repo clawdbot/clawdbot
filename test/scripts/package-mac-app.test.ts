@@ -965,6 +965,7 @@ describe("package-mac-app plist stamping", () => {
     };
     const macosCi = pkg.scripts?.["test:macos:ci"] ?? "";
 
+    expect(macosCi).toContain("src/gateway/worker-environments/workspace-rsync-path.test.ts");
     expect(macosCi).toContain("test/scripts/package-mac-app.test.ts");
     expect(macosCi).toContain("test/scripts/package-mac-dist.test.ts");
     expect(macosCi).toContain("test/scripts/create-dmg.test.ts");

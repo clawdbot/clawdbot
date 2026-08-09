@@ -75,6 +75,17 @@ describe("command-startup-policy", () => {
     }
   });
 
+  it("skips operator-state startup for local Claw authoring commands only", () => {
+    for (const subcommand of ["create", "validate", "build", "dev"]) {
+      const commandPath = ["claws", subcommand];
+      expect(resolvePolicy({ commandPath }).skipConfigGuard, commandPath.join(" ")).toBe(true);
+    }
+    for (const subcommand of ["add", "update", "remove"]) {
+      const commandPath = ["claws", subcommand];
+      expect(resolvePolicy({ commandPath }).skipConfigGuard, commandPath.join(" ")).toBe(false);
+    }
+  });
+
   it("skips the config guard for exact root update dry-runs", () => {
     for (const argv of [
       ["node", "openclaw", "update", "--dry-run"],

@@ -1,3 +1,6 @@
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+
 // Control UI session URL grammar shared by browser and plugin consumers.
 export type ControlUiSessionNamespace = "chat" | "dashboard";
 
@@ -24,34 +27,9 @@ export const SESSION_UUID_SUFFIX_RE =
   /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu;
 export const SHORT_SESSION_ID_RE = /^[0-9a-f]{8,32}$/iu;
 const SHORT_SESSION_REF_RE = /^(?:.*-)?([0-9a-f]{8,32})$/iu;
-const VALID_AGENT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/iu;
-const INVALID_AGENT_ID_CHARS_RE = /[^a-z0-9_-]+/giu;
 const SESSION_SLUG_MAX_LENGTH = 48;
-const DEFAULT_AGENT_ID = "main";
 const DEFAULT_MAIN_KEY = "main";
 const FIXED_RESERVED_SESSION_RESTS = new Set(["main", "global", "boot", "sessions"]);
-
-function optionalString(value: string | undefined | null): string | null {
-  const trimmed = value?.trim() ?? "";
-  return trimmed || null;
-}
-
-function normalizeAgentId(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return DEFAULT_AGENT_ID;
-  }
-  if (VALID_AGENT_ID_RE.test(trimmed)) {
-    return trimmed.toLowerCase();
-  }
-  return (
-    trimmed
-      .toLowerCase()
-      .replace(INVALID_AGENT_ID_CHARS_RE, "-")
-      .replace(/^-+|-+$/gu, "")
-      .slice(0, 64) || DEFAULT_AGENT_ID
-  );
-}
 
 function normalizeBasePath(basePath: string | undefined): string {
   const trimmed = basePath?.trim().replace(/^\/+|\/+$/gu, "") ?? "";
@@ -63,7 +41,7 @@ function agentSessionKeyParts(sessionKey: string): { agentId: string; rest: stri
   if (parts.length < 3 || parts[0]?.toLowerCase() !== "agent") {
     return null;
   }
-  const agentId = optionalString(parts[1]);
+  const agentId = normalizeNullableString(parts[1]);
   const restSegments = parts.slice(2);
   if (!agentId || restSegments.some((segment) => !segment)) {
     return null;
@@ -89,7 +67,7 @@ function isReservedSessionRest(rest: string, mainKey: string | undefined): boole
   const normalized = rest.toLowerCase();
   return (
     FIXED_RESERVED_SESSION_RESTS.has(normalized) ||
-    normalized === (optionalString(mainKey)?.toLowerCase() ?? DEFAULT_MAIN_KEY)
+    normalized === (normalizeNullableString(mainKey)?.toLowerCase() ?? DEFAULT_MAIN_KEY)
   );
 }
 
@@ -111,9 +89,9 @@ function controlUiShortIdFromSessionRef(sessionRef: string): string | null {
 }
 
 export function buildControlUiSessionPath(params: BuildControlUiSessionPathParams): string | null {
-  const rawKey = optionalString(params.sessionKey);
+  const rawKey = normalizeNullableString(params.sessionKey);
   const parsed = rawKey ? agentSessionKeyParts(rawKey) : null;
-  const fallbackAgentId = optionalString(params.fallbackAgentId);
+  const fallbackAgentId = normalizeNullableString(params.fallbackAgentId);
   const agentId = parsed?.agentId ?? (fallbackAgentId ? normalizeAgentId(fallbackAgentId) : null);
   if (!rawKey || !agentId || (!parsed && rawKey.toLowerCase().startsWith("agent:"))) {
     return null;
@@ -122,7 +100,7 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
   const encodedAgentId = encodePathSegment(agentId);
   const rest = parsed?.rest ?? rawKey;
   const normalizedRest = rest.toLowerCase();
-  const mainKey = optionalString(params.mainKey)?.toLowerCase() ?? DEFAULT_MAIN_KEY;
+  const mainKey = normalizeNullableString(params.mainKey)?.toLowerCase() ?? DEFAULT_MAIN_KEY;
   if (
     (!parsed && normalizedRest === DEFAULT_MAIN_KEY) ||
     normalizedRest === mainKey ||
@@ -164,9 +142,9 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
 export function buildControlUiCatalogSessionUrl(
   params: BuildControlUiCatalogSessionUrlParams,
 ): string | null {
-  const catalog = optionalString(params.catalog);
-  const host = optionalString(params.host);
-  const thread = optionalString(params.thread);
+  const catalog = normalizeNullableString(params.catalog);
+  const host = normalizeNullableString(params.host);
+  const thread = normalizeNullableString(params.thread);
   const path = buildControlUiSessionPath({
     namespace: params.namespace,
     sessionKey: DEFAULT_MAIN_KEY,

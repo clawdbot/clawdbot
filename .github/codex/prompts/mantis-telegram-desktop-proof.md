@@ -156,7 +156,7 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
    `--sut-lane`/`--sut-repo-root` during `start`.
 
    ```bash
-   node scripts/mantis/build-telegram-desktop-proof-evidence.mjs \
+   node --import tsx scripts/mantis/build-telegram-desktop-proof-evidence.mts \
      --output-dir "$MANTIS_OUTPUT_DIR" \
      --baseline-repo-root "$GITHUB_WORKSPACE" \
      --baseline-output-dir <baseline-session-output-dir> \

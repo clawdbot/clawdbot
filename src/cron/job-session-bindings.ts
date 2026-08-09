@@ -84,9 +84,7 @@ export async function disableCronJobsBoundToSessions(params: {
       cfg: params.cfg,
       defaultAgentId,
     });
-    return sessionKeys.filter(
-      (sessionKey) => targetKeys.has(sessionKey) && boundKeys.has(sessionKey),
-    );
+    return [...boundKeys].filter((sessionKey) => targetKeys.has(sessionKey));
   };
   const failures: unknown[] = [];
   for (const job of jobs) {

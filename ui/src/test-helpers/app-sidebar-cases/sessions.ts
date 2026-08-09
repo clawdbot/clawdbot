@@ -523,6 +523,53 @@ describe("AppSidebar session mutation feedback", () => {
     await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
   });
 
+  it("destroys a pending cloud worker through its session", async () => {
+    const request = vi.fn(() =>
+      Promise.resolve({ status: "unavailable", worker: { state: "destroyed" } }),
+    );
+    const { gateway, harness, sidebar } = await mountMutationHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
+    gateway.publish({
+      hello: {
+        features: { methods: ["environments.destroy"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
+    const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
+    if (!row) {
+      throw new Error("expected cloud session row");
+    }
+    row.placement = {
+      state: "provisioning",
+      generation: 1,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      stateChangedAtMs: 1,
+      environmentId: "environment-1",
+    };
+    row.hasActiveRun = true;
+    harness.publishList({ result: state.result, agentId: state.agentId });
+    const toast = await mountToastHost();
+    await sidebar.updateComplete;
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const menu = await openSessionMenu(sidebar, row.key);
+    menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
+
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    expect(confirm).toHaveBeenCalledWith('Stop the cloud worker for "a"?');
+    expect(request).toHaveBeenCalledWith("environments.destroy", {
+      environmentId: "environment-1",
+    });
+    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
+    await waitForFast(() =>
+      expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
+        'Cloud worker for "a" is destroyed.',
+      ),
+    );
+  });
+
   it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
     const { harness, sidebar } = await mountMutationHarness();
     harness.patch.mockRejectedValueOnce(new Error("rename rejected by Gateway"));

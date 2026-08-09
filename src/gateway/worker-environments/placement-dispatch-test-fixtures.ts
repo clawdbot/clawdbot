@@ -104,6 +104,7 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
     profileId: "development",
     profileSnapshot,
     provisionOperationId: "provision-1",
+    sharedHost: false,
     bootstrapReceipt,
     teardownTerminalState: null,
     lastError: null,
@@ -114,6 +115,8 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
     destroyRequestedAtMs: null,
     leaseId: "lease-1",
     sshEndpoint,
+    desktop: null,
+    desktopAvailable: false,
   };
   const ready = {
     ...environmentBase,

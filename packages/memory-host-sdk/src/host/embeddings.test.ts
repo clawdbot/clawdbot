@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./embedding-worker-errors.js";
 import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
@@ -45,19 +46,6 @@ beforeEach(async () => {
 afterEach(() => {
   vi.resetAllMocks();
 });
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T | "timeout"> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -434,7 +422,7 @@ describe("local embedding provider", () => {
   });
 
   it("aborts pending local llama model loads when closed", async () => {
-    const loadModelStarted = createDeferred<void>();
+    const loadModelStarted = createDeferred();
     const loadModelGate = createDeferred<never>();
     const disposeLlama = vi.fn();
     let capturedResolveSignal: AbortSignal | undefined;
@@ -468,7 +456,7 @@ describe("local embedding provider", () => {
   });
 
   it("aborts pending local llama embedding context creation when closed", async () => {
-    const createContextStarted = createDeferred<void>();
+    const createContextStarted = createDeferred();
     const createContextGate = createDeferred<never>();
     const disposeLlama = vi.fn();
     const disposeModel = vi.fn();

@@ -3799,6 +3799,79 @@ openclaw-chat-video-player {
   background: color-mix(in srgb, var(--panel) 72%, transparent);
 }
 
+.chat-attachment-thumb--browser-annotation {
+  display: grid;
+  flex: 1 1 260px;
+  grid-template-columns: clamp(64px, 25%, 92px) minmax(0, 1fr);
+  width: min(360px, 100%);
+  max-width: 360px;
+  min-width: 0;
+  height: auto;
+  min-height: 76px;
+  box-sizing: border-box;
+  background: var(--panel);
+}
+
+.chat-browser-annotation-card__preview {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 75%, var(--bg));
+  border-inline-end: 1px solid var(--border);
+}
+
+.chat-browser-annotation-card__body {
+  justify-content: center;
+  padding: 7px 36px 7px 10px;
+  color: var(--text);
+}
+
+.chat-browser-annotation-card__label {
+  color: var(--muted);
+  font-size: 0.65rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.chat-browser-annotation-card__identity {
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.chat-browser-annotation-card__meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  line-height: 1.1;
+}
+
+.chat-browser-annotation-card__meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-browser-annotation-card__remove {
+  width: 28px;
+  height: 28px;
+}
+
+.chat-browser-annotation-card__remove:not(:disabled) {
+  cursor: pointer;
+}
+
+.chat-browser-annotation-card__remove:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
+}
+
 .chat-attachment-thumb img {
   width: 100%;
   height: 100%;

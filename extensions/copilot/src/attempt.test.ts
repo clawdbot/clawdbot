@@ -13,6 +13,7 @@ import {
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -271,24 +272,6 @@ function expectTranscriptCredentialSafety(instructions: string): void {
 
 function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {
   return expectDefined(sdk.resumeSession.mock.calls[0]?.[1], "Copilot resumeSession config");
-}
-
-function createDeferred<T>() {
-  let rejectPromise: ((reason?: unknown) => void) | undefined;
-  let resolvePromise: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
-  return {
-    promise,
-    reject(reason?: unknown) {
-      rejectPromise?.(reason);
-    },
-    resolve(value: T) {
-      resolvePromise?.(value);
-    },
-  };
 }
 
 function flushAsync() {
@@ -4635,6 +4618,38 @@ describe("runCopilotAttempt", () => {
       ]);
     });
 
+    it("omits native ask_user from a restricted create-session catalog", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("read")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(makeParams({ pluginHarnessToolPolicyRestricted: true }), {
+        createToolBridge,
+        pool,
+      });
+
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual(["read"]);
+    });
+
+    it("keeps native ask_user when its restricted OpenClaw equivalent remains allowed", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("read"), makeFakeSdkTool("ask_user")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(makeParams({ pluginHarnessToolPolicyRestricted: true }), {
+        createToolBridge,
+        pool,
+      });
+
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual([
+        "read",
+        "ask_user",
+        "builtin:ask_user",
+      ]);
+    });
+
     it("keeps a host-scoped OpenClaw create-session surface ring-zero", async () => {
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
@@ -4716,6 +4731,27 @@ describe("runCopilotAttempt", () => {
       const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
       const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
       expect(resumeCfg?.availableTools).toEqual(["read", "builtin:ask_user"]);
+    });
+
+    it("omits native ask_user from a restricted resume-session catalog", async () => {
+      const sdk = makeFakeSdk({
+        onResumeSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("resumed"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("read")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(
+        makeParams({
+          initialReplayState: { sdkSessionId: "sess-restricted" },
+          pluginHarnessToolPolicyRestricted: true,
+        } as never),
+        { createToolBridge, pool },
+      );
+
+      expect(requireResumeSessionConfig(sdk).availableTools).toEqual(["read"]);
     });
 
     it("keeps a host-scoped OpenClaw resume-session surface ring-zero", async () => {

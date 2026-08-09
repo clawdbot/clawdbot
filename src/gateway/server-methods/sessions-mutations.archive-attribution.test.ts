@@ -59,6 +59,8 @@ function context(): GatewayRequestContext {
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
+    dedupe: new Map(),
   } as unknown as GatewayRequestContext;
 }
 

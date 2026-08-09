@@ -280,21 +280,20 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     resolveCommandTurnTargetSessionKey(ctx) !== undefined
       ? sessionKey
       : undefined;
-  if (
-    commandTurnContinuationTargetKey === undefined &&
-    providedReplyOperation !== undefined &&
-    providedReplyOperation.result === null &&
-    providedReplyOperation.phase === "queued" &&
-    sessionId !== undefined &&
-    sessionId !== providedReplyOperation.sessionId
-  ) {
-    // Dispatch reserves a queued operation before session init. If stale init
-    // rotates the session, move the reservation so later steer/abort paths
-    // target the session that will actually run. Command-turn continuations
-    // rebind after slot adoption below: rebinding first would collide with a
-    // still-active target operation that owns the same session ID.
-    providedReplyOperation.updateSessionId(sessionId);
-  }
+  const rebindProvidedReplyOperation = (nextSessionId: string) => {
+    if (
+      commandTurnContinuationTargetKey === undefined &&
+      providedReplyOperation !== undefined &&
+      providedReplyOperation.result === null &&
+      providedReplyOperation.phase === "queued" &&
+      nextSessionId !== providedReplyOperation.sessionId
+    ) {
+      // Dispatch can reserve a queued operation before session init discovers the
+      // authoritative row. Keep steer/abort and durable admission on that session.
+      // Command continuations rebind only after adopting the target slot below.
+      providedReplyOperation.updateSessionId(nextSessionId);
+    }
+  };
   const isOwnPreDispatchOperationSession = (candidateSessionId: string | undefined): boolean =>
     providedReplyOperation !== undefined &&
     providedReplyOperation.result === null &&
@@ -318,6 +317,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
           sessionEntry)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
+    rebindProvidedReplyOperation(latestSessionId);
     opts?.onSessionPrepared?.({ sessionKey, sessionId: latestSessionId, storePath });
     const sessionFile = storePath
       ? formatSqliteSessionFileMarker({ agentId, sessionId: latestSessionId, storePath })

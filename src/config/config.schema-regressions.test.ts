@@ -167,48 +167,6 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts memorySearch.qmd.extraCollections", () => {
-    const res = validateConfigObject({
-      memory: {
-        search: {
-          qmd: {
-            extraCollections: [
-              { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
-            ],
-          },
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts agents.entries.*.memory.search.qmd.extraCollections", () => {
-    const res = validateConfigObject({
-      agents: {
-        entries: {
-          main: {
-            memory: {
-              search: {
-                qmd: {
-                  extraCollections: [
-                    { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
-                  ],
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
   it("accepts agents.defaults.startupContext overrides", () => {
     const res = validateConfigObject({
       agents: {

@@ -18,7 +18,7 @@ import {
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
-} from "../../scripts/test-live-shard.mjs";
+} from "../../scripts/test-live-shard.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 
 describe("scripts/test-live-shard", () => {

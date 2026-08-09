@@ -4,7 +4,7 @@ import {
   HELP_TEXT,
   describeSeamKinds,
   determineSeamTestStatus,
-} from "../../scripts/audit-seams.mjs";
+} from "../../scripts/audit-seams.mts";
 
 describe("audit-seams cron seam classification", () => {
   it("detects cron agent handoff and outbound delivery boundaries", () => {

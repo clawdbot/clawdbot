@@ -7,6 +7,53 @@ type SessionProjectionTarget = {
   primaryKey: string;
 };
 
+export class SessionLabelOwnerIndex {
+  readonly #owners = new Map<string, Set<string>>();
+
+  constructor(private readonly store: Record<string, SessionEntry>) {
+    for (const [sessionKey, entry] of Object.entries(this.store)) {
+      this.#update(sessionKey, entry.label, true);
+    }
+  }
+
+  isLabelInUse(label: string, excludedKeys: readonly string[]): boolean {
+    for (const sessionKey of this.#owners.get(label) ?? []) {
+      if (!excludedKeys.includes(sessionKey)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  replaceEntry(
+    candidateKeys: readonly string[],
+    primaryKey: string,
+    entry: SessionEntry,
+  ): SessionEntry {
+    for (const sessionKey of new Set([...candidateKeys, primaryKey])) {
+      this.#update(sessionKey, this.store[sessionKey]?.label, false);
+      delete this.store[sessionKey];
+    }
+    const cloned = structuredClone(entry);
+    this.store[primaryKey] = cloned;
+    this.#update(primaryKey, cloned.label, true);
+    return cloned;
+  }
+
+  #update(sessionKey: string, label: string | undefined, add: boolean): void {
+    if (label === undefined) {
+      return;
+    }
+    const owners = this.#owners.get(label) ?? new Set<string>();
+    if (add) {
+      owners.add(sessionKey);
+      this.#owners.set(label, owners);
+      return;
+    }
+    owners.delete(sessionKey);
+  }
+}
+
 /** Carries only user/runtime selection into a new dashboard fork. */
 export function inheritSessionSelection(
   parentEntry: SessionEntry | undefined,

@@ -145,6 +145,24 @@ describe("terminal tool", () => {
     expect(backend.killed).toBe(true);
   });
 
+  it("binds a uniquely active task to terminals opened from its child session", async () => {
+    const backend = makeBackend();
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
+    const resolveTaskOwnerId = vi.fn(async () => "task-1");
+    const tool = createTerminalTool({
+      agentId: "main",
+      agentSessionKey: "agent:main:task-run",
+      resolveTaskOwnerId,
+      getGatewayContext: () => makeContext(manager),
+    });
+
+    await tool.execute("open", { action: "open", show: false });
+
+    expect(resolveTaskOwnerId).toHaveBeenCalledWith("agent:main:task-run");
+    expect(manager.closeAgentSessions("task-1")).toBe(1);
+    expect(backend.killed).toBe(true);
+  });
+
   it("fails closed when launch policy blocks the agent", async () => {
     const spawn = vi.fn(async () => makeBackend());
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn });

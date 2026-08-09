@@ -43,6 +43,7 @@ import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 import type { SourceInfo } from "./source-info.js";
+import { reportSteeringMessagePersistenceFailure } from "./steering-message-identity.js";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.js";
 
 const log = createSubsystemLogger("agents/session");
@@ -277,9 +278,9 @@ export abstract class AgentSessionBase {
   // Event Subscription
   // =========================================================================
 
-  /** Snapshot listeners because delivery confirmation can unsubscribe during dispatch. */
+  /** Copy-on-write listener registration keeps dispatch stable without per-event snapshots. */
   protected emit(event: AgentSessionEvent): void {
-    for (const l of this.eventListeners.slice()) {
+    for (const l of this.eventListeners) {
       void l(event);
     }
   }
@@ -288,7 +289,7 @@ export abstract class AgentSessionBase {
   private async emitTerminal(
     event: Extract<AgentSessionEvent, { type: "agent_end" }>,
   ): Promise<void> {
-    const listeners = this.eventListeners.slice();
+    const listeners = this.eventListeners;
     for (const listener of listeners) {
       try {
         await listener(event);
@@ -357,6 +358,7 @@ export abstract class AgentSessionBase {
 
     // Emit to extensions first
     const messageChangedByExtension = await this.emitExtensionEvent(event);
+    const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
     // Notify all listeners
     if (event.type === "agent_end") {
@@ -365,7 +367,7 @@ export abstract class AgentSessionBase {
         willRetry: this.willRetryAfterAgentEnd(event),
         ...(this.lastAssistantEntryId ? { assistantEntryId: this.lastAssistantEntryId } : {}),
       });
-    } else {
+    } else if (!publishAfterPersistence) {
       this.emit(event);
     }
 
@@ -389,12 +391,24 @@ export abstract class AgentSessionBase {
         const toolResultChangedByExtension =
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
-        const entryId = this.sessionManager.appendMessage(event.message, {
-          invalidateSerializedPrefixCache:
-            messageChangedByExtension || toolResultChangedByExtension,
-        });
+        let entryId: string;
+        try {
+          entryId = this.sessionManager.appendMessage(event.message, {
+            invalidateSerializedPrefixCache:
+              messageChangedByExtension || toolResultChangedByExtension,
+          });
+        } catch (error) {
+          if (event.message.role === "user") {
+            reportSteeringMessagePersistenceFailure(event.message, error);
+          }
+          throw error;
+        }
         if (event.message.role === "assistant") {
           this.lastAssistantEntryId = entryId;
+        } else if (event.message.role === "user") {
+          // A queued user message_end normally follows a committed append before listeners consume it.
+          // before_message_write suppression marks its recorder blocked first and is terminal without retry.
+          this.emit(event);
         }
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
@@ -547,13 +561,13 @@ export abstract class AgentSessionBase {
    * Multiple listeners can be added. Returns unsubscribe function for this listener.
    */
   subscribe(listener: AgentSessionEventListener): () => void {
-    this.eventListeners.push(listener);
+    this.eventListeners = [...this.eventListeners, listener];
 
     // Return unsubscribe function for this specific listener
     return () => {
       const index = this.eventListeners.indexOf(listener);
       if (index !== -1) {
-        this.eventListeners.splice(index, 1);
+        this.eventListeners = this.eventListeners.toSpliced(index, 1);
       }
     };
   }

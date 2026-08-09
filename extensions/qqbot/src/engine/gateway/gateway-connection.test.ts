@@ -9,7 +9,7 @@ import { flushKnownUsers } from "../session/known-users.js";
 import { GatewayEvent, GatewayOp, MAX_RECONNECT_ATTEMPTS } from "./constants.js";
 import { GatewayConnection } from "./gateway-connection.js";
 import { QQBotIngressAdmissionError, type QQBotIngressMonitor } from "./ingress.js";
-import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
+import type { EngineLogger, GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
 const createQQWSClientMock = vi.hoisted(() => vi.fn());
 
@@ -71,6 +71,7 @@ function makeAccount(): GatewayAccount {
 }
 
 async function startConnection(params: {
+  log?: EngineLogger;
   onDisconnected?: (info: unknown) => void;
   onError?: (error: Error) => void;
   createIngressMonitor?: () => QQBotIngressMonitor;
@@ -84,6 +85,7 @@ async function startConnection(params: {
     cfg: {},
     runtime: {} as GatewayPluginRuntime,
     adapters: {} as EngineAdapters,
+    log: params.log,
     handleMessage: async () => {},
     createIngressMonitor: createNoopIngressMonitor,
     ...(params.createIngressMonitor ? { createIngressMonitor: params.createIngressMonitor } : {}),
@@ -524,6 +526,42 @@ describe("GatewayConnection heartbeat liveness", () => {
     ws.emit("message", JSON.stringify({ op: GatewayOp.HEARTBEAT_ACK }));
     await vi.advanceTimersByTimeAsync(10_000); // tick 2: pre-send 0 < 2 → send (outstanding=1)
     await vi.advanceTimersByTimeAsync(10_000); // tick 3: pre-send 1 < 2 → send (outstanding=2)
+    expect(ws.terminate).not.toHaveBeenCalled();
+    controller.abort();
+    await started;
+  });
+
+  it.each([
+    ["missing", { op: GatewayOp.HELLO }],
+    ["null", { op: GatewayOp.HELLO, d: null }],
+    ["array", { op: GatewayOp.HELLO, d: [] }],
+    ["object", { op: GatewayOp.HELLO, d: {} }],
+    [
+      "non-stringifiable interval",
+      {
+        op: GatewayOp.HELLO,
+        d: { heartbeat_interval: { toString: null, valueOf: null } },
+      },
+    ],
+  ])("uses the fallback heartbeat for a %s HELLO body", async (_case, payload) => {
+    const error = vi.fn();
+    const { ws, controller, started } = await startConnection({
+      log: { info: vi.fn(), error },
+    });
+    ws.readyState = 1; // OPEN
+    ws.emit("open");
+
+    ws.emit("message", JSON.stringify(payload));
+    await vi.advanceTimersByTimeAsync(44_999);
+
+    expect(ws.send).not.toHaveBeenCalledWith(expect.stringContaining('"op":1'));
+    expect(ws.terminate).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      "Invalid QQ gateway HELLO heartbeat interval; using default 45000ms",
+    );
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('"op":1'));
     expect(ws.terminate).not.toHaveBeenCalled();
     controller.abort();
     await started;

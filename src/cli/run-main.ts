@@ -8,7 +8,11 @@ import type { Command as CommanderCommand, Option as CommanderOption } from "com
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
+import {
+  isLoopbackAddress,
+  isSecureWebSocketUrl,
+  normalizeWebSocketProtocol,
+} from "../gateway/net.js";
 import {
   consumeRootOptionToken,
   FLAG_TERMINATOR,
@@ -356,11 +360,14 @@ type BareRootLaunchTarget =
         tlsFingerprint?: string;
       };
     }
+  | { kind: "tui"; local: true }
   | {
       kind: "tui";
-      local: boolean;
-      gatewayUrl?: string;
-      authSource?: "config";
+      local: false;
+      config: OpenClawConfig;
+      gatewayUrl: string;
+      token?: string;
+      password?: string;
       tlsFingerprint?: string;
     };
 
@@ -392,9 +399,17 @@ async function resolveConfiguredTuiLaunchTarget(
     gatewayResolution.kind === "configured-unreachable"
   ) {
     const gateway = gatewayResolution.gateway;
-    const target: BareRootLaunchTarget = { kind: "tui", local: false, gatewayUrl: gateway.url };
-    if (gateway.authSource) {
-      target.authSource = gateway.authSource;
+    const target: BareRootLaunchTarget = {
+      kind: "tui",
+      local: false,
+      config,
+      gatewayUrl: gateway.url,
+    };
+    if (gateway.token) {
+      target.token = gateway.token;
+    }
+    if (gateway.password) {
+      target.password = gateway.password;
     }
     if (gateway.tlsFingerprint) {
       target.tlsFingerprint = gateway.tlsFingerprint;
@@ -433,7 +448,6 @@ async function resolveConfiguredTuiLaunchTarget(
 
 type GatewayProbeTarget = {
   url: string;
-  auth: "local" | "remote";
   scope: "local-loopback" | "local-configured" | "remote";
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
@@ -442,7 +456,6 @@ type GatewayProbeTarget = {
 type ReachableGateway = {
   url: string;
   remote: boolean;
-  authSource?: "config";
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -458,14 +471,12 @@ type GatewayResolution =
 type GatewayProbeAuth = {
   token?: string;
   password?: string;
-  authSource?: "config";
 };
 
 function toReachableGateway(target: GatewayProbeTarget, auth: GatewayProbeAuth): ReachableGateway {
   return {
     url: target.url,
     remote: target.scope === "remote",
-    ...(auth.authSource ? { authSource: auth.authSource } : {}),
     ...(auth.token ? { token: auth.token } : {}),
     ...(auth.password ? { password: auth.password } : {}),
     ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
@@ -476,12 +487,10 @@ async function resolveReachableGateway(
   config: OpenClawConfig,
   options: { hasConfiguredGateway: boolean },
 ): Promise<GatewayResolution> {
-  const targets = await resolveGatewayProbeTargets(config);
+  const { targets, auth } = await resolveGatewayProbePlan(config);
   if (targets.length === 0) {
     return { kind: "unreachable" };
   }
-  const usesRemoteAuth = targets.some((target) => target.auth === "remote");
-  const auth = await resolveGatewayProbeAuth(config, usesRemoteAuth ? "remote" : "local");
   const { probeGatewayConfiguredModel } = await import("../commands/onboard-helpers.js");
   let missingModelGateway: ReachableGateway | undefined;
   let reachableUnverifiedGateway: ReachableGateway | undefined;
@@ -538,43 +547,32 @@ async function resolveReachableGateway(
   return { kind: "unreachable" };
 }
 
-async function resolveGatewayProbeAuth(
+async function resolveGatewayProbePlan(
   config: OpenClawConfig,
-  auth: "local" | "remote",
-): Promise<GatewayProbeAuth> {
-  const { resolveGatewayProbeSurfaceAuth } = await import("../gateway/auth-surface-resolution.js");
-  const authResolution = await resolveGatewayProbeSurfaceAuth({
-    config,
-    surface: auth,
-  });
-  const resolved: GatewayProbeAuth = {};
-  if (authResolution.token) {
-    resolved.token = authResolution.token;
-  }
-  if (authResolution.password) {
-    resolved.password = authResolution.password;
-  }
-  if (authResolution.source === "config") {
-    resolved.authSource = "config";
-  }
-  return resolved;
-}
-
-async function resolveGatewayProbeTargets(config: OpenClawConfig): Promise<GatewayProbeTarget[]> {
+): Promise<{ targets: GatewayProbeTarget[]; auth: GatewayProbeAuth }> {
   const remoteUrl = normalizeOptionalString(config.gateway?.remote?.url);
   if (normalizeOptionalString(config.gateway?.mode) === "remote" && remoteUrl) {
-    const url = await resolveValidatedRemoteGatewayUrl(config);
-    const tlsFingerprint = normalizeOptionalString(config.gateway?.remote?.tlsFingerprint);
-    return url
-      ? [
+    try {
+      const { resolveGatewayClientBootstrap } = await import("../gateway/client-bootstrap.js");
+      const bootstrap = await resolveGatewayClientBootstrap({
+        config,
+        authPolicy: "probe",
+        modeOverride: "remote",
+        ignoreEnvUrlOverride: true,
+      });
+      return {
+        targets: [
           {
-            url,
-            auth: "remote",
+            url: bootstrap.url,
             scope: "remote",
-            ...(tlsFingerprint ? { tlsFingerprint } : {}),
+            ...(bootstrap.tlsFingerprint ? { tlsFingerprint: bootstrap.tlsFingerprint } : {}),
           },
-        ]
-      : [];
+        ],
+        auth: bootstrap.auth,
+      };
+    } catch {
+      return { targets: [], auth: {} };
+    }
   }
   return resolveLocalGatewayProbeTargets(config);
 }
@@ -595,8 +593,7 @@ function isSafeRemoteGatewayProbeUrl(url: string): boolean {
   } catch {
     return false;
   }
-  const protocol =
-    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  const protocol = normalizeWebSocketProtocol(parsed.protocol);
   if (protocol === "wss:") {
     return true;
   }
@@ -622,31 +619,18 @@ function isLoopbackGatewayHost(hostname: string): boolean {
   return isLoopbackAddress(hostForIpCheck);
 }
 
-async function resolveValidatedRemoteGatewayUrl(config: OpenClawConfig): Promise<string | null> {
-  try {
-    const { buildGatewayConnectionDetailsWithResolvers } =
-      await import("../gateway/connection-details.js");
-    return buildGatewayConnectionDetailsWithResolvers({
-      config,
-      ignoreEnvUrlOverride: true,
-    }).url;
-  } catch {
-    return null;
-  }
-}
-
 async function resolveLocalGatewayProbeTargets(
   config: OpenClawConfig,
-): Promise<GatewayProbeTarget[]> {
+): Promise<{ targets: GatewayProbeTarget[]; auth: GatewayProbeAuth }> {
   const [
     { resolveGatewayPort },
     { resolveControlUiLinks },
-    { buildGatewayProbeConnectionDetails },
+    { resolveGatewayClientBootstrap },
     { readActiveGatewayLockPort },
   ] = await Promise.all([
     import("../config/paths.js"),
     import("../gateway/control-ui-links.js"),
-    import("../gateway/call.js"),
+    import("../gateway/client-bootstrap.js"),
     import("../infra/gateway-lock.js"),
   ]);
   const gateway = config.gateway;
@@ -656,8 +640,11 @@ async function resolveLocalGatewayProbeTargets(
   const port = activePort ?? configuredPort;
   // Supplying the selected local port keeps inherited remote URL overrides out
   // of bare-root routing while reusing canonical local TLS/fingerprint logic.
-  const connection = await buildGatewayProbeConnectionDetails({
+  const connection = await resolveGatewayClientBootstrap({
     config,
+    authPolicy: "probe",
+    modeOverride: "local",
+    ignoreEnvUrlOverride: true,
     localPortOverride: port,
   });
   const baseParams = {
@@ -666,7 +653,6 @@ async function resolveLocalGatewayProbeTargets(
     tlsEnabled: gateway?.tls?.enabled === true,
   };
   const sharedTarget = {
-    auth: "local" as const,
     ...(connection.tlsFingerprint ? { tlsFingerprint: connection.tlsFingerprint } : {}),
     ...(connection.preauthHandshakeTimeoutMs
       ? { preauthHandshakeTimeoutMs: connection.preauthHandshakeTimeoutMs }
@@ -679,23 +665,25 @@ async function resolveLocalGatewayProbeTargets(
   };
   const bind = gateway?.bind;
   if (bind !== "tailnet" && bind !== "custom") {
-    return [loopbackTarget];
+    return { targets: [loopbackTarget], auth: connection.auth };
   }
   const configuredLinks = resolveControlUiLinks({
     ...baseParams,
     bind,
     customBindHost: gateway?.customBindHost,
   });
-  return configuredLinks.wsUrl === connection.url
-    ? [loopbackTarget]
-    : [
-        loopbackTarget,
-        {
-          ...sharedTarget,
-          url: configuredLinks.wsUrl,
-          scope: "local-configured",
-        },
-      ];
+  const targets =
+    configuredLinks.wsUrl === connection.url
+      ? [loopbackTarget]
+      : [
+          loopbackTarget,
+          {
+            ...sharedTarget,
+            url: configuredLinks.wsUrl,
+            scope: "local-configured" as const,
+          },
+        ];
+  return { targets, auth: connection.auth };
 }
 
 function pauseNonTtyStdinForCliExit(): void {
@@ -1427,23 +1415,28 @@ async function runCliWithPreparedOutputMode(
           process.exitCode = 1;
           return;
         }
-        const { launchTuiCli } = await import("../tui/tui-launch.js");
-        const tuiOptions = bareRootLaunchTarget.local
-          ? { deliver: false, local: true }
-          : {
-              deliver: false,
-              ...(bareRootLaunchTarget.tlsFingerprint
-                ? { tlsFingerprint: bareRootLaunchTarget.tlsFingerprint }
-                : {}),
-            };
-        const tuiLaunchOptions: { gatewayUrl?: string; authSource?: "config" } = {};
-        if (bareRootLaunchTarget.gatewayUrl) {
-          tuiLaunchOptions.gatewayUrl = bareRootLaunchTarget.gatewayUrl;
-        }
-        if (bareRootLaunchTarget.authSource) {
-          tuiLaunchOptions.authSource = bareRootLaunchTarget.authSource;
-        }
-        await launchTuiCli(tuiOptions, tuiLaunchOptions);
+        const { runTui } = await import("../tui/tui.js");
+        // This TUI now shares the CLI process, so keep its final exit fallback armed
+        // in case imported runtime handles survive the normal teardown.
+        await runTui({
+          ...(bareRootLaunchTarget.local
+            ? { deliver: false, local: true }
+            : {
+                deliver: false,
+                config: bareRootLaunchTarget.config,
+                boundGateway: {
+                  url: bareRootLaunchTarget.gatewayUrl,
+                  ...(bareRootLaunchTarget.token ? { token: bareRootLaunchTarget.token } : {}),
+                  ...(bareRootLaunchTarget.password
+                    ? { password: bareRootLaunchTarget.password }
+                    : {}),
+                  ...(bareRootLaunchTarget.tlsFingerprint
+                    ? { tlsFingerprint: bareRootLaunchTarget.tlsFingerprint }
+                    : {}),
+                },
+              }),
+          forceProcessExitOnReturn: true,
+        });
         return;
       }
     }

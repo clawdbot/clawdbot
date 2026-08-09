@@ -332,7 +332,7 @@ enum GatewayEnvironment {
                 path: binary,
                 arguments: ["--version"],
                 environment: ["PATH": searchPaths.joined(separator: ":")],
-                timeout: 2)
+                timeout: CommandResolver.versionProbeTimeout)
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning(

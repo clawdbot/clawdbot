@@ -82,6 +82,7 @@ function target(createdActor?: { type: "human"; id: string; label?: string }): S
       ...(createdActor ? { createdActor } : {}),
     },
     storeKey: "agent:main:main",
+    storeKeys: ["agent:main:main"],
     storePath: "/tmp/sessions.json",
   };
 }

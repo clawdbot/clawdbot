@@ -11,8 +11,10 @@ import type {
   TaskSuggestionsAcceptResult,
   TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createBrowserAnnotationHandoff } from "../../app/browser-annotation-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
@@ -44,14 +46,6 @@ const suggestion: TaskSuggestion = {
   agentId: "main",
   createdAt: 1,
 };
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
 
 function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
   const event = new KeyboardEvent("keydown", {
@@ -103,6 +97,7 @@ function createInitializationContext(): ApplicationContext {
     agentSelection: { state: { selectedId: "main" } },
     agents: { state: { agentsList: null } },
     initialUserMessage: createInitialUserMessageHandoff(),
+    browserAnnotationHandoff: createBrowserAnnotationHandoff(),
     sessions: {},
   } as unknown as ApplicationContext;
 }

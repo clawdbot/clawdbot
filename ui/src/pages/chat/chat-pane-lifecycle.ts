@@ -12,10 +12,7 @@ import {
   handleQuestionPromptEvent,
 } from "../../app/question-prompt.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
-import {
-  BROWSER_ANNOTATION_EVENT,
-  type BrowserAnnotationDraft,
-} from "../../components/browser/browser-annotation.ts";
+import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAsciiShortcutKey } from "../../lib/keyboard-shortcuts.ts";
 import { resolveChatPaneObserverRunId } from "../../lib/observer-digest.ts";
@@ -31,6 +28,15 @@ import {
 import { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
+import {
+  type BrowserAnnotationGatewayOwner,
+  discardStateBrowserAnnotations,
+  focusBrowserAnnotationComposerAfterUpdate,
+  preparePaneBrowserAnnotations as prepareAnnotations,
+  receiveBrowserAnnotation as admitBrowserAnnotation,
+  replacePaneBrowserAnnotationGatewayOwner,
+  restorePaneBrowserAnnotations,
+} from "./chat-pane-browser-annotation.ts";
 import {
   CHAT_COMPOSER_TEXTAREA_SELECTOR,
   CHAT_MODAL_SELECTOR,
@@ -49,7 +55,6 @@ import { createPageState } from "./chat-state-page.ts";
 import { invalidateChatMetadataCache, refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow, canCreateChatSession } from "./chat-state-route.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts";
 import { toggleSessionWorkspace } from "./components/chat-session-workspace.ts";
@@ -63,6 +68,26 @@ const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 export abstract class ChatPaneLifecycle extends ChatPaneBoard {
+  private browserAnnotationGatewayOwner: BrowserAnnotationGatewayOwner = null;
+
+  public discardBrowserAnnotations(): void {
+    discardStateBrowserAnnotations(this.state);
+  }
+
+  protected browserAnnotationOwner(): NonNullable<BrowserAnnotationGatewayOwner> | undefined {
+    return this.browserAnnotationGatewayOwner ?? undefined;
+  }
+
+  protected replaceBrowserAnnotationGatewayOwner(nextOwner: BrowserAnnotationGatewayOwner): void {
+    this.browserAnnotationGatewayOwner = replacePaneBrowserAnnotationGatewayOwner(
+      this.context,
+      this.paneId,
+      this.state,
+      this.browserAnnotationGatewayOwner,
+      nextOwner,
+    );
+  }
+
   private clearComposerPrefillAttention(): void {
     if (this.composerPrefillAttentionTimer !== null) {
       window.clearTimeout(this.composerPrefillAttentionTimer);
@@ -313,32 +338,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     this.onFocusPane?.(this.paneId);
   };
 
-  /** Receives a browser-panel annotation: attach the marked-up screenshot and append the prepackaged prompt. */
+  /** Receives one complete browser annotation without mixing generated context into the user's draft. */
   protected receiveBrowserAnnotation(event: Event): void {
-    const state = this.state;
-    // Only the active pane consumes the annotation; defaultPrevented tells the
-    // browser panel it landed (and stops sibling panes from double-adding).
-    if (!state || !this.active || event.defaultPrevented || !(event instanceof CustomEvent)) {
+    const accepted = admitBrowserAnnotation(this.state, this.active, event);
+    if (!accepted) {
       return;
     }
-    const detail = event.detail as BrowserAnnotationDraft | null;
-    if (!detail || typeof detail.text !== "string" || typeof detail.dataUrl !== "string") {
-      return;
-    }
-    const attachment = chatAttachmentFromDataUrl(detail.dataUrl, detail.fileName || "annotation");
-    if (!attachment) {
-      return;
-    }
-    event.preventDefault();
-    state.chatAttachments = [...state.chatAttachments, attachment];
-    const current = state.chatMessage.trimEnd();
-    state.handleChatDraftChange(current ? `${current}\n\n${detail.text}` : detail.text);
-    state.requestUpdate?.();
-    void this.updateComplete.then(() => {
-      this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
-        preventScroll: true,
-      });
-    });
+    // A null mount binds only when its first annotation ownership begins.
+    this.browserAnnotationGatewayOwner ??= this.context.gateway.snapshot.client;
+    focusBrowserAnnotationComposerAfterUpdate(this);
   }
 
   protected sendPendingSkillWorkshopRevision(expectedSessionKey: string) {
@@ -458,6 +466,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
   override connectedCallback() {
     this.boardProviderLifecycleConnected = true;
     super.connectedCallback();
+    const mountGatewayOwner = this.context.gateway.snapshot.client;
+    this.browserAnnotationGatewayOwner = mountGatewayOwner;
     this.requestUpdate();
     if (typeof ResizeObserver === "function") {
       this.paneResizeObserver = new ResizeObserver((entries) => {
@@ -526,6 +536,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
     }
     chatState.attach(pageState);
     chatState.restoreComposer({ preserveCurrent: true });
+    restorePaneBrowserAnnotations(this.context, this.paneId, pageState, mountGatewayOwner);
     chatState.startComposerPersistence();
     if (this.draft !== undefined) {
       this.state.handleChatDraftChange(this.draft);
@@ -696,6 +707,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneBoard {
   }
 
   override disconnectedCallback() {
+    if (this.state) {
+      prepareAnnotations(this.context, this.paneId, this.state, this.browserAnnotationGatewayOwner);
+    }
+    this.browserAnnotationGatewayOwner = null;
     this.clearComposerPrefillAttention();
     this.retainedBoardSessionKey = "";
     this.boardProviderLifecycleConnected = false;

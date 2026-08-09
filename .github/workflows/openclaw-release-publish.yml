@@ -779,7 +779,7 @@ jobs:
           changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
           notes_file="${RUNNER_TEMP}/release-notes.md"
           git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
-          node scripts/render-github-release-notes.mjs \
+          node --import tsx scripts/render-github-release-notes.mts \
             --changelog "${changelog_file}" \
             --tag "${RELEASE_TAG}" \
             --repository "${GITHUB_REPOSITORY}" \
@@ -1399,7 +1399,7 @@ jobs:
               echo "openclaw@${release_version} is already published; openclaw_npm_resume_run_id is required to bind postpublish proof to the original workflow identity." >&2
               exit 1
             fi
-            resume_state="$(node "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-resume-run.mjs" \
+            resume_state="$(node --import tsx "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-npm-resume-run.mts" \
               --repo "${GITHUB_REPOSITORY}" \
               --run-id "${OPENCLAW_NPM_RESUME_RUN_ID}")"
             resume_url="$(printf '%s' "${resume_state}" | jq -er '.url')"
@@ -1469,7 +1469,7 @@ jobs:
             local metadata_file="${3:-}"
             local changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
             local -a render_args=(
-              node scripts/render-github-release-notes.mjs
+              node --import tsx scripts/render-github-release-notes.mts
               --changelog "${changelog_file}"
               --tag "${RELEASE_TAG}"
               --repository "${GITHUB_REPOSITORY}"
@@ -1514,12 +1514,12 @@ jobs:
               RELEASE_CHANGELOG_FILE="${changelog_file}" \
               RELEASE_REPOSITORY="${GITHUB_REPOSITORY}" \
               RELEASE_TAG="${RELEASE_TAG}" \
-              node --input-type=module <<'NODE'
+              node --import tsx --input-type=module <<'NODE'
           import { readFileSync } from "node:fs";
           import {
             releaseNotesVersionForTag,
             verifyGithubReleaseNotes,
-          } from "./scripts/render-github-release-notes.mjs";
+          } from "./scripts/render-github-release-notes.mts";
 
           const body = readFileSync(process.env.RELEASE_BODY_FILE, "utf8");
           const changelog = readFileSync(process.env.RELEASE_CHANGELOG_FILE, "utf8");

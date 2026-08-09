@@ -2,6 +2,7 @@
  * Hook endpoint trust tests for agent dispatch and gateway network config.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSystemEventOptionsOwnerAgentId } from "../../infra/system-event-ownership.js";
 import {
@@ -139,14 +140,6 @@ function resolveDispatchAgentHook(): (...args: unknown[]) => unknown {
     throw new Error("dispatchAgentHook missing");
   }
   return capturedDispatchAgentHook;
-}
-
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((innerResolve) => {
-    resolve = innerResolve;
-  });
-  return { promise, resolve };
 }
 
 type HookLogMeta = {

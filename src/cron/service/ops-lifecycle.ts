@@ -10,7 +10,7 @@ import {
   STARTUP_INTERRUPTED_ERROR,
 } from "./startup-run-repair.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import { ensureLoaded, persist, pruneCronJobScratchAfterCommit } from "./store.js";
 import { tryFindCronTaskRunIdForRecovery, tryFindFinalizedCronTaskRun } from "./task-runs.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
 
@@ -92,10 +92,13 @@ export async function start(state: CronServiceState) {
     if (repairedAnyStartupRun || jobs.length > 0) {
       // Recovery notifications describe repaired durable rows, so never
       // publish them until the startup write has committed successfully.
-      await persist(state, {
+      const persisted = await persist(state, {
         ...(repairedAnyStartupRun ? {} : { stateOnly: true }),
         postPersistNotifications,
       });
+      if (persisted) {
+        pruneCronJobScratchAfterCommit(state, completedJobIdsToDelete);
+      }
     }
   });
 
