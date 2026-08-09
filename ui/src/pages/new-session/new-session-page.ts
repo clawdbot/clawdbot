@@ -4,6 +4,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type {
   FsListDirResult,
+  SessionsCatalogStartTerminalResult,
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
@@ -20,9 +21,12 @@ import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { openTerminalSessionInTerminal } from "../../lib/sessions/catalog-terminal.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
+import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
@@ -565,6 +569,20 @@ class NewSessionPage extends OpenClawLightDomElement {
     return hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null);
   }
 
+  private showStartInTerminal(): boolean {
+    const context = this.context;
+    return Boolean(
+      context &&
+      catalog.isTarget(this.data) &&
+      this.data?.startTerminal &&
+      context.config.current.cliAgentsEnabled === true &&
+      isTerminalAvailable(
+        context.gateway.snapshot,
+        context.config.current.terminalEnabled ?? false,
+      ),
+    );
+  }
+
   private canStartAsDraft(): boolean {
     return canStartSessionAsDraft({
       allowedVisibilities: this.context?.gateway.snapshot.hello?.policy?.allowedSessionVisibilities,
@@ -624,6 +642,26 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private submitDisabledReason(): string | undefined {
     const access = this.submissionAccess();
+    return access.allowed ? undefined : access.reason;
+  }
+
+  private terminalStartAccess(): SessionMethodAccess {
+    const gateway = this.context?.gateway.snapshot;
+    const terminalAccess = readSessionMethodAccess(gateway, {
+      method: "sessions.catalog.startTerminal",
+      requiredScope: "operator.admin",
+    });
+    if (!terminalAccess.allowed || !this.worktree) {
+      return terminalAccess;
+    }
+    return readSessionMethodAccess(gateway, {
+      method: "worktrees.create",
+      requiredScope: "operator.admin",
+    });
+  }
+
+  private terminalStartDisabledReason(): string | undefined {
+    const access = this.terminalStartAccess();
     return access.allowed ? undefined : access.reason;
   }
 
@@ -1043,7 +1081,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     return this.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
   }
 
-  private canSubmit(): boolean {
+  private canSubmit(kind: "session" | "terminal" = "session"): boolean {
     const pendingCloud = Boolean(this.pendingCloud.sessionKey);
     const cloudProfileId = this.cloudProfileForSubmission();
     const message = pendingCloud ? this.pendingCloud.message : this.message.trim();
@@ -1056,13 +1094,14 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.requiresModelSetup() ||
       this.attachmentDraft.pendingReads > 0 ||
       (!pendingCloud && this.submissionOutcomeUnknown) ||
-      (!message && !hasAttachments) ||
+      (kind === "session" && !message && !hasAttachments) ||
       gateway?.snapshot.phase !== "connected" ||
       !gateway.snapshot.client
     ) {
       return false;
     }
-    if (!this.submissionAccess().allowed) {
+    const access = kind === "terminal" ? this.terminalStartAccess() : this.submissionAccess();
+    if (!access.allowed) {
       return false;
     }
     if (this.restoredFolderValidation !== "none") {
@@ -1124,6 +1163,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.worktree && !isWorktreeNameValid(this.worktreeName)) {
       return false;
     }
+    if (kind === "terminal" && !(this.folder.trim() || this.workspacePath())) {
+      return false;
+    }
     return true;
   }
 
@@ -1139,6 +1181,14 @@ class NewSessionPage extends OpenClawLightDomElement {
       selectedAgentFound: selectedAgent !== undefined,
       agentModel: selectedAgent?.model?.primary,
     });
+  }
+
+  private closeOpenDropdowns() {
+    for (const dropdown of this.querySelectorAll<HTMLElement & { open: boolean }>(
+      "wa-dropdown[open]",
+    )) {
+      dropdown.open = false;
+    }
   }
 
   private async submit() {
@@ -1171,11 +1221,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.error = null;
     // Retire hidden pickers before their late requests can mutate this submitted draft.
     this.closeBrowser();
-    for (const dropdown of this.querySelectorAll<HTMLElement & { open: boolean }>(
-      "wa-dropdown[open]",
-    )) {
-      dropdown.open = false;
-    }
+    this.closeOpenDropdowns();
     try {
       const cloudProfileId = this.cloudProfileForSubmission();
       // Draft mode can go stale if sharing policy changed since it was selected.
@@ -1417,6 +1463,59 @@ class NewSessionPage extends OpenClawLightDomElement {
           agentId: this.agentId,
         }).options,
       );
+    } finally {
+      if (requestId === this.submitRequestToken) {
+        this.submitting = false;
+      }
+    }
+  }
+
+  private async startInTerminal() {
+    const context = this.context;
+    const client = context?.gateway.snapshot.client;
+    const catalogId = this.data?.catalogId.trim() ?? "";
+    const agentId = normalizeAgentId(this.agentId);
+    if (!context || !client || !catalogId || !agentId || !this.canSubmit("terminal")) {
+      return;
+    }
+    const requestId = ++this.submitRequestToken;
+    const initialMessage = this.message.trim();
+    this.submitting = true;
+    this.error = null;
+    this.closeBrowser();
+    this.closeOpenDropdowns();
+    try {
+      let cwd = this.folder.trim() || this.workspacePath();
+      if (this.worktree) {
+        const created = await createManagedWorktree(client, {
+          repoRoot: cwd,
+          name: this.worktreeName,
+          baseRef: this.baseRef,
+        });
+        if (requestId !== this.submitRequestToken || this.gatewayClient !== client) {
+          return;
+        }
+        cwd = created.path;
+      }
+      const result = await client.request<SessionsCatalogStartTerminalResult>(
+        "sessions.catalog.startTerminal",
+        {
+          catalogId,
+          ...(this.execNode ? { hostId: `node:${this.execNode}` } : {}),
+          agentId,
+          cwd,
+          ...(initialMessage ? { initialMessage } : {}),
+        },
+      );
+      if (requestId !== this.submitRequestToken || this.gatewayClient !== client) {
+        return;
+      }
+      this.message = "";
+      openTerminalSessionInTerminal(result.sessionId);
+    } catch (error) {
+      if (requestId === this.submitRequestToken && this.gatewayClient === client) {
+        this.error = error instanceof Error ? error.message : String(error);
+      }
     } finally {
       if (requestId === this.submitRequestToken) {
         this.submitting = false;
@@ -1832,6 +1931,13 @@ class NewSessionPage extends OpenClawLightDomElement {
           textareaController: this.composerTextarea,
           messageLocked: Boolean(this.pendingCloud.sessionKey),
           incognitoDisabledReason: this.incognitoDisabledReason(),
+          terminalAction: this.showStartInTerminal()
+            ? {
+                canStart: this.canSubmit("terminal"),
+                disabledReason: this.terminalStartDisabledReason(),
+                onStart: () => void this.startInTerminal(),
+              }
+            : undefined,
           onInput: (message) => {
             if (!this.submitting && !this.pendingCloud.sessionKey) {
               this.message = message;

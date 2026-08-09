@@ -17,6 +17,7 @@ describe("new-session catalog target", () => {
       catalogId: "claude",
       model: "",
       catalogLabel: "",
+      startTerminal: false,
     };
     const ready = {
       ...pending,
@@ -35,6 +36,7 @@ describe("new-session catalog target", () => {
       catalogId: "claude",
       model: "",
       catalogLabel: "",
+      startTerminal: false,
     };
     const unresolved = { ...requested, agentId: "" };
     const resolved = { ...requested, agentId: "research" };
@@ -64,6 +66,34 @@ describe("new-session catalog target", () => {
       agentId: "research",
       catalogId: "claude",
       limitPerHost: 1,
+    });
+  });
+
+  it("preserves the catalog terminal-start capability with the resolved target", async () => {
+    const request = vi.fn(async () => ({
+      catalogs: [
+        {
+          id: "claude",
+          label: "Claude Code",
+          capabilities: {
+            continueSession: true,
+            archive: false,
+            createSession: {
+              model: "anthropic/claude-opus-4-8",
+              startTerminal: true,
+            },
+          },
+          hosts: [],
+        },
+      ],
+    }));
+
+    await expect(
+      resolveCreateTarget({ request } as unknown as GatewayBrowserClient, "claude", "research"),
+    ).resolves.toEqual({
+      model: "anthropic/claude-opus-4-8",
+      catalogLabel: "Claude Code",
+      startTerminal: true,
     });
   });
 
