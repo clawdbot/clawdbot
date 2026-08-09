@@ -1,4 +1,4 @@
-import { context, trace, TraceFlags } from "@opentelemetry/api";
+import { context, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import {
   BasicTracerProvider,
@@ -103,8 +103,9 @@ test("keeps one trace across a continue_delegate out-and-back hop", async () => 
 
     // Coming back: only the serialized traceparent survived the hop, and the
     // originating span is already ended and out of the active context.
+    expect(carried).toBeDefined();
     const fire = continuationTracer.startSpan("continuation.delegate.fire", {
-      ...(carried ? { traceparent: carried } : {}),
+      traceparent: carried,
     });
     fire.end();
     await provider.forceFlush();
