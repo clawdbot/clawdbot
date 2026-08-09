@@ -5,8 +5,6 @@ import { resolve } from "node:path";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
 
-const parsedArgs = parseArgs(process.argv.slice(2));
-const fix = parsedArgs.fix;
 const macosInfoPlistPath = "apps/macos/Sources/OpenClaw/Resources/Info.plist";
 type Command = { args: string[]; bin: string };
 const SCOPES = ["all", "config", "dependencies", "plugin-sdk", "plugins", "version"] as const;
@@ -29,6 +27,8 @@ const pnpmCommand = (...args: string[]): Command => ({ args, bin: "pnpm" });
 function isScope(value: string): value is Scope {
   return SCOPES.some((scope) => scope === value);
 }
+const parsedArgs = parseArgs(process.argv.slice(2));
+const fix = parsedArgs.fix;
 const releaseTasks: ReleaseTask[] = [
   {
     id: "root-dependency-ownership",

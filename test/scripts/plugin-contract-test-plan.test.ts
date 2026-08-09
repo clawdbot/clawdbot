@@ -18,7 +18,8 @@ describe("scripts/lib/plugin-contract-test-plan.mts", () => {
     // ci.yml imports the plan through the importTargetPlan fallback helper since
     // 7ae5996bb3c so historical target refs without the module keep working.
     expect(workflow).toContain("const pluginContractPlan = await importTargetPlan(");
-    expect(workflow).toContain('"./scripts/lib/plugin-contract-test-plan.mts",');
+    expect(workflow).toContain('? "./scripts/lib/plugin-contract-test-plan.mts"');
+    expect(workflow).toContain(': "./scripts/lib/plugin-contract-test-plan.mjs",');
     expect(workflow).toContain(
       'typeof pluginContractPlan.createPluginContractTestShards === "function"',
     );

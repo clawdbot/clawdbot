@@ -2075,6 +2075,7 @@
     "@types/express": "5.0.6",
     "@types/hosted-git-info": "3.0.5",
     "@types/markdown-it": "14.1.2",
+    "@types/mdast": "4.0.4",
     "@types/ms": "2.1.0",
     "@types/node": "26.1.2",
     "@types/semver": "7.7.1",

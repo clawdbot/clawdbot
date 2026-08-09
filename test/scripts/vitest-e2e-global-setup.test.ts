@@ -57,7 +57,7 @@ describe("vitest E2E global setup", () => {
       .mockResolvedValueOnce(0)
       .mockResolvedValueOnce(23);
     await expect(runE2eGlobalSetup(runCommand)).rejects.toThrow(
-      "E2E setup command failed with exit code 23: scripts/tsdown-build.mts --config tsdown.ai.config.ts",
+      "E2E setup command failed with exit code 23: --import tsx scripts/tsdown-build.mts --config tsdown.ai.config.ts",
     );
   });
 

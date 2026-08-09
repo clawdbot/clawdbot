@@ -1041,25 +1041,17 @@ describe("detectChangedScope", () => {
       env: { ...process.env, GITHUB_OUTPUT: outputPath },
     });
 
-    expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8"))).toEqual({
-      run_node: "false",
-      run_macos: "false",
-      run_ios_build: "false",
-      run_android: "false",
-      run_windows: "false",
-      run_skills_python: "false",
-      run_changed_smoke: "false",
-      run_node_fast_only: "false",
-      run_node_fast_plugin_contracts: "false",
-      run_node_fast_ci_routing: "false",
-      run_fast_install_smoke: "false",
-      run_full_install_smoke: "false",
-      run_control_ui_i18n: "false",
-      strict_control_ui_i18n: "false",
-      run_ui_tests: "false",
-      run_native_i18n: "false",
-      strict_native_i18n: "false",
-      changed_paths_json: "[]",
-    });
+    const output = parseGitHubOutput(fs.readFileSync(outputPath, "utf8"));
+    expect(Object.keys(output).toSorted()).toEqual(
+      "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_macos run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
+        " ",
+      ),
+    );
+    expect(output.changed_paths_json).toBe("[]");
+    for (const [key, value] of Object.entries(output)) {
+      if (key !== "changed_paths_json") {
+        expect(value, key).toBe("false");
+      }
+    }
   });
 });

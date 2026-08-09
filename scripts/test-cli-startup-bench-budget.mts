@@ -13,8 +13,12 @@ const finiteNumberSchema = z.number().finite();
 const metricSchema = z.object({ avg: finiteNumberSchema, max: finiteNumberSchema }).partial();
 const startupCaseSchema = z.object({
   contract: z
-    .object({ exitBudgetMs: finiteNumberSchema, firstOutputBudgetMs: finiteNumberSchema })
+    .object({
+      exitBudgetMs: finiteNumberSchema.nullable(),
+      firstOutputBudgetMs: finiteNumberSchema.nullable(),
+    })
     .partial()
+    .nullable()
     .optional(),
   id: z.string(),
   name: z.string(),
@@ -22,8 +26,8 @@ const startupCaseSchema = z.object({
     .array(
       z
         .object({
-          exitCode: finiteNumberSchema,
-          maxRssMb: finiteNumberSchema,
+          exitCode: finiteNumberSchema.nullable(),
+          maxRssMb: finiteNumberSchema.nullable(),
           signal: z.string().nullable(),
           timedOut: z.boolean(),
         })
@@ -31,7 +35,11 @@ const startupCaseSchema = z.object({
     )
     .optional(),
   summary: z
-    .object({ durationMs: metricSchema, firstOutputMs: metricSchema, maxRssMb: metricSchema })
+    .object({
+      durationMs: metricSchema,
+      firstOutputMs: metricSchema.nullable(),
+      maxRssMb: metricSchema.nullable(),
+    })
     .partial()
     .optional(),
 });
@@ -238,7 +246,7 @@ for (const currentCase of currentCases.values()) {
     console.error(`[test-cli-startup-bench-budget] ${currentCase.name} timed out.`);
     failed = true;
   }
-  if (samples.some((sample) => sample.maxRssMb === undefined)) {
+  if (samples.some((sample) => sample.maxRssMb == null)) {
     console.error(`[test-cli-startup-bench-budget] ${currentCase.name} did not report max RSS.`);
     failed = true;
   }
@@ -341,7 +349,7 @@ for (const currentCase of currentCases.values()) {
   if (!opts.skipResponseBudgets) {
     const firstOutputBudgetMs = contract.firstOutputBudgetMs;
     const firstOutputMax = currentCase.summary?.firstOutputMs?.max;
-    if (firstOutputBudgetMs !== undefined) {
+    if (firstOutputBudgetMs != null) {
       if (firstOutputMax === undefined) {
         console.error(
           `[test-cli-startup-bench-budget] ${currentCase.name} produced no stdout/stderr before exit; response contract requires first output within ${formatMs(
@@ -361,7 +369,7 @@ for (const currentCase of currentCases.values()) {
 
     const exitBudgetMs = contract.exitBudgetMs;
     const durationMax = currentCase.summary?.durationMs?.max;
-    if (exitBudgetMs !== undefined && durationMax !== undefined && durationMax > exitBudgetMs) {
+    if (exitBudgetMs != null && durationMax !== undefined && durationMax > exitBudgetMs) {
       console.error(
         `[test-cli-startup-bench-budget] ${currentCase.name} exit ${formatMs(
           durationMax,

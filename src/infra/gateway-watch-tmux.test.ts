@@ -137,7 +137,7 @@ describe("gateway-watch tmux wrapper", () => {
 
     expect(command).toContain("scripts/gateway-watch-tmux.mts");
     expect(command).toMatch(
-      /gateway-watch-tmux\.mjs.*handoff-managed-service.*&& exec.*scripts\/watch-node\.mjs/,
+      /gateway-watch-tmux\.mts.*handoff-managed-service.*&& exec.*scripts\/watch-node\.mjs/,
     );
     expect(command.indexOf("scripts/gateway-watch-tmux.mts")).toBeLessThan(
       command.indexOf("scripts/watch-node.mjs"),

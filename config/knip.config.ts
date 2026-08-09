@@ -101,24 +101,25 @@ const repositoryScriptEntries = [
   "skills/meme-maker/scripts/meme.mjs!",
 ] as const;
 
-// Compatibility shims load their typed implementations by computed URL, which Knip cannot follow.
-function listTypedScriptShimEntries(dir = "scripts"): string[] {
+// Compatibility shims are executable roots and load their typed implementations by computed URL,
+// which Knip cannot follow in either direction.
+function listScriptShimEntries(dir = "scripts"): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const entryPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      return listTypedScriptShimEntries(entryPath);
+      return listScriptShimEntries(entryPath);
     }
     if (!entry.isFile() || (!entry.name.endsWith(".mjs") && !entry.name.endsWith(".js"))) {
       return [];
     }
     const implementationPath = entryPath.replace(/\.(?:mjs|js)$/u, ".mts");
-    return fs.existsSync(implementationPath) ? [`${implementationPath}!`] : [];
+    return fs.existsSync(implementationPath) ? [`${entryPath}!`, `${implementationPath}!`] : [];
   });
 }
 
 const rootEntries = [
   ...repositoryScriptEntries,
-  ...listTypedScriptShimEntries(),
+  ...listScriptShimEntries(),
   // Knip loads these audit configurations directly by command-line path.
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",
@@ -687,9 +688,9 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/canvas`]: bundledPluginWorkspace([
       // Package build/copy scripts are invoked from package.json.
-      "scripts/bundle-a2ui.mts!",
+      "scripts/bundle-a2ui.mjs!",
       "scripts/copy-a2ui.mjs!",
-      "scripts/pnpm-runner.mts!",
+      "scripts/pnpm-runner.mjs!",
       // Rolldown consumes this config and its browser bootstrap entry.
       "src/host/a2ui-app/rolldown.config.mjs!",
       "src/host/a2ui-app/bootstrap.js!",

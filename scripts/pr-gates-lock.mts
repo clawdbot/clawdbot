@@ -23,7 +23,7 @@ function parseArgs(argv: string[]): { statusFile: string } {
     throw new Error(`Unknown option: ${argv[index]}`);
   }
   if (!args.statusFile) {
-    throw new Error("Usage: node --import tsx scripts/pr-gates-lock.mts --status-file <path>");
+    throw new Error("Usage: node scripts/pr-gates-lock.mts --status-file <path>");
   }
   return args;
 }

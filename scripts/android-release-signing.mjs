@@ -204,14 +204,12 @@ function run(command, args, options = {}) {
 }
 
 function runText(command, args, options = {}) {
-  return String(
-    runAndroidSigningCommandSync(command, args, {
-      cwd: options.cwd,
-      env: options.env || process.env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }) ?? "",
-  );
+  return runAndroidSigningCommandSync(command, args, {
+    cwd: options.cwd,
+    env: options.env || process.env,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
 function cloneSigningRepo(manifest, workspace, materializedDir) {

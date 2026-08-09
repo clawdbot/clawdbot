@@ -26,8 +26,8 @@ describe("CLI startup benchmark script spawners", () => {
       "utf8",
     );
 
-    expect(source).toContain(
-      'spawnSync(process.execPath, ["--import", "tsx", "scripts/ensure-cli-startup-build.mts"]',
+    expect(source).toMatch(
+      /spawnSync\(\s*process\.execPath,\s*\[\s*"--import",\s*"tsx",\s*"scripts\/ensure-cli-startup-build\.mts"\s*\]/u,
     );
     expect(source.indexOf("scripts/ensure-cli-startup-build.mts")).toBeLessThan(
       source.indexOf("scripts/bench-cli-startup.ts"),
@@ -158,6 +158,7 @@ describe("CLI startup benchmark script spawners", () => {
       const baselinePath = path.join(tmpDir, "baseline.json");
       const reportPath = path.join(tmpDir, "current.json");
       const makeCase = (id: string, name: string) => ({
+        contract: null,
         id,
         name,
         samples: [{ ms: 10, firstOutputMs: 5, maxRssMb: 10, exitCode: 0, signal: null }],
@@ -430,6 +431,8 @@ describe("CLI startup benchmark script spawners", () => {
         [
           "--import",
           archShimPath,
+          "--import",
+          "tsx",
           "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
@@ -459,6 +462,8 @@ describe("CLI startup benchmark script spawners", () => {
         [
           "--import",
           archShimPath,
+          "--import",
+          "tsx",
           "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
@@ -478,6 +483,8 @@ describe("CLI startup benchmark script spawners", () => {
         [
           "--import",
           archShimPath,
+          "--import",
+          "tsx",
           "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
@@ -501,18 +508,18 @@ describe("CLI startup benchmark script spawners", () => {
       const baselinePath = path.join(tmpDir, "baseline.json");
       const reportPath = path.join(tmpDir, "current.json");
       const timedOutCase = {
-        id: "version",
-        name: "--version",
         contract: {
           firstOutputBudgetMs: 1000,
           exitBudgetMs: 2000,
         },
+        id: "version",
+        name: "--version",
         samples: [
           {
             ms: 10,
             firstOutputMs: 5,
             maxRssMb: 10,
-            exitCode: 0,
+            exitCode: null,
             signal: null,
             timedOut: true,
           },
@@ -557,6 +564,7 @@ describe("CLI startup benchmark script spawners", () => {
       const baselinePath = path.join(tmpDir, "baseline.json");
       const reportPath = path.join(tmpDir, "current.json");
       const missingRssCase = {
+        contract: null,
         id: "version",
         name: "--version",
         samples: [{ ms: 10, firstOutputMs: 5, maxRssMb: null, exitCode: 0, signal: null }],
@@ -588,6 +596,7 @@ describe("CLI startup benchmark script spawners", () => {
       expect(result.stderr).toContain(
         "[test-cli-startup-bench-budget] --version did not report max RSS.",
       );
+      expect(result.stderr).not.toContain("current report has no cases");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

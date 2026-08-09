@@ -9,7 +9,6 @@ import {
   type PluginSdkDocCategory,
   type PluginSdkDocEntrypoint,
 } from "../../scripts/lib/plugin-sdk-doc-metadata.ts";
-import { publicPluginSdkEntrypoints } from "./entrypoints.ts";
 import {
   attachPluginSdkDeclarationClosures,
   createDeclarationClosureRenderer,
@@ -20,6 +19,7 @@ import {
   normalizePluginSdkApiDeclarationText,
   normalizePluginSdkApiSourcePath as relativePath,
 } from "./api-baseline-normalization.js";
+import { publicPluginSdkEntrypoints } from "./entrypoints.ts";
 
 export {
   normalizePluginSdkApiDeclarationText,

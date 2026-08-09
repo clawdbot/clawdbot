@@ -261,6 +261,14 @@ export function validateFullReleaseValidationEvidence({
   return { run, source: "sha-pinned-main" };
 }
 
+/**
+ * @param {{
+ *   repository: string;
+ *   runId: string | number;
+ *   validatorFile?: string;
+ *   verifierSourceSha?: string;
+ * }} params
+ */
 export function runStrictReleaseEvidenceValidation({
   repository,
   runId,

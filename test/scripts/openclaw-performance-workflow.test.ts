@@ -851,7 +851,7 @@ esac
     const runKova = findStep("Run Kova");
 
     expect(runKova.run).toContain(
-      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mts" "${gate_args[@]}"',
+      'node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mts" "${gate_args[@]}"',
     );
     expect(runKova.run).not.toContain("report.summary?.statuses ?? {}");
     expect(runKova.run).toContain(
@@ -1050,14 +1050,14 @@ esac
     );
     expect(run).toContain("gate_args+=(--require-instrumented-performance-contract)");
     expect(run).toContain(
-      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mts" "${gate_args[@]}"',
+      'node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mts" "${gate_args[@]}"',
     );
     expect(run.indexOf('gate_args=("$report_json")')).toBeLessThan(
       run.indexOf("gate_args+=(--require-instrumented-performance-contract)"),
     );
     expect(run.indexOf("gate_args+=(--require-instrumented-performance-contract)")).toBeLessThan(
       run.indexOf(
-        'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mts" "${gate_args[@]}"',
+        'node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mts" "${gate_args[@]}"',
       ),
     );
   });
@@ -1084,7 +1084,8 @@ esac
     expect(configure.run).toContain(
       'npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mts"',
     );
-    expect(configure.run).toContain("OCM_INTERNAL_NPM_BIN=$npm_wrapper");
+    expect(configure.run).toContain("OCM_INTERNAL_NPM_BIN=$npm_adapter");
+    expect(configure.run).toContain("OPENCLAW_OCM_NPM_WRAPPER=$npm_wrapper");
     expect(configure.run).toContain(
       'if [[ -f "${GITHUB_WORKSPACE}/packages/ai/package.json" ]]; then',
     );

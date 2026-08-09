@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 const SCHEMA = {
   report: "kova.report.v1",
   gate: "kova.gate.v1",
@@ -23,6 +22,11 @@ const ROLE_VIOLATION = /^resourceByRole\.([^.]+)\.(maxCpuPercent|peakRssMb)$/u;
 
 type JsonRecord = Record<string, unknown>;
 type KovaReportGateOptions = { requireInstrumentedPerformanceContract?: boolean };
+
+// This gate is copied into standalone report fixtures without workspace packages.
+function isRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 function check(condition: unknown, reason: string): asserts condition {
   if (!condition) {
@@ -150,7 +154,9 @@ function validateCleanup(
     `${noun} cleanup status was invalid`,
   );
   check(result.timedOut === false, `${noun} cleanup timed out`);
-  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  const output = [result.stdout, result.stderr]
+    .filter((value) => typeof value === "string")
+    .join("\n");
   const missing = new RegExp(`\\b${noun}\\b[\\s\\S]*\\b(?:does not exist|not found)\\b`, "iu").test(
     output,
   );

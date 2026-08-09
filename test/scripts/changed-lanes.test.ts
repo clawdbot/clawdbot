@@ -1830,6 +1830,7 @@ describe("scripts/changed-lanes", () => {
         "extensions/memory-core/index.ts",
         "scripts/generate-plugin-sdk-api-baseline.ts",
         "scripts/lib/plugin-sdk-doc-metadata.ts",
+        "scripts/lib/plugin-sdk-entries.mts",
         "docs/.generated/plugin-sdk-api-baseline.sha256",
       ]),
     ).toBe(true);
@@ -1853,6 +1854,7 @@ describe("scripts/changed-lanes", () => {
         "src/plugin-sdk/core.ts",
         "scripts/plugin-sdk-surface-report.mts",
         "scripts/sync-plugin-sdk-exports.mts",
+        "scripts/lib/plugin-sdk-entries.mts",
         "scripts/lib/plugin-sdk-entrypoints.json",
         "package.json",
       ]),
