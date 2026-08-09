@@ -233,6 +233,135 @@ describe("createGatewayRequestContext", () => {
     expect(context.getApprovalClientConnIds?.({ approvalKind: "plugin" })).toEqual(new Set());
   });
 
+  it("refreshes every live connection and presence row for a changed user profile", () => {
+    const first = {
+      ...makeGatewayClient({
+        connId: "ada-one",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserId: "ada@example.test",
+      authenticatedUserProfile: {
+        profileId: "profile-ada",
+        displayName: "Ada",
+        hasAvatar: true,
+        updatedAt: 1,
+      },
+      presenceKey: "profile-refresh-ada-one",
+    };
+    const second = {
+      ...makeGatewayClient({
+        connId: "ada-two",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserId: "ada@work.test",
+      authenticatedUserProfile: {
+        profileId: "profile-ada",
+        displayName: "Ada",
+        hasAvatar: true,
+        updatedAt: 1,
+      },
+      presenceKey: "profile-refresh-ada-two",
+    };
+    const unrelated = {
+      ...makeGatewayClient({
+        connId: "grace",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserId: "grace@example.test",
+      authenticatedUserProfile: {
+        profileId: "profile-grace",
+        displayName: "Grace",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      presenceKey: "profile-refresh-grace",
+    };
+    const clients = new Set([first, second, unrelated]) as never;
+    const params = makeContextParams({ clients });
+    const context = createGatewayRequestContext(params);
+
+    context.refreshConnectedUserProfile?.({
+      id: "profile-ada",
+      displayName: "Augusta Ada",
+      hasAvatar: true,
+      updatedAt: 2,
+    });
+
+    expect(first.authenticatedUserProfile).toEqual({
+      profileId: "profile-ada",
+      displayName: "Augusta Ada",
+      hasAvatar: true,
+      updatedAt: 2,
+    });
+    expect(second.authenticatedUserProfile).toEqual(first.authenticatedUserProfile);
+    expect(unrelated.authenticatedUserProfile.displayName).toBe("Grace");
+    expect(params.broadcast).toHaveBeenCalledWith(
+      "presence",
+      {
+        presence: expect.arrayContaining([
+          expect.objectContaining({
+            user: {
+              id: "profile-ada",
+              email: "ada@example.test",
+              name: "Augusta Ada",
+              avatarUrl: "/api/users/profile-ada/avatar?v=2",
+            },
+          }),
+          expect.objectContaining({
+            user: {
+              id: "profile-ada",
+              email: "ada@work.test",
+              name: "Augusta Ada",
+              avatarUrl: "/api/users/profile-ada/avatar?v=2",
+            },
+          }),
+        ]),
+      },
+      {
+        dropIfSlow: true,
+        stateVersion: { presence: 1, health: 1 },
+      },
+    );
+  });
+
+  it("removes the presence avatar URL when a changed profile has no avatar", () => {
+    const client = {
+      ...makeGatewayClient({
+        connId: "ada-avatar-removed",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserId: "ada@example.test",
+      authenticatedUserProfile: {
+        profileId: "profile-ada-avatar-removed",
+        displayName: "Ada",
+        hasAvatar: true,
+        updatedAt: 1,
+      },
+      presenceKey: "profile-refresh-ada-avatar-removed",
+    };
+    const params = makeContextParams({ clients: new Set([client]) as never });
+    const context = createGatewayRequestContext(params);
+
+    context.refreshConnectedUserProfile?.({
+      id: "profile-ada-avatar-removed",
+      displayName: "Ada",
+      hasAvatar: false,
+      updatedAt: 2,
+    });
+
+    expect(client.authenticatedUserProfile.hasAvatar).toBe(false);
+    const presence = vi.mocked(params.broadcast).mock.calls[0]?.[1] as {
+      presence?: Array<{ user?: { id?: string; avatarUrl?: string } }>;
+    };
+    expect(
+      presence.presence?.find((entry) => entry.user?.id === "profile-ada-avatar-removed")?.user,
+    ).toEqual({
+      id: "profile-ada-avatar-removed",
+      email: "ada@example.test",
+      name: "Ada",
+    });
+  });
+
   it("preserves only clients that handle each approval kind", () => {
     const clients = new Set([
       makeGatewayClient({

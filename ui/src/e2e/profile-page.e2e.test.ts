@@ -222,6 +222,7 @@ suite.define(() => {
         const selfInstanceId = (connect.params as { client?: { instanceId?: string } } | undefined)
           ?.client?.instanceId;
         expect(selfInstanceId).toBeTruthy();
+        const updatedDisplayName = "Updated Person";
         const publishAvatarRevision = async (revision: number) => {
           await gateway.emitGatewayEvent("presence", {
             presence: [
@@ -231,7 +232,7 @@ suite.define(() => {
                 reason: "connect",
                 user: {
                   id: testProfile.id,
-                  name: testProfile.displayName,
+                  name: updatedDisplayName,
                   email: testProfile.emails[0],
                   avatarUrl: `/api/users/${testProfile.id}/avatar?v=${revision}`,
                 },
@@ -243,6 +244,9 @@ suite.define(() => {
 
         await publishAvatarRevision(3);
         await expect.poll(() => avatarRequests.length).toBe(2);
+        await expect(page.locator(".sidebar-identity-card__name").textContent()).resolves.toBe(
+          updatedDisplayName,
+        );
         expect(
           await originalSidebarImage?.evaluate((image) =>
             image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
@@ -299,7 +303,7 @@ suite.define(() => {
               await page.locator(".sidebar-identity-card .viewer-avatar__fallback").textContent()
             )?.trim(),
           )
-          .toBe("TP");
+          .toBe("UP");
         expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
         expect(avatarRequests[2]).toEqual({
           authorization: "Bearer e2e-device-token",

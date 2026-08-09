@@ -7,11 +7,14 @@ import {
   type GatewayClientId,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { upsertPresence } from "../infra/system-presence.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
+import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import type { SessionCompanionService } from "./session-companion.js";
 import type { SessionObserverService } from "./session-observer-contract.js";
+import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 type GatewayRequestContextClient = GatewayClient & {
   socket: { close: (code: number, reason: string) => void };
@@ -260,6 +263,41 @@ export function createGatewayRequestContext(
         }
       }
       return false;
+    },
+    refreshConnectedUserProfile: (profile) => {
+      let presenceChanged = false;
+      for (const gatewayClient of params.clients) {
+        if (gatewayClient.authenticatedUserProfile?.profileId !== profile.id) {
+          continue;
+        }
+        gatewayClient.authenticatedUserProfile = {
+          profileId: profile.id,
+          displayName: profile.displayName,
+          hasAvatar: profile.hasAvatar,
+          updatedAt: profile.updatedAt,
+        };
+        if (!gatewayClient.presenceKey || !gatewayClient.authenticatedUserId) {
+          continue;
+        }
+        upsertPresence(gatewayClient.presenceKey, {
+          user: {
+            id: profile.id,
+            email: gatewayClient.authenticatedUserId,
+            ...(profile.displayName ? { name: profile.displayName } : {}),
+            ...(profile.hasAvatar
+              ? { avatarUrl: `${formatUserProfileAvatarPath(profile.id)}?v=${profile.updatedAt}` }
+              : {}),
+          },
+        });
+        presenceChanged = true;
+      }
+      if (presenceChanged) {
+        broadcastPresenceSnapshot({
+          broadcast: params.broadcast,
+          incrementPresenceVersion: params.incrementPresenceVersion,
+          getHealthVersion: params.getHealthVersion,
+        });
+      }
     },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";

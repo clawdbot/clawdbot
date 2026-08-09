@@ -31,12 +31,13 @@ async function runUsersHandler(
   method: keyof typeof usersHandlers,
   params: object,
   client?: object,
+  context: object = {},
 ) {
   const respond = vi.fn();
   await expectDefined(
     usersHandlers[method],
     `${method} test invariant`,
-  )({ client, params, respond } as never);
+  )({ client, context, params, respond } as never);
   return respond;
 }
 
@@ -172,6 +173,7 @@ describe("users gateway methods", () => {
 
   it("returns protocol-complete display name mutations", async () => {
     setDisplayName.mockReturnValue(profile);
+    const refreshConnectedUserProfile = vi.fn();
 
     const respond = await runUsersHandler(
       "users.setDisplayName",
@@ -180,16 +182,25 @@ describe("users gateway methods", () => {
         displayName: "Ada",
       },
       adminClient,
+      { refreshConnectedUserProfile },
     );
 
     expect(validateUsersSetDisplayNameResult(respond.mock.calls[0]?.[1])).toBe(true);
+    expect(refreshConnectedUserProfile).toHaveBeenCalledWith(profile);
   });
 
   it("returns protocol-complete avatar mutations", async () => {
+    const updatedProfile = {
+      ...profile,
+      avatarMime: "image/png",
+      hasAvatar: true,
+      updatedAt: 2,
+    };
     setAvatar.mockReturnValue({
       ok: true,
-      value: { ...profile, avatarMime: "image/png", hasAvatar: true },
+      value: updatedProfile,
     });
+    const refreshConnectedUserProfile = vi.fn();
 
     const respond = await runUsersHandler(
       "users.setAvatar",
@@ -199,9 +210,11 @@ describe("users gateway methods", () => {
         avatarBase64: "AQ==",
       },
       adminClient,
+      { refreshConnectedUserProfile },
     );
 
     expect(validateUsersSetAvatarResult(respond.mock.calls[0]?.[1])).toBe(true);
+    expect(refreshConnectedUserProfile).toHaveBeenCalledWith(updatedProfile);
   });
 
   it("rejects blank email aliases as invalid requests", async () => {
