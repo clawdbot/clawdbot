@@ -222,9 +222,11 @@ async function pollForAccessToken(params: {
       continue;
     }
     if (err === "slow_down") {
-      intervalMs =
-        positiveSecondsToSafeMilliseconds(json.interval) ??
-        Math.min(Number.MAX_SAFE_INTEGER, intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS);
+      // slow_down is cumulative; a returned interval may raise but never lower the required floor.
+      intervalMs = Math.max(
+        Math.min(Number.MAX_SAFE_INTEGER, intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS),
+        positiveSecondsToSafeMilliseconds(json.interval) ?? 0,
+      );
       continue;
     }
     if (err === "expired_token") {
