@@ -195,4 +195,34 @@ describe("legacy config migration end to end", () => {
     expect(validateConfigObjectRaw(result.config).ok).toBe(true);
     expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
   });
+
+  it("loads the OpenCode doctor contract from an exec reviewer fallback", () => {
+    const raw = {
+      tools: {
+        exec: {
+          reviewer: { model: { fallbacks: ["opencode/hy3-free@work"] } },
+        },
+      },
+    };
+    const applied = applyLegacyDoctorMigrations(raw);
+
+    expect(applied.next?.tools).toEqual({
+      exec: {
+        reviewer: { model: { fallbacks: ["opencode/laguna-s-2.1-free@work"] } },
+      },
+    });
+    const result = migrateLegacyConfig(raw);
+
+    expect(result.partiallyValid).toBeUndefined();
+    expect(result.config?.tools?.exec?.reviewer?.model).toEqual({
+      fallbacks: ["opencode/laguna-s-2.1-free@work"],
+    });
+    expect(result.changes).toContain(
+      "Updated tools.exec.reviewer.model.fallbacks.0 from the retired OpenCode Zen model to opencode/laguna-s-2.1-free.",
+    );
+    const validation = validateConfigObjectRaw(result.config);
+    expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
+    expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
+    expect(migrateLegacyConfig(result.config)).toEqual({ config: null, changes: [] });
+  });
 });
