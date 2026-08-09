@@ -128,8 +128,9 @@ describe("provider replay helpers", () => {
     );
   });
 
-  it("preserves thinking blocks for Claude Opus 4.5+ and Sonnet 4.5+ models", () => {
-    // These models should NOT drop thinking blocks
+  it("preserves thinking blocks for Claude generation 4 and newer", () => {
+    // These models should NOT drop thinking blocks. Generation-5 ids place the family
+    // before the generation (claude-opus-5), unlike claude-opus-4-6 or legacy claude-3-7-sonnet.
     for (const modelId of [
       "claude-fable-5",
       "claude-opus-4-5-20251101",
@@ -137,13 +138,21 @@ describe("provider replay helpers", () => {
       "claude-sonnet-4-5-20250929",
       "claude-sonnet-4-6",
       "claude-haiku-4-5-20251001",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-mythos-5",
+      "us.anthropic.claude-opus-5-20260101-v1:0",
     ]) {
       const policy = buildAnthropicReplayPolicyForModel(modelId);
       expect(policy).not.toHaveProperty("dropThinkingBlocks");
     }
 
     // These legacy models SHOULD drop thinking blocks
-    for (const modelId of ["claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20240620"]) {
+    for (const modelId of [
+      "claude-3-7-sonnet-20250219",
+      "claude-3-5-sonnet-20240620",
+      "claude-3-opus-20240229",
+    ]) {
       const policy = buildAnthropicReplayPolicyForModel(modelId);
       expect(policy.dropThinkingBlocks).toBe(true);
     }
