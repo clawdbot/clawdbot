@@ -17,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import {
   acquireMaintenanceLock,
   assertNoSystemLaunchDaemonOwnership,
@@ -48,10 +48,12 @@ import {
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata.mjs";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const script = path.join(repoRoot, ".agents/skills/openclaw-live-updater/scripts/update-main.mjs");
 const fixtureOrigins = new Map<string, string>();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let fixtureTemplate: ReturnType<typeof initializeFixture> | undefined;
 const posixTest = process.platform === "win32" ? test.skip : test;
 
@@ -165,7 +167,7 @@ function makeFixture(options?: { includeSeed?: boolean }) {
   if (!fixtureTemplate) {
     throw new Error("fixture template is not initialized");
   }
-  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-")));
+  const root = realpathSync(tempDirs.make("openclaw-live-updater-"));
   const origin = path.join(root, "origin.git");
   const seed = path.join(root, "seed");
   const mirror = path.join(root, "mirror");
@@ -245,9 +247,15 @@ function managedTimeoutError() {
 }
 
 describe("openclaw live updater", () => {
+  let cleanupProbeRoot = "";
+
   beforeAll(() => {
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-template-")));
     fixtureTemplate = initializeFixture(root);
+  });
+
+  afterEach(() => {
+    fixtureOrigins.clear();
   });
 
   afterAll(() => {
@@ -255,6 +263,17 @@ describe("openclaw live updater", () => {
       rmSync(fixtureTemplate.root, { recursive: true, force: true });
       fixtureTemplate = undefined;
     }
+  });
+
+  describe.sequential("fixture cleanup boundary", () => {
+    test("creates a disposable clone fixture", () => {
+      cleanupProbeRoot = makeFixture().root;
+      expect(existsSync(cleanupProbeRoot)).toBe(true);
+    });
+
+    test("removes the disposable clone before the next test", () => {
+      expect(existsSync(cleanupProbeRoot), cleanupProbeRoot).toBe(false);
+    });
   });
 
   test("audits only error and warning logs emitted after Gateway restart", () => {
@@ -559,7 +578,7 @@ describe("openclaw live updater", () => {
   });
 
   test("ignores restart-window logs emitted by a foreign OpenClaw checkout", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-log-attribution-"));
+    const root = tempDirs.make("openclaw-log-attribution-");
     const sourceRoot = path.join(root, "managed/openclaw/dist");
     const foreignRoot = path.join(root, "worktree/openclaw");
     mkdirSync(path.join(foreignRoot, ".git"), { recursive: true });
@@ -609,7 +628,7 @@ describe("openclaw live updater", () => {
   });
 
   test("keeps managed restart logs when the deployment root is symlinked", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-log-symlink-attribution-"));
+    const root = tempDirs.make("openclaw-log-symlink-attribution-");
     const releaseRoot = path.join(root, "releases/abc");
     const releaseDist = path.join(releaseRoot, "dist");
     const linkedRoot = path.join(root, "current");
@@ -639,7 +658,7 @@ describe("openclaw live updater", () => {
   });
 
   test("scopes embedded RPC records without dropping unattributed errors", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-rpc-log-attribution-"));
+    const root = tempDirs.make("openclaw-rpc-log-attribution-");
     const sourceRoot = path.join(root, "managed/openclaw/dist");
     const foreignRoot = path.join(root, "worktree/openclaw");
     mkdirSync(path.join(foreignRoot, ".git"), { recursive: true });
@@ -1076,7 +1095,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
   });
 
   test("pins managed Gateway calls with a backward-compatible local overlay", () => {
-    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-gateway-call-")));
+    const root = realpathSync(tempDirs.make("openclaw-gateway-call-"));
     const checkout = path.join(root, "checkout");
     const entrypoint = path.join(checkout, "dist/index.js");
     const capture = path.join(root, "capture.mjs");
