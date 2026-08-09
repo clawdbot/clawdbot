@@ -980,11 +980,13 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    @Test func `readiness waiter observes the current owner past its timeout`() async throws {
+    @Test func `readiness waiter rechecks after current owner fails past its timeout`() async throws {
         let port = 19114
         let url = try #require(URL(string: "ws://example.invalid"))
         let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            self.gatewayTask(healthSucceedsAfter: 1)
+            self.gatewayTask(
+                healthSucceedsAfter: 0,
+                stallsFirstHealthResponse: true)
         }
         defer { manager.setTestingConnection(nil) }
 
@@ -1007,7 +1009,7 @@ struct GatewayProcessManagerTests {
                 port: port,
                 pid: 4242,
                 readinessWindow: 0.5,
-                firstInstallReadinessGraceWindows: 1)
+                firstInstallReadinessBudget: 0.5)
             let readiness = Task { @MainActor in
                 await manager.waitForGatewayReady(timeout: 0.01)
             }
@@ -1019,6 +1021,7 @@ struct GatewayProcessManagerTests {
             #expect(!manager._testHasLaunchAgentReadinessFailure())
             #expect(await readiness.value)
             #expect(manager.status == .running(details: "pid 4242"))
+            #expect((session.latestTask()?.snapshotSendCount() ?? 0) > 1)
 
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
@@ -1046,7 +1049,7 @@ struct GatewayProcessManagerTests {
                 port: port,
                 pid: 4242,
                 readinessWindow: 0.5,
-                firstInstallReadinessGraceWindows: 1)
+                firstInstallReadinessBudget: 1)
             let readiness = Task { @MainActor in
                 await manager.waitForGatewayReady(timeout: 0.01)
             }
@@ -1095,7 +1098,7 @@ struct GatewayProcessManagerTests {
                 port: port,
                 pid: 4242,
                 readinessWindow: 0.05,
-                firstInstallReadinessGraceWindows: 2)
+                firstInstallReadinessBudget: 0.15)
             await manager.waitForStartupAttempt()
 
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
@@ -1138,7 +1141,7 @@ struct GatewayProcessManagerTests {
                 port: port,
                 pid: 4242,
                 readinessWindow: 0.01,
-                firstInstallReadinessGraceWindows: 1)
+                firstInstallReadinessBudget: 0.02)
             await manager.waitForStartupAttempt()
 
             #expect(manager.status == .failed("Gateway did not start in time"))
@@ -1180,7 +1183,7 @@ struct GatewayProcessManagerTests {
                 port: port,
                 pid: 4242,
                 readinessWindow: 0.05,
-                firstInstallReadinessGraceWindows: 1)
+                firstInstallReadinessBudget: 0.1)
             await manager.waitForStartupAttempt()
             guard case .failed("Gateway did not start in time") = manager.status else {
                 Issue.record("fresh launchd readiness did not fail within its bounded grace")

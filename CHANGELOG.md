@@ -65,6 +65,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **macOS first-run Gateway startup:** keep onboarding and daemon lifecycle waits alive through bounded state integrity checks and startup migrations instead of reporting a premature background-service failure.
 - **Control UI appearance accessibility:** keep the unavailable custom-theme card announced as an Import command while preserving selected-state semantics for selectable themes and text sizes. Thanks @shakkernerd.
 - **Control UI dashboard index refresh:** keep an open Dashboards page current after session changes, agent-scope updates, and Gateway reconnects while preserving the last safe list until replacement hydration completes. Fixes #120602. Thanks @shakkernerd.
 - **Browser extension relay security:** require canonical 64-character relay secrets and safe WebSocket pairing URLs, and recheck OpenClaw tab-group consent at the extension edge before every authority-bearing existing-tab command.
