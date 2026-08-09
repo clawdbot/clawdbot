@@ -16,7 +16,7 @@ struct GeneralSettings: View {
 
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
-    @AppStorage(computerControlEnabledKey) private var computerControlEnabled: Bool = false
+    @AppStorage(computerControlEnabledKey) private var computerControlEnabled: Bool = true
     let page: Page
     let isActive: Bool
     private let healthStore = HealthStore.shared
@@ -26,6 +26,7 @@ struct GeneralSettings: View {
     @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
+    @State private var computerControlPermissions = ComputerControlPermissionSnapshot.probe()
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -66,6 +67,12 @@ struct GeneralSettings: View {
         .onChange(of: self.computerControlEnabled) { _, _ in
             // Turning Computer Control on/off must start or stop the gated PeekabooBridge host.
             self.state.applyPeekabooBridgeHostState()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            self.refreshComputerControlPermissions()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openclawPermissionsChanged)) { _ in
+            self.refreshComputerControlPermissions()
         }
         .onDisappear { self.gatewayDiscovery.stop() }
     }
@@ -128,10 +135,23 @@ struct GeneralSettings: View {
                 SettingsCardToggleRow(
                     title: "Allow Computer Control",
                     subtitle: """
-                    Let an authorized agent move the pointer, click, and type on this Mac. \
-                    Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.
+                    Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can \
+                    move the pointer, click, and type without per-action confirmation. High risk.
                     """,
                     binding: self.$computerControlEnabled)
+
+                SettingsCardRow(
+                    title: "Computer Control access",
+                    subtitle: .verbatim(self.computerControlPermissions.diagnostic.detailText))
+                {
+                    Label {
+                        Text(verbatim: self.computerControlPermissions.diagnostic.statusText)
+                    } icon: {
+                        Image(systemName: self.computerControlPermissionIcon)
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(self.computerControlPermissionColor)
+                }
 
                 SettingsCardToggleRow(
                     title: "Enable Peekaboo Bridge",
@@ -198,26 +218,39 @@ struct GeneralSettings: View {
     }
 
     private var openClawStatusPanel: some View {
-        HStack(alignment: .center, spacing: 14) {
+        let presentation = GeneralStatusPresentation.resolve(
+            mode: self.state.connectionMode,
+            isPaused: self.state.isPaused,
+            controlState: ControlChannel.shared.state)
+
+        return HStack(alignment: .center, spacing: 14) {
             ZStack {
                 Circle()
-                    .fill(self.state.isPaused ? Color.orange.opacity(0.18) : Color.green.opacity(0.18))
-                Image(systemName: self.state.isPaused ? "pause.fill" : "checkmark")
+                    .fill(self.statusColor(presentation.tone).opacity(0.18))
+                Image(systemName: presentation.symbolName)
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(self.state.isPaused ? .orange : .green)
+                    .foregroundStyle(self.statusColor(presentation.tone))
             }
             .frame(width: 42, height: 42)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(self.state.isPaused ? "OpenClaw paused" : "OpenClaw active")
+                Text(verbatim: presentation.title)
                     .font(.headline)
-                Text(self.generalStatusSubtitle)
+                Text(verbatim: presentation.subtitle)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 20)
+
+            if presentation.showsConnectionAction {
+                Button("Open Connection Settings") {
+                    AppNavigationActions.openSettings(tab: .connection)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
 
             Toggle("OpenClaw active", isOn: self.activeBinding)
                 .labelsHidden()
@@ -232,17 +265,11 @@ struct GeneralSettings: View {
         }
     }
 
-    private var generalStatusSubtitle: String {
-        if self.state.isPaused {
-            return "Gateway work is paused; incoming messages will wait."
-        }
-        switch self.state.connectionMode {
-        case .local:
-            return "Processing messages through the local Gateway on this Mac."
-        case .remote:
-            return "Connected to a remote Gateway configuration."
-        case .unconfigured:
-            return "Ready to run after you choose a Gateway connection."
+    private func statusColor(_ tone: GatewayConnectionTone) -> Color {
+        switch tone {
+        case .healthy: .green
+        case .transient: .orange
+        case .attention: .red
         }
     }
 
@@ -254,6 +281,14 @@ struct GeneralSettings: View {
 
             self.connectionStatusPanel
             self.gatewayModeGroup
+
+            if self.state.connectionMode != .remote,
+               self.state.gatewayConfigConflict != nil
+            {
+                SettingsCardGroup("Remote Access") {
+                    GatewayConfigConflictRecoveryView(state: self.state)
+                }
+            }
 
             switch self.state.connectionMode {
             case .unconfigured:
@@ -283,12 +318,33 @@ struct GeneralSettings: View {
     private func updateActiveWork(active: Bool) {
         guard !self.isPreview else { return }
         if active {
+            self.refreshComputerControlPermissions()
             self.refreshGatewayStatus()
             if self.page == .connection {
                 self.gatewayDiscovery.start()
             }
         } else {
             self.gatewayDiscovery.stop()
+        }
+    }
+
+    private func refreshComputerControlPermissions() {
+        guard self.page == .general, self.isActive, !self.isPreview else { return }
+        self.computerControlPermissions = .probe()
+    }
+
+    private var computerControlPermissionIcon: String {
+        switch self.computerControlPermissions.diagnostic {
+        case .granted: "checkmark.circle.fill"
+        case .missing: "exclamationmark.circle.fill"
+        case .accessibilityGrantMayBeStale: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var computerControlPermissionColor: Color {
+        switch self.computerControlPermissions.diagnostic {
+        case .granted: .green
+        case .missing, .accessibilityGrantMayBeStale: .orange
         }
     }
 
@@ -314,7 +370,9 @@ struct GeneralSettings: View {
 
             Spacer(minLength: 18)
 
-            if let ping = ControlChannel.shared.lastPingMs {
+            if ControlChannel.shared.state == .connected,
+               let ping = ControlChannel.shared.lastPingMs
+            {
                 Text("\(Int(ping)) ms")
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 8)
@@ -431,6 +489,7 @@ struct GeneralSettings: View {
                     self.remoteDirectRow
                 }
                 self.remoteTokenRow
+                GatewayConfigConflictRecoveryView(state: self.state)
             }
 
             SettingsCardGroup("Discovery & Status") {
@@ -616,7 +675,7 @@ struct GeneralSettings: View {
             SettingsCardRow(
                 title: "Gateway token",
                 subtitle: "Used when the remote gateway requires token auth.",
-                showsDivider: false)
+                showsDivider: self.state.gatewayConfigConflict != nil)
             {
                 SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
                     .textFieldStyle(.roundedBorder)
@@ -651,12 +710,7 @@ struct GeneralSettings: View {
     }
 
     private var controlStatusLine: String {
-        switch ControlChannel.shared.state {
-        case .connected: "Connected"
-        case .connecting: "Connecting…"
-        case .disconnected: "Disconnected"
-        case let .degraded(msg): msg
-        }
+        GatewayConnectionPresentation(state: ControlChannel.shared.state).statusLine
     }
 
     @ViewBuilder
@@ -745,9 +799,7 @@ struct GeneralSettings: View {
 
     private func refreshGatewayStatus() {
         Task {
-            let status = await Task.detached(priority: .utility) {
-                GatewayEnvironment.check()
-            }.value
+            let status = await GatewayEnvironment.check()
             self.gatewayStatus = status
         }
     }

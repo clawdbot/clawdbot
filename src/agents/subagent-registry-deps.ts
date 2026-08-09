@@ -7,9 +7,9 @@ import { callGateway } from "../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { importRuntimeModule } from "../shared/runtime-import.js";
-import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import {
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController,
@@ -50,9 +50,11 @@ export type SubagentRegistryDeps = {
   runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
   maybeWakeRequesterAfterAllChildrenSettled: RequesterSettleWakeModule["maybeWakeRequesterAfterAllChildrenSettled"];
   ensureContextEnginesInitialized?: () => void;
-  ensureRuntimePluginsLoaded?: (
-    params: Parameters<typeof ensureRuntimePluginsLoadedFn>[0],
-  ) => void | Promise<void>;
+  loadAgentRuntimePluginRegistryHandle?: (params: {
+    config: OpenClawConfig;
+    workspaceDir?: string;
+    allowGatewaySubagentBinding?: boolean;
+  }) => PluginRegistry | undefined;
   resolveContextEngine?: (
     cfg?: OpenClawConfig,
     options?: ResolveContextEngineOptions,
@@ -101,76 +103,50 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
 };
 
 export let subagentRegistryDeps: SubagentRegistryDeps = defaultSubagentRegistryDeps;
-type ContextEngineInitModule = Pick<
-  {
-    ensureContextEnginesInitialized: () => void;
-  },
-  "ensureContextEnginesInitialized"
->;
-type ContextEngineRegistryModule = Pick<
-  {
-    resolveContextEngine: (
-      cfg?: OpenClawConfig,
-      options?: ResolveContextEngineOptions,
-    ) => Promise<ContextEngine>;
-  },
-  "resolveContextEngine"
->;
-type RuntimePluginsModule = Pick<
-  {
-    ensureRuntimePluginsLoaded: typeof ensureRuntimePluginsLoadedFn;
-  },
-  "ensureRuntimePluginsLoaded"
->;
+type SubagentRegistryRuntimeModule = {
+  ensureContextEnginesInitialized: () => void;
+  resolveContextEngine: (
+    cfg?: OpenClawConfig,
+    options?: ResolveContextEngineOptions,
+  ) => Promise<ContextEngine>;
+};
 
 const SUBAGENT_REGISTRY_RUNTIME_SPEC = ["./subagent-registry.runtime", ".js"] as const;
 
-const contextEngineInitLoader = createLazyPromiseLoader(() =>
-  importRuntimeModule<ContextEngineInitModule>(import.meta.url, SUBAGENT_REGISTRY_RUNTIME_SPEC),
+// All three capabilities belong to the same lazy runtime module and lifecycle.
+const subagentRegistryRuntimeLoader = createLazyPromiseLoader(() =>
+  importRuntimeModule<SubagentRegistryRuntimeModule>(
+    import.meta.url,
+    SUBAGENT_REGISTRY_RUNTIME_SPEC,
+  ),
 );
-const contextEngineRegistryLoader = createLazyPromiseLoader(() =>
-  importRuntimeModule<ContextEngineRegistryModule>(import.meta.url, SUBAGENT_REGISTRY_RUNTIME_SPEC),
-);
-const runtimePluginsLoader = createLazyPromiseLoader(() =>
-  importRuntimeModule<RuntimePluginsModule>(import.meta.url, SUBAGENT_REGISTRY_RUNTIME_SPEC),
+const subagentRegistryPluginRuntimeLoader = createLazyPromiseLoader(
+  () => import("./runtime-plugins.js"),
 );
 
-function loadContextEngineInitModule(): Promise<ContextEngineInitModule> {
-  return contextEngineInitLoader.load();
-}
-
-function loadContextEngineRegistryModule(): Promise<ContextEngineRegistryModule> {
-  return contextEngineRegistryLoader.load();
-}
-
-function loadRuntimePluginsModule(): Promise<RuntimePluginsModule> {
-  return runtimePluginsLoader.load();
-}
-
-export async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
+export async function loadSubagentRegistryPluginRuntimeHandle(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   allowGatewaySubagentBinding?: boolean;
-}) {
-  const ensureRuntimePluginsLoaded = subagentRegistryDeps.ensureRuntimePluginsLoaded;
-  if (ensureRuntimePluginsLoaded) {
-    await ensureRuntimePluginsLoaded(params);
-    return;
+}): Promise<PluginRegistry | undefined> {
+  const configuredLoader = subagentRegistryDeps.loadAgentRuntimePluginRegistryHandle;
+  if (configuredLoader) {
+    return configuredLoader(params);
   }
-  (await loadRuntimePluginsModule()).ensureRuntimePluginsLoaded(params);
+  return (await subagentRegistryPluginRuntimeLoader.load()).loadAgentRuntimePluginRegistryHandle(
+    params,
+  );
 }
 
 export async function resolveSubagentRegistryContextEngine(
   cfg: OpenClawConfig,
   options?: ResolveContextEngineOptions,
 ) {
-  const initModule = await loadContextEngineInitModule();
-  const registryModule = await loadContextEngineRegistryModule();
+  const runtime = await subagentRegistryRuntimeLoader.load();
   const ensureContextEnginesInitialized =
-    subagentRegistryDeps.ensureContextEnginesInitialized ??
-    initModule.ensureContextEnginesInitialized;
+    subagentRegistryDeps.ensureContextEnginesInitialized ?? runtime.ensureContextEnginesInitialized;
   const resolveContextEngine =
-    subagentRegistryDeps.resolveContextEngine ?? registryModule.resolveContextEngine;
+    subagentRegistryDeps.resolveContextEngine ?? runtime.resolveContextEngine;
   ensureContextEnginesInitialized();
   return await resolveContextEngine(cfg, options);
 }
@@ -182,9 +158,8 @@ export function setSubagentRegistryDepsForTest(overrides?: Partial<SubagentRegis
 }
 
 export function resetSubagentRegistryRuntimeLoadersForTests() {
-  contextEngineInitLoader.clear();
-  contextEngineRegistryLoader.clear();
-  runtimePluginsLoader.clear();
+  subagentRegistryRuntimeLoader.clear();
+  subagentRegistryPluginRuntimeLoader.clear();
   subagentAnnounceLoader.clear();
   browserCleanupLoader.clear();
 }

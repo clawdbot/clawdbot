@@ -9,7 +9,6 @@ import {
   resolveExplicitAgentSessionKey,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatUncaughtError } from "../../infra/errors.js";
 import {
   loadVoiceWakeRoutingConfig,
   resolveVoiceWakeRouteByTrigger,
@@ -30,10 +29,11 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
   MediaOffloadError,
+  logAttachmentFailure,
   parseMessageWithAttachments,
-  resolveChatAttachmentMaxBytes,
   type ChatAttachment,
 } from "../chat-attachments.js";
 import {
@@ -65,27 +65,6 @@ type AgentContentPhaseResult = {
   recipientThreadId?: string | number;
   to: string;
 };
-
-function formatAttachmentFailureForLog(err: unknown): string {
-  const primary = formatUncaughtError(err);
-  const cause = err instanceof Error ? err.cause : undefined;
-  if (cause === undefined) {
-    return primary;
-  }
-  const causeText = formatUncaughtError(cause);
-  return !causeText || causeText === primary ? primary : `${primary}\nCaused by: ${causeText}`;
-}
-
-function logAttachmentFailure(
-  logGateway: Pick<GatewayRequestHandlerOptions["context"]["logGateway"], "error">,
-  label: string,
-  err: unknown,
-): void {
-  logGateway.error(label, {
-    error: formatAttachmentFailureForLog(err),
-    consoleMessage: `${label}: ${formatForLog(err)}`,
-  });
-}
 
 export async function prepareAgentContentPhase(params: {
   request: AgentRunRequest;
@@ -119,6 +98,7 @@ export async function prepareAgentContentPhase(params: {
   if (params.normalizedAttachments.length > 0) {
     let baseProvider: string | undefined;
     let baseModel: string | undefined;
+    let catalogAgentId = agentId;
     let requestedAcpMeta: ReturnType<typeof readAcpSessionMeta>;
     if (params.requestedSessionKeyRaw) {
       const { cfg, entry, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw, {
@@ -127,6 +107,7 @@ export async function prepareAgentContentPhase(params: {
       });
       const sessionAgentId =
         canonicalKey === "global" && agentId ? agentId : resolveAgentIdFromSessionKey(canonicalKey);
+      catalogAgentId = sessionAgentId;
       const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
       baseProvider = modelRef.provider;
       baseModel = modelRef.model;
@@ -140,6 +121,8 @@ export async function prepareAgentContentPhase(params: {
       ? true
       : await resolveGatewayModelSupportsImages({
           loadGatewayModelCatalog: params.context.loadGatewayModelCatalog,
+          loadGatewayModelCatalogSnapshot: params.context.loadGatewayModelCatalogSnapshot,
+          agentId: catalogAgentId,
           provider: params.providerOverride || baseProvider,
           model: params.modelOverride || baseModel,
         });

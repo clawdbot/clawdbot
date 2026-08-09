@@ -3,8 +3,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
-import { listNodePairing } from "../../infra/node-pairing.js";
 import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
 import type { WorkerTunnelStatus } from "../worker-environments/tunnel-contract.js";
 import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
@@ -14,13 +14,16 @@ vi.mock("../../infra/device-pairing.js", () => ({
   resolveNodePairingState: vi.fn(),
 }));
 
-vi.mock("../../infra/node-pairing.js", () => ({
+vi.mock("../../infra/device-pairing-node.js", () => ({
   listNodePairing: vi.fn(),
 }));
 
 const NOW = 10_000;
 
-type TestWorkerRecord = WorkerEnvironmentRecord & { tunnelStatus: WorkerTunnelStatus };
+type TestWorkerRecord = WorkerEnvironmentRecord & {
+  tunnelStatus: WorkerTunnelStatus;
+  error?: string;
+};
 
 type TestWorkerService = {
   list: () => TestWorkerRecord[];
@@ -256,6 +259,21 @@ describe("environment gateway methods", () => {
     ["orphaned", "error"],
   ] as const)("maps worker state %s to %s", (state, status) => {
     expect(summarizeWorkerEnvironment(workerRecord({ state }), NOW).status).toBe(status);
+  });
+
+  it("projects recorded errors only for terminal error states", () => {
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ state: "failed", error: "provider teardown failed" }),
+        NOW,
+      ).worker,
+    ).toMatchObject({ error: "provider teardown failed" });
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ state: "ready", error: "stale transient error" }),
+        NOW,
+      ).worker,
+    ).not.toHaveProperty("error");
   });
 
   it("returns status for one node environment", async () => {

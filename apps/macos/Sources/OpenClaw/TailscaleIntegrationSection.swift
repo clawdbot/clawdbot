@@ -237,7 +237,7 @@ struct TailscaleIntegrationSection: View {
                 .foregroundStyle(.secondary)
         }
 
-        if self.effectiveService.isInstalled, !self.effectiveService.isRunning {
+        if self.effectiveService.isAppInstalled, !self.effectiveService.isRunning {
             Button("Start Tailscale") { self.effectiveService.openTailscaleApp() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)

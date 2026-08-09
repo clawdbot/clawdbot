@@ -1,35 +1,5 @@
-// Control UI module implements storage behavior.
-const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
-const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
-export const NAV_WIDTH_MIN = 240;
-export const NAV_WIDTH_MAX = 400;
-const NAV_WIDTH_DEFAULT = 258;
-const CURRENT_GATEWAY_SELECTION_KEY_PREFIX = "openclaw.control.currentGateway.v1:";
-const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
-const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
-const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
-const MAX_SCOPED_SESSION_ENTRIES = 10;
-
-function settingsKeyForGateway(gatewayUrl: string): string {
-  return `${SETTINGS_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
-}
-
-function currentGatewaySelectionKeyForPage(pageUrl: string): string {
-  return `${CURRENT_GATEWAY_SELECTION_KEY_PREFIX}${normalizeGatewayTokenScope(pageUrl)}`;
-}
-
-type ScopedSessionSelection = {
-  sessionKey: string;
-  lastActiveSessionKey: string;
-};
-
-type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActiveSessionKey"> & {
-  token?: never;
-  sessionKey?: string;
-  lastActiveSessionKey?: string;
-  sessionsByGateway?: Record<string, ScopedSessionSelection>;
-};
-
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { safeParseJson } from "@openclaw/normalization-core";
 import {
   DEFAULT_SIDEBAR_ENTRIES,
   normalizeSidebarEntries,
@@ -49,10 +19,41 @@ import {
 import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
 import { resolveControlUiBasePath } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
-import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
 import { normalizePinnedAgentIds } from "./settings-normalizers.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
+
+// Control UI module implements storage behavior.
+const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
+const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
+export const NAV_WIDTH_MIN = 240;
+export const NAV_WIDTH_MAX = 400;
+const NAV_WIDTH_DEFAULT = 258;
+const CURRENT_GATEWAY_SELECTION_KEY_PREFIX = "openclaw.control.currentGateway.v1:";
+const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
+const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
+const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
+const MAX_SCOPED_SESSION_ENTRIES = 10;
+
+function settingsKeyForGateway(gatewayUrl: string): string {
+  return `${SETTINGS_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
+}
+
+function currentGatewaySelectionKeyForPage(pageUrl: string): string {
+  return `${CURRENT_GATEWAY_SELECTION_KEY_PREFIX}${gatewayOriginScope(pageUrl)}`;
+}
+
+type ScopedSessionSelection = {
+  sessionKey: string;
+  lastActiveSessionKey: string;
+};
+
+type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActiveSessionKey"> & {
+  token?: never;
+  sessionKey?: string;
+  lastActiveSessionKey?: string;
+  sessionsByGateway?: Record<string, ScopedSessionSelection>;
+};
 
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
@@ -167,6 +168,19 @@ export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100
   return best;
 }
 
+export const UI_APPEARANCE_DEFAULTS = {
+  theme: "claw",
+  themeMode: "system",
+  textScale: 100,
+  sidebarLiveActivity: true,
+  chatMessageMaxWidth: "48rem",
+  chatSendShortcut: "enter",
+  catalogOpenTarget: "viewer",
+  composerHoldToRecord: true,
+  lobsterPetVisits: true,
+  lobsterPetSounds: false,
+} as const;
+
 export type UiSettings = {
   gatewayUrl: string;
   token: string;
@@ -187,7 +201,7 @@ export type UiSettings = {
   talkCameraAutoEnable?: boolean;
   chatSplitLayout?: ChatSplitLayout;
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
-  boardSessionViews?: BoardSessionViews; // Last face and active dashboard tab per session
+  boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state
   sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
@@ -206,7 +220,7 @@ export type UiSettings = {
 
 type LastActiveSessionHost = {
   settings: UiSettings;
-  applySettings(next: UiSettings): void;
+  applySettings(patch: Partial<UiSettings>): void;
 };
 
 export function setLastActiveSessionKey(host: LastActiveSessionHost, next: string) {
@@ -214,7 +228,7 @@ export function setLastActiveSessionKey(host: LastActiveSessionHost, next: strin
   if (!trimmed || host.settings.lastActiveSessionKey === trimmed) {
     return;
   }
-  host.applySettings({ ...host.settings, lastActiveSessionKey: trimmed });
+  host.applySettings({ lastActiveSessionKey: trimmed });
 }
 
 function isViteDevPage(): boolean {
@@ -225,7 +239,10 @@ function isViteDevPage(): boolean {
 }
 
 function formatHostWithPort(hostname: string, port: string): string {
-  const normalizedHost = hostname.includes(":") ? `[${hostname}]` : hostname;
+  // location.hostname already carries brackets for IPv6 literals; wrapping
+  // again would produce an undialable ws://[[::1]]:port default.
+  const needsBrackets = hostname.includes(":") && !hostname.startsWith("[");
+  const normalizedHost = needsBrackets ? `[${hostname}]` : hostname;
   return `${normalizedHost}:${port}`;
 }
 
@@ -247,9 +264,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
  */
 export function resolvePageGatewaySettings(settings: UiSettings): UiSettings {
   const { effectiveUrl } = deriveDefaultGatewayUrl();
-  if (
-    normalizeGatewayTokenScope(settings.gatewayUrl) === normalizeGatewayTokenScope(effectiveUrl)
-  ) {
+  if (gatewayOriginScope(settings.gatewayUrl) === gatewayOriginScope(effectiveUrl)) {
     return settings;
   }
   const session = loadGatewaySessionSelection(effectiveUrl);
@@ -275,11 +290,7 @@ function parsePersistedSettings(raw: string | null): PersistedUiSettings | null 
   if (!raw) {
     return null;
   }
-  try {
-    return JSON.parse(raw) as PersistedUiSettings;
-  } catch {
-    return null;
-  }
+  return (safeParseJson(raw) as PersistedUiSettings | undefined) ?? null;
 }
 
 function settingsMatchGatewayTarget(parsed: PersistedUiSettings, targetUrl: string): boolean {
@@ -287,7 +298,7 @@ function settingsMatchGatewayTarget(parsed: PersistedUiSettings, targetUrl: stri
   if (!storedUrl) {
     return false;
   }
-  return normalizeGatewayTokenScope(storedUrl) === normalizeGatewayTokenScope(targetUrl);
+  return gatewayOriginScope(storedUrl) === gatewayOriginScope(targetUrl);
 }
 
 function readSettingsForGateway(
@@ -308,7 +319,7 @@ function readSettingsForGateway(
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
-  return `${TOKEN_SESSION_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
+  return `${TOKEN_SESSION_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
 }
 
 function resolveScopedSessionSelection(
@@ -316,7 +327,7 @@ function resolveScopedSessionSelection(
   parsed: PersistedUiSettings,
   fallback: ScopedSessionSelection,
 ): ScopedSessionSelection {
-  const scope = normalizeGatewayTokenScope(gatewayUrl);
+  const scope = gatewayOriginScope(gatewayUrl);
   const scoped = parsed.sessionsByGateway?.[scope];
   const scopedSessionKey = normalizeOptionalString(scoped?.sessionKey);
   const scopedLastActiveSessionKey = normalizeOptionalString(scoped?.lastActiveSessionKey);
@@ -369,9 +380,7 @@ export function resolveGatewayTokenForUrlEdit(
   nextGatewayUrl: string,
   currentToken: string,
 ): string {
-  if (
-    normalizeGatewayTokenScope(currentGatewayUrl) === normalizeGatewayTokenScope(nextGatewayUrl)
-  ) {
+  if (gatewayOriginScope(currentGatewayUrl) === gatewayOriginScope(nextGatewayUrl)) {
     return currentToken;
   }
   // Gateway tokens stay session-scoped across endpoint edits.
@@ -417,21 +426,20 @@ export function loadSettings(): UiSettings {
     token: loadSessionToken(defaultUrl),
     sessionKey: "main",
     lastActiveSessionKey: "main",
-    theme: "claw",
-    themeMode: "system",
+    theme: UI_APPEARANCE_DEFAULTS.theme,
+    themeMode: UI_APPEARANCE_DEFAULTS.themeMode,
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,
-    chatSendShortcut: "enter",
-    catalogOpenTarget: "viewer",
+    chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
+    catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
-    sidebarLiveActivity: true,
+    sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     showAdvancedSettings: false,
     pinnedAgentIds: [],
-    textScale: 100,
-    composerHoldToRecord: true,
+    composerHoldToRecord: UI_APPEARANCE_DEFAULTS.composerHoldToRecord,
   };
 
   try {
@@ -534,7 +542,11 @@ export function loadSettings(): UiSettings {
           ? parsed.showAdvancedSettings
           : defaults.showAdvancedSettings,
       pinnedAgentIds: normalizePinnedAgentIds(parsed.pinnedAgentIds),
-      textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
+      textScale:
+        typeof parsed.textScale === "number" &&
+        normalizeTextScale(parsed.textScale) !== UI_APPEARANCE_DEFAULTS.textScale
+          ? normalizeTextScale(parsed.textScale)
+          : undefined,
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
       ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
@@ -594,7 +606,7 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
   persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();
-  const scope = normalizeGatewayTokenScope(next.gatewayUrl);
+  const scope = gatewayOriginScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
   const chatFollowUpMode = normalizeChatFollowUpModeOverride(next.chatFollowUpMode);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
@@ -673,7 +685,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(next.pinnedAgentIds && next.pinnedAgentIds.length > 0
       ? { pinnedAgentIds: next.pinnedAgentIds }
       : {}),
-    textScale: normalizeTextScale(next.textScale),
+    ...(next.textScale !== undefined ? { textScale: normalizeTextScale(next.textScale) } : {}),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),

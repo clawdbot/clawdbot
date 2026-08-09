@@ -5,6 +5,7 @@ import {
   applyPackageExtensionPeerMetadata,
   collectOverrideViolations,
   collectPnpmLockViolations,
+  createNpmPackageLockInstallStrategyArgs,
   createNpmLockExecOptions,
   createNpmLockCommand,
   disableDependencyShrinkwrapOverrideConflictSources,
@@ -16,11 +17,12 @@ import {
   pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
   parseLockPackagePath,
+  resolvePnpmLockOverridePlan,
   resolvePackageDirs,
   resolveNpmLockJobs,
   shouldUseLegacyPeerDepsForNpmLock,
   npmLockPackageDirsForChangedPaths,
-} from "../../scripts/generate-npm-package-lock.mjs";
+} from "../../scripts/generate-npm-package-lock.mts";
 
 describe("generate-npm-package-lock", () => {
   function repoRelativePath(value: string): string {
@@ -30,6 +32,8 @@ describe("generate-npm-package-lock", () => {
   it("omits workspace packages that are published beside the package", () => {
     const normalized = packageJsonForNpmLock(
       {
+        bundleDependencies: ["chalk"],
+        bundledDependencies: ["chalk"],
         dependencies: { "@openclaw/ai": "workspace:2026.6.11", chalk: "5.6.2" },
         devDependencies: { local: "workspace:*" },
         peerDependencies: { host: "workspace:^1.2.3" },
@@ -37,6 +41,8 @@ describe("generate-npm-package-lock", () => {
       {},
     );
 
+    expect(normalized).not.toHaveProperty("bundleDependencies");
+    expect(normalized).not.toHaveProperty("bundledDependencies");
     expect(normalized).not.toHaveProperty("devDependencies");
     expect(normalized.dependencies).toEqual({ chalk: "5.6.2" });
     expect(normalized.peerDependencies).toEqual({});
@@ -71,6 +77,16 @@ describe("generate-npm-package-lock", () => {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10 * 60 * 1000,
     });
+  });
+
+  it("adds explicit npm install strategies for package-lock generation", () => {
+    expect(createNpmPackageLockInstallStrategyArgs({ installStrategy: "shallow" })).toEqual([
+      "--install-strategy=shallow",
+    ]);
+    expect(createNpmPackageLockInstallStrategyArgs({})).toEqual([]);
+    expect(() =>
+      createNpmPackageLockInstallStrategyArgs({ installStrategy: "global" as never }),
+    ).toThrow("invalid npm package-lock install strategy: global");
   });
 
   it("normalizes pnpm scoped override selectors for npm package locks", () => {
@@ -141,9 +157,48 @@ describe("generate-npm-package-lock", () => {
   });
 
   it("pins same-line pnpm lock versions to the newest locked patch", () => {
+    expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38"]))).toBe("3.972.38");
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.38", "3.972.39"]))).toBe("3.972.39");
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "3.973.0"]))).toBeNull();
     expect(pnpmLockOverrideVersionForVersions(new Set(["3.972.39", "4.0.0"]))).toBeNull();
+  });
+
+  it("uses scoped forks unless peer contexts conflict under one parent", () => {
+    const plan = resolvePnpmLockOverridePlan({
+      packages: {
+        "@emnapi/core@1.11.1": {},
+        "@emnapi/core@1.11.2": {},
+        "@types/retry@0.12.0": {},
+        "@types/retry@0.12.5": {},
+      },
+      snapshots: {
+        "@napi-rs/wasm-runtime@1.1.6(@emnapi/core@1.11.1)": {
+          dependencies: { "@emnapi/core": "1.11.1" },
+        },
+        "@napi-rs/wasm-runtime@1.1.6(@emnapi/core@1.11.2)": {
+          dependencies: { "@emnapi/core": "1.11.2" },
+        },
+        "@slack/web-api@8.0.0": {
+          dependencies: { "@types/retry": "0.12.0" },
+        },
+        "@types/proper-lockfile@4.1.4": {
+          dependencies: { "@types/retry": "0.12.5" },
+        },
+        "p-retry@4.6.2": {
+          dependencies: { "@types/retry": "0.12.0" },
+        },
+      },
+    });
+
+    expect(plan).toEqual({
+      conflictingPackageNames: ["@emnapi/core"],
+      scopedVersionOverrides: {
+        "@slack/web-api@8.0.0": { "@types/retry": "0.12.0" },
+        "@types/proper-lockfile@4.1.4": { "@types/retry": "0.12.5" },
+        "p-retry@4.6.2": { "@types/retry": "0.12.0" },
+      },
+      versionOverrides: { "@emnapi/core": "1.11.2" },
+    });
   });
 
   it("parses nested scoped package paths", () => {

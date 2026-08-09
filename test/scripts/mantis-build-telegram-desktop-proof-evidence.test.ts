@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeTelegramDesktopProofEvidence } from "../../scripts/mantis/build-telegram-desktop-proof-evidence.mjs";
+import { writeTelegramDesktopProofEvidence } from "../../scripts/mantis/build-telegram-desktop-proof-evidence.mts";
 import {
   loadEvidenceManifest,
   renderEvidenceComment,
@@ -17,7 +17,7 @@ afterEach(() => {
   }
 });
 
-function makeLane(name: string) {
+function makeLane(name: "baseline" | "candidate", sha: string) {
   const repo = mkdtempSync(path.join(tmpdir(), `mantis-telegram-${name}-repo-`));
   tempDirs.push(repo);
   const outputDir = path.join(repo, ".artifacts", "qa-e2e", name);
@@ -40,6 +40,7 @@ function makeLane(name: string) {
       },
       report: path.relative(repo, report),
       status: "pass",
+      sutAttestation: { lane: name, sha },
     }),
   );
   return { outputDir, repo };
@@ -47,8 +48,10 @@ function makeLane(name: string) {
 
 describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
   it("builds paired native Telegram Desktop GIF evidence for PR comments", () => {
-    const baseline = makeLane("baseline");
-    const candidate = makeLane("candidate");
+    const baselineSha = "a".repeat(40);
+    const candidateSha = "b".repeat(40);
+    const baseline = makeLane("baseline", baselineSha);
+    const candidate = makeLane("candidate", candidateSha);
     const outputDir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-proof-"));
     tempDirs.push(outputDir);
 
@@ -62,7 +65,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
       "--baseline-ref",
       "main",
       "--baseline-sha",
-      "aaa",
+      baselineSha,
       "--candidate-repo-root",
       candidate.repo,
       "--candidate-output-dir",
@@ -70,7 +73,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
       "--candidate-ref",
       "refs/pull/1/head",
       "--candidate-sha",
-      "bbb",
+      candidateSha,
       "--scenario-label",
       "telegram-desktop-proof",
     ]);
@@ -96,9 +99,11 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
 
     expect(body).toContain("<!-- mantis-telegram-desktop-proof -->");
     expect(body).toContain("## Mantis Telegram Desktop Proof");
-    expect(body).toContain("- Baseline: `pass` at `aaa`, expected baseline visual proof captured");
     expect(body).toContain(
-      "- Candidate: `pass` at `bbb`, expected candidate visual proof captured",
+      `- Baseline: \`pass\` at \`${baselineSha}\`, expected baseline visual proof captured`,
+    );
+    expect(body).toContain(
+      `- Candidate: \`pass\` at \`${candidateSha}\`, expected candidate visual proof captured`,
     );
     expect(body).toContain(`- Artifact: ${artifactUrl}`);
     expect(body).toContain('<table width="100%">');
@@ -113,5 +118,33 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     );
     expect(body).not.toContain("undefined/");
     expect(body).not.toContain("| Main | This PR |");
+  });
+
+  it("rejects a candidate session that attests the baseline lane", () => {
+    const baselineSha = "a".repeat(40);
+    const candidateSha = "b".repeat(40);
+    const baseline = makeLane("baseline", baselineSha);
+    const candidate = makeLane("baseline", baselineSha);
+    const outputDir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-proof-mismatch-"));
+    tempDirs.push(outputDir);
+
+    expect(() =>
+      writeTelegramDesktopProofEvidence([
+        "--output-dir",
+        outputDir,
+        "--baseline-repo-root",
+        baseline.repo,
+        "--baseline-output-dir",
+        baseline.outputDir,
+        "--baseline-sha",
+        baselineSha,
+        "--candidate-repo-root",
+        candidate.repo,
+        "--candidate-output-dir",
+        candidate.outputDir,
+        "--candidate-sha",
+        candidateSha,
+      ]),
+    ).toThrow("SUT attestation mismatch for candidate.");
   });
 });

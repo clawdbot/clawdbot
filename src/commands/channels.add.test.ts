@@ -1,4 +1,5 @@
 // Channels add tests cover guided setup, plugin install paths, and channel account config writes.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
@@ -154,12 +155,7 @@ function listConfiguredAccountIds(
   return [];
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
   const call = source.mock.calls[callIndex];
@@ -557,6 +553,49 @@ describe("channelsAddCommand", () => {
     await channelsAddCommand({ channel: "external-chat" }, runtime, { hasFlags: false });
 
     expect(setupOptions().initialSelection).toEqual(["external-chat"]);
+    expect(setupOptions().finishAfterInitialSelection).toBe(true);
+  });
+
+  it("opens an exact channel id instead of an earlier plugin alias", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    const aliasOwner = createChannelTestPluginBase({
+      id: "alias-owner",
+      label: "Alias Owner",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alias-owner",
+          plugin: {
+            ...aliasOwner,
+            meta: { ...aliasOwner.meta, aliases: ["exact-id"] },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        ...createExternalChatCatalogEntry(),
+        id: "exact-id",
+        meta: {
+          ...createExternalChatCatalogEntry().meta,
+          id: "exact-id",
+          label: "Exact ID",
+          selectionLabel: "Exact ID",
+        },
+      },
+    ]);
+
+    await channelsAddCommand({ channel: "exact-id" }, runtime, { hasFlags: false });
+
+    expect(setupOptions().initialSelection).toEqual(["exact-id"]);
+    expect(setupOptions().finishAfterInitialSelection).toBe(true);
   });
 
   it("exits quietly when guided channel setup is cancelled", async () => {

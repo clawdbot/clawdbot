@@ -159,7 +159,7 @@ export function buildTestAllowedModelSet({
   return {
     allowedKeys,
     allowedCatalog: allowedCatalog.filter((entry) =>
-      allowedKeys.has(`${entry.provider}/${entry.id}`),
+      isTestModelKeyAllowed(allowedKeys, `${entry.provider}/${entry.id}`),
     ),
     allowAny: false,
   };
@@ -235,6 +235,33 @@ export function resolveTestModelRefFromString({
         ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
         : { provider: defaultProvider, model: raw },
   };
+}
+
+export function resolveTestModelAliasFromPair(params: {
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  aliasIndex?: ReturnType<typeof buildTestModelAliasIndex>;
+}) {
+  const bareAlias = resolveTestModelRefFromString({
+    raw: params.model,
+    defaultProvider: params.provider,
+    aliasIndex: params.aliasIndex,
+  });
+  const providerAlias = resolveTestModelRefFromString({
+    raw: `${params.provider}/${params.model}`,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+  });
+  if (providerAlias.alias) {
+    return providerAlias.ref;
+  }
+  const provider = normalizeTestProviderId(params.provider);
+  return bareAlias.alias &&
+    (normalizeTestProviderId(bareAlias.ref.provider) === provider ||
+      provider === normalizeTestProviderId(params.defaultProvider))
+    ? bareAlias.ref
+    : null;
 }
 
 function configuredPrimary(cfg?: unknown): string {

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -280,6 +281,7 @@ export type ClawHubSkillSearchResult = {
   ownerHandle?: string | null;
   displayName: string;
   summary?: string;
+  icon?: string | null;
   version?: string;
   updatedAt?: number;
 };
@@ -289,6 +291,7 @@ export type ClawHubSkillDetail = {
     slug: string;
     displayName: string;
     summary?: string;
+    icon?: string | null;
     tags?: Record<string, string>;
     channel?: string | null;
     isOfficial?: boolean | null;
@@ -388,6 +391,7 @@ export type ClawHubSkillSecurityVerdictItem = {
   decision: ClawHubSkillVerificationDecision;
   reasons: string[];
   requestedSlug: string;
+  requestedOwnerHandle?: string;
   requestedVersion: string;
   slug?: string | null;
   version?: string | null;
@@ -476,6 +480,30 @@ function normalizeBaseUrl(baseUrl?: string): string {
     DEFAULT_CLAWHUB_URL;
   const value = (normalizeOptionalString(baseUrl) || envValue).replace(/\/+$/, "");
   return value || DEFAULT_CLAWHUB_URL;
+}
+
+function resolveClawHubImageUrl(value: string | null | undefined, baseUrl?: string) {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  try {
+    const registryUrl = new URL(`${normalizeBaseUrl(baseUrl)}/`);
+    const url = new URL(normalized, registryUrl);
+    if (
+      url.origin !== registryUrl.origin ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !/^\/api\/v1\/skill-icons\/[a-f\d]{64}$/u.test(url.pathname)
+    ) {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeGitHubCodeloadBaseUrl(): string {
@@ -823,10 +851,6 @@ function createClawHubBodyLimitError(
   return new Error(
     `ClawHub ${resourceLabel} exceeded ${maxBytes} bytes (${size} bytes ${measurement})`,
   );
-}
-
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function optionalStringField(
@@ -1219,7 +1243,11 @@ export async function searchClawHubSkills(params: {
       limit: params.limit ? String(params.limit) : undefined,
     },
   });
-  return result.results ?? [];
+  const results = result.results ?? [];
+  for (const entry of results) {
+    entry.icon = resolveClawHubImageUrl(entry.icon, params.baseUrl);
+  }
+  return results;
 }
 
 export async function fetchClawHubSkillDetail(params: {
@@ -1230,7 +1258,7 @@ export async function fetchClawHubSkillDetail(params: {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubSkillDetail> {
-  return await fetchJson<ClawHubSkillDetail>({
+  const detail = await fetchJson<ClawHubSkillDetail>({
     baseUrl: params.baseUrl,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}`,
     token: params.token,
@@ -1238,6 +1266,15 @@ export async function fetchClawHubSkillDetail(params: {
     fetchImpl: params.fetchImpl,
     search: params.ownerHandle ? { ownerHandle: params.ownerHandle } : undefined,
   });
+  return {
+    ...detail,
+    skill: detail.skill
+      ? {
+          ...detail.skill,
+          icon: resolveClawHubImageUrl(detail.skill.icon, params.baseUrl),
+        }
+      : null,
+  };
 }
 
 export async function fetchClawHubSkillInstallResolution(params: {
@@ -1281,6 +1318,7 @@ export async function fetchClawHubSkillVerification(params: {
   tag?: string;
   baseUrl?: string;
   token?: string;
+  skipAuth?: boolean;
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubSkillVerificationResponse> {
@@ -1288,6 +1326,7 @@ export async function fetchClawHubSkillVerification(params: {
     baseUrl: params.baseUrl,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}/verify`,
     token: params.token,
+    skipAuth: params.skipAuth,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
     search: {

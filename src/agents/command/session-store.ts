@@ -3,7 +3,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveCompactionSessionFile,
+  SESSION_TOTAL_TOKENS_VERSION,
   setSessionRuntimeModel,
   type SessionEntry,
 } from "../../config/sessions.js";
@@ -13,8 +13,12 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
-import { resolveDefaultAgentId } from "../agent-scope.js";
-import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
+import {
+  clearCliSession,
+  getCliSessionBinding,
+  setCliSessionBinding,
+  setCliSessionId,
+} from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery-clear.js";
 import { isCliProvider } from "../model-selection.js";
@@ -99,7 +103,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
-  const activeSessionFile = normalizeOptionalString(result.meta.agentMeta?.sessionFile);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextTokens =
@@ -136,21 +139,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
         }),
   };
   if (entry.sessionId !== sessionId) {
-    next.sessionFile =
-      activeSessionFile ??
-      resolveCompactionSessionFile({
-        entry,
-        sessionKey,
-        storePath,
-        defaultAgentId: resolveDefaultAgentId(cfg),
-        newSessionId: sessionId,
-      });
+    delete (next as { sessionFile?: unknown }).sessionFile;
     next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     next.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, sessionId]),
     );
-  } else if (activeSessionFile) {
-    next.sessionFile = activeSessionFile;
   }
   if (preserveRuntimeModel) {
     // Keep the pre-existing runtime model and context window so a background
@@ -237,6 +230,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     if (useCompactionSnapshot) {
       next.totalTokens = compactionTokensAfter;
       next.totalTokensFresh = true;
+      next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
       next.inputTokens = undefined;
       next.outputTokens = undefined;
       next.cacheRead = undefined;
@@ -245,9 +239,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
     } else if (hasUsageTotalTokens) {
       next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
+      next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     } else {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
+      next.totalTokensVersion = undefined;
     }
     if (!useCompactionSnapshot) {
       next.cacheRead = usage.cacheRead ?? 0;
@@ -262,6 +258,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   } else if (compactionTokensAfter !== undefined && !preserveUserFacingRunState) {
     next.totalTokens = compactionTokensAfter;
     next.totalTokensFresh = true;
+    next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     next.inputTokens = undefined;
     next.outputTokens = undefined;
     next.cacheRead = undefined;
@@ -275,6 +272,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   ) {
     next.totalTokens = entry.totalTokens;
     next.totalTokensFresh = false;
+    next.totalTokensVersion = undefined;
   }
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
@@ -330,17 +328,16 @@ export async function clearCliSessionInStore(params: {
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
   expectedSessionId?: string;
+  expectedCliSessionId?: string;
 }): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath, expectedSessionId } = params;
+  const { provider, sessionKey, sessionStore, storePath, expectedSessionId, expectedCliSessionId } =
+    params;
   const entry = sessionStore[sessionKey];
   if (!entry) {
     return undefined;
   }
 
-  const next = { ...entry };
-  clearCliSession(next, provider);
-  next.updatedAt = Date.now();
-
+  let didClear = false;
   const persisted = await patchSessionEntry(
     {
       storePath,
@@ -353,14 +350,25 @@ export async function clearCliSessionInStore(params: {
       ) {
         return null;
       }
+      if (
+        expectedCliSessionId &&
+        getCliSessionBinding(currentEntry, provider)?.sessionId !== expectedCliSessionId
+      ) {
+        return null;
+      }
+      const next = { ...currentEntry };
+      clearCliSession(next, provider);
+      next.updatedAt = Date.now();
+      didClear = true;
       return next;
     },
     { fallbackEntry: entry },
   );
-  if (persisted) {
+  if (persisted && didClear) {
     sessionStore[sessionKey] = persisted;
+    return persisted;
   }
-  return persisted ?? undefined;
+  return undefined;
 }
 
 /** Clears the one-shot fork marker before the resumed CLI process starts. */
@@ -400,7 +408,7 @@ export async function consumeCliSessionForkInStore(params: {
   return persisted ?? undefined;
 }
 
-/** Re-arms a claimed fork marker after a failed CLI turn. */
+/** Arms a fork marker for recovery, or re-arms one after a failed CLI turn. */
 export async function restoreCliSessionForkInStore(params: {
   provider: string;
   sessionKey: string;
@@ -491,7 +499,6 @@ export async function recordCliCompactionInStore(params: {
   storePath: string;
   tokensAfter?: number;
   newSessionId?: string;
-  newSessionFile?: string;
   expectedSessionId?: string;
 }): Promise<SessionEntry | undefined> {
   const { provider, sessionKey, sessionStore, storePath, expectedSessionId } = params;
@@ -505,39 +512,28 @@ export async function recordCliCompactionInStore(params: {
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();
   const newSessionId = normalizeOptionalString(params.newSessionId);
-  const explicitNewSessionFile = normalizeOptionalString(params.newSessionFile);
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
-  const sessionFileChanged = Boolean(
-    explicitNewSessionFile && explicitNewSessionFile !== entry.sessionFile,
-  );
   if (sessionIdChanged && newSessionId) {
+    delete (next as { sessionFile?: unknown }).sessionFile;
     next.sessionId = newSessionId;
-    next.sessionFile =
-      explicitNewSessionFile ??
-      resolveCompactionSessionFile({
-        entry,
-        sessionKey,
-        storePath,
-        newSessionId,
-      });
     next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     next.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
     );
-  } else if (sessionFileChanged && explicitNewSessionFile) {
-    next.sessionFile = explicitNewSessionFile;
   }
   const tokensAfterCompaction = resolveNonNegativeNumber(params.tokensAfter);
   next.contextBudgetStatus = undefined;
   if (tokensAfterCompaction !== undefined) {
     next.totalTokens = Math.floor(tokensAfterCompaction);
     next.totalTokensFresh = true;
+    next.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     next.inputTokens = undefined;
     next.outputTokens = undefined;
     next.cacheRead = undefined;
     next.cacheWrite = undefined;
   } else {
     next.totalTokensFresh = false;
+    next.totalTokensVersion = undefined;
     next.inputTokens = undefined;
     next.outputTokens = undefined;
     next.cacheRead = undefined;

@@ -2,12 +2,20 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { normalizeTrackedSkillSlug, resolveWorkspaceSkillInstallDir } from "./archive-install.js";
+import { resolveWorkspaceSkillInstallDir } from "./archive-install.js";
+import { formatClawHubSkillRef, parseRequestedClawHubSkillRef } from "./clawhub-store.js";
 import { resolveClawHubSkillStatusLinkSync, untrackClawHubSkill } from "./clawhub.js";
+import {
+  dispatchCommittedSkillChangeBestEffort,
+  hasCommittedSkillChangeHooks,
+  snapshotCommittedSkillArtifactBestEffort,
+} from "./skill-change-hook.js";
 import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 
 export type ClawHubSkillUninstallPlan = {
   workspaceDir: string;
+  // Replan from the registry identity so publisher/source changes cannot retarget deletion.
+  requestedRef: string;
   slug: string;
   version: string;
   installedAt: number;
@@ -30,12 +38,13 @@ export async function planClawHubSkillUninstall(params: {
   slug: string;
   expectedVersion: string;
 }): Promise<ClawHubSkillUninstallPlanResult> {
-  let slug: string;
+  let requestedRef: ReturnType<typeof parseRequestedClawHubSkillRef>;
   try {
-    slug = normalizeTrackedSkillSlug(params.slug);
+    requestedRef = parseRequestedClawHubSkillRef(params.slug);
   } catch (error) {
     return { ok: false, code: "ambiguous", error: String(error) };
   }
+  const slug = requestedRef.slug;
   const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, slug);
   const link = resolveClawHubSkillStatusLinkSync({
     workspaceDir: params.workspaceDir,
@@ -56,6 +65,24 @@ export async function planClawHubSkillUninstall(params: {
       error: link.valid
         ? `Skill ${JSON.stringify(slug)} has no complete installed-file digest.`
         : link.reason,
+    };
+  }
+  if (requestedRef.ownerHandle && link.ownerHandle !== requestedRef.ownerHandle) {
+    const trackedRef = link.ownerHandle ? `@${link.ownerHandle}/${slug}` : slug;
+    return {
+      ok: false,
+      code: "ambiguous",
+      error: `Skill ${JSON.stringify(slug)} is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${slug}.`,
+    };
+  }
+  if (
+    requestedRef.requestedReference &&
+    link.requestedReference !== requestedRef.requestedReference
+  ) {
+    return {
+      ok: false,
+      code: "ambiguous",
+      error: `Skill ${JSON.stringify(slug)} is not tracked from ${requestedRef.requestedReference}.`,
     };
   }
   if (link.installedVersion !== params.expectedVersion) {
@@ -104,6 +131,7 @@ export async function planClawHubSkillUninstall(params: {
     ok: true,
     plan: {
       workspaceDir: params.workspaceDir,
+      requestedRef: requestedRef.requestedReference ?? formatClawHubSkillRef(requestedRef),
       slug,
       version: link.installedVersion,
       installedAt: link.installedAt,
@@ -126,12 +154,21 @@ export async function applyClawHubSkillUninstall(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const current = await planClawHubSkillUninstall({
     workspaceDir: plan.workspaceDir,
-    slug: plan.slug,
+    slug: plan.requestedRef,
     expectedVersion: plan.version,
   });
   if (!current.ok) {
     return { ok: false, error: current.error };
   }
+  const shouldDispatchChange = hasCommittedSkillChangeHooks();
+  const before = shouldDispatchChange
+    ? await snapshotCommittedSkillArtifactBestEffort({
+        skillDir: plan.targetDir,
+        skillKey: plan.slug,
+        source: "clawhub",
+        sourceVersion: plan.version,
+      })
+    : undefined;
   const stagedDir = `${plan.targetDir}.openclaw-skill-remove-${randomUUID()}`;
   let staged = false;
   let restoreTracking: (() => Promise<void>) | undefined;
@@ -150,6 +187,14 @@ export async function applyClawHubSkillUninstall(
     }
     restoreTracking = await (deps.untrack ?? untrackClawHubSkill)(plan.workspaceDir, plan.slug);
     await (deps.removeDir ?? fs.rm)(stagedDir, { recursive: true, force: false });
+    if (shouldDispatchChange) {
+      await dispatchCommittedSkillChangeBestEffort({
+        action: "removed",
+        source: "clawhub",
+        workspaceDir: plan.workspaceDir,
+        before,
+      });
+    }
     return { ok: true };
   } catch (error) {
     const rollbackErrors: string[] = [];

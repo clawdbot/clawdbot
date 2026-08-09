@@ -1,4 +1,4 @@
-// Plans grouped targeted Docker lane matrix entries.
+// Plans grouped targeted Docker lane matrix entries without installed dependencies.
 import { fileURLToPath } from "node:url";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
@@ -26,6 +26,17 @@ function sanitizeLabel(value) {
 
 /**
  * Groups selected Docker lanes and expands sharded upgrade-survivor baselines.
+ *
+ * @param {{
+ *   groupSize?: number | string;
+ *   lanes?: string;
+ *   upgradeSurvivorBaselines?: string;
+ * }} [options]
+ * @returns {{
+ *   docker_lanes: string;
+ *   label: string;
+ *   published_upgrade_survivor_baselines?: string;
+ * }[]}
  */
 export function planTargetedDockerLaneGroups({
   groupSize = 1,

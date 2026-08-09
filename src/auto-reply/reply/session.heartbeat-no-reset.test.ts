@@ -20,6 +20,7 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
 }));
 
 describe("initSessionState - heartbeat should not trigger session reset", () => {
+  const sessionKey = "agent:main:main:user123";
   let tempDir: string;
   let storePath: string;
 
@@ -67,7 +68,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     Body: "test message",
     From: "user123",
     To: "bot123",
-    SessionKey: "main:user123",
+    SessionKey: sessionKey,
     Provider: "quietchat",
     Surface: "quietchat",
     ChatType: "direct",
@@ -83,7 +84,7 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     await replaceSessionEntry(
       {
         storePath,
-        sessionKey: "main:user123",
+        sessionKey,
       },
       {
         sessionId,
@@ -95,9 +96,9 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
   };
 
   const expectPersistedSession = (): SessionEntry => {
-    const entry = loadSessionEntry({ storePath, sessionKey: "main:user123" });
+    const entry = loadSessionEntry({ storePath, sessionKey });
     if (!entry) {
-      throw new Error("Expected persisted session for main:user123");
+      throw new Error(`Expected persisted session for ${sessionKey}`);
     }
     return entry;
   };
@@ -223,92 +224,6 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
 
     expect(userResult.isNewSession).toBe(true);
     expect(userResult.sessionId).toBe("daily-session-id");
-  });
-
-  it("resets legacy daily sessions using the JSONL header even when updatedAt is fresh", async () => {
-    const now = Date.now();
-    const staleTime = now - 25 * 60 * 60 * 1000;
-    const sessionFile = path.join(tempDir, "legacy-daily-session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({
-        type: "session",
-        version: 3,
-        id: "legacy-daily-session",
-        timestamp: new Date(staleTime).toISOString(),
-        cwd: tempDir,
-      })}\n`,
-      "utf8",
-    );
-    await saveExistingSession("legacy-daily-session", now, {
-      sessionFile,
-      lastInteractionAt: staleTime,
-    });
-
-    const cfg = createBaseConfig();
-    cfg.session!.reset = {
-      mode: "daily",
-      atHour: 4,
-    };
-
-    const result = await initSessionState({
-      ctx: createBaseCtx({
-        Provider: "quietchat",
-        Body: "real user message",
-      }),
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).toBe("legacy-daily-session");
-  });
-
-  it("does not let heartbeat keep a legacy idle session fresh without lastInteractionAt", async () => {
-    const now = Date.now();
-    const staleTime = now - 10 * 60 * 1000;
-    const sessionFile = path.join(tempDir, "legacy-idle-session.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify({
-        type: "session",
-        version: 3,
-        id: "legacy-idle-session",
-        timestamp: new Date(staleTime).toISOString(),
-        cwd: tempDir,
-      })}\n`,
-      "utf8",
-    );
-    await saveExistingSession("legacy-idle-session", now, {
-      sessionFile,
-    });
-
-    const cfg = createBaseConfig();
-    const heartbeatResult = await initSessionState({
-      ctx: createBaseCtx({
-        Provider: "heartbeat",
-        Body: "HEARTBEAT_OK",
-      }),
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(heartbeatResult.isNewSession).toBe(false);
-    expect(heartbeatResult.sessionId).toBe("legacy-idle-session");
-
-    expect(expectPersistedSession().lastInteractionAt).toBeUndefined();
-
-    const userResult = await initSessionState({
-      ctx: createBaseCtx({
-        Provider: "quietchat",
-        Body: "real user message",
-      }),
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(userResult.isNewSession).toBe(true);
-    expect(userResult.sessionId).toBe("legacy-idle-session");
   });
 
   it("should handle cron-event provider same as heartbeat (no reset)", async () => {

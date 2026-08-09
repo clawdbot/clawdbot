@@ -1,7 +1,7 @@
 // Extension Package Boundary script supports OpenClaw repository automation.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
-import { privateLocalOnlyPluginSdkEntrypoints } from "./plugin-sdk-entries.mjs";
+import { privateLocalOnlyPluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
 
 export const EXTENSION_PACKAGE_BOUNDARY_INCLUDE = ["./*.ts", "./src/**/*.ts"] as const;
 export const EXTENSION_PACKAGE_BOUNDARY_EXCLUDE = [
@@ -70,6 +70,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "openclaw/plugin-sdk/secret-ref-runtime": ["../dist/plugin-sdk/secret-ref-runtime.d.ts"],
   "openclaw/plugin-sdk/ssrf-runtime": ["../dist/plugin-sdk/ssrf-runtime.d.ts"],
   "@openclaw/qa-channel/api.js": ["../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
+  "@openclaw/memory-core/api.js": ["../dist/plugin-sdk/extensions/memory-core/api.d.ts"],
   "@openclaw/matrix/test-api.js": ["../dist/plugin-sdk/extensions/matrix/test-api.d.ts"],
   "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
   "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
@@ -286,7 +287,6 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
   "@openclaw/anthropic-vertex/api.js": ["./.boundary-stubs/anthropic-vertex-api.d.ts"],
   "@openclaw/ollama/api.js": ["./.boundary-stubs/ollama-api.d.ts"],
   "@openclaw/ollama/runtime-api.js": ["./.boundary-stubs/ollama-runtime-api.d.ts"],
-  "@openclaw/speech-core/runtime-api.js": ["./.boundary-stubs/speech-core-runtime-api.d.ts"],
 } as const;
 
 type ExtensionPackageBoundaryTsConfigJson = {

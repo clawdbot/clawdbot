@@ -1,5 +1,6 @@
 /** Builds compact prompt notes for inbound media attachments. */
 import path from "node:path";
+import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMediaFacts, type MediaFact } from "../media/media-facts.js";
 import { getMediaDir } from "../media/store.js";
@@ -61,34 +62,18 @@ function formatMediaAttachedLine(params: {
   return `${prefix}${pathValue}${typePart}${urlPart}]`;
 }
 
-// Common audio file extensions for transcription detection
-const AUDIO_EXTENSIONS = new Set([
-  ".ogg",
-  ".opus",
-  ".mp3",
-  ".m4a",
-  ".m2a",
-  ".wav",
-  ".webm",
-  ".flac",
-  ".aac",
-  ".wma",
-  ".aiff",
-  ".alac",
-  ".oga",
-]);
+// WebM is ambiguous, while WMA and ALAC do not have canonical extension mappings.
+const AUDIO_EXTENSIONS_WITHOUT_CANONICAL_MIME = [".webm", ".wma", ".alac"] as const;
 
 function isAudioPath(pathLocal: string | undefined): boolean {
   if (!pathLocal) {
     return false;
   }
-  const lower = normalizeLowercaseStringOrEmpty(pathLocal);
-  for (const ext of AUDIO_EXTENSIONS) {
-    if (lower.endsWith(ext)) {
-      return true;
-    }
+  if (isAudioFileName(pathLocal)) {
+    return true;
   }
-  return false;
+  const lower = normalizeLowercaseStringOrEmpty(pathLocal);
+  return AUDIO_EXTENSIONS_WITHOUT_CANONICAL_MIME.some((extension) => lower.endsWith(extension));
 }
 
 function isValidAttachmentIndex(index: number, attachmentCount: number): boolean {

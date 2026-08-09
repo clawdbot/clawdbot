@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { readCronJobScratchState, writeCronJobScratch } from "./scratch-store.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
-import { list, run } from "./service/ops.js";
+import { add } from "./service/ops-mutations.js";
+import { list } from "./service/ops-read.js";
+import { run } from "./service/ops-run.js";
 import { createCronServiceState, type CronEvent, type CronServiceState } from "./service/state.js";
 import { ensureLoaded } from "./service/store.js";
 import { runMissedJobs } from "./service/timer.js";
@@ -33,6 +36,18 @@ function createDueOneShot(id: string, nowMs: number): CronJob {
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "do work" },
     state: { nextRunAtMs: runAtMs },
+  };
+}
+
+function createReplacementInput(id: string) {
+  return {
+    id,
+    name: `replacement ${id}`,
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget: "isolated" as const,
+    wakeMode: "next-heartbeat" as const,
+    payload: { kind: "agentTurn" as const, message: "replacement work" },
   };
 }
 
@@ -84,21 +99,37 @@ afterEach(() => {
 });
 
 describe.each(removalPaths)("cron one-shot removal via %s", (path) => {
-  it("emits the full removal snapshot only after the deletion is durable", async () => {
+  it("emits the full removal snapshot only after the job and scratch deletion are durable", async () => {
     const { storePath } = await makeStorePath();
     const nowMs = Date.parse("2026-07-10T12:00:00.000Z");
     const job = createDueOneShot(`postcommit-${path.replaceAll(" ", "-")}`, nowMs);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
+    expect(
+      writeCronJobScratch({
+        storePath,
+        jobId: job.id,
+        content: "original scratch",
+        nowMs: nowMs - 1,
+      }),
+    ).toMatchObject({ ok: true, currentRevision: 1 });
 
     const events: CronEvent[] = [];
-    const durableJobsAtRemoval: Array<Promise<CronJob[]>> = [];
+    const durableStateAtRemoval: Array<
+      Promise<{
+        jobs: CronJob[];
+        scratch: ReturnType<typeof readCronJobScratchState>;
+      }>
+    > = [];
     const state = createState({
       storePath,
       nowMs,
       onEvent: (event) => {
         events.push(structuredClone(event));
         if (event.action === "removed") {
-          durableJobsAtRemoval.push(loadCronStore(storePath).then((store) => store.jobs));
+          const scratch = readCronJobScratchState(storePath, job.id);
+          durableStateAtRemoval.push(
+            loadCronStore(storePath).then((store) => ({ jobs: store.jobs, scratch })),
+          );
         }
       },
     });
@@ -126,9 +157,15 @@ describe.each(removalPaths)("cron one-shot removal via %s", (path) => {
           },
         },
       });
-      expect(durableJobsAtRemoval).toHaveLength(1);
-      await expect(Promise.all(durableJobsAtRemoval)).resolves.toEqual([[]]);
+      expect(durableStateAtRemoval).toHaveLength(1);
+      await expect(Promise.all(durableStateAtRemoval)).resolves.toEqual([
+        { jobs: [], scratch: { currentRevision: 0 } },
+      ]);
       expect(state.store?.jobs).toEqual([]);
+
+      const replacement = await add(state, createReplacementInput(job.id));
+      expect(replacement.id).toBe(job.id);
+      expect(readCronJobScratchState(storePath, job.id)).toEqual({ currentRevision: 0 });
     } finally {
       clearStateTimer(state);
     }
@@ -139,6 +176,14 @@ describe.each(removalPaths)("cron one-shot removal via %s", (path) => {
     const nowMs = Date.parse("2026-07-10T12:00:00.000Z");
     const job = createDueOneShot(`rollback-${path.replaceAll(" ", "-")}`, nowMs);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
+    writeCronJobScratch({
+      storePath,
+      jobId: job.id,
+      content: "scratch must survive rollback",
+      sourceSha256: "original-source",
+      nowMs: nowMs - 1,
+    });
+    const scratchBefore = readCronJobScratchState(storePath, job.id);
 
     const events: CronEvent[] = [];
     let listedAfterFinished: Promise<CronJob[]> | undefined;
@@ -183,6 +228,7 @@ describe.each(removalPaths)("cron one-shot removal via %s", (path) => {
       expect(state.durableNextRunAtMsByJobId).toEqual(
         new Map([[job.id, durableJob?.state.nextRunAtMs]]),
       );
+      expect(readCronJobScratchState(storePath, job.id)).toEqual(scratchBefore);
     } finally {
       clearStateTimer(state);
     }
@@ -205,17 +251,16 @@ describe.each(removalPaths)("cron one-shot removal via %s", (path) => {
     state.pendingQuarantineConfigJobs = [
       { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
     ];
-    vi.spyOn(cronStoreModule, "saveCronQuarantineFile").mockRejectedValue(
-      new Error("quarantine unavailable"),
-    );
-    const saveStore = vi.spyOn(cronStoreModule, "saveCronJobsStore");
+    const saveStore = vi
+      .spyOn(cronStoreModule, "saveCronJobsStore")
+      .mockRejectedValue(new Error("quarantine unavailable"));
 
     try {
       await expect(executeRemovalPath(path, state, job.id)).rejects.toThrow(
         "cron: durable store write did not complete",
       );
 
-      expect(saveStore).not.toHaveBeenCalled();
+      expect(saveStore).toHaveBeenCalledTimes(1);
       expect(events.some((event) => event.action === "removed")).toBe(false);
       const durableStore = await loadCronStore(storePath);
       expect(durableStore).toEqual(durableBefore);

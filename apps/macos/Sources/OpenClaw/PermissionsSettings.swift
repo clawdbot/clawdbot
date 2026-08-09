@@ -155,7 +155,7 @@ private struct LocationAccessSettings: View {
             return false
         }
 
-        let status = CLLocationManager().authorizationStatus
+        let status = await PermissionManager.locationAuthorizationStatus()
         let requireAlways = mode == .always
         if PermissionManager.isLocationAuthorized(status: status, requireAlways: requireAlways) {
             return true

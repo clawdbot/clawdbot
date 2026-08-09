@@ -1,124 +1,97 @@
 // Control UI E2E tests cover the redesigned chat composer.
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI chat composer redesign",
+});
 
-let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
-let browser: Browser;
-
-describeControlUiE2e("Control UI chat composer redesign", () => {
-  beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-    try {
-      server = await startControlUiE2eServer();
-    } catch (error) {
-      await browser.close();
-      throw error;
-    }
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("keeps model and settings in the bottom bar and switches the primary action with input state", async () => {
-    const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      assistantName: "Rosita",
-      deferredMethods: ["chat.send"],
-      models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-        {
-          id: "gpt-5.4-pro",
-          name: "GPT-5.4 Pro",
-          provider: "openai",
-          available: true,
-        },
-        {
-          id: "gpt-5.3-codex-spark",
-          name: "GPT-5.3 Codex Spark",
-          provider: "codex",
-          available: false,
-        },
-        {
-          id: "claude-sonnet-4-6",
-          name: "Claude Sonnet 4.6",
-          provider: "anthropic",
-        },
-      ],
-      methodResponses: {
-        "models.authStatus": {
-          ts: Date.now(),
-          providers: [
-            {
-              provider: "openai",
-              displayName: "Codex",
-              status: "ok",
-              profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
-              usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
-            },
-          ],
-        },
-        "sessions.list": {
-          count: 1,
-          defaults: {
-            contextTokens: 200_000,
-            model: "gpt-5.5",
-            modelProvider: "openai",
-            thinkingDefault: "high",
-            thinkingLevels: [
-              { id: "off", label: "off" },
-              { id: "low", label: "low" },
-              { id: "medium", label: "medium" },
-              { id: "high", label: "high" },
+    await suite.withPage({ viewport: { width: 1920, height: 1080 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        assistantName: "Rosita",
+        deferredMethods: ["chat.send"],
+        models: [
+          { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+          {
+            id: "gpt-5.4-pro",
+            name: "GPT-5.4 Pro",
+            provider: "openai",
+            available: true,
+          },
+          {
+            id: "gpt-5.3-codex-spark",
+            name: "GPT-5.3 Codex Spark",
+            provider: "codex",
+            available: false,
+          },
+          {
+            id: "claude-sonnet-4-6",
+            name: "Claude Sonnet 4.6",
+            provider: "anthropic",
+          },
+        ],
+        methodResponses: {
+          "models.authStatus": {
+            ts: Date.now(),
+            providers: [
+              {
+                provider: "openai",
+                displayName: "Codex",
+                status: "ok",
+                profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
+                usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
+              },
             ],
           },
-          path: "",
-          sessions: [
-            {
+          "sessions.list": {
+            count: 1,
+            defaults: {
               contextTokens: 200_000,
-              displayName: "Main",
-              hasActiveRun: false,
-              key: "main",
-              kind: "direct",
-              label: "Main",
               model: "gpt-5.5",
               modelProvider: "openai",
-              status: "done",
-              totalTokens: 46_000,
-              totalTokensFresh: true,
-              updatedAt: Date.now(),
+              thinkingDefault: "high",
+              thinkingLevels: [
+                { id: "off", label: "off" },
+                { id: "low", label: "low" },
+                { id: "medium", label: "medium" },
+                { id: "high", label: "high" },
+              ],
             },
-          ],
-          ts: Date.now(),
+            path: "",
+            sessions: [
+              {
+                contextTokens: 200_000,
+                displayName: "Main",
+                hasActiveRun: false,
+                key: "main",
+                kind: "direct",
+                label: "Main",
+                model: "gpt-5.5",
+                modelProvider: "openai",
+                status: "done",
+                totalTokens: 46_000,
+                totalTokensFresh: true,
+                updatedAt: Date.now(),
+              },
+            ],
+            ts: Date.now(),
+          },
         },
-      },
-    });
+      });
 
-    try {
-      await page.goto(`${server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.metadata");
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
 
       const composer = page.locator(".agent-chat__input");
       const composerShell = page.locator(".agent-chat__composer-shell");
       const chatContent = page.locator("main.content--chat");
       const chatMain = page.locator(".chat-workbench__main");
       const model = composer.locator('[data-chat-model-select="true"]');
+      const effort = composer.locator('[data-chat-thinking-select="true"]');
       const usage = composer.locator('[data-chat-provider-usage="true"]');
       const contextUsage = composer.locator(".context-ring");
       const textarea = composer.locator("textarea");
@@ -130,8 +103,11 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       const settings = composer.getByRole("button", { name: "View", exact: true });
       const splitView = page.getByRole("button", { name: "Open split view" });
       const voice = page.getByRole("button", { name: "Start voice input" });
+      const microphonePicker = page.getByRole("button", { name: "Microphone input" });
 
       await expect.poll(() => model.isVisible()).toBe(true);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toHaveLength(0);
       await expect.poll(() => contextUsage.isVisible()).toBe(true);
       await expect.poll(() => usage.isVisible()).toBe(false);
       await expect.poll(() => settings.isVisible()).toBe(true);
@@ -174,12 +150,19 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         .toBeLessThanOrEqual(1.5);
       await expect.poll(() => composer.locator(".agent-chat__composer-header").count()).toBe(0);
       await expect
-        .poll(() => model.locator(".chat-controls__inline-select-label").textContent())
-        .toBe("GPT-5.5 · High");
+        .poll(async () =>
+          (await model.locator(".chat-controls__inline-select-label").textContent())?.trim(),
+        )
+        .toBe("GPT-5.5");
+      await expect
+        .poll(async () =>
+          (await effort.locator(".chat-controls__inline-select-label").textContent())?.trim(),
+        )
+        .toBe("High");
       await expect.poll(() => contextUsage.locator(".context-ring__detail").count()).toBe(0);
       await expect
         .poll(() => contextUsage.getAttribute("aria-label"))
-        .toBe("Thread context usage: 46k of 200k (23%)");
+        .toBe("Session context usage: 46k of 200k (23%)");
       await expect
         .poll(() =>
           contextUsage.evaluate((node) => node.closest(".agent-chat__composer-meta") != null),
@@ -193,10 +176,10 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
             ?.replace(/\s+/g, " ")
             .trim(),
         )
-        .toBe("Weekly · all models 72%");
+        .toBe("Weekly 72%");
       await contextUsage.click();
 
-      await model.click();
+      await effort.click();
       const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
       const speedToggle = composer.locator("[data-chat-speed-toggle]");
       await expect
@@ -204,16 +187,8 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         .toBe("off,low,medium,high");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("3");
       // OpenAI sessions toggle between the standard and priority tiers.
-      await expect.poll(async () => (await speedToggle.textContent())?.trim()).toBe("Standard");
       await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("false");
-      await expect
-        .poll(() => composer.locator(".chat-controls__model-option-icon").count())
-        .toBe(0);
-      await expect
-        .poll(() => composer.locator(".chat-controls__provider-icon").count())
-        .toBeGreaterThan(0);
-      // Reasoning and speed commit immediately; the picker stays open so all
-      // three controls can be adjusted together.
+      // Reasoning and speed commit immediately while the Effort picker stays open.
       await thinkingSlider.press("Home");
       await thinkingSlider.press("ArrowRight");
       await expect
@@ -227,7 +202,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           ),
         )
         .toBe(true);
-      await expect.poll(() => model.getAttribute("data-chat-thinking-value")).toBe("low");
+      await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("low");
       await expect.poll(() => thinkingSlider.inputValue()).toBe("1");
       await speedToggle.click();
       await expect
@@ -242,24 +217,24 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         )
         .toBe(true);
       await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
-      await expect.poll(async () => (await speedToggle.textContent())?.trim()).toBe("Fast");
       await page.keyboard.press("Escape");
       await expect
-        .poll(() => composer.locator(".chat-controls__inline-select-menu").isVisible())
+        .poll(() => composer.locator(".chat-controls__effort-menu").isVisible())
         .toBe(false);
-      await model.click();
+      await effort.click();
       await expect.poll(() => speedToggle.getAttribute("aria-checked")).toBe("true");
       await expect
         .poll(() => composer.locator('[data-chat-thinking-slider="true"]').count())
         .toBe(1);
-      const providerButtons = composer.locator("[data-chat-model-provider]");
+      await page.keyboard.press("Escape");
+      await model.click();
+      const providerHeadings = composer.locator("[data-chat-model-provider]");
       await expect
-        .poll(async () => (await providerButtons.allTextContents()).map((label) => label.trim()))
+        .poll(async () => (await providerHeadings.allTextContents()).map((label) => label.trim()))
         .toEqual(["OpenAI", "Anthropic"]);
       await expect
         .poll(() => composer.locator('[data-chat-model-provider-group="openai"]').textContent())
         .toContain("GPT-5.4 Pro");
-      await providerButtons.filter({ hasText: "Anthropic" }).click();
       const anthropicModels = composer.locator('[data-chat-model-provider-group="anthropic"]');
       await expect.poll(() => anthropicModels.isVisible()).toBe(true);
       await expect.poll(() => anthropicModels.textContent()).toContain("Claude Sonnet 4.6");
@@ -374,8 +349,8 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         .poll(() => page.getByRole("button", { name: "Send message" }).isVisible())
         .toBe(true);
       await expect
-        .poll(() => page.getByRole("button", { name: "Start voice input" }).count())
-        .toBe(0);
+        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
+        .toBe(true);
 
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
@@ -405,9 +380,9 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         sessionKey: "main",
         state: "delta",
       });
-      // Streaming content replaces the spark as the working signal.
+      // The working row stays attached with elapsed/token telemetry throughout streaming.
       await expect.poll(() => page.getByText("Working on it.").first().isVisible()).toBe(true);
-      await expect.poll(() => spark.count()).toBe(0);
+      await expect.poll(() => spark.isVisible()).toBe(true);
       await expect.poll(() => announcement.textContent()).toContain("Rosita is responding");
       const [activeSettingsBox, activeSplitViewBox, activeModelBox, activeChatContentBox] =
         await Promise.all([
@@ -522,9 +497,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await textarea.fill("");
       await expect.poll(() => camera.count()).toBe(0);
       await model.click();
-      const mobilePickerBox = await composer
-        .locator(".chat-controls__inline-select-menu--combined")
-        .boundingBox();
+      const mobilePickerBox = await composer.locator(".chat-controls__model-menu").boundingBox();
       expect(mobilePickerBox).not.toBeNull();
       if (!mobilePickerBox) {
         throw new Error("expected mobile model picker to have a layout box");
@@ -536,78 +509,95 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
       await settings.click();
       await expect.poll(() => viewMenu.isVisible()).toBe(false);
-    } finally {
-      await context.close();
-    }
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await gateway.setOnline(false);
+      await expect.poll(() => voice.isDisabled()).toBe(true);
+      await expect
+        .poll(async () => {
+          const [voiceBackground, pickerBackground] = await Promise.all([
+            voice.evaluate((node) => getComputedStyle(node).backgroundColor),
+            microphonePicker.evaluate((node) => getComputedStyle(node).backgroundColor),
+          ]);
+          return voiceBackground === pickerBackground;
+        })
+        .toBe(true);
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await composerShell.screenshot({
+          animations: "disabled",
+          path: `${artifactDir}/voice-picker-disabled-background.png`,
+        });
+      }
+    });
   });
 
   it("refreshes the configured usable catalog after advertised chat metadata", async () => {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-        {
-          id: "gpt-5.3-codex-spark",
-          name: "GPT-5.3 Codex Spark",
-          provider: "codex",
-          available: false,
-        },
-      ],
-      methodResponses: {
-        "chat.startup": {
-          agentsList: {
-            agents: [{ id: "main", name: "OpenClaw" }],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/gpt-5.3-codex-spark",
+        models: [
+          { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
+          {
+            id: "gpt-5.3-codex-spark",
+            name: "GPT-5.3 Codex Spark",
+            provider: "codex",
+            available: false,
           },
-          messages: [],
-          sessionId: "control-ui-e2e-session",
-          thinkingLevel: null,
-        },
-        "chat.metadata": {
-          commands: [],
-          models: [
-            { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-            {
-              id: "gpt-5.3-codex-spark",
-              name: "GPT-5.3 Codex Spark",
-              provider: "codex",
-              available: false,
+        ],
+        methodResponses: {
+          "chat.startup": {
+            agentsList: {
+              agents: [{ id: "main", name: "OpenClaw" }],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
             },
-          ],
-        },
-        "sessions.list": {
-          count: 1,
-          defaults: {
-            contextTokens: 200_000,
-            model: "gpt-5.3-codex-spark",
-            modelProvider: "openai",
+            messages: [],
+            sessionId: "control-ui-e2e-session",
+            thinkingLevel: null,
           },
-          path: "",
-          sessions: [
-            {
+          "chat.metadata": {
+            commands: [],
+            models: [
+              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
+              {
+                id: "gpt-5.3-codex-spark",
+                name: "GPT-5.3 Codex Spark",
+                provider: "codex",
+                available: false,
+              },
+            ],
+          },
+          "sessions.list": {
+            count: 1,
+            defaults: {
               contextTokens: 200_000,
-              displayName: "Main",
-              hasActiveRun: false,
-              key: "main",
-              kind: "direct",
-              label: "Main",
-              model: "gpt-5.5",
+              model: "gpt-5.3-codex-spark",
               modelProvider: "openai",
-              status: "done",
-              totalTokens: 0,
-              updatedAt: Date.now(),
             },
-          ],
-          ts: Date.now(),
+            path: "",
+            sessions: [
+              {
+                contextTokens: 200_000,
+                displayName: "Main",
+                hasActiveRun: false,
+                key: "main",
+                kind: "direct",
+                label: "Main",
+                model: "gpt-5.5",
+                modelProvider: "openai",
+                status: "done",
+                totalTokens: 0,
+                updatedAt: Date.now(),
+              },
+            ],
+            ts: Date.now(),
+          },
         },
-      },
-    });
+      });
 
-    try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.metadata");
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
@@ -626,95 +616,84 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       // marked as the default and no synthetic empty row is introduced.
       await expect.poll(() => composer.locator('[data-chat-model-default="true"]').count()).toBe(0);
       await expect.poll(() => composer.locator('[data-chat-model-option=""]').count()).toBe(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("refreshes agent-scoped models when the pane switches sessions", async () => {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      defaultAgentId: "work",
-      sessionKey: "agent:work:main",
-      methodResponses: {
-        "chat.metadata": {
-          cases: [
-            {
-              match: { agentId: "work" },
-              response: {
-                commands: [],
-                models: [
-                  {
-                    id: "work-model",
-                    name: "Work Model",
-                    provider: "openai",
-                    available: true,
-                  },
-                ],
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        defaultAgentId: "work",
+        sessionKey: "agent:work:main",
+        methodResponses: {
+          "chat.metadata": {
+            cases: [
+              {
+                match: { agentId: "work" },
+                response: {
+                  commands: [],
+                  models: [
+                    {
+                      id: "work-model",
+                      name: "Work Model",
+                      provider: "openai",
+                      available: true,
+                    },
+                  ],
+                },
               },
-            },
-            {
-              match: { agentId: "other" },
-              response: {
-                commands: [],
-                models: [
-                  {
-                    id: "other-model",
-                    name: "Other Model",
-                    provider: "anthropic",
-                    available: true,
-                  },
-                ],
+              {
+                match: { agentId: "other" },
+                response: {
+                  commands: [],
+                  models: [
+                    {
+                      id: "other-model",
+                      name: "Other Model",
+                      provider: "anthropic",
+                      available: true,
+                    },
+                  ],
+                },
               },
-            },
-          ],
-        },
-        "sessions.list": {
-          count: 2,
-          defaults: {
-            contextTokens: 200_000,
-            model: "other-model",
-            modelProvider: "anthropic",
+            ],
           },
-          path: "",
-          sessions: [
-            {
-              key: "agent:work:main",
-              kind: "direct",
-              model: "work-model",
-              modelProvider: "openai",
-              status: "done",
-              updatedAt: Date.now(),
-            },
-            {
-              key: "agent:other:main",
-              kind: "direct",
+          "sessions.list": {
+            count: 2,
+            defaults: {
+              contextTokens: 200_000,
               model: "other-model",
               modelProvider: "anthropic",
-              status: "done",
-              updatedAt: Date.now(),
             },
-          ],
-          ts: Date.now(),
-        },
-      },
-      models: [{ id: "work-model", name: "Work Model", provider: "openai", available: true }],
-    });
-
-    try {
-      await page.goto(`${server.baseUrl}chat?session=agent%3Awork%3Amain`);
-      await expect
-        .poll(
-          async () => {
-            const requests = await gateway.getRequests("chat.metadata");
-            return requests.some(
-              (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
-            );
+            path: "",
+            sessions: [
+              {
+                key: "agent:work:main",
+                kind: "direct",
+                model: "work-model",
+                modelProvider: "openai",
+                status: "done",
+                updatedAt: Date.now(),
+              },
+              {
+                key: "agent:other:main",
+                kind: "direct",
+                model: "other-model",
+                modelProvider: "anthropic",
+                status: "done",
+                updatedAt: Date.now(),
+              },
+            ],
+            ts: Date.now(),
           },
-          { timeout: 10_000 },
-        )
-        .toBe(true);
+        },
+        models: [{ id: "work-model", name: "Work Model", provider: "openai", available: true }],
+      });
+
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:work:main"));
+      await gateway.waitForRequest("chat.startup");
+      // The initial work-agent catalog is complete in chat.startup, so only the
+      // later switch to the other agent should require chat.metadata.
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
 
       const composer = page.locator(".agent-chat__input");
       await expect
@@ -728,57 +707,78 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect
         .poll(async () => {
           const requests = await gateway.getRequests("chat.metadata");
-          return requests.some(
+          return requests.filter(
             (request) => (request.params as { agentId?: string } | undefined)?.agentId === "other",
-          );
+          ).length;
         })
-        .toBe(true);
+        .toBe(1);
       await expect
         .poll(() => composer.locator('[data-chat-model-option="anthropic/other-model"]').count())
         .toBe(1);
       await expect
         .poll(() => composer.locator('[data-chat-model-option="openai/work-model"]').count())
         .toBe(0);
-    } finally {
-      await context.close();
-    }
+      const metadataRequests = await gateway.getRequests("chat.metadata");
+      expect(metadataRequests).toHaveLength(1);
+      expect((metadataRequests[0]?.params as { agentId?: string } | undefined)?.agentId).toBe(
+        "other",
+      );
+    });
   });
 
-  it("keeps startup models when the metadata refresh fails", async () => {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.metadata"],
-      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
-    });
+  it("keeps startup models when an explicit metadata refresh fails", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.metadata"],
+        models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
+      });
 
-    try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      const composer = page.locator(".agent-chat__input");
+      await expect
+        .poll(() => composer.locator('[data-chat-model-provider-group="openai"]').textContent())
+        .toContain("GPT-5.5");
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
+
+      // Startup metadata now owns the same-agent cache. A config change invalidates
+      // that cache, so the next pane refresh still exercises the failure fallback.
+      await gateway.emitGatewayEvent("config.changed", {});
+      await page.locator("openclaw-chat-pane").evaluate((pane) => {
+        (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:main:refreshed";
+      });
       await gateway.waitForRequest("chat.metadata");
       await gateway.rejectDeferred("chat.metadata", {
         code: "UNAVAILABLE",
         message: "metadata unavailable",
       });
-      const composer = page.locator(".agent-chat__input");
       await expect
         .poll(() => composer.locator('[data-chat-model-provider-group="openai"]').textContent())
         .toContain("GPT-5.5");
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("does not substitute default-agent models when scoped metadata fails", async () => {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.startup", "chat.metadata"],
-      models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
-    });
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.startup"],
+        methodResponses: {
+          "chat.metadata": {
+            cases: [
+              {
+                match: { agentId: "work" },
+                response: {
+                  __mockError: { code: "UNAVAILABLE", message: "metadata unavailable" },
+                },
+              },
+            ],
+          },
+        },
+        models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
+      });
 
-    try {
-      await page.goto(`${server.baseUrl}chat?session=agent%3Amain%3Amain`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("chat.startup");
       await page.locator("openclaw-chat-pane").evaluate((pane) => {
         (pane as HTMLElement & { sessionKey: string }).sessionKey = "agent:work:main";
@@ -791,11 +791,24 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
           );
         })
         .toBe(true);
-      await gateway.rejectDeferred("chat.metadata", {
-        code: "UNAVAILABLE",
-        message: "metadata unavailable",
+      await page.waitForFunction(() => {
+        const pane = document.querySelector("openclaw-chat-pane") as
+          | (HTMLElement & {
+              state?: {
+                sessionKey?: string;
+                chatMetadataRequestVersion?: number;
+                chatModelCatalog?: unknown[];
+                chatModelsLoading?: boolean;
+              };
+            })
+          | null;
+        return (
+          pane?.state?.sessionKey === "agent:work:main" &&
+          (pane.state.chatMetadataRequestVersion ?? 0) >= 2 &&
+          pane.state.chatModelsLoading === false &&
+          pane.state.chatModelCatalog?.length === 0
+        );
       });
-      const agentsRequestsBeforeStartup = (await gateway.getRequests("agents.list")).length;
       await gateway.resolveDeferred("chat.startup", {
         agentsList: {
           agents: [
@@ -814,9 +827,6 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         sessionId: "control-ui-e2e-session",
         thinkingLevel: null,
       });
-      await expect
-        .poll(async () => (await gateway.getRequests("agents.list")).length)
-        .toBeGreaterThan(agentsRequestsBeforeStartup);
       await page.waitForFunction(() => {
         const pane = document.querySelector("openclaw-chat-pane") as
           | (HTMLElement & {
@@ -835,64 +845,73 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         )
         .not.toContain("GPT Default");
       const metadataRequests = await gateway.getRequests("chat.metadata");
-      expect(metadataRequests).toHaveLength(1);
-      expect((metadataRequests[0]?.params as { agentId?: string } | undefined)?.agentId).toBe(
-        "work",
-      );
+      expect(
+        metadataRequests.filter(
+          (request) => (request.params as { agentId?: string } | undefined)?.agentId === "work",
+        ),
+      ).toHaveLength(1);
+      expect(
+        metadataRequests.every(
+          (request) =>
+            typeof (request.params as { agentId?: string } | undefined)?.agentId === "string",
+        ),
+      ).toBe(true);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("does not request unscoped models when chat metadata is unavailable", async () => {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
-      methodResponses: {
-        connect: {
-          auth: {
-            deviceToken: "e2e-device-token",
-            role: "operator",
-            scopes: [
-              "operator.admin",
-              "operator.read",
-              "operator.write",
-              "operator.approvals",
-              "operator.pairing",
-            ],
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        models: [{ id: "gpt-default", name: "GPT Default", provider: "openai", available: true }],
+        methodResponses: {
+          connect: {
+            auth: {
+              deviceToken: "e2e-device-token",
+              role: "operator",
+              scopes: [
+                "operator.admin",
+                "operator.read",
+                "operator.write",
+                "operator.approvals",
+                "operator.pairing",
+              ],
+            },
+            features: { events: [], methods: ["chat.startup"] },
+            protocol: 4,
+            server: { connId: "control-ui-e2e", version: "e2e" },
+            snapshot: {
+              sessionDefaults: {
+                defaultAgentId: "main",
+                mainKey: "main",
+                mainSessionKey: "agent:work:main",
+                scope: "agent",
+              },
+            },
+            type: "hello-ok",
           },
-          features: { events: [], methods: ["chat.startup"] },
-          protocol: 4,
-          server: { connId: "control-ui-e2e", version: "e2e" },
-          snapshot: {
-            sessionDefaults: {
-              defaultAgentId: "main",
+          "chat.startup": {
+            agentsList: {
+              agents: [{ id: "work", name: "Work" }],
+              defaultId: "main",
               mainKey: "main",
-              mainSessionKey: "agent:work:main",
               scope: "agent",
             },
+            messages: [],
+            sessionId: "control-ui-e2e-session",
+            thinkingLevel: null,
           },
-          type: "hello-ok",
         },
-        "chat.startup": {
-          agentsList: {
-            agents: [{ id: "work", name: "Work" }],
-            defaultId: "main",
-            mainKey: "agent:work:main",
-            scope: "agent",
-          },
-          messages: [],
-          sessionId: "control-ui-e2e-session",
-          thinkingLevel: null,
-        },
-      },
-    });
+      });
 
-    try {
-      await page.goto(`${server.baseUrl}chat?session=agent%3Awork%3Amain`);
-      await expect.poll(async () => (await gateway.getRequests("chat.startup")).length).toBe(1);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:work:main"));
+      const startupRequest = await gateway.waitForRequest("chat.startup");
+      expect(startupRequest.params).toEqual(
+        expect.objectContaining({ sessionKey: "agent:work:main" }),
+      );
+      for (const request of await gateway.getRequests("chat.startup")) {
+        expect(request.params).toEqual(expect.objectContaining({ sessionKey: "agent:work:main" }));
+      }
 
       const composer = page.locator(".agent-chat__input");
       await expect
@@ -902,8 +921,6 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         .not.toContain("GPT Default");
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

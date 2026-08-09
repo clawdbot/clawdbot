@@ -1,6 +1,8 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { ensureMeetingAudioBackend, resolveMeetingAudioRuntimeForFormat } from "./audio-backend.js";
 import { createMeetingChromeTransport } from "./chrome-transport.js";
-import { createMeetingConfiguredNodeHost } from "./node-host.js";
+import { createMeetingConfiguredNodeHost } from "./configured-node-host.js";
+import { isMeetingRealtimeRouteReady, isMeetingTalkBackMode } from "./meeting-modes.js";
 import type {
   MeetingBrowserAdapter,
   MeetingBrowserLeaveStep,
@@ -8,8 +10,21 @@ import type {
   MeetingPlatformAdapter as MeetingPlatformAdapterContract,
   MeetingPlatformRuntimeMetadata,
 } from "./platform-adapter-contract.js";
+import { registerMeetingPluginCli } from "./plugin-cli.js";
+import { createMeetingPluginConfigSchema } from "./plugin-config.js";
 import { createMeetingPluginEntryOptions } from "./plugin-entry.js";
-import { createMeetingRuntimeProbes } from "./runtime-probes.js";
+import {
+  createMeetingChromeRuntimeBindings,
+  createMeetingPluginChromeTransport,
+  createMeetingPluginCliMetadata,
+  createMeetingPluginNodeHostHandler,
+  createMeetingPluginNodeInvokePolicy,
+  createMeetingPluginShellEntry,
+  createMeetingPluginTypes,
+} from "./plugin-shell.js";
+import { createMeetingRuntimeFacade } from "./runtime-facade.js";
+import { createMeetingRuntimeProbes, resolveMeetingProbeTimeoutMs } from "./runtime-probes.js";
+import { createMeetingRuntimeSetup } from "./runtime-setup.js";
 import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";
 import { createMeetingStatusCallSource } from "./status-call-source.js";
 import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
@@ -94,6 +109,17 @@ function browserResultString(result: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function parseMeetingManualAction(value: unknown): MeetingBrowserHealth["manualAction"] {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const action = value as Record<string, unknown>;
+  if (typeof action.reason !== "string" || typeof action.message !== "string") {
+    return undefined;
+  }
+  return { reason: action.reason, message: action.message };
+}
+
 function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
   result: unknown,
   options: MeetingPlatformAdapterOptions<
@@ -168,12 +194,7 @@ function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
       typeof parsed.audioOutputRouteRetryable === "boolean"
         ? parsed.audioOutputRouteRetryable
         : undefined,
-    manualActionRequired:
-      typeof parsed.manualActionRequired === "boolean" ? parsed.manualActionRequired : undefined,
-    manualActionReason:
-      typeof parsed.manualActionReason === "string" ? parsed.manualActionReason : undefined,
-    manualActionMessage:
-      typeof parsed.manualActionMessage === "string" ? parsed.manualActionMessage : undefined,
+    manualAction: parseMeetingManualAction(parsed.manualAction),
     browserUrl: typeof parsed.url === "string" ? parsed.url : undefined,
     browserTitle: typeof parsed.title === "string" ? parsed.title : undefined,
     status: "browser-control",
@@ -311,17 +332,13 @@ function createMeetingPlatformAdapter<
       ...browser,
       parseStatus: (result) => parseMeetingBrowserStatus(result, parsing),
       classifyManualAction: (health) => {
-        if (
-          !health.manualActionRequired ||
-          !health.manualActionReason ||
-          !health.manualActionMessage
-        ) {
+        if (!health.manualAction) {
           return undefined;
         }
         return {
-          category: parsing.classifyManualActionReason(health.manualActionReason),
-          reason: health.manualActionReason,
-          message: health.manualActionMessage,
+          category: parsing.classifyManualActionReason(health.manualAction.reason),
+          reason: health.manualAction.reason,
+          message: health.manualAction.message,
         };
       },
       parseLeaveResult: parseMeetingLeaveResult,
@@ -364,9 +381,25 @@ function createMeetingPlatformAdapter<
 export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
   createChromeTransport: createMeetingChromeTransport,
+  createChromeRuntimeBindings: createMeetingChromeRuntimeBindings,
+  createCliMetadata: createMeetingPluginCliMetadata,
+  createPluginChromeTransport: createMeetingPluginChromeTransport,
+  createPluginConfigSchema: createMeetingPluginConfigSchema,
+  createPluginNodeHostHandler: createMeetingPluginNodeHostHandler,
+  createPluginNodeInvokePolicy: createMeetingPluginNodeInvokePolicy,
+  createPluginShellEntry: createMeetingPluginShellEntry,
+  createRuntimeFacade: createMeetingRuntimeFacade,
+  createRuntimeSetup: createMeetingRuntimeSetup,
+  pluginTypes: createMeetingPluginTypes,
+  registerPluginCli: registerMeetingPluginCli,
+  resolveProbeTimeoutMs: resolveMeetingProbeTimeoutMs,
   createRuntimeProbes: createMeetingRuntimeProbes,
   createNodeHostHandler: createMeetingConfiguredNodeHost,
   createPluginEntry: createMeetingPluginEntryOptions,
   createStatusCallSource: createMeetingStatusCallSource,
   createStatusPreludeSource: createMeetingStatusPreludeSource,
+  isRealtimeRouteReady: isMeetingRealtimeRouteReady,
+  isTalkBackMode: isMeetingTalkBackMode,
+  ensureAudioBackend: ensureMeetingAudioBackend,
+  resolveAudioRuntimeForFormat: resolveMeetingAudioRuntimeForFormat,
 };

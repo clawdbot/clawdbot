@@ -39,7 +39,7 @@ describe("RawBody directive parsing", () => {
       prefixedBody,
     }).prefixedCommandBody;
 
-    expect(prompt).toContain("Chat history since last reply (untrusted, for context):");
+    expect(prompt).toContain("Chat history since last reply:");
     expect(prompt).toContain("Peter: hello");
     expect(prompt).toContain("status please");
     expect(prompt).not.toContain("/think:high");

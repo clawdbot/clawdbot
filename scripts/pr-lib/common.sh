@@ -6,6 +6,22 @@ require_artifact() {
   fi
 }
 
+validate_pr_temp_storage() {
+  local temp_dir="${TMPDIR:-/tmp}"
+  local probe=""
+  if ! probe=$(mktemp "${temp_dir%/}/openclaw-pr.XXXXXX"); then
+    :
+  elif ! printf 'openclaw-pr-temp-probe\n' >"$probe"; then
+    rm -f "$probe" 2>/dev/null || true
+  elif rm -f "$probe"; then
+    return 0
+  fi
+
+  echo "scripts/pr temporary-storage preflight failed under TMPDIR=$temp_dir." >&2
+  echo "Free disk space or set TMPDIR to a writable filesystem, then retry." >&2
+  return 1
+}
+
 path_is_docsish() {
   local path="$1"
   case "$path" in
@@ -20,13 +36,19 @@ file_list_is_docsish_only() {
   local files="$1"
   local saw_any=false
   local path
-  while IFS= read -r path; do
+  while [ -n "$files" ]; do
+    path="${files%%$'\n'*}"
+    if [ "$path" = "$files" ]; then
+      files=""
+    else
+      files="${files#*$'\n'}"
+    fi
     [ -n "$path" ] || continue
     saw_any=true
     if ! path_is_docsish "$path"; then
       return 1
     fi
-  done <<<"$files"
+  done
 
   [ "$saw_any" = "true" ]
 }
@@ -185,30 +207,33 @@ common_repo_root() {
 worktree_path_for_branch() {
   local branch="$1"
   local ref="refs/heads/$branch"
-  local field worktree=""
-  while IFS= read -r -d '' field; do
-    case "$field" in
-      worktree\ *) worktree="${field#worktree }" ;;
-      "branch $ref")
-        [ -n "$worktree" ] || return 1
-        printf '%s\n' "$worktree"
-        return 0
-        ;;
-      "") worktree="" ;;
-    esac
-  done < <(git worktree list --porcelain -z)
-  return 1
+  local field worktree="" match=""
+  # Drain foreground Git before the supervisor checks for leftover children.
+  git worktree list --porcelain -z | {
+    while IFS= read -r -d '' field; do
+      case "$field" in
+        worktree\ *) worktree="${field#worktree }" ;;
+        "branch $ref") match="$worktree" ;;
+        "") worktree="" ;;
+      esac
+    done
+    [ -n "$match" ] || return 1
+    printf '%s\n' "$match"
+  }
 }
 
 worktree_is_registered() {
   local path="$1"
-  local field
-  while IFS= read -r -d '' field; do
-    case "$field" in
-      worktree\ *) [ "${field#worktree }" = "$path" ] && return 0 ;;
-    esac
-  done < <(git worktree list --porcelain -z)
-  return 1
+  local field found=false
+  # Git must finish before a successful operation can release its lock.
+  git worktree list --porcelain -z | {
+    while IFS= read -r -d '' field; do
+      case "$field" in
+        worktree\ *) [ "${field#worktree }" != "$path" ] || found=true ;;
+      esac
+    done
+    [ "$found" = true ]
+  }
 }
 
 resolve_existing_dir_path() {

@@ -1,7 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
@@ -9,6 +8,7 @@ import {
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 import {
   groupSidebarSessionRows,
   sidebarSectionHasHeader,
@@ -19,8 +19,11 @@ import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
   resolveSessionNavigation,
-  searchForSession,
 } from "../lib/sessions/index.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -41,12 +44,12 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
+import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import {
   listSessionCreators,
   type SessionCreatedActor,
   type SessionCreatorOption,
 } from "./session-owner-chip.ts";
-import { isStoppableCloudWorkerPlacement } from "./session-row-badges.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -84,6 +87,12 @@ export function buildSidebarSessionNavigationState(input: {
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined;
 }): SidebarSessionNavigationState {
   const { context } = input;
+  const mainKey = context
+    ? resolveUiConfiguredMainKey({
+        agentsList: context.agents.state.agentsList,
+        hello: context.gateway.snapshot.hello,
+      })
+    : undefined;
   const navigation = resolveSessionNavigation({
     result: input.sessionsResult,
     activeSession: input.activeSession,
@@ -108,6 +117,7 @@ export function buildSidebarSessionNavigationState(input: {
     }
     return {
       key: row.key,
+      displayName: row.displayName,
       incognito: row.incognito === true,
       createdActor: row.createdActor,
       archivedBy: row.archivedBy,
@@ -116,10 +126,19 @@ export function buildSidebarSessionNavigationState(input: {
       label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
       meta: formatSidebarTimestamp(row.updatedAt),
       subtitle: resolveSessionWorkSubtitle(row),
-      href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
+      href: sessionNavigationTarget({
+        face: resolveSessionPreferredFace(row),
+        sessionKey: row.key,
+        fallbackAgentId: navigation.selectedAgentId,
+        basePath: context?.basePath ?? "",
+        row,
+        mainKey,
+        preferenceDerivedFace: true,
+      }).href,
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
-      hasActiveRun: row.archived !== true && Boolean(row.hasActiveRun),
+      // Normalize optional gateway state before collapsing it to the sidebar's required fact.
+      hasActiveRun: row.archived !== true && isSessionRunActive(row),
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,
       modelSelectionLocked: row.modelSelectionLocked === true,
       kind: row.kind,
@@ -129,9 +148,12 @@ export function buildSidebarSessionNavigationState(input: {
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       icon: row.icon,
       category: normalizeOptionalString(row.category),
+      boardFace: row.boardFace,
       channel: channelInfo.channel,
       channelSession: channelInfo.channelSession,
-      workSession: Boolean(row.worktree || row.execNode),
+      workSession:
+        Boolean(row.worktree || row.execNode) ||
+        context?.sessions.isPreparedWorkSession(row.key) === true,
       acpSession: isAcpSessionKey(row.key),
       worktreeId: row.worktree?.id,
       placementState: row.placement?.state,
@@ -142,7 +164,7 @@ export function buildSidebarSessionNavigationState(input: {
               row.placement.workspaceResultConflict?.totalCount ?? 0,
             ) || undefined
           : undefined,
-      cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
+      cloudWorkerStopAction: resolveCloudWorkerStopAction(row.placement),
       hasAutomation: row.hasAutomation === true,
       pullRequest: context?.sessions.pullRequestSummary(row.key),
       outboxCount: input.outboxCountForSessionKey(row.key),
@@ -152,6 +174,7 @@ export function buildSidebarSessionNavigationState(input: {
       agentStatusNote: input.resolveAgentStatusNote(row),
       observerDigest: row.observerDigest,
       spawnedBy: row.spawnedBy,
+      forkSource: row.forkSource,
       status: row.status,
       startedAt: row.startedAt,
       updatedAt: row.updatedAt,
@@ -403,7 +426,7 @@ export function promoteSidebarSessionCreatedOrder(
 export function applySidebarSessionCreatorFilter(input: {
   projected: readonly SidebarRecentSession[];
   creatorRows: readonly { createdActor?: SessionCreatedActor }[];
-  creatorFacet: readonly { id: string; label?: string }[] | undefined;
+  creatorFacet: readonly { id: string; label?: string; avatarUrl?: string }[] | undefined;
   selectedCreatorId: string | null;
 }): {
   rows: SidebarRecentSession[];

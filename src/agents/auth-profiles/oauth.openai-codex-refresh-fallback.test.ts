@@ -10,7 +10,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { buildRefreshContentionError } from "./oauth-refresh-lock-errors.js";
 import {
@@ -73,7 +73,14 @@ vi.mock("../../llm/oauth.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
-  refreshProviderOAuthCredentialWithPlugin: refreshProviderOAuthCredentialWithPluginMock,
+  resolveProviderOAuthCredentialWithPlugin: async (params: { credential: OAuthCredential }) => {
+    const credential = await refreshProviderOAuthCredentialWithPluginMock({
+      context: params.credential,
+    });
+    return credential
+      ? { status: "available", credential, apiKey: credential.access }
+      : { status: "unhandled" };
+  },
   formatProviderAuthProfileApiKeyWithPlugin: formatProviderAuthProfileApiKeyWithPluginMock,
   buildProviderAuthDoctorHintWithPlugin: buildProviderAuthDoctorHintWithPluginMock,
 }));
@@ -147,7 +154,7 @@ function requireOAuthContext(context: unknown): OAuthCredential {
 }
 
 describe("resolveApiKeyForProfile openai refresh fallback", () => {
-  const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+  const envSnapshot = captureEnv([...OAUTH_AGENT_ENV_KEYS, "OPENAI_API_KEY"]);
   let tempRoot = "";
   let agentDir = "";
   let caseIndex = 0;
@@ -179,6 +186,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     await fs.mkdir(agentDir, { recursive: true });
     setTestEnvValue("OPENCLAW_STATE_DIR", caseRoot);
     setTestEnvValue("OPENCLAW_AGENT_DIR", agentDir);
+    deleteTestEnvValue("OPENAI_API_KEY");
   });
 
   afterEach(async () => {
@@ -221,6 +229,27 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       }),
     ).rejects.toThrow(/OAuth token refresh failed for openai/);
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when provider refresh returns an unchanged expired credential", async () => {
+    const profileId = "openai:default";
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai",
+      }),
+      agentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async (params) =>
+      requireOAuthContext(params?.context),
+    );
+
+    await expect(resolveOpenAICodexProfile({ profileId, agentDir })).rejects.toThrow(
+      /OAuth token refresh failed for openai/,
+    );
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
   });
 
   it("surfaces refresh contention once without local lock details", async () => {

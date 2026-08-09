@@ -27,7 +27,7 @@ Most skills configuration lives under `skills` in
       allowUploadedArchives: false,
     },
     workshop: {
-      autonomous: { enabled: false },
+      autonomous: { mode: "auto" },
       allowSymlinkTargetWrites: false,
       approvalPolicy: "auto",
       maxPending: 50,
@@ -168,16 +168,9 @@ skills, skill dependency installers, and plugin install/update sources.
   Optional allowlist of directories that may contain the policy executable.
 </ParamField>
 
-<ParamField path="security.installPolicy.exec.allowInsecurePath" type="boolean" default="false">
-  Bypasses command path ownership and permission checks. Use only when the
-  path is protected by another mechanism.
-</ParamField>
-
-<ParamField path="security.installPolicy.exec.allowSymlinkCommand" type="boolean" default="false">
-  Allows the configured command path to be a symlink. The resolved target
-  must still satisfy the other path checks. Interpreter script arguments must
-  be direct regular files, not symlinks.
-</ParamField>
+The policy command and interpreter script arguments must be direct regular
+files with trusted ownership, restricted permissions, and verifiable parent
+directories. Symlinks and insecure paths are rejected.
 
 The policy receives one JSON object on stdin with `protocolVersion: 1`,
 `openclawVersion`, `targetType`, `targetName`, `sourcePath`, `sourcePathKind`,
@@ -336,11 +329,12 @@ different visible skill set per agent.
 
 ## Workshop (`skills.workshop`)
 
-<ParamField path="skills.workshop.autonomous.enabled" type="boolean" default="false">
-  When `true`, OpenClaw can create pending proposals from durable corrections
-  and can review successful, substantial completed work after the system becomes
-  idle. This can add a background model run after eligible turns. User-prompted
-  skill creation and `/learn` continue to work when the setting is `false`.
+<ParamField path="skills.workshop.autonomous.mode" type='"off" | "propose" | "auto"' default='"auto"'>
+  `off` disables autonomous capture while keeping the durable-instruction
+  suggestion nudge. `propose` creates pending proposals from corrections and
+  substantial completed work. `auto` sends the same captures through the normal
+  scanner-gated Workshop apply path. User-prompted skill creation, `/learn`, and
+  manual history scan continue to work in every mode.
 </ParamField>
 
 See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,

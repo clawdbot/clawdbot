@@ -5,6 +5,14 @@
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { SenderIdentity } from "./sender-label.ts";
 
+export type BrowserAnnotationAttachment = {
+  modelContext: string;
+  title: string;
+  displayUrl: string;
+  markedRegionCount: number;
+  inspectedElement: boolean;
+};
+
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;
@@ -12,9 +20,17 @@ export type ChatAttachment = {
   mimeType: string;
   fileName?: string;
   sizeBytes?: number;
+  /** UI-local context that must remain coupled to its annotated screenshot. */
+  browserAnnotation?: BrowserAnnotationAttachment;
 };
 
-export type ChatQueueSkillWorkshopRevision = { proposalId: string; agentId?: string };
+export type ChatQueueSkillWorkshopRevision = {
+  proposalId: string;
+  agentId?: string;
+  /** Process-local owner; revision requests must never replay after reconnect. */
+  connectionClient?: object;
+  connectionEpoch?: number;
+};
 
 export type ChatQueueItem = {
   id: string;
@@ -31,6 +47,8 @@ export type ChatQueueItem = {
   sendAttempts?: number;
   sendError?: string;
   sendRunId?: string;
+  /** Immutable active run selected when this row first became a steer. */
+  steerTargetRunId?: string;
   sendState?:
     | "waiting-model"
     | "waiting-idle"
@@ -69,6 +87,7 @@ export type ChatItem =
 export type ChatStreamSegment = {
   text: string;
   ts: number;
+  runId?: string;
   toolCallId?: string;
   itemId?: string;
 };
@@ -118,6 +137,12 @@ export type MessageContentItem =
         label: string;
         mimeType?: string;
         isVoiceNote?: boolean;
+        artifactId?: string;
+        playback?: "native" | "transcode";
+        sizeBytes?: number;
+        durationMs?: number;
+        width?: number;
+        height?: number;
       };
     }
   | {

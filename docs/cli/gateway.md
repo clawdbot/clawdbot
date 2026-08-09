@@ -107,6 +107,18 @@ openclaw gateway run   # equivalent, explicit form
 
 For `--bind custom`, set `gateway.customBindHost` to an IPv4 address. Any address other than `127.0.0.1` or `0.0.0.0` also requires `127.0.0.1` on the same port for same-host clients; startup fails if either listener cannot bind. Wildcard `0.0.0.0` does not add a separate required alias. IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
 
+## Reveal the configured token
+
+Run this on the Gateway host when a client needs the configured shared token:
+
+```bash
+openclaw gateway auth-token --show
+```
+
+The command resolves `gateway.auth.token`, `OPENCLAW_GATEWAY_TOKEN`, and configured SecretRefs, then prints only the token. It requires an interactive terminal and refuses redirected or piped output so the credential does not silently enter command logs. Treat the terminal output as a secret.
+
+If no persistent token is configured, run `openclaw doctor --generate-gateway-token`, restart the Gateway, and then rerun the command. Generic `openclaw config get` output remains redacted, including `--json`.
+
 ## Restart the Gateway
 
 ```bash
@@ -128,6 +140,16 @@ openclaw gateway restart --wait 30s
 <Warning>
 Inline `--password` can be exposed in local process listings. Prefer `--password-file`, env, or a SecretRef-backed `gateway.auth.password`.
 </Warning>
+
+### Install identity
+
+Service management (`install`, `start`, `stop`, `restart`, `uninstall`, Doctor service repair, and self-update service handling) belongs to the install that owns the host service. That is the canonical `.openclaw` directory under the OS account home, or the `.openclaw-<profile>` directory a named profile projects there. Named profiles use distinct native service identities.
+
+`OPENCLAW_HOME`, or an `OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH` that points elsewhere, is treated as isolated state and skipped. A relocated or copied state tree cannot adopt and rewrite the account's host service.
+
+On macOS and Windows, native service-managed profile names must be lowercase. Runtime-only profiles may still use uppercase, but case-distinct names such as `Main` and `main` share paths on normal case-insensitive filesystems and cannot safely own separate native services. On macOS, the lowercase names `gateway` and `node` are also unavailable for native service management because their historical LaunchAgent labels collide with the default Gateway and node-host services.
+
+Named profiles must also use the native service identity derived from `OPENCLAW_PROFILE`. Unset `OPENCLAW_LAUNCHD_LABEL`, `OPENCLAW_SYSTEMD_UNIT`, or `OPENCLAW_WINDOWS_TASK_NAME` before service management; custom identities remain available for the default profile or runtime-only/external-supervisor setups.
 
 ### External supervisors
 
@@ -428,6 +450,11 @@ openclaw gateway probe --ssh user@gateway-host
 <ParamField path="--ssh <target>" type="string">
   `user@host` or `user@host:port` (port defaults to `22`).
 </ParamField>
+
+OpenClaw launches only an SSH client found in OS-managed system directories. On native Windows,
+install the **OpenSSH Client** optional feature; Windows places it under
+`%SystemRoot%\System32\OpenSSH`.
+
 <ParamField path="--ssh-identity <path>" type="string">
   Identity file.
 </ParamField>
@@ -443,6 +470,7 @@ Low-level RPC helper.
 
 ```bash
 openclaw gateway call status
+openclaw gateway call health --port 18999
 openclaw gateway call logs.tail --params '{"limit": 200}'
 ```
 
@@ -451,6 +479,9 @@ openclaw gateway call logs.tail --params '{"limit": 200}'
 </ParamField>
 <ParamField path="--url <url>" type="string">
   Gateway WebSocket URL.
+</ParamField>
+<ParamField path="--port <port>" type="number">
+  Target a local loopback Gateway on this port. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call. Cannot combine with `--url`.
 </ParamField>
 <ParamField path="--token <token>" type="string">
   Gateway token.
@@ -469,7 +500,7 @@ openclaw gateway call logs.tail --params '{"limit": 200}'
 </ParamField>
 
 <Note>
-`--params` must be valid JSON, and each method validates its own param shape (extra/misnamed fields are rejected).
+`--params` must be valid JSON, and each method validates its own param shape (extra/misnamed fields are rejected). Use `--port` for a custom-port local Gateway; explicit `--url` targets still require explicit credentials.
 </Note>
 
 ## Manage the Gateway service
@@ -523,6 +554,7 @@ openclaw gateway restart
   </Accordion>
   <Accordion title="Lifecycle behavior">
     - `gateway start` is idempotent: when the managed service is already running, it reports the running process and leaves it untouched. A loaded but stopped service is started as before.
+    - If `gateway start` or `gateway restart` needs to repair a stale service definition, the command refuses when the invoking shell resolves a different state directory, config path, or port than the installed service. Match or unset the conflicting environment overrides, or use `openclaw gateway install --force` to retarget the service intentionally.
     - Use `gateway restart` to restart a managed service. Do not chain `gateway stop` and `gateway start` as a restart substitute.
     - In a non-interactive shell, `gateway stop` requires `--force`. Interactive terminals keep the existing prompt-free behavior. For automation and tests, prefer `gateway run --dev` or an isolated `--profile` with a free port.
     - On macOS, `gateway stop` uses `launchctl bootout` by default, which removes the LaunchAgent from the current boot session without persisting a disable — KeepAlive auto-recovery stays active for future crashes and `gateway start` re-enables cleanly without a manual `launchctl enable`. Pass `--disable` to persistently suppress KeepAlive and RunAtLoad so the gateway does not respawn until the next explicit `gateway start`; use this when a manual stop should survive reboots.

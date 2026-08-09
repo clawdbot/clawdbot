@@ -6,6 +6,7 @@
 // routes the browser panel needs and keeps route-path knowledge in one place.
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
 
 const BROWSER_REQUEST_METHOD = "browser.request";
 const BROWSER_SCREENSHOT_FETCH_TIMEOUT_MS = 30_000;
@@ -146,7 +147,7 @@ export async function captureBrowserScreenshot(
   );
   const path = asString(result?.path);
   if (!path) {
-    throw new Error("browser screenshot did not return a media path");
+    throw new Error(t("browser.errors.screenshotPathMissing"));
   }
   return {
     path,
@@ -323,7 +324,10 @@ export async function fetchBrowserScreenshotDataUrl(params: {
   }
   const controller = new AbortController();
   const timeout = setTimeout(
-    () => controller.abort(new DOMException("screenshot fetch timed out", "TimeoutError")),
+    () =>
+      controller.abort(
+        new DOMException(t("browser.errors.screenshotFetchTimedOut"), "TimeoutError"),
+      ),
     BROWSER_SCREENSHOT_FETCH_TIMEOUT_MS,
   );
   let blob: Blob;
@@ -335,7 +339,10 @@ export async function fetchBrowserScreenshotDataUrl(params: {
       signal: controller.signal,
     });
     if (!res.ok) {
-      throw new Error(`screenshot fetch failed (${res.status})`);
+      // A response stream can take indefinitely to cancel; release it without
+      // delaying the stable HTTP error or defeating the request deadline.
+      void res.body?.cancel().catch(() => undefined);
+      throw new Error(t("browser.errors.screenshotFetchFailed", { status: String(res.status) }));
     }
     blob = await res.blob();
   } finally {
@@ -347,11 +354,11 @@ export async function fetchBrowserScreenshotDataUrl(params: {
       if (typeof reader.result === "string") {
         resolve(reader.result);
       } else {
-        reject(new Error("screenshot read failed"));
+        reject(new Error(t("browser.errors.screenshotReadFailed")));
       }
     });
     reader.addEventListener("error", () =>
-      reject(reader.error ?? new Error("screenshot read failed")),
+      reject(reader.error ?? new Error(t("browser.errors.screenshotReadFailed"))),
     );
     reader.readAsDataURL(blob);
   });

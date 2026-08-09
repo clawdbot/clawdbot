@@ -644,7 +644,7 @@ describe("runtime parity", () => {
     const result = await runRuntimeParityScenario({
       scenarioId: "resolved-tool",
       runCell: async (runtime) => ({
-        scenarioStatus: "pass",
+        status: "pass",
         cell: { ...cell, runtime },
       }),
     });
@@ -663,7 +663,7 @@ describe("runtime parity", () => {
         reason: " Local fixture only; no assistant turn runs. ",
       },
       runCell: async (runtime) => ({
-        scenarioStatus: "pass",
+        status: "pass",
         cell: makeRuntimeParityCell(runtime, []),
       }),
     });
@@ -691,7 +691,7 @@ describe("runtime parity", () => {
     const result = await runRuntimeParityScenario({
       scenarioId: "planned-only-tool",
       runCell: async (runtime) => ({
-        scenarioStatus: "pass",
+        status: "pass",
         cell: { ...cell, runtime },
       }),
     });
@@ -704,7 +704,7 @@ describe("runtime parity", () => {
     const result = await runRuntimeParityScenario({
       scenarioId: "matching-tool-errors",
       runCell: async (runtime) => ({
-        scenarioStatus: "pass",
+        status: "pass",
         cell: {
           ...makeRuntimeParityCell(runtime, [
             {
@@ -727,7 +727,7 @@ describe("runtime parity", () => {
     const result = await runRuntimeParityScenario({
       scenarioId: "failed-cell-with-drift",
       runCell: async (runtime) => ({
-        scenarioStatus: runtime === "codex" ? "fail" : "pass",
+        status: runtime === "codex" ? "fail" : "pass",
         cell: makeRuntimeParityCell(runtime, [
           {
             tool: "web_search",
@@ -740,7 +740,7 @@ describe("runtime parity", () => {
 
     expect(result).toMatchObject({
       drift: "failure-mode",
-      driftDetails: "scenario status differs (pass vs fail)",
+      driftDetails: "runtime-pair cell status differs (pass vs fail)",
     });
     expect(isRuntimeParityResultPass(result)).toBe(false);
   });
@@ -1044,5 +1044,18 @@ describe("runtime parity", () => {
       undefined,
       "tool-result-missing",
     ]);
+  });
+
+  it("copies model-switch evidence into the runtime parity cell", async () => {
+    const modelSwitchEvidence = {
+      primary: { runId: "run-1", responseModel: "primary-model" },
+      alternate: { runId: "run-2", responseModel: "alternate-model" },
+    };
+    const cell = await captureRuntimeParityWithMockRequests({
+      requests: [],
+      scenarioResult: { status: "pass", modelSwitchEvidence },
+    });
+
+    expect(cell.modelSwitchEvidence).toEqual(modelSwitchEvidence);
   });
 });

@@ -1,28 +1,17 @@
 // Mattermost plugin module registers interactive callback transport handling.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveMattermostReplyToMode } from "./accounts.js";
 import { createMattermostInteractionHandler } from "./interactions.js";
+import { authorizeMattermostCommandInvocation } from "./monitor-auth.js";
 import {
-  authorizeMattermostCommandInvocation,
-  mapMattermostChannelTypeToChatType,
-} from "./monitor-auth.js";
-import {
-  resolveMattermostReplyRootId,
-  resolveMattermostThreadSessionContext,
+  buildMattermostButtonInteractionMessageSid,
+  resolveMattermostInteractionReplyRootId,
 } from "./monitor-context.js";
+import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import type { MattermostModelPickerInteractionHandler } from "./monitor-model-picker.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import {
-  createMattermostReplyDeliveryBarrier,
-  deliverMattermostReplyPayload,
-} from "./reply-delivery.js";
+import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import type { ReplyPayload } from "./runtime-api.js";
-import {
-  createChannelMessageReplyPipeline,
-  logTypingFailure,
-  registerPluginHttpRoute,
-} from "./runtime-api.js";
+import { registerPluginHttpRoute } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 
 export function registerMattermostInteractions(params: {
@@ -30,10 +19,10 @@ export function registerMattermostInteractions(params: {
   interactionPath: string;
   allowedSourceIps: string[];
   handleModelPickerInteraction: MattermostModelPickerInteractionHandler;
-}): (() => void) | undefined {
+}): () => void {
   const { monitor } = params;
   const { account, botUserId, cfg, client, core, pairing, resources, runtime } = monitor;
-  const { resolveChannelInfo, sendTypingIndicator } = resources;
+  const { resolveChannelInfo } = resources;
   return registerPluginHttpRoute({
     path: params.interactionPath,
     fallbackPath: "/mattermost/interactions/default",
@@ -78,168 +67,98 @@ export function registerMattermostInteractions(params: {
         };
       },
       resolveSessionKey: async ({ channelId, userId, post }) => {
-        const channelInfo = await resolveChannelInfo(channelId);
-        if (!channelInfo?.type) {
-          monitor.logVerboseMessage(
-            `mattermost: drop interaction session event (cannot resolve channel type for ${channelId})`,
-          );
+        const eventPlan = await buildMattermostEventPlan(monitor, {
+          channelId,
+          senderId: userId,
+          postId: post.id,
+          threadRootId: post.root_id,
+          dropLabel: "interaction session event",
+        });
+        if (!eventPlan) {
           throw new Error("Mattermost channel type could not be resolved");
         }
-        const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
-        const route = core.channel.routing.resolveAgentRoute({
-          cfg,
-          channel: "mattermost",
-          accountId: account.accountId,
-          teamId: channelInfo.team_id ?? undefined,
-          peer: {
-            kind,
-            id: kind === "direct" ? userId : channelId,
-          },
-        });
-        return resolveMattermostThreadSessionContext({
-          baseSessionKey: route.sessionKey,
-          kind,
-          postId: post.id || undefined,
-          replyToMode: resolveMattermostReplyToMode(account, kind),
-          threadRootId: post.root_id,
-        }).sessionKey;
+        return eventPlan.thread.sessionKey;
       },
       dispatchButtonClick: async (button) => {
-        const channelInfo = await resolveChannelInfo(button.channelId);
-        if (!channelInfo?.type) {
-          monitor.logVerboseMessage(
-            `mattermost: drop interaction dispatch (cannot resolve channel type for ${button.channelId})`,
-          );
+        const sourcePostId = button.post.id || button.postId;
+        const interactionMessageSid = buildMattermostButtonInteractionMessageSid({
+          postId: button.postId,
+          actionId: button.actionId,
+        });
+        const eventPlan = await buildMattermostEventPlan(monitor, {
+          channelId: button.channelId,
+          senderId: button.userId,
+          postId: sourcePostId,
+          threadRootId: button.post.root_id,
+          dropLabel: "interaction dispatch",
+        });
+        if (!eventPlan) {
           return;
         }
-        const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
-        const teamId = channelInfo.team_id ?? undefined;
-        const channelName = channelInfo.name ?? undefined;
-        const channelDisplay = channelInfo.display_name ?? channelName ?? button.channelId;
-        const route = core.channel.routing.resolveAgentRoute({
-          cfg,
-          channel: "mattermost",
-          accountId: account.accountId,
-          teamId,
-          peer: {
-            kind,
-            id: kind === "direct" ? button.userId : button.channelId,
-          },
-        });
-        const threadContext = resolveMattermostThreadSessionContext({
-          baseSessionKey: route.sessionKey,
-          kind,
-          postId: button.post.id || button.postId,
-          replyToMode: resolveMattermostReplyToMode(account, kind),
-          threadRootId: button.post.root_id,
-        });
-        const to = kind === "direct" ? `user:${button.userId}` : `channel:${button.channelId}`;
+        const { channelDisplay, kind, route, thread, to } = eventPlan;
         const bodyText = `[Button click: user @${button.userName} selected "${button.actionName}"]`;
-        const ctxPayload = finalizeInboundContext({
+        const ctxPayload = eventPlan.finalizeContext({
           Body: bodyText,
           BodyForAgent: bodyText,
           RawBody: bodyText,
           CommandBody: bodyText,
-          From:
-            kind === "direct"
-              ? `mattermost:${button.userId}`
-              : kind === "group"
-                ? `mattermost:group:${button.channelId}`
-                : `mattermost:channel:${button.channelId}`,
-          To: to,
-          SessionKey: threadContext.sessionKey,
-          DmScope: route.dmScope,
-          ParentSessionKey: threadContext.parentSessionKey,
-          AccountId: route.accountId,
-          ChatType: kind,
           ConversationLabel: `mattermost:${button.userName}`,
-          GroupSubject: kind !== "direct" ? channelDisplay : undefined,
-          GroupChannel: channelName ? `#${channelName}` : undefined,
-          GroupSpace: teamId,
+          GroupSubject: kind !== "direct" ? channelDisplay || button.channelId : undefined,
           SenderName: button.userName,
-          SenderId: button.userId,
-          Provider: "mattermost" as const,
-          Surface: "mattermost" as const,
-          MessageSid: `interaction:${button.postId}:${button.actionId}`,
-          ReplyToId: threadContext.effectiveReplyToId,
-          MessageThreadId: threadContext.effectiveReplyToId,
+          MessageSid: interactionMessageSid,
           WasMentioned: true,
           CommandAuthorized: false,
-          OriginatingChannel: "mattermost" as const,
-          OriginatingTo: to,
         });
-
-        const textLimit = core.channel.text.resolveTextChunkLimit(
-          cfg,
-          "mattermost",
-          account.accountId,
-          { fallbackLimit: account.textChunkLimit ?? 4000 },
-        );
-        const tableMode = core.channel.text.resolveMarkdownTableMode({
+        const { deliveryBarrier, replyOptions, replyPipeline, tableMode, textLimit } =
+          eventPlan.createReplyPlan();
+        await core.channel.inbound.dispatch({
           cfg,
           channel: "mattermost",
           accountId: account.accountId,
-        });
-        const { onModelSelected, typingCallbacks, ...replyPipeline } =
-          createChannelMessageReplyPipeline({
-            cfg,
+          route: {
             agentId: route.agentId,
-            channel: "mattermost",
-            accountId: account.accountId,
-            typing: {
-              start: () => sendTypingIndicator(button.channelId, threadContext.effectiveReplyToId),
-              onStartError: (err) => {
-                logTypingFailure({
-                  log: monitor.logDebugMessage,
-                  channel: "mattermost",
-                  target: button.channelId,
-                  error: err,
-                });
-              },
-            },
-          });
-        const deliveryBarrier = createMattermostReplyDeliveryBarrier({
-          isDirect: kind === "direct",
-          dmRetryOptions: account.config.dmChannelRetry,
-        });
-        await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-          ctx: ctxPayload,
-          cfg,
-          dispatcherOptions: {
-            ...replyPipeline,
-            resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
-            onDeliverySettled: deliveryBarrier.markDeliverySettled,
-            humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+            dmScope: route.dmScope,
+            sessionKey: thread.sessionKey,
+          },
+          ctxPayload,
+          delivery: {
+            observeMessageSent: true,
             deliver: async (payload: ReplyPayload) => {
-              await deliverMattermostReplyPayload({
+              const result = await deliverMattermostReplyPayload({
                 core,
                 cfg,
                 payload,
                 to,
                 accountId: account.accountId,
                 agentId: route.agentId,
-                replyToId: resolveMattermostReplyRootId({
+                replyToId: resolveMattermostInteractionReplyRootId({
                   kind,
-                  threadRootId: threadContext.effectiveReplyToId,
+                  threadRootId: thread.effectiveReplyToId,
                   replyToId: payload.replyToId,
+                  interactionMessageSid,
+                  sourcePostId,
                 }),
                 textLimit,
                 tableMode,
                 sendMessage: sendMessageMattermost,
                 onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
               });
-              runtime.log?.(`delivered button-click reply to ${to}`);
+              if (result.visibleReplySent) {
+                runtime.log?.(`delivered button-click reply to ${to}`);
+              }
+              return result;
             },
             onError: (err, info) => {
               runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
             },
-            typingCallbacks,
           },
-          replyOptions: {
-            disableBlockStreaming:
-              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-            onModelSelected,
+          replyPipeline,
+          dispatcherOptions: {
+            resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+            onDeliverySettled: deliveryBarrier.markDeliverySettled,
+            humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
           },
+          replyOptions,
         });
       },
       log: (message) => runtime.log?.(message),
@@ -248,5 +167,7 @@ export function registerMattermostInteractions(params: {
     source: "mattermost-interactions",
     accountId: account.accountId,
     log: (message: string) => runtime.log?.(message),
+    replaceExisting: true,
+    throwOnFailure: true,
   });
 }

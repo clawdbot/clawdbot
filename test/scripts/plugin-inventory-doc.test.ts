@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolvePluginSurface } from "../../scripts/lib/plugin-inventory-doc.mjs";
+import { resolvePluginSurface } from "../../scripts/lib/plugin-inventory-doc.mts";
 
 describe("resolvePluginSurface", () => {
   it("keeps manifest identifiers as inline code while leaving labels visible", () => {

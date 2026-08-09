@@ -1,4 +1,7 @@
-import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
+import {
+  findLlamacppGbnfSchemaViolations,
+  normalizeToolParameterSchema,
+} from "@openclaw/ai/internal/openai";
 // Cron tool schema tests cover the provider-facing parameter shape and runtime
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
@@ -38,6 +41,9 @@ describe("createCronToolSchema", () => {
     modelProvider: "jjcc",
     modelId: "gemini-3.1-pro-preview",
   }) as unknown as Record<string, unknown>;
+  const llamacppSchemaRecord = normalizeToolParameterSchema(schema, {
+    modelCompat: { toolSchemaProfile: "llamacpp" },
+  }) as unknown as Record<string, unknown>;
 
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
   // If a field is removed from this list the test must be updated intentionally.
@@ -75,6 +81,19 @@ describe("createCronToolSchema", () => {
     expect(declarationKey).not.toHaveProperty("pattern");
   });
 
+  it("projects the complete cron schema into llama.cpp's GBNF subset", () => {
+    expect(propertyAt(schemaRecord, "job.trigger.script")).toMatchObject({
+      type: "string",
+      minLength: 1,
+      maxLength: 65_536,
+    });
+    expect(propertyAt(llamacppSchemaRecord, "job.trigger.script")).toEqual({
+      type: "string",
+      minLength: 1,
+    });
+    expect(findLlamacppGbnfSchemaViolations(llamacppSchemaRecord, "cron.parameters")).toEqual([]);
+  });
+
   it("patch exposes the expected top-level fields", () => {
     expect(keysAt(schemaRecord, "patch")).toEqual(
       [
@@ -110,6 +129,29 @@ describe("createCronToolSchema", () => {
     ).toEqual(["max", "min"]);
   });
 
+  it("exposes bounded cron list pagination", () => {
+    expect(propertyAt(schemaRecord, "limit")).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: 200,
+    });
+    expect(propertyAt(schemaRecord, "offset")).toMatchObject({
+      type: "integer",
+      minimum: 0,
+    });
+    expect(Value.Check(schema, { action: "list", limit: 200, offset: 200 })).toBe(true);
+
+    for (const invalid of [
+      { action: "list", limit: 0 },
+      { action: "list", limit: 201 },
+      { action: "list", limit: 1.5 },
+      { action: "list", offset: -1 },
+      { action: "list", offset: 1.5 },
+    ]) {
+      expect(Value.Check(schema, invalid)).toBe(false);
+    }
+  });
+
   it("job.schedule exposes interval, cron, and stream source fields", () => {
     expect(keysAt(schemaRecord, "job.schedule")).toEqual(
       [
@@ -128,6 +170,29 @@ describe("createCronToolSchema", () => {
         "tz",
       ].toSorted(),
     );
+    expect(propertyAt(schemaRecord, "job.schedule.kind")?.enum).toContain("stream");
+  });
+
+  it("documents wake, context, and session-target fields", () => {
+    expect(propertyAt(schemaRecord, "text")?.description).toBe(
+      'systemEvent text for action="wake"',
+    );
+    expect(propertyAt(schemaRecord, "mode")?.description).toBe(
+      'Wake mode for action="wake" (default next-heartbeat)',
+    );
+    for (const path of ["job.sessionTarget", "patch.sessionTarget"]) {
+      expect(propertyAt(schemaRecord, path)?.description).toBe(
+        "main | isolated | current (agentTurn default) | session:<id>",
+      );
+    }
+    for (const path of ["job.payload", "patch.payload"]) {
+      expect(propertyAt(schemaRecord, `${path}.lightContext`)?.description).toBe(
+        "Lightweight bootstrap context (skip full workspace context)",
+      );
+      expect(propertyAt(schemaRecord, `${path}.allowUnsafeExternalContent`)?.description).toBe(
+        "Allow untrusted external content in prompt",
+      );
+    }
   });
 
   it("marks staggerMs as cron-only in both job and patch schedule schemas", () => {

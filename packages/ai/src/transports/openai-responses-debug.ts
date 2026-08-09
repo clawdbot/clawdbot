@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Api, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -7,22 +8,9 @@ import { RESPONSE_FAILED_NO_DETAILS_MESSAGE } from "./openai-responses-contracts
 import { log, type MutableAssistantOutput } from "./openai-transport-shared.js";
 import { redactIdentifier, redactSensitiveText } from "./transport-utils.js";
 
-export function stringifyUnknown(value: unknown, fallback = ""): string {
+function stringifyUnknown(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
     return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return fallback;
-}
-
-export function stringifyJsonLike(value: unknown, fallback = ""): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value && typeof value === "object") {
-    return JSON.stringify(value);
   }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
@@ -112,6 +100,57 @@ function responseInputRoles(input: unknown): string {
   return [...roles].toSorted().join(",");
 }
 
+function responseInputItemShape(input: unknown): string {
+  if (!Array.isArray(input)) {
+    return "none";
+  }
+  return (
+    input
+      .map((item) => {
+        if (!isRecord(item) || typeof item.type !== "string") {
+          return "unknown";
+        }
+        if (item.type === "message" && typeof item.role === "string") {
+          return `message:${item.role}`;
+        }
+        return item.type;
+      })
+      .join(",") || "none"
+  );
+}
+
+function hashOpaqueResponsesValue(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function summarizeResponsesCompactionItems(input: unknown): string[] {
+  if (!Array.isArray(input)) {
+    return [
+      "compactionItems=0",
+      "compactionIdHashes=none",
+      "compactionPayloadHashes=none",
+      "compactionInputIndexes=none",
+    ];
+  }
+  const compactions = input.flatMap((item, inputIndex) => {
+    if (!isRecord(item) || item.type !== "compaction") {
+      return [];
+    }
+    const idHash = typeof item.id === "string" ? hashOpaqueResponsesValue(item.id) : undefined;
+    const payloadHash =
+      typeof item.encrypted_content === "string"
+        ? hashOpaqueResponsesValue(item.encrypted_content)
+        : undefined;
+    return [{ idHash, inputIndex, payloadHash }];
+  });
+  return [
+    `compactionItems=${compactions.length}`,
+    `compactionIdHashes=${compactions.flatMap((item) => item.idHash ?? []).join(",") || "none"}`,
+    `compactionPayloadHashes=${compactions.flatMap((item) => item.payloadHash ?? []).join(",") || "none"}`,
+    `compactionInputIndexes=${compactions.map((item) => item.inputIndex).join(",") || "none"}`,
+  ];
+}
+
 function readToolPayloadField(record: Record<string, unknown>, field: string): unknown {
   try {
     return record[field];
@@ -154,7 +193,9 @@ export function summarizeResponsesTools(tools: unknown): string {
 
 export function stringifyRedactedPayload(value: unknown): string {
   try {
-    const encoded = JSON.stringify(value);
+    const encoded = JSON.stringify(value, (key, child) =>
+      key === "encrypted_content" ? "<opaque data omitted>" : child,
+    );
     if (!encoded) {
       return "<empty>";
     }
@@ -443,6 +484,20 @@ export function normalizeResponsesFailedEvent(
   );
 }
 
+export class ResponsesStreamFailure extends Error {
+  readonly responseId?: string;
+  readonly response: unknown;
+  readonly observation: ReturnType<typeof normalizeResponsesFailedEvent>["observation"];
+
+  constructor(failure: ReturnType<typeof normalizeResponsesFailedEvent>, response: unknown) {
+    super(failure.message);
+    this.name = "ResponsesStreamFailure";
+    this.responseId = failure.responseId;
+    this.response = response;
+    this.observation = failure.observation;
+  }
+}
+
 export function logResponsesFailedNoDetails(
   observation: ResponsesFailedNoDetailsObservation,
 ): void {
@@ -473,6 +528,7 @@ export function summarizeResponsesPayload(params: unknown): string {
     `model=${safeDebugValue(record.model)}`,
     `stream=${safeDebugValue(record.stream)}`,
     `inputItems=${Array.isArray(input) ? input.length : typeof input}`,
+    `inputItemShape=${responseInputItemShape(input)}`,
     `inputRoles=${responseInputRoles(input) || "none"}`,
     `inputTextChars=${responseInputTextChars(input)}`,
     `tools=${summarizeResponsesTools(record.tools)}`,
@@ -480,6 +536,7 @@ export function summarizeResponsesPayload(params: unknown): string {
     `reasoningSummary=${safeDebugValue(reasoning?.summary)}`,
     `textVerbosity=${safeDebugValue(text?.verbosity)}`,
     `serviceTier=${safeDebugValue(record.service_tier)}`,
+    ...summarizeResponsesCompactionItems(input),
     `store=${safeDebugValue(record.store)}`,
     `promptCacheKey=${record.prompt_cache_key === undefined ? "absent" : "present"}`,
     `metadataKeys=${

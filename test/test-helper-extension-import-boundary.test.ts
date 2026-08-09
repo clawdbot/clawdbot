@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectTestHelperExtensionImportBoundaryInventory,
   main,
-} from "../scripts/check-test-helper-extension-import-boundary.mjs";
+} from "../scripts/check-test-helper-extension-import-boundary.mts";
 import { createCapturedIo } from "./helpers/captured-io.js";
 
 describe("test-helper extension import boundary inventory", () => {

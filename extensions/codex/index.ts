@@ -14,11 +14,8 @@ import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import {
-  CODEX_REALTIME_OFFER_PATH,
-  configureCodexRealtimeBrowserSession,
-} from "./realtime-voice-api.js";
 import { readCodexPluginConfig } from "./src/app-server/config.js";
+import { createCodexAppServerConnectionHealthService } from "./src/app-server/connection-health.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -81,7 +78,12 @@ export default definePluginEntry({
         origin: "bundled",
         config: normalizePluginsConfig(liveConfig.plugins),
         rootConfig: liveConfig,
-        enabledByDefault: readCodexPluginConfig(livePluginConfig).supervision?.enabled === true,
+        // Core auto-enables this bundled plugin whenever the operator declares a
+        // codex config block, so a live block is the plugin-side default. Gating
+        // on a feature flag (supervision) here would silently drop unrelated
+        // harness settings such as appServer.homeScope; feature gates belong in
+        // the feature's own surface (see requireSupervisionEnabled).
+        enabledByDefault: livePluginConfig !== undefined,
       }).enabled;
       if (!enabled) {
         return undefined;
@@ -89,41 +91,14 @@ export default definePluginEntry({
       return livePluginConfig;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
-    if (api.registrationMode === "full") {
-      const realtimeBrowserSession = configureCodexRealtimeBrowserSession({
-        getConfig: resolveCurrentConfig,
-        getPluginConfig: resolveCurrentPluginConfig,
-      });
-      api.registerHttpRoute({
-        path: CODEX_REALTIME_OFFER_PATH,
-        auth: "plugin",
-        match: "exact",
-        handler: realtimeBrowserSession.handler,
-      });
-      api.registerService({
-        id: "codex-oauth-realtime-browser-session-warmup",
-        start: () => {
-          void realtimeBrowserSession.warmup().catch((error: unknown) => {
-            api.logger.debug?.(
-              `Codex OAuth realtime warmup unavailable: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            );
-          });
-        },
-      });
-      api.lifecycle.registerRuntimeLifecycle({
-        id: "codex-oauth-realtime-browser-session",
-        description: "Release Codex OAuth realtime browser sessions when the plugin stops",
-        cleanup: async ({ reason }) => {
-          // Session cleanup must not release the process runtime. Registry
-          // restart and plugin disable release this registration's lease.
-          if (reason === "reset" || reason === "delete") {
-            return;
-          }
-          await realtimeBrowserSession.cleanup();
-        },
-      });
+    const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
+    if (appServerConfig?.transport === "websocket") {
+      api.registerService(
+        createCodexAppServerConnectionHealthService({
+          getPluginConfig: resolveCurrentPluginConfig,
+          getRuntimeConfig: resolveCurrentConfig,
+        }),
+      );
     }
     let bindingStateStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> | undefined;
     const openBindingStateStore = () =>
@@ -158,9 +133,13 @@ export default definePluginEntry({
         api,
         bindingStore,
         control: sessionCatalogControl,
+        getPluginConfig: resolveCurrentPluginConfig,
         getRuntimeConfig: resolveCurrentConfig,
       });
-      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
+      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl, {
+        getPluginConfig: resolveCurrentPluginConfig,
+        getRuntimeConfig: resolveCurrentConfig,
+      })) {
         api.registerNodeHostCommand(command);
       }
     }
@@ -348,16 +327,27 @@ export default definePluginEntry({
       if (endedSessionKey && nextSessionKey && nextSessionKey !== endedSessionKey) {
         return;
       }
+      // Reset hooks already clear in-place lifecycle state before the next turn.
+      // A delayed session_end must not retire a replacement that reuses the id.
+      if (event.nextSessionId?.trim() === event.sessionId.trim()) {
+        return;
+      }
       const config = resolveCurrentConfig();
-      const { sessionBindingIdentity } = await import("./src/app-server/session-binding.js");
-      await bindingStore.retireSessionGeneration(
-        sessionBindingIdentity({
+      const [{ sessionBindingIdentity }, { retireCodexAppServerSessionGeneration }] =
+        await Promise.all([
+          import("./src/app-server/session-binding.js"),
+          import("./src/app-server/session-retirement.js"),
+        ]);
+      await retireCodexAppServerSessionGeneration({
+        bindingStore,
+        identity: sessionBindingIdentity({
           sessionId: event.sessionId,
           ...(sessionKey ? { sessionKey } : {}),
           ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
           ...(config ? { config } : {}),
         }),
-      );
+        mode: "retire",
+      });
     });
   },
 });

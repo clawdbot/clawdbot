@@ -8,7 +8,9 @@ const mocks = vi.hoisted(() => ({
     ok: true,
   })),
   emitReachableGatewayAuthDiagnostic: vi.fn(async (_params: unknown) => false),
+  formatHealthChannelLines: vi.fn(() => []),
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
+  gatewayAuthTokenCommand: vi.fn(async (_runtime: unknown) => {}),
   defaultRuntime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -45,8 +47,13 @@ vi.mock("../../commands/gateway-status.js", () => ({
     mocks.gatewayStatusCommand(opts, runtime),
 }));
 
-vi.mock("./call.js", () => ({
-  callGatewayCli: (method: string, opts: unknown, params?: unknown) =>
+vi.mock("../../commands/gateway-auth-token.js", () => ({
+  gatewayAuthTokenCommand: (runtime: unknown) => mocks.gatewayAuthTokenCommand(runtime),
+}));
+
+vi.mock("../gateway-rpc.js", async () => ({
+  ...(await vi.importActual<typeof import("../gateway-rpc.js")>("../gateway-rpc.js")),
+  callGatewayFromCliWithTransport: (method: string, opts: unknown, params?: unknown) =>
     mocks.callGatewayCli(method, opts, params),
 }));
 
@@ -65,7 +72,7 @@ vi.mock("../daemon-cli/register-service-commands.js", () => ({
 vi.mock("../../commands/health.js", () => ({
   emitReachableGatewayAuthDiagnostic: (params: unknown) =>
     mocks.emitReachableGatewayAuthDiagnostic(params),
-  formatHealthChannelLines: () => [],
+  formatHealthChannelLines: () => mocks.formatHealthChannelLines(),
 }));
 
 vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
@@ -128,6 +135,23 @@ function firstGatewayStatusCall() {
   return gatewayStatusCommand.mock.calls[0] ?? [];
 }
 
+function expectLocalGatewayCall(method: string, port: number, params?: unknown) {
+  expect(defaultRuntime.error.mock.calls).toEqual([]);
+  expect(callGatewayCli).toHaveBeenCalledTimes(1);
+  const [actualMethod, opts, actualParams] = firstGatewayCall();
+  expect(actualMethod).toBe(method);
+  if (params !== undefined) {
+    expect(actualParams).toEqual(params);
+  }
+  const gatewayOpts = opts as
+    | { config?: { gateway?: { port?: number } }; localPortOverride?: number }
+    | undefined;
+  expect(gatewayOpts?.localPortOverride).toBe(port);
+  expect(gatewayOpts?.config).toEqual({
+    gateway: { mode: "local", port },
+  });
+}
+
 describe("gateway register option collisions", () => {
   const sharedProgram: Command = new Command();
 
@@ -139,12 +163,31 @@ describe("gateway register option collisions", () => {
   beforeEach(() => {
     callGatewayCli.mockClear();
     emitReachableGatewayAuthDiagnostic.mockClear();
+    mocks.formatHealthChannelLines.mockClear();
     gatewayStatusCommand.mockClear();
+    mocks.gatewayAuthTokenCommand.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.writeStdout.mockClear();
     defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
+  });
+
+  it("requires explicit confirmation before revealing the Gateway token", async () => {
+    await sharedProgram.parseAsync(["gateway", "auth-token"], { from: "user" });
+
+    expect(mocks.gatewayAuthTokenCommand).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Pass --show to confirm"),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("routes an explicitly confirmed token reveal through the output runtime", async () => {
+    await sharedProgram.parseAsync(["gateway", "auth-token", "--show"], { from: "user" });
+
+    expect(mocks.gatewayAuthTokenCommand).toHaveBeenCalledWith(defaultRuntime);
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -157,6 +200,20 @@ describe("gateway register option collisions", () => {
         expect(method).toBe("health");
         expect((opts as { token?: string } | undefined)?.token).toBe("tok_call");
         expect(params).toEqual({});
+      },
+    },
+    {
+      name: "projects gateway call --port into local config",
+      argv: ["gateway", "call", "health", "--port", "19084", "--json"],
+      assert: () => {
+        expectLocalGatewayCall("health", 19084, {});
+      },
+    },
+    {
+      name: "inherits parent --port for gateway call",
+      argv: ["gateway", "--port", "19085", "call", "health", "--json"],
+      assert: () => {
+        expectLocalGatewayCall("health", 19085);
       },
     },
     {
@@ -191,34 +248,14 @@ describe("gateway register option collisions", () => {
       name: "projects gateway health --port into local config",
       argv: ["gateway", "health", "--port", "19081", "--json"],
       assert: () => {
-        expect(defaultRuntime.error.mock.calls).toEqual([]);
-        expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, opts] = firstGatewayCall();
-        expect(method).toBe("health");
-        const gatewayOpts = opts as
-          | { config?: { gateway?: { port?: number } }; localPortOverride?: number }
-          | undefined;
-        expect(gatewayOpts?.localPortOverride).toBe(19081);
-        expect(gatewayOpts?.config).toEqual({
-          gateway: { mode: "local", port: 19081 },
-        });
+        expectLocalGatewayCall("health", 19081);
       },
     },
     {
       name: "inherits parent --port for gateway health",
       argv: ["gateway", "--port", "19083", "health", "--json"],
       assert: () => {
-        expect(defaultRuntime.error.mock.calls).toEqual([]);
-        expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, opts] = firstGatewayCall();
-        expect(method).toBe("health");
-        const gatewayOpts = opts as
-          | { config?: { gateway?: { port?: number } }; localPortOverride?: number }
-          | undefined;
-        expect(gatewayOpts?.localPortOverride).toBe(19083);
-        expect(gatewayOpts?.config).toEqual({
-          gateway: { mode: "local", port: 19083 },
-        });
+        expectLocalGatewayCall("health", 19083);
       },
     },
     {
@@ -246,6 +283,19 @@ describe("gateway register option collisions", () => {
     assert();
   });
 
+  it("rejects combining --url and --port for gateway call", async () => {
+    await sharedProgram.parseAsync(
+      ["gateway", "call", "health", "--url", "ws://127.0.0.1:19084", "--port", "19084", "--json"],
+      { from: "user" },
+    );
+
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      "Gateway call failed: Error: Use either --url or --port, not both.",
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("uses the effective local port config for gateway health auth diagnostics", async () => {
     const authError = new Error("gateway auth required");
     callGatewayCli.mockRejectedValueOnce(authError);
@@ -268,5 +318,32 @@ describe("gateway register option collisions", () => {
       localPortOverride: 19081,
       json: true,
     });
+  });
+
+  it("defers health presentation imports for successful JSON output", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const loadGatewayHealthModule = vi.fn(async () => ({
+      emitReachableGatewayAuthDiagnostic: mocks.emitReachableGatewayAuthDiagnostic,
+      formatHealthChannelLines: mocks.formatHealthChannelLines,
+    }));
+    const loadHealthStyleModule = vi.fn(async () => ({
+      styleHealthChannelLine: (line: string) => line,
+    }));
+    registerGatewayCli(program, {
+      loadGatewayHealthModule: loadGatewayHealthModule as never,
+      loadHealthStyleModule: loadHealthStyleModule as never,
+    });
+
+    await program.parseAsync(["node", "openclaw", "gateway", "health", "--json"]);
+
+    expect(callGatewayCli).toHaveBeenCalledWith(
+      "health",
+      expect.objectContaining({ json: true }),
+      undefined,
+    );
+    expect(loadGatewayHealthModule).not.toHaveBeenCalled();
+    expect(loadHealthStyleModule).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ ok: true });
   });
 });

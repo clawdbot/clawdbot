@@ -14,15 +14,13 @@ import {
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
+  pathForRoute,
   pathForWorkboardBoard,
   workboardBoardIdFromPath,
 } from "./app-route-paths.ts";
-import {
-  createApplicationRouter,
-  pathForRoute,
-  routeIdFromPath,
-  type RouteId,
-} from "./app-routes.ts";
+import { createApplicationRouter, routeIdFromPath, type RouteId } from "./app-routes.ts";
+import { sessionRefFromPath } from "./app-session-route-paths.ts";
+import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
 /**
@@ -39,7 +37,9 @@ const ALL_ROUTES: RouteId[] = Array.from(
     // Hub tabs and settings subpages route without their own nav entry.
     "worktrees",
     "memory-import",
+    "ai-agents",
     "model-setup",
+    "lobsterdex",
     ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
   ]),
 );
@@ -54,6 +54,7 @@ const SETTINGS_ROUTE_PATHS = [
     alias: "/communications",
   },
   { routeId: "appearance", path: "/settings/appearance", alias: "/appearance" },
+  { routeId: "lobsterdex", path: "/settings/lobsterdex", alias: "/lobsterdex" },
   { routeId: "automation", path: "/settings/automation", alias: "/automation" },
   { routeId: "mcp", path: "/settings/mcp", alias: "/mcp" },
   {
@@ -63,7 +64,8 @@ const SETTINGS_ROUTE_PATHS = [
   },
   { routeId: "worktrees", path: "/worktrees", alias: "/settings/worktrees" },
   { routeId: "sessions", path: "/sessions", alias: "/settings/sessions" },
-  { routeId: "nodes", path: "/settings/devices", alias: "/nodes" },
+  { routeId: "devices", path: "/settings/devices", alias: "/nodes" },
+  { routeId: "cron", path: "/automations", alias: "/cron" },
   { routeId: "agents", path: "/settings/agents", alias: "/agents" },
   {
     routeId: "memory-import",
@@ -94,6 +96,7 @@ describe("navigationIconForRoute", () => {
       apps: "layoutGrid",
       approvals: "badgeCheck",
       workboard: "kanban",
+      dashboards: "layoutDashboard",
       worktrees: "folder",
       channels: "link",
       connection: "radio",
@@ -105,15 +108,18 @@ describe("navigationIconForRoute", () => {
       skills: "zap",
       plugins: "puzzle",
       "skill-workshop": "wrench",
-      nodes: "monitorSmartphone",
-      config: "settings",
+      devices: "monitorSmartphone",
       profile: "circleUser",
       communications: "send",
       appearance: "palette",
+      lobsterdex: "bug",
       automation: "terminal",
       mcp: "wrench",
+      memory: "book",
+      talk: "mic",
       infrastructure: "globe",
       labs: "flaskConical",
+      updates: "download",
       about: "fileText",
       "ai-agents": "brain",
       "model-setup": "spark",
@@ -139,6 +145,15 @@ describe("settingsSearchTextMatches", () => {
     expect(settingsSearchTextMatches("CPU usage", "cp")).toBe(true);
     expect(settingsSearchTextMatches("MCP", "cp")).toBe(false);
     expect(settingsSearchTextMatches("外観設定", "設定")).toBe(true);
+  });
+
+  it.each([
+    ["Cámara", "Ca\u0301mara"],
+    ["Ca\u0301mara", "Cámara"],
+    ["Notificación", "Notificacio\u0301n"],
+    ["Notificacio\u0301n", "Notificación"],
+  ])("matches canonically equivalent setting text %j against %j", (value, query) => {
+    expect(settingsSearchTextMatches(value, query)).toBe(true);
   });
 });
 
@@ -202,10 +217,11 @@ describe("titleForRoute", () => {
       apps: "Apps",
       approvals: "Approvals",
       workboard: "Workboard",
+      dashboards: "Dashboards",
       worktrees: "Worktrees",
       channels: "Channels",
-      connection: "Connection",
-      sessions: "Threads",
+      connection: "Gateway",
+      sessions: "Sessions",
       usage: "Usage",
       cron: "Automations",
       tasks: "Tasks",
@@ -213,19 +229,22 @@ describe("titleForRoute", () => {
       skills: "Skills",
       plugins: "Plugins",
       "skill-workshop": "Skill Workshop",
-      nodes: "Devices",
-      config: "Settings",
+      devices: "Devices",
       profile: "Profile",
       communications: "Communications",
       appearance: "Appearance",
+      lobsterdex: "Lobsterdex",
       automation: "Automation",
       mcp: "MCP",
+      memory: "Memory",
+      talk: "Talk",
       infrastructure: "Infrastructure",
       labs: "Labs",
+      updates: "Updates",
       about: "About",
       "ai-agents": "Agent Defaults",
       "model-setup": "Model Setup",
-      "model-providers": "Model Providers",
+      "model-providers": "Models",
       "memory-import": "Import Memory",
       notifications: "Notifications",
       security: "Privacy & Security",
@@ -246,31 +265,35 @@ describe("subtitleForRoute", () => {
       activity: "Browser-local tool activity summaries.",
       apps: "Companion apps for phone, watch, desktop, and browser.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
-      workboard: "Agent work queue and thread handoff.",
+      workboard: "Agent work queue and session handoff.",
+      dashboards: "Sessions that open on their dashboard face.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
       connection: "Gateway endpoint, credentials, and handshake status.",
-      sessions: "Active threads and defaults.",
+      sessions: "Active sessions and defaults.",
       usage: "API usage and costs.",
       cron: "Scheduled tasks and recurring agent runs.",
-      tasks: "Background tasks: subagents, cron runs, CLI.",
+      tasks: "Background tasks: subagents, automation runs, CLI.",
       agents: "Workspaces, tools, identities.",
       skills: "Skills and API keys.",
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
-      nodes: "Paired devices, pairing approvals, and exec bindings.",
-      config: "Model defaults, language, and gateway host.",
-      profile: "Your agent's stats, streaks, and life in the reef.",
-      communications: "Channels, messages, and audio settings.",
+      devices: "Paired devices, pairing approvals, and exec bindings.",
+      profile: "Your display name, avatar, and identity on this gateway.",
+      communications: "Messages and text-to-speech settings.",
       appearance: "Theme, UI, and setup wizard settings.",
-      automation: "Commands, hooks, cron, and plugins.",
+      lobsterdex: "Every lobster palette that has visited this browser.",
+      automation: "Commands, hooks, automations, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
-      infrastructure: "Gateway, web, browser, and media settings.",
+      memory: "Memory engine, search, and dreaming.",
+      talk: "Realtime voice: provider, model, and speaker voice.",
+      infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
       labs: "Experimental agent and tool capabilities.",
+      updates: "Release channel, automatic updates, and current update status.",
       about: "Control UI and connected Gateway build identity.",
-      "ai-agents": "Global agent defaults: models, skills, tools, memory, session.",
+      "ai-agents": "Global agent defaults: skills, tools, and session.",
       "model-setup": "Connect a verified AI model",
-      "model-providers": "Configured providers with plan, quota, and cost.",
+      "model-providers": "Default models, behavior, provider access, usage, and cost.",
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
       notifications: "Browser push notifications from your gateway.",
       security: "Gateway auth, exec policy, tool profile, and approvals.",
@@ -285,6 +308,7 @@ describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
     expect(pathForRoute("apps")).toBe("/apps");
+    expect(pathForRoute("dashboards")).toBe("/dashboards");
     expect(pathForRoute("custodian")).toBe("/custodian");
     expect(pathForRoute("connection")).toBe("/settings/connection");
     expect(pathForRoute("debug")).toBe("/debug");
@@ -321,6 +345,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/connection")).toBeNull();
     expect(routeIdFromPath("/activity")).toBe("activity");
     expect(routeIdFromPath("/apps")).toBe("apps");
+    expect(routeIdFromPath("/dashboards")).toBe("dashboards");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/debug")).toBe("debug");
     expect(routeIdFromPath("/logs")).toBe("logs");
@@ -342,6 +367,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/ui/chat", "/ui")).toBe("chat");
     expect(routeIdFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
     expect(routeIdFromPath("/ui/settings/plugins", "/ui")).toBe("plugins");
+    expect(routeIdFromPath("/xx/chat/main", "/ui")).toBeNull();
   });
 
   it("round-trips Workboard board paths", () => {
@@ -352,6 +378,23 @@ describe("routeIdFromPath", () => {
     expect(pathForWorkboardBoard("ops", "/ui")).toBe("/ui/workboard/ops");
     expect(workboardBoardIdFromPath("/ui/workboard/ops", "/ui")).toBe("ops");
     expect(inferBasePathFromPathname("/ui/workboard/ops")).toBe("/ui");
+  });
+
+  it("round-trips session navigation through the lazy contract seam", () => {
+    const pathname = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: "telegram:12345",
+      fallbackAgentId: "research",
+      basePath: "/ui",
+    }).options.pathname;
+
+    expect(pathname).toBe("/ui/chat/research/telegram/12345");
+    expect(sessionRefFromPath(pathname, "/ui")).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:research:telegram:12345",
+    });
+    expect(routeIdFromPath(pathname, "/ui")).toBe("chat");
+    expect(inferBasePathFromPathname(pathname)).toBe("/ui");
   });
 
   it("keeps dotted board IDs from resembling static asset paths", () => {
@@ -423,6 +466,23 @@ describe("inferBasePathFromPathname", () => {
     expect(inferBasePathFromPathname("/index.html")).toBe("");
     expect(inferBasePathFromPathname("/ui/index.html")).toBe("/ui");
   });
+
+  it("never infers a route namespace as a mount base", () => {
+    // "/settings/config" is not a route; matching the "/config" alias must not
+    // rescope the page to base "/settings" or reconnect state and assets break.
+    expect(inferBasePathFromPathname("/settings/config")).toBe("");
+    expect(inferBasePathFromPathname("/settings/config/")).toBe("");
+    expect(inferBasePathFromPathname("/settings/chat/main")).toBe("");
+    // A leaf route is equally not a mount directory.
+    expect(inferBasePathFromPathname("/custodian/config")).toBe("");
+    // Nested unknown segments below a route namespace stay root-mounted too.
+    expect(inferBasePathFromPathname("/settings/other/config")).toBe("");
+    expect(inferBasePathFromPathname("/settings/")).toBe("");
+    expect(inferBasePathFromPathname("/skills/")).toBe("");
+    // Real mount directories that merely contain a route-suffix keep working.
+    expect(inferBasePathFromPathname("/ui/config")).toBe("/ui");
+    expect(inferBasePathFromPathname("/ui/settings/appearance")).toBe("/ui");
+  });
 });
 
 describe("plugin tabs route", () => {
@@ -469,18 +529,18 @@ describe("SIDEBAR_NAV_ROUTES", () => {
     expect(settingsRoutes).toEqual([
       "custodian",
       "profile",
-      "config",
       "appearance",
       "notifications",
       "connection",
       "channels",
       "communications",
-      "nodes",
+      "talk",
+      "devices",
       "agents",
-      "ai-agents",
       "labs",
       "model-providers",
       "mcp",
+      "memory",
       "automation",
       "security",
       "approvals",
@@ -488,16 +548,17 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "advanced",
       "debug",
       "logs",
+      "updates",
       "about",
     ]);
   });
 
-  it("keeps settings sidebar groups unique and general first", () => {
+  it("keeps settings sidebar groups unique with personal settings first", () => {
     const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
     expect(new Set(settingsRoutes).size).toBe(settingsRoutes.length);
     const [firstGroup] = SETTINGS_NAVIGATION_GROUPS;
     expect(firstGroup?.labelKey).toBeNull();
-    expect(firstGroup?.routes).toContain("config");
+    expect(firstGroup?.routes).toEqual(["custodian", "profile", "appearance", "notifications"]);
     for (const group of SETTINGS_NAVIGATION_GROUPS.slice(1)) {
       expect(group.labelKey).toBeTruthy();
     }

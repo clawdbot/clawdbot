@@ -23,12 +23,13 @@ import {
 } from "./cli-shared.js";
 
 type ClaudeCliAuthCredential =
-  | { type: "oauth"; access: string }
+  | { type: "oauth"; access: string; expires: number }
   | { type: "token"; token: string }
   | { type: "api_key"; key: string }
   | { type: string };
 
 type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
+  isolatedCompletionEnforced?: true;
   secretInput: {
     fd: 3;
     fingerprint: string;
@@ -73,11 +74,21 @@ function createClaudeCliAuthInput(params: {
 function resolveClaudeCliAuthInput(
   credential: ClaudeCliAuthCredential | undefined,
 ): ClaudeCliPreparedExecution | undefined {
-  if (
-    credential?.type === "oauth" &&
-    "access" in credential &&
-    typeof credential.access === "string"
-  ) {
+  // Forwarded OAuth here is OpenClaw-managed material (its refresh path is
+  // OpenClaw-owned). Imported native `claude` logins are never forwarded —
+  // core runs those as identity-verified passthrough — so an expired token
+  // reaching this point is a real fault worth failing loudly, not refreshable
+  // state this plugin could repair.
+  if (credential?.type === "oauth" && "access" in credential) {
+    const expires = "expires" in credential ? credential.expires : undefined;
+    if (typeof expires !== "number" || !Number.isFinite(expires) || expires <= Date.now()) {
+      throw new Error(
+        "Selected Claude CLI OAuth credential is expired or invalid. Re-authenticate the selected profile and retry. OpenClaw did not start the run.",
+      );
+    }
+    if (typeof credential.access !== "string") {
+      return undefined;
+    }
     return createClaudeCliAuthInput({
       envName: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
       value: credential.access,
@@ -124,6 +135,14 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       entrypoint: "command",
       nativeExecutableNames: ["claude", "claude.exe"],
     },
+    // Claude Code 2.1.206 first shipped per-input lifecycle correlation. The
+    // runtime checks the advertised capability so backports and wrappers work.
+    liveSessionRequirement: {
+      capability: "msg_lifecycle_v1",
+      minimumVersion: "2.1.206",
+      versionArgs: ["--version"],
+      updateCommand: "claude update",
+    },
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
@@ -166,6 +185,9 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "{sessionId}",
       ],
       forkArg: "--fork-session",
+      // Claude Code 2.1.209+ exposes this hidden print-mode flag, and stream-json
+      // emits the matching transcript UUID on assistant records.
+      resumeAtArg: "--resume-session-at",
       output: "jsonl",
       liveSession: "claude-stdio",
       input: "stdin",
@@ -194,15 +216,21 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     prepareExecution: (context) => {
       const credentialContext = context as typeof context & {
         authCredential?: ClaudeCliAuthCredential;
+        isolatedCompletionPrompt?: string;
+        isolatedCompletionSystemPrompt?: string;
       };
       const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
+      const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
       const env = {
         ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
         ...authInput?.env,
       };
-      return Object.keys(env).length > 0
+      return Object.keys(env).length > 0 || isolatedCompletion
         ? {
             env,
+            // The paired side-question argv projection disables settings, memory,
+            // hooks, session persistence, and tools before process launch.
+            ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
             ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
             ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
             ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),

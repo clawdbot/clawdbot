@@ -59,6 +59,7 @@ import {
   deliverDiscordInteractionReply,
   hasRenderableReplyPayload,
   safeDiscordInteractionCall,
+  settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
 import { maybeDeliverDiscordDirectStatus } from "./native-command-status.js";
 import {
@@ -297,7 +298,8 @@ async function dispatchDiscordCommandInteraction(params: {
     allowNameMatching,
   });
   const commandOwnerAllowAll = commandOwnerAllowFrom?.includes("*") === true;
-  const senderIsCommandOwner = commandOwnerOk || commandOwnerAllowAll;
+  const senderIsCommandOwner = commandOwnerOk;
+  const commandOwnerAccessAllowed = senderIsCommandOwner || commandOwnerAllowAll;
   const ownerAllowListConfigured = discordOwnerAllowList != null;
   const ownerOk = discordOwnerOk;
   const { commandsAllowFromAccess, guildInfo, channelConfig } =
@@ -461,7 +463,7 @@ async function dispatchDiscordCommandInteraction(params: {
   const pluginMatch = nativeCommandRuntime.matchPluginCommand(prompt);
   if (
     commandOwnerAllowFrom &&
-    !senderIsCommandOwner &&
+    !commandOwnerAccessAllowed &&
     !commandsAllowFromAccess.allowed &&
     commandName !== "status" &&
     !pluginMatch
@@ -545,6 +547,7 @@ async function dispatchDiscordCommandInteraction(params: {
 
   if (pluginMatch && commandName !== "status") {
     if (suppressReplies) {
+      await settleDiscordInteractionWithoutVisibleReply(interaction);
       return { accepted: true };
     }
     const messageThreadId = !isDirectMessage && isThreadChannel ? channelId : undefined;
@@ -583,6 +586,7 @@ async function dispatchDiscordCommandInteraction(params: {
       threadParentId: pluginThreadParentId,
     });
     if (pluginReply.suppressReply === true) {
+      await settleDiscordInteractionWithoutVisibleReply(interaction);
       return { accepted: true, effectiveRoute };
     }
     if (!hasRenderableReplyPayload(pluginReply)) {
@@ -699,7 +703,7 @@ async function dispatchDiscordCommandInteraction(params: {
     return directStatusResult;
   }
 
-  await dispatchDiscordNativeAgentReply({
+  const { dispatched, hiddenFinalReply } = await dispatchDiscordNativeAgentReply({
     cfg,
     discordConfig,
     accountId,
@@ -714,7 +718,7 @@ async function dispatchDiscordCommandInteraction(params: {
     log,
   });
 
-  return { accepted: true, effectiveRoute };
+  return { accepted: dispatched, effectiveRoute, hiddenFinalReply };
 }
 
 export function createDiscordCommandArgFallbackButton(params: DiscordCommandArgContext): Button {

@@ -6,7 +6,7 @@ import {
   collectPluginExtensionImportBoundaryInventory,
   diffInventory,
   main,
-} from "../scripts/check-plugin-extension-import-boundary.mjs";
+} from "../scripts/check-plugin-extension-import-boundary.mts";
 import { createCapturedIo } from "./helpers/captured-io.js";
 
 const repoRoot = process.cwd();

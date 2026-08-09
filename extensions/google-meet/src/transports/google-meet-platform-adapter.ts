@@ -42,10 +42,6 @@ type GoogleMeetDialInPlan = {
   dtmfSequence?: string;
 };
 
-export function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
-  return mode === "agent" || mode === "bidi";
-}
-
 function parsePermissionGrantNotes(result: unknown): string[] {
   const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
   const unsupportedPermissions = Array.isArray(record.unsupportedPermissions)
@@ -133,16 +129,20 @@ export const GOOGLE_MEET_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     },
   },
   browser: {
-    allowsMicrophone: isGoogleMeetTalkBackMode,
+    allowsMicrophone: MeetingPlatformAdapter.isTalkBackMode,
     buildStatusJoinScript: (params) =>
       meetStatusScript({
-        allowMicrophone: isGoogleMeetTalkBackMode(params.mode),
+        allowMicrophone: MeetingPlatformAdapter.isTalkBackMode(params.mode),
         autoJoin: params.autoJoin,
         captionSessionId: params.meetingSessionId || undefined,
         captureCaptions: params.captureCaptions,
         guestName: params.guestName,
         readOnly: params.readOnly,
       }),
+    shouldRetryJoinStatus: (health) =>
+      health.inCall === true &&
+      health.manualAction?.reason === "meet-audio-choice-required" &&
+      (health.audioInputRouted !== true || health.audioOutputRouted !== true),
     browserControlUnavailable: () => ({
       category: "browser-control-unavailable",
       reason: "browser-control-unavailable",

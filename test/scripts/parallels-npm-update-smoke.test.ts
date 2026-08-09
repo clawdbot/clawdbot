@@ -1,6 +1,5 @@
 // Parallels Npm Update Smoke tests cover parallels npm update smoke script behavior.
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +23,7 @@ import {
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
 import type { HostServer, Platform } from "../../scripts/e2e/parallels/types.ts";
 import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
 const GUEST_TRANSPORTS_PATH = "scripts/e2e/parallels/guest-transports.ts";
@@ -35,13 +35,7 @@ const TEST_AUTH = {
   apiKeyValue: "test-key",
   modelId: "gpt-5.4",
 };
-const tempDirs: string[] = [];
-
-function makeTempDir(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-parallels-npm-update-"));
-  tempDirs.push(root);
-  return root;
-}
+const tempDirs = createTempDirTracker();
 
 function pidIsAlive(pid: number): boolean {
   try {
@@ -103,9 +97,7 @@ function extractWindowsBackgroundControlMarkers(decoded: string): {
 
 afterEach(() => {
   vi.useRealTimers();
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
+  tempDirs.cleanup();
 });
 
 describe("parallels npm update smoke", () => {
@@ -137,6 +129,15 @@ describe("parallels npm update smoke", () => {
     ).toThrow("--registry-package-tarball requires --target-tarball");
   });
 
+  it("passes an explicit macOS snapshot hint through fresh lanes", () => {
+    expect(
+      parseArgs(["--platform", "macos", "--macos-snapshot-hint", "macOS 26.5 Node 24"]),
+    ).toMatchObject({
+      macosSnapshotHint: "macOS 26.5 Node 24",
+      platforms: new Set(["macos"]),
+    });
+  });
+
   it("stops the host artifact server when the wrapper fails mid-run", async () => {
     let stopCalls = 0;
     const server: HostServer = {
@@ -151,7 +152,7 @@ describe("parallels npm update smoke", () => {
     class FailingNpmUpdateSmoke extends NpmUpdateSmoke {
       protected override async makeRunTempDir(prefix: string): Promise<string> {
         void prefix;
-        return makeTempDir();
+        return tempDirs.make("openclaw-parallels-npm-update-");
       }
 
       protected override async runSteps(): Promise<void> {
@@ -179,7 +180,7 @@ describe("parallels npm update smoke", () => {
   });
 
   it("removes uploaded guest update scripts when chmod fails", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "prlctl.log");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
@@ -245,6 +246,88 @@ exit 1
     expect(log.match(/^cleanup$/gm)).toHaveLength(1);
   });
 
+  it("uses one macOS guest identity to write and execute update scripts", async () => {
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
+    const logPath = path.join(root, "prlctl.log");
+    const prlctlPath = path.join(root, "prlctl");
+    writeFileSync(
+      prlctlPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+log_path=${JSON.stringify(logPath)}
+printf '%s\\n' "$*" >>"$log_path"
+args=" $* "
+if [[ "$args" == *" --current-user whoami "* ]]; then
+  printf 'desktop-user\\n'
+  exit 0
+fi
+if [[ "$args" == *" /usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  cat >/dev/null
+  exit 0
+fi
+if [[ "$args" == *" /bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  exit 0
+fi
+if [[ "$args" == *" /usr/sbin/chown desktop-user /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  exit 0
+fi
+if [[ "$args" == *" /bin/rm -f /tmp/openclaw-parallels-npm-update-macos-"* ]]; then
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(prlctlPath, 0o755);
+
+    await withEnvAsync(
+      {
+        OPENAI_API_KEY: "test-key",
+        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      async () => {
+        const smoke = new NpmUpdateSmoke({
+          ...TEST_AUTH,
+          dependencyTarballs: [],
+          registryPackageTarballs: [],
+          json: false,
+          packageSpec: "openclaw@latest",
+          platforms: new Set<Platform>(["macos"]),
+          provider: "openai",
+          updateTarget: "local-main",
+        });
+        const stream = vi.fn().mockResolvedValue(0);
+        Reflect.set(smoke, "runStreamingToJobLog", stream);
+        const guestMacos = Reflect.get(smoke, "guestMacos") as (
+          script: string,
+          timeoutMs: number,
+          ctx: { append: (chunk: string) => void },
+        ) => Promise<void>;
+        const ctx = { append: vi.fn() };
+
+        await guestMacos.call(smoke, "echo update", 30_000, ctx);
+
+        const call = stream.mock.calls.at(0);
+        expect(call?.[0]).toBe("prlctl");
+        expect(call?.[1]).toEqual([
+          "exec",
+          "macOS Tahoe",
+          "--current-user",
+          "/usr/bin/env",
+          expect.stringMatching(/^PATH=/),
+          "/bin/bash",
+          expect.stringMatching(/^\/tmp\/openclaw-parallels-npm-update-macos-/),
+        ]);
+      },
+    );
+
+    const log = readFileSync(logPath, "utf8");
+    expect(log).toContain("--current-user whoami");
+    expect(log).toContain("--current-user /usr/bin/env PATH=");
+    expect(log).toContain("/usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-");
+    expect(log).toContain("/bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-");
+    expect(log).toContain("/usr/sbin/chown desktop-user");
+  });
+
   it("has a one-command beta validation mode with fresh target coverage", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -298,6 +381,27 @@ exit 1
     for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
       expect(script).toContain("attempt=$((attempt + 1))");
       expect(script).toContain('if [ "$attempt" -eq 4 ]; then\n      start_openclaw_gateway');
+    }
+  });
+
+  it("keeps POSIX provider secrets out of executable command lines", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.5",
+      updateTarget: "2026.7.2-beta.5",
+    };
+    const exportLine = `  export ${TEST_AUTH.apiKeyEnv}='${TEST_AUTH.apiKeyValue}'`;
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script.split("\n").filter((line) => line.includes(TEST_AUTH.apiKeyValue))).toEqual([
+        exportLine,
+      ]);
+      expect(script).toMatch(/with_provider_api_key [^\n]*gateway run/u);
+      expect(script).toMatch(/with_provider_api_key [^\n]*agent --local/u);
+      expect(script).toContain(`unset ${TEST_AUTH.apiKeyEnv}`);
+      expect(script.split("\n").find((line) => line.includes(" update --tag "))).not.toContain(
+        "with_provider_api_key",
+      );
     }
   });
 
@@ -447,7 +551,7 @@ exit 1
   });
 
   it("streams fresh lane logs instead of retaining them in memory", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "fresh.log");
     const output: string[] = [];
 
@@ -488,7 +592,7 @@ exit 1
   });
 
   it("clamps oversized fresh lane command timeouts before scheduling", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "fresh.log");
 
     const code = await spawnLoggedCommand(
@@ -504,7 +608,7 @@ exit 1
   });
 
   it.runIf(process.platform !== "win32")("times out fresh lane process groups", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "fresh.log");
     const scriptPath = path.join(root, "hung-fresh-lane.mjs");
     const descendantPidPath = path.join(root, "descendant.pid");
@@ -544,7 +648,7 @@ exit 1
   it.runIf(process.platform !== "win32")(
     "lets fresh lane descendants exit during timeout kill grace",
     async () => {
-      const root = makeTempDir();
+      const root = tempDirs.make("openclaw-parallels-npm-update-");
       const logPath = path.join(root, "fresh.log");
       const scriptPath = path.join(root, "graceful-fresh-lane.mjs");
       const readyPath = path.join(root, "ready");
@@ -623,7 +727,7 @@ exit 1
   it.runIf(process.platform !== "win32")(
     "lets update stream descendants exit during timeout kill grace",
     async () => {
-      const root = makeTempDir();
+      const root = tempDirs.make("openclaw-parallels-npm-update-");
       const scriptPath = path.join(root, "stream-update-grace.mjs");
       const readyPath = path.join(root, "stream-ready");
       const donePath = path.join(root, "stream-done");
@@ -748,6 +852,110 @@ exit 1
     expect(commands).not.toContain("ReadAllBytes");
   });
 
+  it.each([
+    {
+      scenario: "a successfully launched job",
+      launchStatus: 0,
+      launchOutput: "started\n",
+      expectedError: "windows setup deadline timed out",
+    },
+    {
+      scenario: "a launch that never materializes",
+      launchStatus: 0,
+      launchOutput: "",
+      expectedError: "windows setup deadline background launch failed with exit code 0",
+    },
+    {
+      scenario: "a genuine launch failure",
+      launchStatus: 17,
+      launchOutput: "",
+      expectedError: "windows setup deadline background launch failed with exit code 17",
+    },
+  ])("preserves $scenario when Windows setup exhausts its active budget", async (testCase) => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let launchAttempts = 0;
+    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
+      if (options?.input) {
+        now += 2;
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      const decoded = decodePowerShellFromArgs(args);
+      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
+        launchAttempts++;
+        return { status: testCase.launchStatus, stderr: "", stdout: testCase.launchOutput };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    };
+
+    try {
+      await expect(
+        runWindowsBackgroundPowerShell({
+          label: "windows setup deadline",
+          pollIntervalMs: 1,
+          runCommand: fakeRun,
+          script: "Write-Output test",
+          timeoutMs: 5,
+          vmName: "Windows Test",
+        }),
+      ).rejects.toThrow(testCase.expectedError);
+      expect(launchAttempts).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("drains a completed Windows job when setup exhausts the active budget", async () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let completionProbes = 0;
+    let logProbes = 0;
+    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
+      if (options?.input) {
+        now += 2;
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      const decoded = decodePowerShellFromArgs(args);
+      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      if (args.includes("cmd.exe")) {
+        const command = args.at(-1) ?? "";
+        if (command.includes("__OPENCLAW_BACKGROUND_DONE__")) {
+          logProbes++;
+          const markers = extractWindowsBackgroundControlMarkers(command);
+          return {
+            status: 0,
+            stderr: "",
+            stdout: [`${markers.exitPrefix}0`, markers.done, ""].join("\n"),
+          };
+        }
+        if (command.includes("(echo done) else (echo wait)")) {
+          completionProbes++;
+          return { status: 0, stderr: "", stdout: "done\n" };
+        }
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    };
+
+    try {
+      await expect(
+        runWindowsBackgroundPowerShell({
+          label: "windows completed before first poll",
+          pollIntervalMs: 1,
+          runCommand: fakeRun,
+          script: "Write-Output done",
+          timeoutMs: 5,
+          vmName: "Windows Test",
+        }),
+      ).resolves.toBeUndefined();
+      expect(completionProbes).toBe(1);
+      expect(logProbes).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("does not treat Windows background log text as completion control", async () => {
     const decodedCommands: string[] = [];
     const fakeRun: typeof hostCommandRun = (_command, args) => {
@@ -832,12 +1040,13 @@ exit 1
   it("keeps macOS sudo fallback update scripts readable by the desktop user", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
-    expect(script).toContain('macosExecArgs.indexOf("-u")');
-    expect(script).toContain('"/usr/sbin/chown", sudoUser, scriptPath');
+    expect(script).toContain('"/usr/sbin/chown"');
+    expect(script).toContain("macosUpdateExec.ownerUser");
+    expect(script).toContain("ownerUser: fallbackUser");
   });
 
   it("selects macOS desktop users with homes on spaced mounted volumes", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
       prlctlPath,
@@ -885,7 +1094,7 @@ exit 7
   });
 
   it("keeps spaces in macOS sudo fallback desktop homes", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
       prlctlPath,
@@ -926,6 +1135,16 @@ exit 7
         );
       },
     );
+  });
+
+  it("writes macOS update scripts through the desktop user transport", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("const macosUpdateExec = this.resolveMacosUpdateExec(ctx)");
+    expect(script).toContain('{ execArgs: macosUpdateExec.execArgs, mode: "700" }');
+    expect(script).toContain('["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath]');
+    expect(script).toContain('["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath]');
+    expect(script).toContain("ownerUser: user");
   });
 
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {

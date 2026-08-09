@@ -70,6 +70,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
 
     .search {
       flex: 1;
+      min-width: 0;
       background: transparent;
       border: none;
       outline: none;
@@ -436,6 +437,33 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       color: var(--muted);
       max-width: 380px;
     }
+
+    @media (max-width: 640px) {
+      .head {
+        padding: 12px;
+      }
+
+      .body {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(0, min(180px, 30dvh)) minmax(0, 1fr);
+      }
+
+      .list {
+        min-width: 0;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+        padding: 10px 8px;
+      }
+
+      .item {
+        min-width: 0;
+      }
+
+      .foot {
+        gap: 8px;
+        padding: 10px 12px;
+      }
+    }
   `;
 
   protected override willUpdate(changed: PropertyValues<this>) {
@@ -706,16 +734,16 @@ function fileKind(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {
     md: "Markdown",
-    txt: "Text",
+    txt: t("filePreview.kind.text"),
     json: "JSON",
     yaml: "YAML",
     yml: "YAML",
     ts: "TypeScript",
     js: "JavaScript",
     py: "Python",
-    sh: "Shell",
+    sh: t("filePreview.kind.shell"),
   };
-  return map[ext] ?? (ext ? ext.toUpperCase() : "File");
+  return map[ext] ?? (ext ? ext.toUpperCase() : t("filePreview.kind.file"));
 }
 
 const CODE_EXTENSIONS = new Set([

@@ -68,59 +68,61 @@ describeLive("comfy live", () => {
     );
   });
 
-  it.skipIf(!isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "image" }))(
-    "runs an image workflow",
-    async () => {
-      const provider = requireProvider(imageProviders, "comfy");
-      const result = await provider.generateImage({
-        provider: "comfy",
-        model: "workflow",
-        prompt: "A tiny orange lobster icon on a clean background.",
-        cfg: cfg as never,
-        agentDir,
-      });
-      expect(result.images.length).toBeGreaterThan(0);
-      expect(result.images[0]?.mimeType.startsWith("image/")).toBe(true);
-      expect(result.images[0]?.buffer.byteLength).toBeGreaterThan(128);
-    },
-    120_000,
-  );
+  // Capability gates must run after beforeAll loads the isolated live config;
+  // declaration-time skipIf checks would only see the empty placeholders above.
+  it("runs an image workflow", async ({ skip }) => {
+    if (!isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "image" })) {
+      skip("No Comfy image workflow is configured");
+      return;
+    }
+    const provider = requireProvider(imageProviders, "comfy");
+    const result = await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "A tiny orange lobster icon on a clean background.",
+      cfg: cfg as never,
+      agentDir,
+    });
+    expect(result.images.length).toBeGreaterThan(0);
+    expect(result.images[0]?.mimeType.startsWith("image/")).toBe(true);
+    expect(result.images[0]?.buffer.byteLength).toBeGreaterThan(128);
+  }, 120_000);
 
-  it.skipIf(!isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "video" }))(
-    "runs a video workflow",
-    async () => {
-      const provider = requireProvider(videoProviders, "comfy");
-      const result = await provider.generateVideo({
-        provider: "comfy",
-        model: "workflow",
-        prompt: "A tiny paper lobster gently waving, cinematic motion.",
-        cfg: cfg as never,
-        agentDir,
-      });
-      expect(result.videos.length).toBeGreaterThan(0);
-      expect(result.videos[0]?.mimeType.startsWith("video/")).toBe(true);
-      expect(result.videos[0]?.buffer.byteLength).toBeGreaterThan(512);
-    },
-    180_000,
-  );
+  it("runs a video workflow", async ({ skip }) => {
+    if (!isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "video" })) {
+      skip("No Comfy video workflow is configured");
+      return;
+    }
+    const provider = requireProvider(videoProviders, "comfy");
+    const result = await provider.generateVideo({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "A tiny paper lobster gently waving, cinematic motion.",
+      cfg: cfg as never,
+      agentDir,
+    });
+    expect(result.videos.length).toBeGreaterThan(0);
+    expect(result.videos[0]?.mimeType.startsWith("video/")).toBe(true);
+    expect(result.videos[0]?.buffer.byteLength).toBeGreaterThan(512);
+  }, 180_000);
 
-  it.skipIf(!isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "music" }))(
-    "runs a music workflow",
-    async () => {
-      const provider = requireProvider(musicProviders, "comfy");
-      const result = await provider.generateMusic({
-        provider: "comfy",
-        model: "workflow",
-        prompt: "A gentle ambient synth loop with warm analog pads.",
-        cfg: cfg as never,
-        agentDir,
-      });
-      expect(result.tracks.length).toBeGreaterThan(0);
-      expect(result.tracks[0]?.mimeType.startsWith("audio/")).toBe(true);
-      expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(512);
-    },
-    180_000,
-  );
+  it("runs a music workflow", async ({ skip }) => {
+    if (!isComfyCapabilityConfigured({ cfg: cfg as never, agentDir, capability: "music" })) {
+      skip("No Comfy music workflow is configured");
+      return;
+    }
+    const provider = requireProvider(musicProviders, "comfy");
+    const result = await provider.generateMusic({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "A gentle ambient synth loop with warm analog pads.",
+      cfg: cfg as never,
+      agentDir,
+    });
+    expect(result.tracks.length).toBeGreaterThan(0);
+    expect(result.tracks[0]?.mimeType.startsWith("audio/")).toBe(true);
+    expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(512);
+  }, 180_000);
 
   it("documents the effective comfy config shape for live debugging", () => {
     const comfyConfig = getComfyConfigForTesting(cfg as never);

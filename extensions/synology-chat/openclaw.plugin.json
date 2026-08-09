@@ -1,5 +1,6 @@
 {
   "id": "synology-chat",
+  "doctorContract": {},
   "name": "Synology Chat",
   "description": "Synology Chat channel plugin for OpenClaw channels and direct messages.",
   "icon": "https://cdn.simpleicons.org/synology",

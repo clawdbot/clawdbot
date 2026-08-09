@@ -39,6 +39,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { resolveSessionCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
@@ -371,6 +372,7 @@ async function createSessionEntry(
                     pluginOwnerId: cliInitial.pluginOwnerId,
                     providerOverride: cliInitial.cliBackendId,
                     modelOverride: cliInitial.model,
+                    modelOverrideRouteResolution: "resolved",
                     cliSessionBindings: {
                       [cliInitial.cliBackendId]: cliInitial.cliSessionBinding,
                     },
@@ -579,6 +581,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     resolveAgentDir,
     resolveAgentWorkspaceDir,
     resolveAgentIdentity,
+    resolveSessionCatalogCreateTarget,
     resolveThinkingDefault,
     normalizeThinkingLevel: normalizeThinkLevel,
     resolveThinkingPolicy: (params) => {

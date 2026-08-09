@@ -30,7 +30,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
 import {
   getSessionStateVersion,
   listSessionStateEventsSince,
@@ -363,7 +363,7 @@ ${JSON.stringify(details, null, 2)}
 
 function formatSessionStateChanges(details: {
   stateVersion: number;
-  stateChanges: ReturnType<typeof listSessionStateEventsSince>;
+  stateChanges: ReturnType<typeof compactSessionStateChanges>;
 }): string {
   return `Session state changes:
 \`\`\`json
@@ -414,6 +414,7 @@ function withActiveStatusModelIdentity(
   delete next.providerOverride;
   delete next.modelOverride;
   delete next.modelOverrideSource;
+  delete next.modelOverrideRouteResolution;
   return next;
 }
 
@@ -743,7 +744,9 @@ export function createSessionStatusTool(opts?: {
             visibilitySessionKey: requestedKeyInput,
           });
           if (!visibleSession.ok) {
-            throw new Error("Session status visibility is restricted to the current session tree.");
+            // The resolver's copy already names the denying policy (including the
+            // watched-group carve-out); a local string here would drift from it.
+            throw new Error(visibleSession.error);
           }
           // If resolution points at another agent, enforce A2A policy before switching stores.
           ensureAgentAccess(
@@ -889,8 +892,15 @@ export function createSessionStatusTool(opts?: {
                     isDefault: selection.isDefault,
                   };
             const nextEntry: SessionEntry = { ...scopedResolved.entry };
-            const applied = applyModelOverrideToSessionEntry({
+            const currentProvider =
+              scopedResolved.entry.providerOverride?.trim() ||
+              scopedResolved.entry.modelProvider?.trim() ||
+              configured.provider;
+            const applied = applyModelOverrideWithAuthProfileCompatibility({
+              cfg,
+              agentDir: selectedAgentDir,
               entry: nextEntry,
+              currentProvider,
               selection: modelSelection,
               markLiveSwitchPending: true,
             });
@@ -903,8 +913,14 @@ export function createSessionStatusTool(opts?: {
                 },
                 (entry, context) => {
                   const persistedEntryPatch: SessionEntry = { ...entry };
-                  applyModelOverrideToSessionEntry({
+                  applyModelOverrideWithAuthProfileCompatibility({
+                    cfg,
+                    agentDir: selectedAgentDir,
                     entry: persistedEntryPatch,
+                    currentProvider:
+                      entry.providerOverride?.trim() ||
+                      entry.modelProvider?.trim() ||
+                      configured.provider,
                     selection: modelSelection,
                     markLiveSwitchPending: true,
                   });
@@ -1082,9 +1098,7 @@ export function createSessionStatusTool(opts?: {
             : undefined;
           const extraBlocks = [
             routeContextText,
-            rawStateChanges
-              ? formatSessionStateChanges({ stateVersion, stateChanges: rawStateChanges })
-              : undefined,
+            stateChanges ? formatSessionStateChanges({ stateVersion, stateChanges }) : undefined,
           ].filter((block): block is string => Boolean(block));
           const visibleStatusText =
             extraBlocks.length > 0

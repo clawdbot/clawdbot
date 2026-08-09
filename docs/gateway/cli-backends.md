@@ -116,6 +116,29 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 ### Claude CLI specifics
 
+OpenClaw's managed Claude stdio sessions require the `msg_lifecycle_v1`
+capability, first observed in the published Claude Code 2.1.206 build. At
+runtime OpenClaw does not trust the version string alone: it waits for
+Claude Code's `system/init` record to advertise `msg_lifecycle_v1`, then accepts
+assistant, tool, and result records only after the matching input lifecycle has
+started. Unknown capabilities are ignored. A CLI that omits the required
+capability fails immediately with `claude update` and gateway-restart guidance
+instead of waiting for the no-output watchdog.
+
+Setup and Doctor treat 2.1.206 as advisory, so a lower-version compatible
+backport or wrapper remains selectable and is verified by the runtime gate.
+
+```bash
+claude --version
+claude update
+# Restart the OpenClaw gateway after updating.
+```
+
+Claude Code's public CLI documentation covers stream-json mode and updates but
+does not currently document the lifecycle event itself. OpenClaw therefore
+feature-detects the advertised capability; 2.1.206 is the first published
+Claude Code build observed to provide it.
+
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
 Claude CLI has its own noninteractive permission mode; OpenClaw maps that to the existing exec policy instead of adding Claude-specific config. For OpenClaw-managed Claude live sessions, the effective exec policy is authoritative: YOLO (`tools.exec.mode: "full"`) normally launches Claude with `--permission-mode bypassPermissions`, while a restrictive policy launches it with `--permission-mode default`. Root-run gateways also use `default` because Claude Code rejects bypass mode for root. Per-agent `agents.entries.*.tools.exec` settings override the global `tools.exec` for that agent. The Anthropic plugin normalizes Claude's permission flags to match the effective policy and host restriction.
@@ -202,19 +225,20 @@ Anthropic owns `claude-cli` and Google owns `google-gemini-cli`. OpenAI Codex ag
 
 The bundled Anthropic plugin registers for `claude-cli`:
 
-| Key                   | Value                                                                                                                                                                                                         |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`             | `claude`                                                                                                                                                                                                      |
-| `args`                | `-p --output-format stream-json --include-partial-messages --verbose --setting-sources user --allowedTools mcp__openclaw__* --disallowedTools ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor` |
-| `output`              | `jsonl`                                                                                                                                                                                                       |
-| `input`               | `stdin`                                                                                                                                                                                                       |
-| `modelArg`            | `--model`                                                                                                                                                                                                     |
-| `sessionArgs`         | `["--session-id", "{sessionId}"]`                                                                                                                                                                             |
-| `sessionMode`         | `always`                                                                                                                                                                                                      |
-| `imageArg`            | `@`                                                                                                                                                                                                           |
-| `imagePathScope`      | `workspace`                                                                                                                                                                                                   |
-| `systemPromptFileArg` | `--append-system-prompt-file`                                                                                                                                                                                 |
-| `systemPromptMode`    | `append`                                                                                                                                                                                                      |
+| Key                      | Value                                                                                                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`                | `claude`                                                                                                                                                                                                      |
+| `args`                   | `-p --output-format stream-json --include-partial-messages --verbose --setting-sources user --allowedTools mcp__openclaw__* --disallowedTools ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor` |
+| `output`                 | `jsonl`                                                                                                                                                                                                       |
+| `input`                  | `stdin`                                                                                                                                                                                                       |
+| `modelArg`               | `--model`                                                                                                                                                                                                     |
+| `sessionArgs`            | `["--session-id", "{sessionId}"]`                                                                                                                                                                             |
+| `sessionMode`            | `always`                                                                                                                                                                                                      |
+| live-session requirement | `msg_lifecycle_v1` (first observed in Claude Code 2.1.206)                                                                                                                                                    |
+| `imageArg`               | `@`                                                                                                                                                                                                           |
+| `imagePathScope`         | `workspace`                                                                                                                                                                                                   |
+| `systemPromptFileArg`    | `--append-system-prompt-file`                                                                                                                                                                                 |
+| `systemPromptMode`       | `append`                                                                                                                                                                                                      |
 
 The bundled Google plugin registers for `google-gemini-cli`:
 
@@ -231,7 +255,11 @@ The bundled Google plugin registers for `google-gemini-cli`:
 | `sessionMode`             | `existing`                                                                             |
 | `sessionIdFields`         | `["session_id", "sessionId"]`                                                          |
 
-Prerequisite: the local Gemini CLI must be installed and on `PATH` as `gemini` (`brew install gemini-cli` or `npm install -g @google/gemini-cli`).
+Prerequisites: the local Gemini CLI must be installed and on `PATH` as `gemini`
+(`brew install gemini-cli` or `npm install -g @google/gemini-cli`), and the
+selected model must have a supported Google AI Studio API-key profile. Existing
+valid legacy Gemini CLI OAuth profiles remain runtime-compatible, but OpenClaw
+does not create or repair them.
 
 Gemini CLI output notes:
 

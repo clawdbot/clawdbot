@@ -1,11 +1,8 @@
 import type { SessionsSearchResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  AgentIdentityResult,
-  GatewaySessionRow,
-  SessionsListResult,
-} from "../../api/types.ts";
+import type { AgentIdentityResult, SessionsListResult } from "../../api/types.ts";
 import type { SessionListOptions } from "../../lib/sessions/index.ts";
+import { fetchPagedSessionRows } from "../../lib/sessions/paged-session-rows.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 
 export function sessionAgentIds(result: SessionsListResult | null): string[] {
@@ -38,36 +35,19 @@ export async function searchVisibleSessionTranscripts(params: {
   resolveAgentId: (sessionKey: string) => string | undefined;
 }): Promise<SessionsSearchResult> {
   const protocolKeyLimit = 200;
-  const sessions: GatewaySessionRow[] = [...(params.result?.sessions ?? [])];
-  let nextOffset =
-    params.result?.hasMore === true
-      ? (params.result.nextOffset ?? (params.result.offset ?? 0) + params.result.sessions.length)
-      : null;
-  while (nextOffset !== null && nextOffset !== undefined) {
-    const page = await params.listSessions({
-      ...params.listOptions,
-      limit: protocolKeyLimit,
-      offset: nextOffset,
-    });
-    if (!page) {
-      break;
-    }
-    sessions.push(...page.sessions);
-    const followingOffset =
-      page.hasMore === true
-        ? (page.nextOffset ?? (page.offset ?? nextOffset) + page.sessions.length)
-        : null;
-    if (
-      followingOffset === null ||
-      followingOffset === undefined ||
-      followingOffset <= nextOffset
-    ) {
-      break;
-    }
-    nextOffset = followingOffset;
-  }
+  const sessions = await fetchPagedSessionRows({
+    initialResult: params.result,
+    list: (offset) =>
+      params.listSessions({
+        ...params.listOptions,
+        limit: protocolKeyLimit,
+        offset,
+      }),
+    missingResultError: "Unable to load all sessions for transcript search.",
+    stalledPaginationError: "Session pagination did not advance during transcript search.",
+  });
   const keysByAgent = new Map<string, string[]>();
-  for (const row of sessions) {
+  for (const row of sessions ?? []) {
     const agentId = params.resolveAgentId(row.key);
     if (!agentId) {
       continue;

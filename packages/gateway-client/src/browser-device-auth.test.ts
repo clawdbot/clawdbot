@@ -28,6 +28,7 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
       role: "operator",
       defaultScopes: ["operator.read", "operator.write"],
       nonce: "nonce",
+      challengeTs: 456,
     });
 
     expect(plan.auth).toEqual({
@@ -40,7 +41,7 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
     });
     expect(plan.scopes).toEqual(["operator.read"]);
     expect(sign).toHaveBeenCalledWith(
-      "v3|device|openclaw-browser-copilot|ui|operator|operator.read|123|test-token-placeholder|nonce|chrome|extension",
+      "v3|device|openclaw-browser-copilot|ui|operator|operator.read|456|test-token-placeholder|nonce|chrome|extension",
     );
 
     await lifecycle.acceptHello(
@@ -54,6 +55,46 @@ describe("GatewayBrowserDeviceAuthLifecycle", () => {
       token: "test-auth-token",
       scopes: ["operator.write"],
     });
+  });
+
+  it("rejects the protocol's malformed-timestamp signal", async () => {
+    const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
+      loadIdentity: async () => ({
+        deviceId: "device",
+        publicKey: "public",
+        sign: async () => "signature",
+      }),
+      tokenStore: { load: () => null, store: vi.fn(), clear: vi.fn() },
+      nowMs: () => 123,
+    });
+
+    await expect(
+      lifecycle.buildPlan({
+        client,
+        role: "operator",
+        defaultScopes: ["operator.read"],
+        nonce: "nonce",
+        challengeTs: null,
+      }),
+    ).rejects.toThrow("gateway connect challenge timestamp invalid");
+  });
+
+  it("keeps the local-clock fallback for callers that received no challenge", async () => {
+    const sign = vi.fn(async () => "signature");
+    const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
+      loadIdentity: async () => ({ deviceId: "device", publicKey: "public", sign }),
+      tokenStore: { load: () => null, store: vi.fn(), clear: vi.fn() },
+      nowMs: () => 123,
+    });
+
+    const plan = await lifecycle.buildPlan({
+      client,
+      role: "operator",
+      defaultScopes: ["operator.read"],
+      nonce: "nonce",
+    });
+
+    expect(plan.device?.signedAt).toBe(123);
   });
 
   it("never persists bootstrap or shared-secret credentials", async () => {

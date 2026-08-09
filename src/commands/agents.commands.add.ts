@@ -15,8 +15,8 @@ import {
   buildPortableAuthProfileStoreForAgentCopy,
   ensureAuthProfileStore,
 } from "../agents/auth-profiles.js";
-import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -24,6 +24,7 @@ import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
 } from "../plugins/install-record-commit.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -129,13 +130,15 @@ export async function agentsAddCommand(
       runtime.log(`Normalized agent id to "${agentId}".`);
     }
 
-    const created = await createAgent({
-      name: nameInput,
-      workspace: workspaceFlag,
-      ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
-      ...(opts.model ? { model: opts.model } : {}),
-      ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
-      transformConfig: transformConfigWithPendingPluginInstalls,
+    const created = await withPluginLifecycleLease({}, async () => {
+      return await createAgent({
+        name: nameInput,
+        workspace: workspaceFlag,
+        ...(opts.agentDir ? { agentDir: opts.agentDir } : {}),
+        ...(opts.model ? { model: opts.model } : {}),
+        ...(opts.bind?.length ? { bindingSpecs: opts.bind } : {}),
+        transformConfig: transformConfigWithPendingPluginInstalls,
+      });
     });
     if (created.status === "error") {
       runtime.error(
@@ -257,9 +260,9 @@ export async function agentsAddCommand(
     const defaultAgentId = resolveDefaultAgentId(cfg);
     if (defaultAgentId !== agentId) {
       const sourceAgentDir = resolveAgentDir(cfg, defaultAgentId);
-      const sourceAuthPath = resolveAuthStorePath(sourceAgentDir);
-      const destAuthPath = resolveAuthStorePath(agentDir);
-      const mainAuthPath = resolveAuthStorePath();
+      const sourceAuthPath = resolveAuthProfileDatabasePath(sourceAgentDir);
+      const destAuthPath = resolveAuthProfileDatabasePath(agentDir);
+      const mainAuthPath = resolveAuthProfileDatabasePath();
       const sameAuthPath =
         normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
         normalizeLowercaseStringOrEmpty(path.resolve(destAuthPath));

@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { resolveCliRuntimeCanonicalProvider } from "../../agents/cli-backends.js";
+import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
 import {
   modelKey,
   normalizeModelRef,
@@ -10,15 +11,41 @@ import {
 } from "../../agents/model-selection.js";
 import { RUNTIME_MODEL_VISIBILITY_NORMALIZATION } from "../../agents/model-visibility-policy.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
+import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { RuntimeModelNormalization } from "./model-runtime-normalization.js";
 
 /** Model override loaded from the current session or its parent session. */
 export type StoredModelOverride = {
   provider?: string;
   model: string;
   source: "session" | "parent";
+  routeResolution: ModelFallbackRouteResolution;
 };
+
+/** Resolves only the current session's persisted model override. */
+export function resolveDirectStoredModelOverride(params: {
+  sessionEntry?: SessionEntry;
+  defaultProvider: string;
+}): StoredModelOverride | null {
+  const normalized = normalizeStoredOverrideModel({
+    providerOverride: params.sessionEntry?.providerOverride,
+    modelOverride: params.sessionEntry?.modelOverride,
+  });
+  const direct = resolvePersistedOverrideModelRef({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: normalized.providerOverride,
+    overrideModel: normalized.modelOverride,
+  });
+  return direct
+    ? {
+        ...direct,
+        source: "session",
+        routeResolution: resolveSessionModelOverrideRouteResolution(params.sessionEntry),
+      }
+    : null;
+}
 
 /** Normalizes a stored model ref, resolving runtime aliases only for CLI-bound sessions. */
 export function normalizeStoredRuntimeModelRef(
@@ -26,8 +53,9 @@ export function normalizeStoredRuntimeModelRef(
   model: string,
   cfg?: OpenClawConfig,
   sessionEntry?: SessionEntry,
+  normalization: RuntimeModelNormalization = RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 ) {
-  const normalized = normalizeModelRef(provider, model, RUNTIME_MODEL_VISIBILITY_NORMALIZATION);
+  const normalized = normalizeModelRef(provider, model, normalization);
   const hasCliSessionBinding =
     sessionEntry?.cliSessionBindings?.[normalized.provider] !== undefined;
   const canonicalProvider =
@@ -65,17 +93,12 @@ export function resolveStoredModelOverride(params: {
   parentSessionKey?: string;
   defaultProvider: string;
 }): StoredModelOverride | null {
-  const directOverride = normalizeStoredOverrideModel({
-    providerOverride: params.sessionEntry?.providerOverride,
-    modelOverride: params.sessionEntry?.modelOverride,
-  });
-  const direct = resolvePersistedOverrideModelRef({
+  const direct = resolveDirectStoredModelOverride({
+    sessionEntry: params.sessionEntry,
     defaultProvider: params.defaultProvider,
-    overrideProvider: directOverride.providerOverride,
-    overrideModel: directOverride.modelOverride,
   });
   if (direct) {
-    return { ...direct, source: "session" };
+    return direct;
   }
   const parentKey = resolveParentSessionKeyCandidate({
     sessionKey: params.sessionKey,
@@ -97,7 +120,11 @@ export function resolveStoredModelOverride(params: {
   if (!parentOverride) {
     return null;
   }
-  return { ...parentOverride, source: "parent" };
+  return {
+    ...parentOverride,
+    source: "parent",
+    routeResolution: resolveSessionModelOverrideRouteResolution(parentEntry),
+  };
 }
 
 function resolveModelRefKey(params: {
@@ -171,7 +198,7 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
 
   const noticeSelectedKey = resolveModelRefKey({
     defaultProvider: params.defaultProvider,
-    overrideModel: normalizeOptionalString(entry.fallbackNoticeSelectedModel),
+    overrideModel: normalizeOptionalString(entry.fallbackNotice?.selectedModel),
   });
   if (noticeSelectedKey) {
     return noticeSelectedKey !== primaryKey;

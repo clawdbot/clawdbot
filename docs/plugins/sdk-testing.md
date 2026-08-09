@@ -337,7 +337,7 @@ pnpm test src/plugins/contracts/runtime-seams.contract.test.ts
 
 ## Lint enforcement (in-repo plugins)
 
-`scripts/run-additional-boundary-checks.mjs` runs a set of `lint:plugins:*`
+`scripts/run-additional-boundary-checks.mts` runs a set of `lint:plugins:*`
 import-boundary checks in CI; each can also be run standalone locally:
 
 | Command                                                        | Enforces                                                                                     |

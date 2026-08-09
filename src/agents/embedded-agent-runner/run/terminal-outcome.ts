@@ -9,6 +9,11 @@ type EmbeddedRunAttemptTerminalInput = Pick<
   "terminal" | "promptTimeoutOutcome"
 >;
 
+export type EmbeddedRunTerminalState = {
+  outcome: AgentRunTerminalOutcome;
+  signalOwnedInterruption: boolean;
+};
+
 /** Projects private attempt metadata into the canonical agent terminal outcome. */
 export function resolveEmbeddedRunAttemptTerminalOutcome(params: {
   attempt: EmbeddedRunAttemptTerminalInput;
@@ -28,9 +33,25 @@ export function isEmbeddedRunTerminalTimeout(outcome: AgentRunTerminalOutcome): 
 }
 
 export function isEmbeddedRunTerminalAbort(outcome: AgentRunTerminalOutcome): boolean {
-  return outcome.reason === "aborted" || outcome.reason === "cancelled";
+  return (
+    outcome.reason === "aborted" ||
+    outcome.reason === "cancelled" ||
+    outcome.reason === "superseded"
+  );
 }
 
 export function isEmbeddedRunTerminalInterrupted(outcome: AgentRunTerminalOutcome): boolean {
   return isEmbeddedRunTerminalTimeout(outcome) || isEmbeddedRunTerminalAbort(outcome);
+}
+
+/** Captures signal ownership with the outcome before async recovery can change the signal. */
+export function resolveEmbeddedRunAttemptTerminalState(
+  params: Parameters<typeof resolveEmbeddedRunAttemptTerminalOutcome>[0],
+): EmbeddedRunTerminalState {
+  const outcome = resolveEmbeddedRunAttemptTerminalOutcome(params);
+  return {
+    outcome,
+    signalOwnedInterruption:
+      isEmbeddedRunTerminalInterrupted(outcome) && params.abortSignal?.aborted === true,
+  };
 }

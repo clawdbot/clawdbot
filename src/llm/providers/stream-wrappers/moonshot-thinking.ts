@@ -1,4 +1,5 @@
 // Moonshot thinking wrapper normalizes reasoning output from Moonshot streams.
+import { asOptionalRecord as asPayloadRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
@@ -75,12 +76,6 @@ function isPinnedToolChoice(toolChoice: unknown): boolean {
   }
   const typeValue = (toolChoice as Record<string, unknown>).type;
   return typeValue === "tool" || typeValue === "function";
-}
-
-function asPayloadRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function ensureMoonshotToolCallReasoningContent(payloadObj: Record<string, unknown>): void {

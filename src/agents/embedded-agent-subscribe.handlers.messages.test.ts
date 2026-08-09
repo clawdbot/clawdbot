@@ -15,7 +15,7 @@ import {
 import {
   buildAssistantStreamData,
   recordPendingAssistantReplyDirectives,
-  resolveSilentReplyFallbackText,
+  resolveCurrentSourceMessagingToolPartial,
 } from "./embedded-agent-subscribe.handlers.messages.test-support.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import {
@@ -23,6 +23,26 @@ import {
   createOpenAiResponsesTextBlock,
   createOpenAiResponsesTextEvent as createTextUpdateEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import { createThinkingTagStreamState } from "./embedded-agent-utils.js";
+
+function updateMessage(
+  context: EmbeddedAgentSubscribeContext,
+  event: { message: unknown; assistantMessageEvent?: unknown },
+) {
+  // Stream fixtures intentionally include incomplete and malformed provider payloads.
+  return handleMessageUpdate(context, {
+    type: "message_update",
+    ...event,
+  } as Parameters<typeof handleMessageUpdate>[1]);
+}
+
+function endMessage(context: EmbeddedAgentSubscribeContext, event: { message: unknown }) {
+  // Message-end coverage includes malformed content and partial provider usage.
+  return handleMessageEnd(context, {
+    type: "message_end",
+    ...event,
+  } as Parameters<typeof handleMessageEnd>[1]);
+}
 
 function createMessageUpdateContext(
   params: {
@@ -32,8 +52,10 @@ function createMessageUpdateContext(
     resetAssistantMessageState?: ReturnType<typeof vi.fn>;
     debug?: ReturnType<typeof vi.fn>;
     shouldEmitPartialReplies?: boolean;
+    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     consumePartialReplyDirectives?: ReturnType<typeof vi.fn>;
     stripBlockTags?: ReturnType<typeof vi.fn>;
+    emitReasoningStream?: ReturnType<typeof vi.fn>;
     state?: Record<string, unknown>;
   } = {},
 ) {
@@ -46,15 +68,21 @@ function createMessageUpdateContext(
     params: {
       runId: "run-1",
       session: { id: "session-1" },
+      ...(params.sourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
+        : {}),
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       ...(params.onPartialReply ? { onPartialReply: params.onPartialReply } : {}),
     },
     state: {
       deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,
+      currentSourceMessagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolHeldPartial: undefined,
       reasoningStreamOpen: false,
       streamReasoning: false,
       deltaBuffer: "",
+      thinkingTagStream: createThinkingTagStreamState(),
       blockBuffer: "",
       partialBlockState: {
         thinking: false,
@@ -81,7 +109,7 @@ function createMessageUpdateContext(
       vi.fn((text: string, options?: { final?: boolean }) =>
         partialReplyDirectiveAccumulator.consume(text, options),
       ),
-    emitReasoningStream: vi.fn(),
+    emitReasoningStream: params.emitReasoningStream ?? vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
     resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
     recordAssistantUsage: vi.fn(),
@@ -139,6 +167,8 @@ function createMessageEndContext(
       deterministicApprovalPromptSent: false,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolHeldPartial: undefined,
       includeReasoning: false,
       streamReasoning: false,
       blockReplyBreak: "message_end",
@@ -205,50 +235,6 @@ function createMessageToolEnvelope(message: string, args: Record<string, unknown
     },
   });
 }
-
-describe("resolveSilentReplyFallbackText", () => {
-  it("replaces NO_REPLY with latest messaging tool text when available", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "NO_REPLY",
-        messagingToolSentTexts: ["first", "final delivered text"],
-      }),
-    ).toBe("final delivered text");
-  });
-
-  it("keeps original text when response is not NO_REPLY", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "normal assistant reply",
-        messagingToolSentTexts: ["final delivered text"],
-      }),
-    ).toBe("normal assistant reply");
-  });
-
-  it("keeps NO_REPLY when there is no messaging tool text to mirror", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "NO_REPLY",
-        messagingToolSentTexts: [],
-      }),
-    ).toBe("NO_REPLY");
-  });
-
-  it("tolerates malformed text payloads without throwing", () => {
-    expect(
-      resolveSilentReplyFallbackText({
-        text: undefined,
-        messagingToolSentTexts: ["final delivered text"],
-      }),
-    ).toBe("");
-    expect(
-      resolveSilentReplyFallbackText({
-        text: "NO_REPLY",
-        messagingToolSentTexts: [42 as unknown as string],
-      }),
-    ).toBe("42");
-  });
-});
 
 describe("hasAssistantVisibleReply", () => {
   it("treats audio-only payloads as visible", () => {
@@ -330,7 +316,149 @@ describe("pending assistant reply directives", () => {
   });
 });
 
+describe("handleMessageUpdate current-source message-tool previews", () => {
+  it("holds delta-only continuation fragments and releases one full divergent snapshot", () => {
+    const state = {
+      currentSourceMessagingToolHeldPartial: undefined as string | undefined,
+      currentSourceMessagingToolSentTextsNormalized: ["qa-msteams-dm-ok"],
+    };
+
+    expect(
+      resolveCurrentSourceMessagingToolPartial(state, {
+        evtType: "text_delta",
+        text: "QA-MSTEAMS",
+        visibleDelta: "QA-MSTEAMS",
+      }),
+    ).toEqual({ hold: true, text: "QA-MSTEAMS" });
+    expect(
+      resolveCurrentSourceMessagingToolPartial(state, {
+        evtType: "text_delta",
+        text: "-DM-OK",
+        visibleDelta: "-DM-OK",
+      }),
+    ).toEqual({ hold: true, text: "QA-MSTEAMS-DM-OK" });
+    expect(
+      resolveCurrentSourceMessagingToolPartial(state, {
+        evtType: "text_delta",
+        text: " with more detail",
+        visibleDelta: " with more detail",
+      }),
+    ).toEqual({ hold: false, text: "QA-MSTEAMS-DM-OK with more detail" });
+    expect(state.currentSourceMessagingToolHeldPartial).toBeUndefined();
+  });
+
+  it("holds automatic partial prefixes and exact duplicates after source delivery", () => {
+    const onAgentEvent = vi.fn();
+    const onPartialReply = vi.fn();
+    const sentText = "QA-MSTEAMS-DM-OK";
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      onPartialReply,
+      sourceReplyDeliveryMode: "automatic",
+      state: {
+        currentSourceMessagingToolSentTextsNormalized: [sentText.toLowerCase()],
+      },
+    });
+
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "QA-MSTEAMS",
+        id: "msg_source_duplicate",
+      }),
+    );
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: sentText,
+        id: "msg_source_duplicate",
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
+  it("releases the full cumulative snapshot when automatic text diverges", () => {
+    const onPartialReply = vi.fn();
+    const sentText = "QA-MSTEAMS-DM-OK";
+    const context = createMessageUpdateContext({
+      onPartialReply,
+      sourceReplyDeliveryMode: "automatic",
+      state: {
+        currentSourceMessagingToolSentTextsNormalized: [sentText.toLowerCase()],
+      },
+    });
+
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "QA-MSTEAMS",
+        id: "msg_source_diverges",
+      }),
+    );
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: `${sentText} with more detail`,
+        id: "msg_source_diverges",
+      }),
+    );
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: `${sentText} with more detail` }),
+    );
+  });
+
+  it("keeps unrelated automatic partial text visible", () => {
+    const onPartialReply = vi.fn();
+    const context = createMessageUpdateContext({
+      onPartialReply,
+      sourceReplyDeliveryMode: "automatic",
+      state: {
+        currentSourceMessagingToolSentTextsNormalized: ["qa-msteams-dm-ok"],
+      },
+    });
+
+    updateMessage(
+      context,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: "A genuinely different answer",
+        id: "msg_source_different",
+      }),
+    );
+
+    expect(onPartialReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "A genuinely different answer" }),
+    );
+  });
+});
+
 describe("handleMessageUpdate text signatures", () => {
+  it("emits the full incrementally extracted reasoning value on every delta", () => {
+    const emitReasoningStream = vi.fn();
+    const context = createMessageUpdateContext({ emitReasoningStream });
+
+    for (const chunk of ["<thi", "nk>reason", "ing</think>"]) {
+      updateMessage(
+        context,
+        createTextUpdateEvent({ type: "text_delta", text: chunk, delta: chunk }),
+      );
+    }
+
+    expect(emitReasoningStream.mock.calls.map(([text]) => text)).toEqual([
+      "",
+      "reason",
+      "reasoning",
+    ]);
+  });
+
   it("uses incremental text deltas for unphased OpenAI Responses streams", () => {
     const onAgentEvent = vi.fn();
     const stripBlockTags = vi.fn((text: string) => text);
@@ -338,7 +466,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createNonPhaseEvent = (text: string, delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -357,8 +484,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createNonPhaseEvent("Hello ", "Hello "));
-    handleMessageUpdate(context, createNonPhaseEvent("Hello world", "world"));
+    updateMessage(context, createNonPhaseEvent("Hello ", "Hello "));
+    updateMessage(context, createNonPhaseEvent("Hello world", "world"));
 
     expect(stripBlockTags.mock.calls.map(([text]) => text)).toEqual(["Hello ", "world"]);
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
@@ -395,8 +522,7 @@ describe("handleMessageUpdate text signatures", () => {
     context.resetAssistantMessageState = resetAssistantMessageState;
     context.params.onAssistantMessageStart = onAssistantMessageStart;
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_end",
@@ -411,7 +537,7 @@ describe("handleMessageUpdate text signatures", () => {
           api: "openai-responses",
         },
       },
-    } as never);
+    });
 
     expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
     expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
@@ -435,7 +561,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createNonPhaseEvent = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -443,8 +568,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createNonPhaseEvent("Hello\n"));
-    handleMessageUpdate(context, createNonPhaseEvent("M"));
+    updateMessage(context, createNonPhaseEvent("Hello\n"));
+    updateMessage(context, createNonPhaseEvent("M"));
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
     expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
@@ -454,13 +579,47 @@ describe("handleMessageUpdate text signatures", () => {
     expect(context.state.lastStreamedAssistantCleaned).toBe("Hello");
   });
 
+  it.each([
+    {
+      name: "the directive accumulator has no parsed result",
+      text: "answer part A msg [[E1008]timeout] answer part B",
+      hasParsedDirectives: false,
+    },
+    {
+      name: "the directive accumulator flushes a buffered tail",
+      text: "answer part A msg [[E1008]timeout] answer part B",
+      hasParsedDirectives: true,
+    },
+    {
+      name: "the final text ends with one bracket",
+      text: "answer part A [",
+      hasParsedDirectives: true,
+    },
+  ])("keeps literal final text when $name", ({ text, hasParsedDirectives }) => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      ...(hasParsedDirectives ? {} : { consumePartialReplyDirectives: vi.fn(() => null) }),
+    });
+
+    updateMessage(context, {
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "text_end", content: text },
+    });
+
+    expect(context.state.lastStreamedAssistantCleaned).toBe(text);
+    expect(firstMockArg(onAgentEvent, "final assistant event")).toMatchObject({
+      stream: "assistant",
+      data: { text },
+    });
+  });
+
   it("keeps stripped reply directives out of later plain deltas", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
 
     const createNonPhaseEvent = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -468,8 +627,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createNonPhaseEvent("[[reply_to_current]]\nHello"));
-    handleMessageUpdate(context, createNonPhaseEvent(" world"));
+    updateMessage(context, createNonPhaseEvent("[[reply_to_current]]\nHello"));
+    updateMessage(context, createNonPhaseEvent(" world"));
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -487,14 +646,13 @@ describe("handleMessageUpdate text signatures", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_delta",
         delta: "Here it is.\nMEDIA:/tmp/final.png\n",
       },
-    } as never);
+    });
 
     expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
       stream: "assistant",
@@ -506,7 +664,7 @@ describe("handleMessageUpdate text signatures", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
 
-    handleMessageUpdate(
+    updateMessage(
       context,
       createTextUpdateEvent({
         type: "text_delta",
@@ -517,7 +675,7 @@ describe("handleMessageUpdate text signatures", () => {
         partialPhase: "commentary",
       }),
     );
-    handleMessageUpdate(
+    updateMessage(
       context,
       createTextUpdateEvent({
         type: "text_delta",
@@ -564,17 +722,15 @@ describe("handleMessageUpdate text signatures", () => {
     const startPartial = createPartial("Work");
     const finalPartial = createPartial("Working...");
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: startPartial,
       assistantMessageEvent: {
         type: "text_start",
         contentIndex: 0,
         partial: startPartial,
       },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: startPartial,
       assistantMessageEvent: {
         type: "text_delta",
@@ -582,9 +738,8 @@ describe("handleMessageUpdate text signatures", () => {
         delta: "Work",
         partial: startPartial,
       },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: finalPartial,
       assistantMessageEvent: {
         type: "text_delta",
@@ -592,9 +747,8 @@ describe("handleMessageUpdate text signatures", () => {
         delta: "ing...",
         partial: finalPartial,
       },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: finalPartial,
       assistantMessageEvent: {
         type: "text_end",
@@ -602,11 +756,10 @@ describe("handleMessageUpdate text signatures", () => {
         content: "Working...",
         partial: finalPartial,
       },
-    } as never);
-    await handleMessageEnd(context, {
-      type: "message_end",
+    });
+    await endMessage(context, {
       message: finalPartial,
-    } as never);
+    });
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -635,13 +788,11 @@ describe("handleMessageUpdate text signatures", () => {
     const firstPartial = createPartial("Working", "item-1");
     const extendedPartial = createPartial("Working now", "item-2");
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: firstPartial,
       assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: firstPartial },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: firstPartial,
       assistantMessageEvent: {
         type: "text_end",
@@ -649,9 +800,8 @@ describe("handleMessageUpdate text signatures", () => {
         content: "Working",
         partial: firstPartial,
       },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: extendedPartial,
       assistantMessageEvent: {
         type: "text_end",
@@ -659,8 +809,8 @@ describe("handleMessageUpdate text signatures", () => {
         content: "Working now",
         partial: extendedPartial,
       },
-    } as never);
-    await handleMessageEnd(context, { type: "message_end", message: extendedPartial } as never);
+    });
+    await endMessage(context, { message: extendedPartial });
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -692,24 +842,22 @@ describe("handleMessageUpdate text signatures", () => {
       ],
     };
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: {
         role: "assistant",
         api: "anthropic-messages",
         content: [{ type: "text", text: narration }],
       },
       assistantMessageEvent: { type: "text_delta", delta: narration },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: { role: "assistant", api: "anthropic-messages", content: [] },
       assistantMessageEvent: {
         type: "text_end",
         content: narration,
         partial: commentaryPartial,
       },
-    } as never);
+    });
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toContainEqual(
       expect.objectContaining({
@@ -744,7 +892,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createPhasedDelta = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -753,8 +900,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createPhasedDelta("Hello"));
-    handleMessageUpdate(context, createPhasedDelta(" world"));
+    updateMessage(context, createPhasedDelta("Hello"));
+    updateMessage(context, createPhasedDelta(" world"));
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -788,7 +935,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createPhasedDelta = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -797,12 +943,12 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createPhasedDelta("Visible\n<tool_call>{"));
-    handleMessageUpdate(
+    updateMessage(context, createPhasedDelta("Visible\n<tool_call>{"));
+    updateMessage(
       context,
       createPhasedDelta('"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>'),
     );
-    handleMessageUpdate(context, createPhasedDelta("\nDone."));
+    updateMessage(context, createPhasedDelta("\nDone."));
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -836,7 +982,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createPhasedDelta = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -845,8 +990,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createPhasedDelta("<tool_call>{"));
-    handleMessageUpdate(
+    updateMessage(context, createPhasedDelta("<tool_call>{"));
+    updateMessage(
       context,
       createPhasedDelta('"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>\nDone.'),
     );
@@ -874,8 +1019,7 @@ describe("handleMessageUpdate text signatures", () => {
     context.state.lastAssistantStreamItemId = "item-1";
     context.state.assistantMessageIndex = 7;
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_delta",
@@ -904,7 +1048,7 @@ describe("handleMessageUpdate text signatures", () => {
           timestamp: 0,
         },
       },
-    } as never);
+    });
 
     expect(flushBlockReplyBuffer).toHaveBeenCalledWith({ assistantMessageIndex: 7 });
     expect(resetAssistantMessageState).toHaveBeenCalledWith(0);
@@ -956,24 +1100,22 @@ describe("handleMessageUpdate text signatures", () => {
       api: "openai-responses",
     };
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: partial,
       assistantMessageEvent: {
         type: "text_start",
         contentIndex: 1,
         partial,
       },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: partial,
       assistantMessageEvent: {
         type: "text_delta",
         contentIndex: 1,
         delta: "Second block",
       },
-    } as never);
+    });
 
     expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
     expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
@@ -1007,8 +1149,7 @@ describe("handleMessageUpdate text signatures", () => {
     });
     context.params.onAssistantMessageStart = onAssistantMessageStart;
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_end",
@@ -1021,7 +1162,7 @@ describe("handleMessageUpdate text signatures", () => {
           partialPhase: "final_answer",
         }),
       },
-    } as never);
+    });
 
     expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
     expect(resetAssistantMessageState).not.toHaveBeenCalled();
@@ -1046,8 +1187,7 @@ describe("handleMessageUpdate text signatures", () => {
       state: { lastAssistantStreamItemId: "item-1" },
     });
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_delta",
@@ -1070,7 +1210,7 @@ describe("handleMessageUpdate text signatures", () => {
           api: "openai-responses",
         },
       },
-    } as never);
+    });
 
     expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
     expect(onPartialReply).toHaveBeenCalledWith(
@@ -1099,7 +1239,7 @@ describe("handleMessageUpdate text signatures", () => {
     });
     const replyText = "Done.\n\n[[reply_to_current]]\n[[audio_as_voice]]\nMEDIA:/tmp/reply.ogg";
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -1109,7 +1249,7 @@ describe("handleMessageUpdate text signatures", () => {
         partialPhase: "final_answer",
       }),
     );
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_end",
@@ -1138,9 +1278,17 @@ describe("handleMessageUpdate text signatures", () => {
 describe("consumePendingToolMediaIntoReply", () => {
   it("attaches queued tool media to the next assistant reply", () => {
     const state = {
-      pendingToolMediaUrls: ["/tmp/a.png", "/tmp/b.png"],
+      pendingToolMediaUrls: ["/tmp/a.png", "/tmp/a.png", "/tmp/b.png"],
+      pendingToolMediaAttachments: [
+        { type: "image" as const, path: "/tmp/a.png", width: 640, height: 480 },
+        { type: "image" as const, path: "/tmp/a.png", width: 1, height: 1 },
+        { type: "image" as const, path: "/tmp/b.png", width: 800, height: 600 },
+      ],
+      pendingToolMediaTrustByUrl: new Map([
+        ["/tmp/a.png", true],
+        ["/tmp/b.png", false],
+      ]),
       pendingToolAudioAsVoice: false,
-      pendingToolTrustedLocalMedia: false,
     };
 
     expect(
@@ -1150,16 +1298,27 @@ describe("consumePendingToolMediaIntoReply", () => {
     ).toEqual({
       text: "done",
       mediaUrls: ["/tmp/a.png", "/tmp/b.png"],
+      attachments: [
+        {
+          type: "image",
+          path: "/tmp/a.png",
+          width: 640,
+          height: 480,
+          trustedLocalMedia: true,
+        },
+        { type: "image", path: "/tmp/b.png", width: 800, height: 600 },
+      ],
       audioAsVoice: undefined,
     });
     expect(state.pendingToolMediaUrls).toStrictEqual([]);
+    expect(state.pendingToolMediaAttachments).toStrictEqual([]);
   });
 
   it("does not append queued image tool media when the reply already names media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/generated.png"],
+      pendingToolMediaTrustByUrl: new Map([["/tmp/generated.png", true]]),
       pendingToolAudioAsVoice: false,
-      pendingToolTrustedLocalMedia: true,
     };
 
     expect(
@@ -1173,14 +1332,80 @@ describe("consumePendingToolMediaIntoReply", () => {
     });
     expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
-    expect(state.pendingToolTrustedLocalMedia).toBe(false);
+    expect(state.pendingToolMediaTrustByUrl.size).toBe(0);
+  });
+
+  it("retains queued metadata for explicitly selected media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/generated.mp3", "/tmp/generated.mp3", "/tmp/unselected.mp3"],
+      pendingToolMediaAttachments: [
+        { type: "audio" as const, path: "/tmp/generated.mp3", durationMs: 2_000 },
+        { type: "audio" as const, path: "/tmp/generated.mp3", durationMs: 9_999 },
+        { type: "audio" as const, path: "/tmp/unselected.mp3", durationMs: 3_000 },
+      ],
+      pendingToolMediaTrustByUrl: new Map([
+        ["/tmp/generated.mp3", true],
+        ["/tmp/unselected.mp3", false],
+      ]),
+      pendingToolAudioAsVoice: false,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+        mediaUrls: [" /tmp/generated.mp3 "],
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: [" /tmp/generated.mp3 "],
+      attachments: [
+        {
+          type: "audio",
+          path: "/tmp/generated.mp3",
+          durationMs: 2_000,
+          trustedLocalMedia: true,
+        },
+      ],
+      trustedLocalMedia: true,
+    });
+    expect(state.pendingToolMediaAttachments).toStrictEqual([]);
+  });
+
+  it("does not trust an explicitly selected untrusted pending URL", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/generated.mp3", "/tmp/untrusted.mp3"],
+      pendingToolMediaAttachments: [
+        { type: "audio" as const, path: "/tmp/generated.mp3" },
+        {
+          type: "audio" as const,
+          path: "/tmp/untrusted.mp3",
+          trustedLocalMedia: true,
+        },
+      ],
+      pendingToolMediaTrustByUrl: new Map([
+        ["/tmp/generated.mp3", true],
+        ["/tmp/untrusted.mp3", false],
+      ]),
+      pendingToolAudioAsVoice: false,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+        mediaUrls: ["/tmp/untrusted.mp3"],
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["/tmp/untrusted.mp3"],
+      attachments: [{ type: "audio", path: "/tmp/untrusted.mp3" }],
+    });
   });
 
   it("does not append queued voice media when the reply already names media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolMediaTrustByUrl: new Map([["/tmp/reply.opus", true]]),
       pendingToolAudioAsVoice: true,
-      pendingToolTrustedLocalMedia: true,
     };
 
     expect(
@@ -1194,14 +1419,14 @@ describe("consumePendingToolMediaIntoReply", () => {
     });
     expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
-    expect(state.pendingToolTrustedLocalMedia).toBe(false);
+    expect(state.pendingToolMediaTrustByUrl.size).toBe(0);
   });
 
   it("preserves reasoning replies without consuming queued media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png"],
+      pendingToolMediaTrustByUrl: new Map([["/tmp/a.png", false]]),
       pendingToolAudioAsVoice: true,
-      pendingToolTrustedLocalMedia: false,
     };
 
     expect(
@@ -1222,8 +1447,8 @@ describe("consumePendingToolMediaReply", () => {
   it("reads a media-only reply without consuming queued tool media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolMediaTrustByUrl: new Map([["/tmp/reply.opus", false]]),
       pendingToolAudioAsVoice: true,
-      pendingToolTrustedLocalMedia: false,
     };
 
     expect(readPendingToolMediaReply(state)).toEqual({
@@ -1237,8 +1462,8 @@ describe("consumePendingToolMediaReply", () => {
   it("builds a media-only reply for orphaned tool media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolMediaTrustByUrl: new Map([["/tmp/reply.opus", false]]),
       pendingToolAudioAsVoice: true,
-      pendingToolTrustedLocalMedia: false,
     };
 
     expect(consumePendingToolMediaReply(state)).toEqual({
@@ -1261,11 +1486,11 @@ describe("handleMessageUpdate commentary phase", () => {
       flushBlockReplyBuffer,
     });
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({ type: "text_delta", text: "Need send.", messagePhase: "commentary" }),
     );
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({ type: "text_end", text: "Need send.", messagePhase: "commentary" }),
     );
@@ -1292,7 +1517,7 @@ describe("handleMessageUpdate commentary phase", () => {
       flushBlockReplyBuffer,
     });
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -1300,7 +1525,7 @@ describe("handleMessageUpdate commentary phase", () => {
         content: [commentaryBlock],
       }),
     );
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_end",
@@ -1327,7 +1552,7 @@ describe("handleMessageUpdate commentary phase", () => {
       shouldEmitPartialReplies: false,
     });
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -1353,7 +1578,7 @@ describe("handleMessageUpdate commentary phase", () => {
     expect(ctx.state.deltaBuffer).toBe("Working...");
     expect(ctx.state.blockBuffer).toBe("");
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -1386,7 +1611,7 @@ describe("handleMessageUpdate commentary phase", () => {
       }),
     });
 
-    handleMessageUpdate(ctx, createTextUpdateEvent({ type: "text_end", text: "" }));
+    updateMessage(ctx, createTextUpdateEvent({ type: "text_end", text: "" }));
 
     await vi.waitFor(() => {
       expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
@@ -1395,6 +1620,140 @@ describe("handleMessageUpdate commentary phase", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it.each(["answer part A msg [[E1008]timeout] answer part B", "answer ending ["])(
+    "keeps malformed directive-looking final text identical across delivery paths: %s",
+    (text) => {
+      const onAgentEvent = vi.fn();
+      const emitBlockReply = vi.fn();
+      const flushBlockReplyBuffer = vi.fn();
+      const accumulator = createStreamingDirectiveAccumulator();
+      const streamed = accumulator.consume(text)?.text ?? "";
+      const ctx = createMessageEndContext({
+        onAgentEvent,
+        emitBlockReply,
+        flushBlockReplyBuffer,
+        consumeReplyDirectives: vi.fn((chunk: string, options?: { final?: boolean }) =>
+          accumulator.consume(chunk, options),
+        ),
+        blockChunker: {
+          hasBuffered: () => true,
+          reset: vi.fn(),
+        },
+        state: {
+          blockBuffer: streamed,
+          deltaBuffer: streamed,
+        },
+      });
+
+      void endMessage(ctx, {
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      });
+
+      expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
+        stream: "assistant",
+        data: { text, delta: text },
+      });
+      const finalBlockText = (firstMockArg(emitBlockReply, "block reply") as { text?: string })
+        .text;
+      expect(`${streamed}${finalBlockText ?? ""}`).toBe(text);
+      expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    },
+  );
+
+  it("keeps exact NO_REPLY silent after a user-facing message send followed by sessions_send (#119383)", () => {
+    const emitBlockReply = vi.fn();
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = createMessageEndContext({
+      emitBlockReply,
+      finalizeAssistantTexts,
+      consumeReplyDirectives: vi.fn((text: string) => ({ text })),
+      state: {
+        blockBuffer: "",
+        deltaBuffer: "",
+        messagingToolSentTexts: ["<user-facing reply>", "<internal escalation note>"],
+        messagingToolSentTextsNormalized: ["<user-facing reply>", "<internal escalation note>"],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "whatsapp",
+            to: "user:123",
+            text: "<user-facing reply>",
+          },
+        ],
+      },
+    });
+
+    void endMessage(ctx, {
+      message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+    });
+
+    // The exact silent token must never be rewritten to the sessions_send body:
+    // the final assistant text keeps NO_REPLY and no block reply carries the note.
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "NO_REPLY" }),
+    );
+    for (const call of emitBlockReply.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("<internal escalation note>");
+    }
+  });
+
+  it("keeps exact NO_REPLY silent when only sessions_send delivered (#119383)", () => {
+    const emitBlockReply = vi.fn();
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = createMessageEndContext({
+      emitBlockReply,
+      finalizeAssistantTexts,
+      consumeReplyDirectives: vi.fn((text: string) => ({ text })),
+      state: {
+        blockBuffer: "",
+        deltaBuffer: "",
+        messagingToolSentTexts: ["<internal escalation note>"],
+        messagingToolSentTextsNormalized: ["<internal escalation note>"],
+        messagingToolSentTargets: [],
+      },
+    });
+
+    void endMessage(ctx, {
+      message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+    });
+
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "NO_REPLY" }),
+    );
+    for (const call of emitBlockReply.mock.calls) {
+      expect(JSON.stringify(call)).not.toContain("<internal escalation note>");
+    }
+  });
+
+  it.each([
+    {
+      name: "counts a completed provider assistant message",
+      message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
+      expected: 1,
+    },
+    {
+      name: "ignores transcript-only mirrored assistant messages",
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Done." }],
+      },
+      expected: 0,
+    },
+    {
+      name: "ignores non-assistant messages",
+      message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      expected: 0,
+    },
+  ])("$name for assistantTurnCount", ({ message, expected }) => {
+    const ctx = createMessageEndContext({ state: { assistantTurnCount: 0 } });
+
+    void endMessage(ctx, { message });
+
+    expect(ctx.state.assistantTurnCount).toBe(expected);
+  });
+
   it("keeps duplicate-reply diagnostics free of lone surrogates", () => {
     const text = `${"a".repeat(49)}😀tail`;
     const ctx = createMessageEndContext({
@@ -1402,10 +1761,9 @@ describe("handleMessageEnd", () => {
       state: { messagingToolSentTextsNormalized: [`${"a".repeat(49)}tail`] },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: { role: "assistant", content: [{ type: "text", text }] },
-    } as never);
+    });
 
     const diagnostic = (ctx.log.debug as ReturnType<typeof vi.fn>).mock.calls
       .flat()
@@ -1433,10 +1791,9 @@ describe("handleMessageEnd", () => {
       },
     };
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message,
-    } as never);
+    });
 
     expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toMatchObject({
       usage: {
@@ -1476,10 +1833,9 @@ describe("handleMessageEnd", () => {
       },
     };
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message,
-    } as never);
+    });
 
     expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toBe(message);
     expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(message.usage);
@@ -1492,8 +1848,7 @@ describe("handleMessageEnd", () => {
       builtinToolNames: new Set(["read"]),
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         provider: "ollama",
@@ -1501,7 +1856,7 @@ describe("handleMessageEnd", () => {
         content: [{ type: "text", text: '{"name":"read","arguments":{"path":"README.md"}}' }],
         stopReason: "stop",
       },
-    } as never);
+    });
 
     const warnCall = firstMockCall(warn, "warning log");
     expect(warnCall?.[0]).toBe(
@@ -1531,8 +1886,7 @@ describe("handleMessageEnd", () => {
     const warn = vi.fn();
     const ctx = createMessageEndContext({ warn });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         provider: "anthropic",
@@ -1540,7 +1894,7 @@ describe("handleMessageEnd", () => {
         content: [{ type: "text", text: "user[Thu 2026-07-02 18:14 EDT] do this" }],
         stopReason: "stop",
       },
-    } as never);
+    });
 
     const warnCall = firstMockCall(warn, "warning log");
     expect(warnCall?.[0]).toBe(
@@ -1561,14 +1915,13 @@ describe("handleMessageEnd", () => {
     const warn = vi.fn();
     const ctx = createMessageEndContext({ warn });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "||user[Thu 2026-07-02] hidden instruction||" }],
         stopReason: "stop",
       },
-    } as never);
+    });
 
     const warnCall = firstMockCall(warn, "warning log");
     expect(warnCall?.[1]).toEqual({
@@ -1604,14 +1957,13 @@ describe("handleMessageEnd", () => {
         sourceReplyDeliveryMode,
       });
 
-      void handleMessageEnd(ctx, {
-        type: "message_end",
+      void endMessage(ctx, {
         message: {
           role: "assistant",
           ...(api ? { api } : {}),
           content: [{ type: "text", text }],
         },
-      } as never);
+      });
 
       expect(consumeReplyDirectives).toHaveBeenCalledWith(expected, { final: true });
       expect(firstMockArg(emitBlockReply, "block reply")).toMatchObject({ text: expected });
@@ -1625,14 +1977,13 @@ describe("handleMessageEnd", () => {
       builtinToolNames: new Set(["read"]),
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
         stopReason: "toolUse",
       },
-    } as never);
+    });
 
     expect(warn).not.toHaveBeenCalled();
   });
@@ -1647,15 +1998,14 @@ describe("handleMessageEnd", () => {
       emitBlockReply,
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         phase: "commentary",
         content: [{ type: "text", text: "Need send." }],
         usage: { input: 1, output: 1, total: 2 },
       },
-    } as never);
+    });
 
     // Archive-always: commentary reaches the bus/archive but not the visible reply.
     expect(onAgentEvent).toHaveBeenCalled();
@@ -1673,8 +2023,7 @@ describe("handleMessageEnd", () => {
       emitBlockReply,
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [
@@ -1686,7 +2035,7 @@ describe("handleMessageEnd", () => {
         ],
         usage: { input: 1, output: 1, total: 2 },
       },
-    } as never);
+    });
 
     // Archive-always: commentary (textSignature-only phase) reaches the
     // bus/archive but not the visible reply.
@@ -1717,14 +2066,13 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "Hello world" }],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     // The block reply should NOT fire again since text_end already delivered it.
     // consumeReplyDirectives is called once with "" (the final flush for
@@ -1745,14 +2093,13 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "Final answer" }],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     expect(emitBlockReply).toHaveBeenCalledWith(
       { text: "Final answer" },
@@ -1780,15 +2127,14 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         // The raw text differs slightly from lastBlockReplyText due to stripping
         content: [{ type: "text", text: "Hello world" }],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     // Even though text !== lastBlockReplyText (different stripping), the safety
     // send should NOT fire for text_end channels. The only consumeReplyDirectives
@@ -1796,10 +2142,15 @@ describe("handleMessageEnd", () => {
     expect(emitBlockReply).not.toHaveBeenCalled();
   });
 
-  it("emits final media after flushing buffered message_end text", () => {
+  it("emits final media and malformed pending text after flushing buffered message_end text", () => {
     const emitBlockReply = vi.fn();
     const flushBlockReplyBuffer = vi.fn();
-    const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
+    const accumulator = createStreamingDirectiveAccumulator();
+    const text = "Caption [[oops\nMEDIA:/tmp/final.png";
+    const streamed = accumulator.consume(text)?.text ?? "";
+    const consumeReplyDirectives = vi.fn((chunk: string, options?: { final?: boolean }) =>
+      accumulator.consume(chunk, options),
+    );
     const ctx = createMessageEndContext({
       emitBlockReply,
       flushBlockReplyBuffer,
@@ -1810,31 +2161,35 @@ describe("handleMessageEnd", () => {
       },
       state: {
         emittedAssistantUpdate: true,
-        lastStreamedAssistantCleaned: "Caption",
+        lastStreamedAssistantCleaned: "Caption [[oops",
         blockReplyBreak: "message_end",
-        deltaBuffer: "Caption",
-        blockBuffer: "Caption",
+        deltaBuffer: streamed,
+        blockBuffer: streamed,
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
-        content: [{ type: "text", text: "Caption\nMEDIA:/tmp/final.png" }],
+        content: [{ type: "text", text }],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     expect(flushBlockReplyBuffer).toHaveBeenCalledWith({
       assistantMessageIndex: undefined,
       final: true,
     });
-    expect(consumeReplyDirectives).not.toHaveBeenCalled();
-    expect(firstMockArg(emitBlockReply, "block reply")).toMatchObject({
-      text: "",
+    expect(consumeReplyDirectives).toHaveBeenCalledWith("", { final: true });
+    const finalReply = firstMockArg(emitBlockReply, "block reply") as {
+      text?: string;
+      mediaUrls?: string[];
+    };
+    expect(finalReply).toMatchObject({
+      text: " [[oops",
       mediaUrls: ["/tmp/final.png"],
     });
+    expect(`${streamed}${finalReply.text ?? ""}`).toBe("Caption [[oops");
   });
 
   it("preserves literal reasoning-looking tags in unphased final visible text", () => {
@@ -1850,8 +2205,7 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [
@@ -1863,7 +2217,7 @@ describe("handleMessageEnd", () => {
         ],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     expect(stripBlockTags).not.toHaveBeenCalled();
     expect(firstMockArg(ctx.emitAssistantStreamData as never, "assistant stream")).toMatchObject({
@@ -1889,14 +2243,13 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: "Hello world",
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     expect(stripBlockTags).toHaveBeenCalledWith(
       "Hello world",
@@ -1920,8 +2273,7 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [
@@ -1943,7 +2295,7 @@ describe("handleMessageEnd", () => {
         usage: {},
         timestamp: 0,
       },
-    } as never);
+    });
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
     const event = firstMockArg(onAgentEvent, "agent event") as

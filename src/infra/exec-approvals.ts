@@ -1,17 +1,16 @@
 // Manages exec approval policy, allowlist entries, and host targeting.
 import {
   normalizeExecApprovalsInternal,
-  resolveExecApprovalsPath,
+  resolveExecApprovalsDisplayPath,
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile, ExecApprovalsResolved } from "./exec-approvals-core.js";
-import { withExecApprovalsReadLock, withExecApprovalsReadLockSync } from "./exec-approvals-lock.js";
 import { resolveExecApprovalsFromFilePrepared } from "./exec-approvals-resolver.js";
 import {
   ensureExecApprovals,
   ensureExecApprovalsSnapshot,
-  readExecApprovalsForNoPersistenceUnlocked,
+  loadExecApprovals,
 } from "./exec-approvals-store.js";
 import { expandHomePrefix } from "./home-dir.js";
 
@@ -89,11 +88,9 @@ export function resolveExecApprovals(
   agentId?: string,
   overrides?: ExecApprovalsDefaultOverrides,
 ): ExecApprovalsResolved {
-  const filePath = resolveExecApprovalsPath();
+  const filePath = resolveExecApprovalsDisplayPath();
   if (!overrides?.requireSocket) {
-    const file = withExecApprovalsReadLockSync(filePath, () =>
-      readExecApprovalsForNoPersistenceUnlocked(filePath),
-    );
+    const file = loadExecApprovals();
     const resolved = resolveExecApprovalsWithoutSocket({
       file,
       filePath,
@@ -118,11 +115,9 @@ export async function resolveExecApprovalsLocked(
   agentId?: string,
   overrides?: ExecApprovalsDefaultOverrides,
 ): Promise<ExecApprovalsResolved> {
-  const filePath = resolveExecApprovalsPath();
+  const filePath = resolveExecApprovalsDisplayPath();
   if (!overrides?.requireSocket) {
-    const file = await withExecApprovalsReadLock(filePath, async () =>
-      readExecApprovalsForNoPersistenceUnlocked(filePath),
-    );
+    const file = loadExecApprovals();
     const resolved = resolveExecApprovalsWithoutSocket({
       file,
       filePath,
@@ -135,7 +130,7 @@ export async function resolveExecApprovalsLocked(
   }
   return shapeResolvedExecApprovals({
     file: (await ensureExecApprovalsSnapshot()).file,
-    filePath: resolveExecApprovalsPath(),
+    filePath: resolveExecApprovalsDisplayPath(),
     agentId,
     overrides,
     socket: "persisted",

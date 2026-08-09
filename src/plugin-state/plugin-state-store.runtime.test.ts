@@ -264,7 +264,7 @@ describe("plugin runtime state proxy", () => {
     ).toThrow("openKeyedStore is only available for trusted plugins");
     expect(() =>
       api.runtime.state.openSyncKeyedStore({ namespace: "runtime", maxEntries: 10 }),
-    ).toThrow("openKeyedStore is only available for trusted plugins");
+    ).toThrow("openSyncKeyedStore is only available for trusted plugins");
     expect(() =>
       api.runtime.state.openBlobStore({
         namespace: "runtime",
@@ -285,6 +285,17 @@ describe("plugin runtime state proxy", () => {
         async () => undefined,
       ),
     ).toThrow("withLease is only available for trusted plugins");
+  });
+
+  it("names the denied capability, plugin, and origin for channel ingress queues", () => {
+    const registry = createTestPluginRegistry();
+    const record = createPluginRecord("slack", "config");
+    registry.registry.plugins.push(record);
+    const api = registry.createApi(record, { config: {} });
+
+    expect(() => api.runtime.state.openChannelIngressQueue()).toThrow(
+      /openChannelIngressQueue is only available for trusted plugins in this release\. Plugin "slack" loaded with origin "config"/,
+    );
   });
 
   it("rejects untrusted global plugins", () => {

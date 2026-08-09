@@ -77,8 +77,8 @@ enum NodeServiceManager {
 }
 
 extension NodeServiceManager {
-    private static func serviceCommand(_ args: [String]) -> [String] {
-        CommandResolver.openclawCommand(
+    private static func serviceCommand(_ args: [String]) async -> [String] {
+        await CommandResolver.openclawCommand(
             subcommand: "node",
             extraArgs: self.withJsonFlag(args),
             // Service management must always run locally, even if remote mode is configured.
@@ -107,7 +107,7 @@ extension NodeServiceManager {
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
-        let command = self.serviceCommand(args)
+        let command = await self.serviceCommand(args)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
@@ -206,8 +206,8 @@ extension NodeServiceManager {
 
 #if DEBUG
 extension NodeServiceManager {
-    static func _testServiceCommand(_ args: [String]) -> [String] {
-        self.serviceCommand(args)
+    static func _testServiceCommand(_ args: [String]) async -> [String] {
+        await self.serviceCommand(args)
     }
 
     static func _testLaunchdProgramArguments(plistURL: URL) -> [String]? {

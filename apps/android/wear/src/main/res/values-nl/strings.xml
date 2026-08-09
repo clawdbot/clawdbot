@@ -11,10 +11,12 @@
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dicteren"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Live"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gespreksdraad"</string>
+    <string name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Discussie openen"</string>
     <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Veeg →"</string>
     <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ingedrukt houden"</string>
     <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tikken"</string>
     <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dubbeltik"</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Nieuwe berichten weergeven"</string>
     <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Start Live om het gesprek hier te zien."</string>
     <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nieuw"</string>
     <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Typen"</string>

@@ -9,6 +9,7 @@ import {
   CircularIncludeError,
   ConfigIncludeError,
   MAX_INCLUDE_DEPTH,
+  type ConfigIncludeResolutionEvent,
   type IncludeResolver,
   resolveConfigIncludeWritePath,
   resolveConfigIncludes,
@@ -170,6 +171,95 @@ describe("resolveConfigIncludes", () => {
     expect(resolve(obj, files)).toEqual({
       nested: { deep: "value" },
     });
+  });
+
+  it("reports exact include ownership through arrays, nesting, and sibling overrides", () => {
+    const files = {
+      [configPath("first.json")]: { id: "first" },
+      [configPath("second.json")]: { enabled: true },
+      [configPath("third.json")]: { mode: "strict" },
+    };
+    const events: ConfigIncludeResolutionEvent[] = [];
+    const resolver = createMockResolver(files);
+    resolver.onIncludeResolved = (event) => events.push(event);
+
+    expect(
+      resolveConfigIncludes(
+        {
+          plugins: [
+            { $include: "./first.json" },
+            {
+              policy: {
+                $include: ["./second.json", "./third.json"],
+                enabled: false,
+              },
+            },
+          ],
+        },
+        DEFAULT_BASE_PATH,
+        resolver,
+      ),
+    ).toEqual({
+      plugins: [{ id: "first" }, { policy: { enabled: false, mode: "strict" } }],
+    });
+    expect(events).toEqual([
+      {
+        path: ["plugins", "0"],
+        value: { id: "first" },
+        kind: "single",
+        hasSiblingOverrides: false,
+        targetPath: configPath("first.json"),
+      },
+      {
+        path: ["plugins", "1", "policy"],
+        value: { enabled: true, mode: "strict" },
+        kind: "multiple",
+        hasSiblingOverrides: true,
+        targetPaths: [configPath("second.json"), configPath("third.json")],
+      },
+    ]);
+  });
+
+  it("reports the enclosing include after nested delegates at the same logical path", () => {
+    const files = {
+      [configPath("delegating.json")]: { $include: "./nested.json" },
+      [configPath("nested.json")]: { mode: "nested" },
+      [configPath("override.json")]: { mode: "override" },
+    };
+    const events: ConfigIncludeResolutionEvent[] = [];
+    const resolver = createMockResolver(files);
+    resolver.onIncludeResolved = (event) => events.push(event);
+
+    expect(
+      resolveConfigIncludes(
+        {
+          agents: { $include: ["./delegating.json", "./override.json"] },
+        },
+        DEFAULT_BASE_PATH,
+        resolver,
+      ),
+    ).toEqual({ agents: { mode: "override" } });
+    expect(
+      events.map(({ path: logicalPath, kind, targetPath, targetPaths }) => ({
+        path: logicalPath,
+        kind,
+        targetPath,
+        targetPaths,
+      })),
+    ).toEqual([
+      {
+        path: ["agents"],
+        kind: "single",
+        targetPath: configPath("nested.json"),
+        targetPaths: undefined,
+      },
+      {
+        path: ["agents"],
+        kind: "multiple",
+        targetPath: undefined,
+        targetPaths: [configPath("delegating.json"), configPath("override.json")],
+      },
+    ]);
   });
 
   it.each([

@@ -28,6 +28,26 @@
     "target": "BlueBubbles"
   },
   {
+    "source": "Buzz",
+    "target": "Buzz"
+  },
+  {
+    "source": "Channel overview",
+    "target": "频道概览"
+  },
+  {
+    "source": "Channel access controls",
+    "target": "频道访问控制"
+  },
+  {
+    "source": "Secrets management",
+    "target": "密钥管理"
+  },
+  {
+    "source": "Channel troubleshooting",
+    "target": "频道故障排除"
+  },
+  {
     "source": "Configuration reference - iMessage",
     "target": "Configuration reference - iMessage"
   },
@@ -368,6 +388,10 @@
     "target": "微信"
   },
   {
+    "source": "WeCom",
+    "target": "企业微信"
+  },
+  {
     "source": "Weixin",
     "target": "微信"
   },
@@ -650,6 +674,10 @@
   {
     "source": "Memory overview",
     "target": "记忆概览"
+  },
+  {
+    "source": "QMD memory backend removal",
+    "target": "QMD 记忆后端移除"
   },
   {
     "source": "Active memory",
@@ -1428,6 +1456,34 @@
     "target": "媒体理解"
   },
   {
+    "source": "Media playback",
+    "target": "媒体播放"
+  },
+  {
+    "source": "Image and media support",
+    "target": "图像和媒体支持"
+  },
+  {
+    "source": "Audio and voice notes",
+    "target": "音频和语音消息"
+  },
+  {
+    "source": "Media overview",
+    "target": "媒体概览"
+  },
+  {
+    "source": "Text to speech",
+    "target": "文本转语音"
+  },
+  {
+    "source": "Linux app",
+    "target": "Linux 应用"
+  },
+  {
+    "source": "Inline audio and video playback",
+    "target": "内联音频和视频播放"
+  },
+  {
     "source": "Models CLI reference",
     "target": "模型 CLI 参考"
   },
@@ -1616,6 +1672,26 @@
     "target": "Baseten（Inkling + Model APIs）"
   },
   {
+    "source": "ChromeOS",
+    "target": "ChromeOS"
+  },
+  {
+    "source": "ChromeOS (Crostini)",
+    "target": "ChromeOS (Crostini)"
+  },
+  {
+    "source": "Linux guide",
+    "target": "Linux 指南"
+  },
+  {
+    "source": "Node install guidance",
+    "target": "Node 安装指南"
+  },
+  {
+    "source": "Gateway runbook",
+    "target": "Gateway 运行手册"
+  },
+  {
     "source": "Multi-user mode",
     "target": "多用户模式"
   },
@@ -1642,5 +1718,29 @@
   {
     "source": "Cron CLI",
     "target": "Cron CLI"
+  },
+  {
+    "source": "TOOLS.md retired",
+    "target": "TOOLS.md 已弃用"
+  },
+  {
+    "source": "Automations",
+    "target": "自动化"
+  },
+  {
+    "source": "Automations (cron)",
+    "target": "自动化 (cron)"
+  },
+  {
+    "source": "Daytona",
+    "target": "Daytona"
+  },
+  {
+    "source": "Gateway remote access",
+    "target": "Gateway 远程访问"
+  },
+  {
+    "source": "Updating OpenClaw",
+    "target": "更新 OpenClaw"
   }
 ]

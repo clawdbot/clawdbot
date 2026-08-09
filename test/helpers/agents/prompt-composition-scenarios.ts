@@ -1,11 +1,11 @@
 // Prompt composition scenarios build reusable agent prompt fixtures.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { buildBootstrapPromptWarning } from "../../../src/agents/bootstrap-budget-warning.js";
 import {
   appendBootstrapPromptWarning,
   analyzeBootstrapBudget,
   buildBootstrapInjectionStats,
-  buildBootstrapPromptWarning,
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
 import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
@@ -73,8 +73,7 @@ function buildCommonSystemParams(workspaceDir: string) {
       shell: "zsh",
     },
     userTimezone: "America/Los_Angeles",
-    userTime: "Monday, March 16th, 2026 - 9:00 PM",
-    userTimeFormat: "12" as const,
+    userDate: "2026-03-16",
     toolNames,
   };
 }
@@ -87,15 +86,15 @@ function buildSystemPrompt(params: {
   contextFiles?: Array<{ path: string; content: string }>;
   silentReplyPromptMode?: "generic" | "none";
 }) {
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat, toolNames } =
-    buildCommonSystemParams(params.workspaceDir);
+  const { runtimeInfo, userTimezone, userDate, toolNames } = buildCommonSystemParams(
+    params.workspaceDir,
+  );
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     extraSystemPrompt: params.extraSystemPrompt,
     runtimeInfo,
     userTimezone,
-    userTime,
-    userTimeFormat,
+    userDate,
     toolNames,
     modelAliasLines: [],
     promptMode: "full",
@@ -184,9 +183,7 @@ function buildToolRichSystemPrompt(params: {
   skillsPrompt: string;
   contextFiles: Array<{ path: string; content: string }>;
 }) {
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildCommonSystemParams(
-    params.workspaceDir,
-  );
+  const { runtimeInfo, userTimezone, userDate } = buildCommonSystemParams(params.workspaceDir);
   const tools = [
     "bash",
     "read",
@@ -207,8 +204,7 @@ function buildToolRichSystemPrompt(params: {
     tools,
     modelAliasLines: [],
     userTimezone,
-    userTime,
-    userTimeFormat,
+    userDate,
     acpEnabled: true,
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: { level: "extensive", channel: "Telegram" },
@@ -459,7 +455,7 @@ function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
     MessageSid: "1503084621145964846",
     Body: body,
     BodyStripped: body,
-    UntrustedStructuredContext: [
+    ChannelStructuredContext: [
       {
         label: "Discord channel metadata",
         source: "discord",
@@ -504,7 +500,7 @@ async function createToolRichScenario(workspaceDir: string): Promise<PromptScena
     "<skill><name>release</name><description>Release OpenClaw safely.</description><location>/skills/release/SKILL.md</location></skill>",
     "</available_skills>",
   ].join("\n");
-  const contextFiles = await readContextFiles(workspaceDir, ["AGENTS.md", "TOOLS.md", "SOUL.md"]);
+  const contextFiles = await readContextFiles(workspaceDir, ["AGENTS.md", "SOUL.md"]);
   const systemPrompt = buildToolRichSystemPrompt({
     workspaceDir,
     skillsPrompt,
@@ -521,7 +517,7 @@ async function createToolRichScenario(workspaceDir: string): Promise<PromptScena
         label: "Tool-rich turn asking for search, read, and file edits",
         systemPrompt,
         bodyPrompt: [
-          "Conversation info (untrusted metadata):",
+          "Conversation info:",
           "```json",
           JSON.stringify({ message_id: "tool-1", sender_id: "U9", was_mentioned: true }, null, 2),
           "```",
@@ -535,12 +531,12 @@ async function createToolRichScenario(workspaceDir: string): Promise<PromptScena
         label: "Follow-up after a fictional tool call",
         systemPrompt,
         bodyPrompt: [
-          "Conversation info (untrusted metadata):",
+          "Conversation info:",
           "```json",
           JSON.stringify({ message_id: "tool-2", sender_id: "U9" }, null, 2),
           "```",
           "",
-          "Tool transcript summary (untrusted, for context):",
+          "Tool transcript summary:",
           "```json",
           JSON.stringify(
             [
@@ -573,9 +569,9 @@ async function createBootstrapWarningScenario(workspaceDir: string): Promise<Pro
     },
   } satisfies OpenClawConfig;
   const largeAgents = "# AGENTS.md\n\n" + "Rules.\n".repeat(5_000);
-  const largeTools = "# TOOLS.md\n\n" + "Notes.\n".repeat(3_000);
+  const largeSoul = "# SOUL.md\n\n" + "Notes.\n".repeat(3_000);
   await writeWorkspaceFile({ dir: workspaceDir, name: "AGENTS.md", content: largeAgents });
-  await writeWorkspaceFile({ dir: workspaceDir, name: "TOOLS.md", content: largeTools });
+  await writeWorkspaceFile({ dir: workspaceDir, name: "SOUL.md", content: largeSoul });
   const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: bootstrapConfig,
@@ -668,7 +664,7 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
   const memoryFlushPrompt = [
     "Pre-compaction memory flush.",
     "Store durable memories only in memory/2026-03-15.md (create memory/ if needed).",
-    "Treat workspace bootstrap/reference files such as MEMORY.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.",
+    "Treat workspace bootstrap/reference files such as MEMORY.md, SOUL.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.",
     "If nothing to store, reply with NO_REPLY.",
     "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles)",
     "Reference UTC: 2026-03-16 04:30 UTC",
@@ -751,16 +747,14 @@ async function createWorkspaceWithPromptCompositionFiles(): Promise<string> {
       "# AGENTS.md",
       "",
       "## Session Startup",
-      "Read AGENTS.md and TOOLS.md before making changes.",
+      "Read AGENTS.md before making changes.",
+      "",
+      "## Tools",
+      "Use rg before grep.",
       "",
       "## Red Lines",
       "Do not rewrite user commits.",
     ].join("\n"),
-  });
-  await writeWorkspaceFile({
-    dir: workspaceDir,
-    name: "TOOLS.md",
-    content: "# TOOLS.md\n\nUse rg before grep.\n",
   });
   await writeWorkspaceFile({
     dir: workspaceDir,

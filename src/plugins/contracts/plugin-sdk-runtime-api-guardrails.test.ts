@@ -15,6 +15,7 @@ function runtimeApiPluginFile(pluginId: string): string {
 const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "acpx",
   "browser",
+  "buzz",
   "canvas",
   "clickclack",
   "copilot-proxy",
@@ -28,7 +29,6 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "memory-core",
   "ollama",
   "open-prose",
-  "phone-control",
   "qa-channel",
   "qa-lab",
   "qqbot",
@@ -157,7 +157,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";',
     'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";',
     'export type { WizardPrompter } from "openclaw/plugin-sdk/setup";',
-    'export function chunkTextForOutbound(text: string, limit: number): string[] { const chunks: string[] = []; let remaining = text; while (remaining.length > limit) { const window = remaining.slice(0, limit); const splitAt = Math.max(window.lastIndexOf("\\n"), window.lastIndexOf(" ")); const breakAt = splitAt > 0 ? splitAt : limit; chunks.push(remaining.slice(0, breakAt).trimEnd()); remaining = remaining.slice(breakAt).trimStart(); } if (remaining.length > 0 || text.length === 0) { chunks.push(remaining); } return chunks; }',
+    'export function chunkTextForOutbound(text: string, limit: number): string[] { if (text.length === 0) { return [""]; } if (Number.isFinite(limit) && limit > 0 && !Number.isInteger(limit)) { return chunkTextForOutboundSdk(text, limit); } const chunks: string[] = []; let remaining = text; while (remaining.length > limit) { const window = remaining.slice(0, limit); const splitAt = Math.max(window.lastIndexOf("\\n"), window.lastIndexOf(" ")); const breakAt = splitAt > 0 ? splitAt : limit; chunks.push(remaining.slice(0, breakAt).trimEnd()); remaining = remaining.slice(breakAt).trimStart(); } if (remaining.length > 0) { chunks.push(remaining); } return chunks; }',
   ],
   [bundledPluginFile({
     rootDir: ROOT_DIR,
@@ -355,6 +355,32 @@ describe("runtime api guardrails", () => {
         source,
         `${pluginId} runtime api should use generic sdk subpaths or local exports`,
       ).not.toContain(`'openclaw/plugin-sdk/${pluginId}'`);
+    }
+  });
+
+  it("keeps QA runner registration on narrow plugin facades", () => {
+    const qaRunnerApiFiles: string[] = [];
+
+    for (const [pluginId, rootDir] of getBundledPluginRoots().entries()) {
+      const runtimeApiPath = resolve(rootDir, "runtime-api.ts");
+      if (existsSync(runtimeApiPath)) {
+        expect(
+          readFileSync(runtimeApiPath, "utf8"),
+          `${pluginId} runtime api must not own QA discovery`,
+        ).not.toContain("qaRunnerCliRegistrations");
+      }
+
+      const qaRunnerApiPath = resolve(rootDir, "qa-runner-api.ts");
+      if (existsSync(qaRunnerApiPath)) {
+        qaRunnerApiFiles.push(qaRunnerApiPath);
+      }
+    }
+
+    expect(qaRunnerApiFiles.length).toBeGreaterThan(0);
+    for (const file of qaRunnerApiFiles) {
+      const exports = readExportStatements(file);
+      expect(exports).toHaveLength(1);
+      expect(exports[0]).toMatch(/^export const qaRunnerCliRegistrations = \[/u);
     }
   });
 

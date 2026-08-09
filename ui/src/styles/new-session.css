@@ -338,6 +338,19 @@ wa-popover.new-session-page__place-popover::part(body) {
   border-radius: var(--radius-md);
 }
 
+/* Keep a long first prompt visible before scrolling. The shared auto-height
+   controller measures content; this surface owns its ten-line visual cap. */
+.new-session-page__composer .new-session-page__message {
+  max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
+  --scrollbar-size: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
+}
+
+.new-session-page__composer .new-session-page__message::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
+}
+
 .new-session-page__composer::after {
   content: "";
   position: absolute;
@@ -560,6 +573,21 @@ wa-popover.new-session-page__place-popover::part(body) {
   .new-session-page__triggers {
     position: relative;
     gap: 4px 2px;
+  }
+
+  /* The shared chat footer becomes a three-column grid on mobile, but a new
+     session has visibility pills instead of the chat settings slot. Keep
+     those pills intrinsic and let the model picker use the remaining width. */
+  .new-session-page__composer .agent-chat__composer-controls {
+    display: flex;
+    gap: 4px;
+  }
+
+  .new-session-page__composer .chat-composer-model-control {
+    flex: 1 1 auto;
+    width: auto;
+    max-width: 100%;
+    margin-left: auto;
   }
 
   .new-session-page__select {

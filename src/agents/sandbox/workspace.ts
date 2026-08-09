@@ -19,7 +19,6 @@ import {
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_SOUL_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
 } from "../workspace.js";
@@ -38,7 +37,6 @@ export async function ensureSandboxWorkspace(
     const files = [
       DEFAULT_AGENTS_FILENAME,
       DEFAULT_SOUL_FILENAME,
-      DEFAULT_TOOLS_FILENAME,
       DEFAULT_IDENTITY_FILENAME,
       DEFAULT_USER_FILENAME,
       DEFAULT_BOOTSTRAP_FILENAME,

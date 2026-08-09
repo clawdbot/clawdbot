@@ -34,6 +34,8 @@ export type CliBackendConfig = {
   resumeArgs?: string[];
   /** Argument appended to one explicitly forked resume invocation. */
   forkArg?: string;
+  /** Argument followed by an assistant checkpoint id to bound one resumed fork. */
+  resumeAtArg?: string;
   /** When to pass session ids. */
   sessionMode?: "always" | "existing" | "none";
   /** JSON fields to read session id from (in order). */
@@ -173,6 +175,49 @@ export type CliBackendResolveExecutionArgs = (
   ctx: CliBackendResolveExecutionArgsContext,
 ) => readonly string[] | null | undefined;
 
+export type CliBackendJsonlUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+};
+
+export type CliBackendParsedJsonlEvent =
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
+  | {
+      kind: "toolStart";
+      toolCallId: string;
+      name: string;
+      args?: Record<string, unknown>;
+    }
+  | {
+      kind: "toolResult";
+      toolCallId: string;
+      name?: string;
+      isError?: boolean;
+      result?: unknown;
+    }
+  | {
+      kind: "result";
+      text?: string;
+      sessionId?: string;
+      usage?: CliBackendJsonlUsage;
+      errorText?: string;
+    }
+  | { kind: "sessionId"; sessionId: string };
+
+export type CliBackendParseJsonlEventContext = {
+  backendId: string;
+  backend: Readonly<CliBackendConfig>;
+};
+
+export type CliBackendParseJsonlEvent = (
+  line: string,
+  ctx: CliBackendParseJsonlEventContext,
+) => CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[] | null | undefined;
+
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
 export type CliBackendNativeToolMode = "none" | "always-on" | "selectable";
@@ -181,6 +226,13 @@ export type CliBackendNativeToolMode = "none" | "always-on" | "selectable";
 export type CliBackendToolAvailabilityEnforcement = "execution-args" | "prepare-execution";
 
 export type CliBackendSideQuestionToolMode = "disabled";
+
+type CliBackendExactToolAvailabilityVersionPolicy = Readonly<{
+  /** Inclusive floor for stable package releases. */
+  stableMinimum: string;
+  /** Inclusive floors keyed by the first SemVer prerelease identifier. */
+  prereleaseMinimums?: Readonly<Record<string, string>>;
+}>;
 
 export type CliBackendNormalizeConfigContext = {
   config?: OpenClawConfig;
@@ -195,8 +247,22 @@ export type CliBackendRuntimeArtifactPolicy = Readonly<{
   packageName: string;
   /** Only the command itself may be the package entrypoint. */
   entrypoint: "command";
+  /** Supported package release lines when a run requests exact tool availability. */
+  exactToolAvailabilityVersionPolicy?: CliBackendExactToolAvailabilityVersionPolicy;
   /** Canonical basenames allowed when this backend ships a self-contained native build. */
   nativeExecutableNames?: readonly string[];
+}>;
+
+/** Provider-owned protocol requirement for a long-lived CLI session. */
+export type CliBackendLiveSessionRequirement = Readonly<{
+  /** Exact capability the CLI must advertise before streamed output is trusted. */
+  capability: string;
+  /** First published version known to advertise the capability; runtime still feature-detects. */
+  minimumVersion: string;
+  /** Arguments used by setup and Doctor to obtain the installed CLI version. */
+  versionArgs: readonly string[];
+  /** Operator command that installs a compatible CLI version. */
+  updateCommand: string;
 }>;
 
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
@@ -244,6 +310,8 @@ export type CliBackendPlugin = {
   };
   /** Required whenever this backend can become a verified inference owner. */
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
+  /** Negotiated protocol capability required by this backend's live-session transport. */
+  liveSessionRequirement?: CliBackendLiveSessionRequirement;
   /**
    * Whether OpenClaw should inject bundle MCP config for this backend.
    *
@@ -335,6 +403,13 @@ export type CliBackendPlugin = {
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
   /** How this backend enforces an exact per-run `toolAvailability` contract. */
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
+  /**
+   * Backend-owned JSONL line parser for provider-specific stream formats.
+   *
+   * Tool events report execution already performed by the backend. OpenClaw
+   * renders them but does not treat them as host tool execution or delivery evidence.
+   */
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   /**
    * Whether this CLI backend can expose native tools outside OpenClaw's tool
    * catalog. Exact restricted runs require `selectable` plus a declared

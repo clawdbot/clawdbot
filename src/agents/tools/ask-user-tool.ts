@@ -584,9 +584,8 @@ export function createAskUserTool(params: {
           gatewayCall,
           waiters: new Set(),
         } satisfies AskUserQuestionState);
-      Object.assign(state, { sessionKey, questions: normalized.questions });
+      Object.assign(state, { sessionKey, questions: normalized.questions, gatewayCall });
       state.expiresAtMs = Date.now() + timeoutMs;
-      state.gatewayCall = gatewayCall;
       transitionAskUserQuestion(state, { kind: "registering" });
       askUserQuestions.set(questionId, state);
       let cancellation:
@@ -675,6 +674,7 @@ export function createAskUserTool(params: {
                 questions: normalized.questions,
                 ...(params.agentId ? { agentId: params.agentId } : {}),
                 ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                ...(params.runId ? { runId: params.runId } : {}),
                 timeoutMs,
               },
               signal ? { signal } : undefined,

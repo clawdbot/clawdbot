@@ -1,5 +1,6 @@
-// Slack tests cover action runtime plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Slack tests cover action runtime plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
@@ -63,14 +64,245 @@ describe("handleSlackAction", () => {
     } as OpenClawConfig;
   }
 
-  it("rejects all actions before Slack API work for an enterprise org account", async () => {
+  it("reads pins from the trusted Enterprise Grid workspace", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+    listSlackPins.mockResolvedValueOnce([]);
+
+    const result = await handleSlackAction({ action: "listPins", channelId: "C123" }, cfg, {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+    });
+
+    expect(requireDetails(result).ok).toBe(true);
+    expect(requireMockArg(listSlackPins, "listSlackPins", 0, 0)).toBe("C123");
+    expectRecordFields(requireRecordArg(listSlackPins, "listSlackPins", 0, 1), {
+      cfg,
+      teamId: "T123",
+    });
+  });
+
+  it("reads the current requester from the trusted Enterprise Grid workspace", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+    getSlackMemberInfo.mockResolvedValueOnce({
+      ok: true,
+      user: { id: "U123", is_bot: false },
+    });
+
+    const result = await handleSlackAction({ action: "memberInfo", userId: "U123" }, cfg, {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+      requesterSenderId: "U123",
+    });
+
+    expect(getSlackMemberInfo).toHaveBeenCalledWith("U123", {
+      cfg,
+      teamId: "T123",
+    });
+    expect(requireDetails(result)).toEqual({
+      ok: true,
+      info: { ok: true, user: { id: "U123", is_bot: false } },
+    });
+  });
+
+  it.each([
+    {
+      name: "provider does not match",
+      context: {
+        currentChannelProvider: "discord",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+      },
+    },
+    {
+      name: "account does not match",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "other",
+        requesterSenderId: "U123",
+      },
+    },
+    {
+      name: "workspace is absent",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+      },
+    },
+    {
+      name: "current targets disagree on workspace",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        currentMessagingTarget: "team:T456:channel:C123",
+        requesterAccountId: "default",
+        requesterSenderId: "U123",
+      },
+    },
+  ])("rejects Enterprise Grid member info when the trusted $name", async ({ context }) => {
     await expect(
       handleSlackAction(
-        { action: "readMessages", channelId: "C123" },
+        { action: "memberInfo", userId: "U123" },
         slackConfig({ enterpriseOrgInstall: true }),
+        context,
       ),
-    ).rejects.toThrow(/unavailable for Enterprise Grid org installs/);
-    expect(readSlackMessages).not.toHaveBeenCalled();
+    ).rejects.toThrow();
+    expect(getSlackMemberInfo).not.toHaveBeenCalled();
+  });
+
+  it("scopes every Enterprise Grid message and pin write to the trusted current workspace", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+    const context = {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+    };
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "created" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      {
+        action: "editMessage",
+        channelId: "C123",
+        messageId: "123.456",
+        content: "updated",
+      },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      { action: "deleteMessage", channelId: "C123", messageId: "123.456" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      { action: "pinMessage", channelId: "C123", messageId: "123.456" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      { action: "unpinMessage", channelId: "C123", messageId: "123.456" },
+      cfg,
+      context,
+    );
+
+    expectSlackSendCall(0, "team:T123:channel:C123", "created", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: undefined,
+      blocks: undefined,
+    });
+    expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "updated", {
+      cfg,
+      teamId: "T123",
+      blocks: undefined,
+    });
+    expect(deleteSlackMessage).toHaveBeenCalledWith("C123", "123.456", {
+      cfg,
+      teamId: "T123",
+    });
+    expect(pinSlackMessage).toHaveBeenCalledWith("C123", "123.456", {
+      cfg,
+      teamId: "T123",
+    });
+    expect(unpinSlackMessage).toHaveBeenCalledWith("C123", "123.456", {
+      cfg,
+      teamId: "T123",
+    });
+  });
+
+  it("scopes Enterprise Grid history, file, reaction, and emoji reads to the trusted workspace", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+    const context = {
+      currentChannelProvider: "slack",
+      currentChannelId: "team:T123:channel:C123",
+      requesterAccountId: "default",
+    };
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+    listSlackReactions.mockResolvedValueOnce([]);
+    downloadSlackFile.mockResolvedValueOnce(null);
+    listSlackEmojis.mockResolvedValueOnce({ ok: true, emoji: { openai: "url" } });
+
+    await handleSlackAction({ action: "readMessages", channelId: "C123" }, cfg, context);
+    await handleSlackAction(
+      { action: "reactions", channelId: "C123", messageId: "123.456" },
+      cfg,
+      context,
+    );
+    await handleSlackAction(
+      { action: "downloadFile", channelId: "C123", fileId: "F123" },
+      cfg,
+      context,
+    );
+    await handleSlackAction({ action: "emojiList" }, cfg, context);
+
+    expect(readSlackMessages).toHaveBeenCalledWith(
+      "C123",
+      expect.objectContaining({ cfg, teamId: "T123" }),
+    );
+    expect(listSlackReactions).toHaveBeenCalledWith("C123", "123.456", {
+      cfg,
+      teamId: "T123",
+    });
+    expect(downloadSlackFile).toHaveBeenCalledWith(
+      "F123",
+      expect.objectContaining({ cfg, teamId: "T123", channelId: "C123" }),
+    );
+    expect(listSlackEmojis).toHaveBeenCalledWith({ cfg, teamId: "T123" });
+  });
+
+  it.each([
+    { name: "history", params: { action: "readMessages", channelId: "C123" } },
+    {
+      name: "reactions",
+      params: { action: "reactions", channelId: "C123", messageId: "123.456" },
+    },
+    { name: "file", params: { action: "downloadFile", channelId: "C123", fileId: "F123" } },
+    { name: "emoji", params: { action: "emojiList" } },
+  ])("rejects a bare Enterprise Grid $name read without trusted context", async ({ params }) => {
+    await expect(
+      handleSlackAction(params, slackConfig({ enterpriseOrgInstall: true })),
+    ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+  });
+
+  it.each([
+    {
+      name: "send",
+      params: { action: "sendMessage", to: "channel:C123", content: "created" },
+    },
+    {
+      name: "edit",
+      params: {
+        action: "editMessage",
+        channelId: "C123",
+        messageId: "123.456",
+        content: "updated",
+      },
+    },
+    {
+      name: "delete",
+      params: { action: "deleteMessage", channelId: "C123", messageId: "123.456" },
+    },
+    {
+      name: "pin",
+      params: { action: "pinMessage", channelId: "C123", messageId: "123.456" },
+    },
+    {
+      name: "unpin",
+      params: { action: "unpinMessage", channelId: "C123", messageId: "123.456" },
+    },
+  ])("rejects a bare Enterprise Grid $name without trusted current context", async ({ params }) => {
+    await expect(
+      handleSlackAction(params, slackConfig({ enterpriseOrgInstall: true })),
+    ).rejects.toThrow("unsupported_enterprise_slack_delivery");
   });
 
   function createReplyToFirstContext(hasRepliedRef: { value: boolean }) {
@@ -90,12 +322,7 @@ describe("handleSlackAction", () => {
     return { cfg, context, hasRepliedRef };
   }
 
-  function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    if (typeof value !== "object" || value === null) {
-      throw new Error(`${label} was not an object`);
-    }
-    return value as Record<string, unknown>;
-  }
+  const requireRecord = createRequireRecord("object", "label-not-object");
 
   function requireArray(value: unknown, label: string): unknown[] {
     expect(Array.isArray(value)).toBe(true);
@@ -312,6 +539,179 @@ describe("handleSlackAction", () => {
       ok: true,
       added: "✅",
     });
+  });
+
+  it("routes Enterprise Grid reactions through the target workspace client", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+    const channelId = "team:T123:channel:C123";
+
+    await handleSlackAction(
+      {
+        action: "react",
+        channelId,
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: channelId,
+        requesterAccountId: "default",
+      },
+    );
+
+    expect(reactSlackMessage).toHaveBeenCalledWith("C123", "123.456", "✅", {
+      cfg,
+      teamId: "T123",
+    });
+  });
+
+  it("qualifies a bare Enterprise Grid reaction target from the trusted current conversation", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+
+    await handleSlackAction(
+      {
+        action: "react",
+        channelId: "C123",
+        messageId: "123.456",
+        emoji: "✅",
+      },
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      },
+    );
+
+    expect(reactSlackMessage).toHaveBeenCalledWith("C123", "123.456", "✅", {
+      cfg,
+      teamId: "T123",
+    });
+  });
+
+  it.each([
+    {
+      name: "provider does not match",
+      context: {
+        currentChannelProvider: "discord",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      },
+    },
+    {
+      name: "account does not match",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "other",
+      },
+    },
+    {
+      name: "requester account is missing",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+      },
+    },
+    {
+      name: "channel does not match",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C456",
+        requesterAccountId: "default",
+      },
+    },
+    {
+      name: "current target is not workspace-qualified",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+        requesterAccountId: "default",
+      },
+    },
+    {
+      name: "current targets disagree on workspace",
+      context: {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        currentMessagingTarget: "team:T456:channel:C123",
+        requesterAccountId: "default",
+      },
+    },
+  ])(
+    "rejects bare Enterprise Grid reaction targets when the trusted $name",
+    async ({ context }) => {
+      await expect(
+        handleSlackAction(
+          {
+            action: "react",
+            channelId: "C123",
+            messageId: "123.456",
+            emoji: "✅",
+          },
+          slackConfig({ enterpriseOrgInstall: true }),
+          context,
+        ),
+      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(reactSlackMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("routes Enterprise Grid reaction removal through the target workspace client", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+    const channelId = "team:T123:channel:C123";
+
+    await handleSlackAction(
+      {
+        action: "react",
+        channelId,
+        messageId: "123.456",
+        emoji: "✅",
+        remove: true,
+      },
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: channelId,
+        requesterAccountId: "default",
+      },
+    );
+
+    expect(removeSlackReaction).toHaveBeenCalledWith("C123", "123.456", "✅", {
+      cfg,
+      teamId: "T123",
+    });
+  });
+
+  it("requires a workspace-qualified reaction target for Enterprise Grid", async () => {
+    await expect(
+      handleSlackAction(
+        {
+          action: "react",
+          channelId: "C123",
+          messageId: "123.456",
+          emoji: "✅",
+        },
+        slackConfig({ enterpriseOrgInstall: true }),
+      ),
+    ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+    expect(reactSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects workspace-qualified reaction targets for ordinary installs", async () => {
+    await expect(
+      handleSlackAction(
+        {
+          action: "react",
+          channelId: "team:T123:channel:C123",
+          messageId: "123.456",
+          emoji: "✅",
+        },
+        slackConfig(),
+      ),
+    ).rejects.toThrow("unexpected_enterprise_slack_workspace");
+    expect(reactSlackMessage).not.toHaveBeenCalled();
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -640,6 +1040,107 @@ describe("handleSlackAction", () => {
       uploadFileName: "report-final.png",
       uploadTitle: "Report Final",
     });
+  });
+
+  it("routes Enterprise Grid uploads through a workspace-qualified destination", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+
+    await handleSlackAction(
+      {
+        action: "uploadFile",
+        to: "team:T123:channel:C123",
+        filePath: "/tmp/report.png",
+        initialComment: "fresh report",
+      },
+      cfg,
+    );
+
+    expectSlackSendCall(0, "team:T123:channel:C123", "fresh report", {
+      cfg,
+      mediaUrl: "/tmp/report.png",
+      threadTs: undefined,
+    });
+  });
+
+  it("qualifies a bare Enterprise Grid upload destination from the trusted current conversation", async () => {
+    const cfg = slackConfig({ enterpriseOrgInstall: true });
+
+    await handleSlackAction(
+      {
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "/tmp/report.png",
+        initialComment: "fresh report",
+      },
+      cfg,
+      {
+        currentChannelProvider: "slack",
+        currentChannelId: "team:T123:channel:C123",
+        requesterAccountId: "default",
+      },
+    );
+
+    expectSlackSendCall(0, "team:T123:channel:C123", "fresh report", {
+      cfg,
+      mediaUrl: "/tmp/report.png",
+      threadTs: undefined,
+    });
+  });
+
+  it("requires a workspace-qualified upload destination for Enterprise Grid", async () => {
+    await expect(
+      handleSlackAction(
+        {
+          action: "uploadFile",
+          to: "channel:C123",
+          filePath: "/tmp/report.png",
+        },
+        slackConfig({ enterpriseOrgInstall: true }),
+      ),
+    ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      action: "sendMessage",
+      params: {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "render",
+        mediaUrl: "renders/chart.png",
+      },
+    },
+    {
+      action: "uploadFile",
+      params: {
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "renders/chart.png",
+        initialComment: "render",
+      },
+    },
+  ] as const)("forwards trusted media access unchanged for $action", async ({ params }) => {
+    const cfg = slackConfig();
+    const mediaReadFile = vi.fn(async () => Buffer.from("image"));
+    const mediaAccess = {
+      localRoots: ["/tmp/workspace-agent"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/workspace-agent",
+    };
+
+    await handleSlackAction(params, cfg, {
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+    });
+
+    const sendOptions = expectSlackSendCall(0, "channel:C123", "render", {
+      cfg,
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile: undefined,
+    });
+    expect(sendOptions.mediaAccess).toBe(mediaAccess);
   });
 
   it("rejects replyBroadcast for uploadFile", async () => {
@@ -1577,36 +2078,28 @@ describe("handleSlackAction", () => {
     });
   });
 
-  it("uses user token for reads when available", async () => {
-    const token = await resolveReadToken(
-      slackConfig({
-        accounts: {
-          default: {
-            botToken: "xoxb-bot",
-            userToken: "xoxp-user",
-          },
-        },
+  it.each<{
+    name: string;
+    config: OpenClawConfig;
+    operation: "read" | "send";
+    expectedToken?: string;
+  }>([
+    {
+      name: "uses user token for reads when available",
+      config: slackConfig({
+        accounts: { default: { botToken: "xoxb-bot", userToken: "xoxp-user" } },
       }),
-    );
-    expect(token).toBe("xoxp-user");
-  });
-
-  it("falls back to bot token for reads when user token missing", async () => {
-    const token = await resolveReadToken(
-      slackConfig({
-        accounts: {
-          default: {
-            botToken: "xoxb-bot",
-          },
-        },
-      }),
-    );
-    expect(token).toBeUndefined();
-  });
-
-  it("uses bot token for writes when userTokenReadOnly is true", async () => {
-    const token = await resolveSendToken(
-      slackConfig({
+      operation: "read",
+      expectedToken: "xoxp-user",
+    },
+    {
+      name: "falls back to bot token for reads when user token missing",
+      config: slackConfig({ accounts: { default: { botToken: "xoxb-bot" } } }),
+      operation: "read",
+    },
+    {
+      name: "uses bot token for writes when userTokenReadOnly is true",
+      config: slackConfig({
         accounts: {
           default: {
             botToken: "xoxb-bot",
@@ -1615,24 +2108,25 @@ describe("handleSlackAction", () => {
           },
         },
       }),
-    );
-    expect(token).toBeUndefined();
-  });
-
-  it("allows user token writes when bot token is missing", async () => {
-    const token = await resolveSendToken({
-      channels: {
-        slack: {
-          accounts: {
-            default: {
-              userToken: "xoxp-user",
-              userTokenReadOnly: false,
-            },
+      operation: "send",
+    },
+    {
+      name: "allows user token writes when bot token is missing",
+      config: {
+        channels: {
+          slack: {
+            accounts: { default: { userToken: "xoxp-user", userTokenReadOnly: false } },
           },
         },
-      },
-    } as OpenClawConfig);
-    expect(token).toBe("xoxp-user");
+      } as OpenClawConfig,
+      operation: "send",
+      expectedToken: "xoxp-user",
+    },
+  ])("$name", async ({ config, operation, expectedToken }) => {
+    const token = await (operation === "read"
+      ? resolveReadToken(config)
+      : resolveSendToken(config));
+    expect(token).toBe(expectedToken);
   });
 
   it("uses the user token for user-identity writes", async () => {

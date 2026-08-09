@@ -50,7 +50,7 @@ candidate_version="$(
 if [ -n "${OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC:-}" ]; then
   BASELINE_SPEC="$OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC"
 else
-  BASELINE_SPEC="$(node scripts/lib/release-upgrade-baseline.mjs --candidate-version "$candidate_version")"
+  BASELINE_SPEC="$(node --import tsx scripts/lib/release-upgrade-baseline.mts --candidate-version "$candidate_version")"
 fi
 
 mock_pid=""

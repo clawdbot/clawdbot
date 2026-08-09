@@ -3,6 +3,10 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { clampText } from "../../lib/format.ts";
 import {
+  isActiveWorkboardCard,
+  nextWorkboardCardPosition,
+} from "../../lib/workboard/card-state.ts";
+import {
   getWorkboardDependencyState,
   getWorkboardLifecycle,
   getWorkboardState,
@@ -34,9 +38,8 @@ import {
   formatLifecycle,
   formatPriorityLabel,
   formatStatusLabel,
-  formatTime,
+  formatWorkboardDate,
   formatUpdatedTime,
-  nextPosition,
   taskDetail,
   taskMatchesLifecycle,
   type WorkboardProps,
@@ -53,7 +56,7 @@ function renderEvents(card: WorkboardCard) {
         (event) => html`
           <li>
             <span>${formatEventLabel(event)}</span>
-            <time>${formatTime(event.at)}</time>
+            <time>${formatWorkboardDate(event.at)}</time>
           </li>
         `,
       )}
@@ -251,7 +254,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
     writable && (linkedSessionKey ? live : activeTask)
       ? renderStopCardAction(props, card, busy, { iconOnly: true })
       : nothing;
-  const moveAction = writable ? renderCardMoveControl(props, card, busy) : nothing;
+  const moveAction = writable && !archived ? renderCardMoveControl(props, card, busy) : nothing;
   const deleteAction = writable
     ? renderDeleteCardAction(props, card, busy, { iconOnly: true })
     : nothing;
@@ -269,7 +272,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
       aria-haspopup="dialog"
       aria-expanded=${state.detailCardId === card.id ? "true" : "false"}
       aria-controls=${workboardCardDetailDrawerId}
-      draggable=${writable && !state.dispatching ? "true" : "false"}
+      draggable=${writable && !archived && !state.dispatching ? "true" : "false"}
       @click=${(event: MouseEvent) => {
         if (!isCardActionTarget(event)) {
           openCardDetails(state, card);
@@ -285,7 +288,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard) {
         event.preventDefault();
       }}
       @dragstart=${(event: DragEvent) => {
-        if (!writable || state.dispatching) {
+        if (!writable || archived || state.dispatching) {
           event.preventDefault();
           return;
         }
@@ -372,15 +375,16 @@ export function renderColumn(
           return;
         }
         const cardId = event.dataTransfer?.getData("text/plain") || state.draggedCardId;
-        if (!cardId) {
+        const card = state.cards.find((candidate) => candidate.id === cardId);
+        if (!card || !isActiveWorkboardCard(card)) {
           return;
         }
         void moveWorkboardCard({
           host: props.host,
           client: props.client,
-          cardId,
+          cardId: card.id,
           status,
-          position: nextPosition(state.cards, status),
+          position: nextWorkboardCardPosition(state.cards, card, status),
           requestUpdate: props.onRequestUpdate,
         });
       }}

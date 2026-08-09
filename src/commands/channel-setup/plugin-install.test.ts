@@ -1,6 +1,10 @@
 // Channel setup plugin install tests cover install decisions, registry reloads, scoped snapshots, and trust boundaries.
 import path from "node:path";
-import { bundledPluginRoot, bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
+import {
+  createRequireRecord,
+  bundledPluginRoot,
+  bundledPluginRootAt,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs", async () => {
@@ -82,11 +86,15 @@ vi.mock("../../plugins/bundled-sources.js", () => ({
   resolveBundledPluginSources: (...args: unknown[]) => resolveBundledPluginSources(...args),
 }));
 
-vi.mock("../../plugins/loader.js", () => ({
-  loadOpenClawPlugins: vi.fn(),
-}));
+vi.mock("../../plugins/loader.js", () => {
+  const load = vi.fn();
+  return { loadOpenClawPlugins: load, loadPluginRegistryHandle: load };
+});
 
-const discoverOpenClawPlugins = vi.fn((_args?: unknown) => ({ candidates: [], diagnostics: [] }));
+const discoverOpenClawPlugins = vi.fn((_args?: unknown) => ({
+  candidates: [] as PluginCandidate[],
+  diagnostics: [],
+}));
 vi.mock("../../plugins/discovery.js", () => ({
   discoverOpenClawPlugins: (args: unknown) => discoverOpenClawPlugins(args),
 }));
@@ -94,6 +102,7 @@ vi.mock("../../plugins/discovery.js", () => ({
 import fs from "node:fs";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { PluginCandidate } from "../../plugins/discovery.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -309,12 +318,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
@@ -747,7 +751,6 @@ describe("ensureChannelSetupPluginInstalled", () => {
       config: autoEnabledConfig,
       activationSourceConfig: cfg,
       autoEnabledReasons: {},
-      activate: false,
     });
   });
 
@@ -771,7 +774,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       cache: false,
       onlyPluginIds: ["@vendor/external-chat-plugin"],
       includeSetupOnlyChannelPlugins: true,
-      activate: false,
+      channelPluginLoadIntent: "setup",
     });
     expect(getChannelPluginCatalogEntry).toHaveBeenCalledWith("external-chat", {
       workspaceDir: "/tmp/openclaw-workspace",
@@ -875,7 +878,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       cache: false,
       onlyPluginIds: ["custom-external-chat-plugin"],
       includeSetupOnlyChannelPlugins: true,
-      activate: false,
+      channelPluginLoadIntent: "setup",
     });
   });
 
@@ -883,6 +886,17 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
     let sawTrustedCandidate = false;
+    discoverOpenClawPlugins.mockReturnValue({
+      candidates: [
+        {
+          idHint: "custom-external-chat-plugin",
+          source: "/tmp/openclaw-test/custom-external-chat-plugin/index.ts",
+          rootDir: "/tmp/openclaw-test/custom-external-chat-plugin",
+          origin: "bundled",
+        },
+      ],
+      diagnostics: [],
+    });
     loadPluginManifestRegistry.mockImplementation((args: unknown) => {
       if (
         isRecord(args) &&
@@ -1073,7 +1087,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
       cache: false,
       onlyPluginIds: ["@vendor/external-chat-plugin"],
       includeSetupOnlyChannelPlugins: true,
-      activate: false,
+      channelPluginLoadIntent: "setup",
     });
   });
 });

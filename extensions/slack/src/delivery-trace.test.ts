@@ -20,6 +20,7 @@ import {
   type TraceNormalizer,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, describe, it, vi } from "vitest";
 import type { PreparedSlackMessage } from "./monitor/message-handler/types.js";
@@ -50,14 +51,6 @@ type CapturedReplyOptions = {
 type TurnCounts = Record<ReplyDispatchKind, number>;
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
-
-function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
 
 type SlackTraceState = {
   recordWireCall: (call: RecordedWireCall) => void;
@@ -131,6 +124,7 @@ vi.mock("./client.js", async (importOriginal) => {
   };
   return {
     ...actual,
+    createSlackReadClient: traceClient,
     createSlackWebClient: traceClient,
     createSlackWriteClient: traceClient,
     getSlackWriteClient: traceClient,
@@ -249,11 +243,8 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "idle" },
   ],
   // Edit-preview tier: native transport ineligible → draft post + throttled
-  // chat.update, and the final promotes the draft in place. The custom-identity
-  // flavor of this tier is structurally unreachable: dispatch.ts disables the
-  // draft stream whenever a custom identity is set because chat.update cannot
-  // preserve custom authorship (identity turns instead deliver one final
-  // chat.postMessage), so no golden exists for it.
+  // chat.update, and the final promotes the draft in place. Custom identity uses
+  // a disposable app-authored draft plus a separate customized final instead.
   "preview-edit-fallback": [
     { kind: "reply-start" },
     { kind: "partial", text: PREVIEW_PARTIAL_ONE },

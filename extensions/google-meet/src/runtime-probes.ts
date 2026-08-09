@@ -53,7 +53,7 @@ const probes = MeetingPlatformAdapter.createRuntimeProbes<
       (session.transport === "chrome" || session.transport === "chrome-node") &&
       session.chrome?.launched,
     ),
-  talkBackMode: (mode) => mode === "agent" || mode === "bidi",
+  talkBackMode: MeetingPlatformAdapter.isTalkBackMode,
   normalizeUrl: normalizeMeetUrl,
   resolveRequestMode: (mode) => (mode === "realtime" ? "agent" : mode),
   defaultTransport: (config) => config.defaultTransport,

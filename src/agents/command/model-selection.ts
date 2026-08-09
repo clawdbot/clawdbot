@@ -6,8 +6,10 @@ import {
   type ThinkLevel,
 } from "../../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
+import { resolveSessionModelOverrideRouteResolution } from "../../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../sessions/agent-harness-session-key.js";
 import {
@@ -35,13 +37,16 @@ import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { loadManifestModelCatalog } from "../model-catalog.js";
+import type { ModelFallbackRouteResolution } from "../model-fallback.types.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import {
   modelKey,
   resolveDefaultModelForAgent,
+  resolveModelAliasFromPair,
   resolveThinkingDefault,
 } from "../model-selection.js";
+import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
 import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
@@ -49,7 +54,11 @@ import {
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
-import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
+import {
+  hasResolvedThinkingCatalogEntry,
+  normalizeThinkingCatalogProviders,
+  resolveEffectiveAgentRuntime,
+} from "../thinking-runtime.js";
 import {
   normalizeAgentCommandDefaultModelRef,
   normalizeAgentCommandModelRef,
@@ -103,9 +112,13 @@ export async function resolveEmbeddedModelSelection(params: {
   );
   let provider = defaultProvider;
   let model = defaultModel;
+  let requestedRouteResolution: ModelFallbackRouteResolution = "resolved";
   let sessionEntry = params.sessionEntry;
   const hasStoredOverride = Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
   let storedModelOverrideSource = hasStoredOverride ? sessionEntry?.modelOverrideSource : undefined;
+  let storedModelOverrideRouteResolution = hasStoredOverride
+    ? resolveSessionModelOverrideRouteResolution(sessionEntry)
+    : undefined;
   let hasStoredAutoFallbackProvenance =
     hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
   let hasLegacyAutoFallbackOverrideWithoutOrigin =
@@ -161,6 +174,7 @@ export async function resolveEmbeddedModelSelection(params: {
   }
 
   if (
+    !isModelSelectionLocked(sessionEntry) &&
     sessionEntry &&
     params.sessionStore &&
     params.sessionKey &&
@@ -218,11 +232,18 @@ export async function resolveEmbeddedModelSelection(params: {
       storedModelOverrideSource = adoptedHasStoredOverride
         ? sessionEntry?.modelOverrideSource
         : undefined;
+      storedModelOverrideRouteResolution = adoptedHasStoredOverride
+        ? resolveSessionModelOverrideRouteResolution(sessionEntry)
+        : undefined;
       hasStoredAutoFallbackProvenance =
         adoptedHasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
       hasLegacyAutoFallbackOverrideWithoutOrigin =
         adoptedHasStoredOverride && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
     }
+  }
+
+  if (isModelSelectionLocked(sessionEntry)) {
+    hasLegacyAutoFallbackOverrideWithoutOrigin = false;
   }
 
   const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
@@ -270,18 +291,42 @@ export async function resolveEmbeddedModelSelection(params: {
   if (normalizedChannelOverride && !hasEffectiveStoredOverride) {
     provider = normalizedChannelOverride.provider;
     model = normalizedChannelOverride.model;
+    requestedRouteResolution = "resolved";
   }
   if (storedModelOverride) {
     const candidateProvider = storedProviderOverride || defaultProvider;
+    const storedRouteKey = modelKey(candidateProvider, storedModelOverride);
+    const storedRouteCataloged = (modelCatalog ?? allowedModelCatalog).some(
+      (entry) => modelKey(entry.provider, entry.id) === storedRouteKey,
+    );
+    const storedAlias =
+      storedModelOverrideRouteResolution === "raw" && !storedRouteCataloged
+        ? resolveModelAliasFromPair({
+            cfg: params.cfg,
+            provider: candidateProvider,
+            model: storedModelOverride,
+            defaultProvider,
+            aliasIndex: visibilityPolicy.selectionAliasIndex,
+            allowPluginNormalization: params.pluginsEnabled,
+            ...params.modelManifestContext,
+          })
+        : null;
     const normalizedStored = normalizeAgentCommandModelRef(
       params.cfg,
-      candidateProvider,
-      storedModelOverride,
+      storedAlias?.provider ?? candidateProvider,
+      storedAlias?.model ?? storedModelOverride,
       params.modelManifestContext,
     );
-    if (visibilityPolicy.allowsKey(modelKey(normalizedStored.provider, normalizedStored.model))) {
+    if (
+      isModelSelectionLocked(sessionEntry) ||
+      visibilityPolicy.allowsKey(modelKey(normalizedStored.provider, normalizedStored.model))
+    ) {
       provider = normalizedStored.provider;
       model = normalizedStored.model;
+      requestedRouteResolution =
+        storedAlias || storedRouteCataloged
+          ? "resolved"
+          : (storedModelOverrideRouteResolution ?? "raw");
     }
   }
   const autoFallbackPrimaryProbe =
@@ -297,6 +342,7 @@ export async function resolveEmbeddedModelSelection(params: {
   if (autoFallbackPrimaryProbe && sessionEntry) {
     provider = autoFallbackPrimaryProbe.provider;
     model = autoFallbackPrimaryProbe.model;
+    requestedRouteResolution = "resolved";
     autoFallbackPrimaryProbeSessionEntry = { ...sessionEntry };
     clearAutoFallbackPrimaryProbeSelection(autoFallbackPrimaryProbeSessionEntry);
   }
@@ -337,8 +383,12 @@ export async function resolveEmbeddedModelSelection(params: {
     }
     provider = explicitRef.provider;
     model = explicitRef.model;
+    requestedRouteResolution = "resolved";
   }
-  const allowedInitialSelection = visibilityPolicy.resolveSelection({ provider, model });
+  const unresolvedSelectionKey = modelKey(provider, model);
+  const allowedInitialSelection = isModelSelectionLocked(sessionEntry)
+    ? { provider, model }
+    : visibilityPolicy.resolveSelection({ provider, model });
   if (!allowedInitialSelection) {
     const policyPath = visibilityPolicy.allowConfigPath ?? "modelPolicy.allow";
     throw new Error(
@@ -347,6 +397,9 @@ export async function resolveEmbeddedModelSelection(params: {
   }
   provider = allowedInitialSelection.provider;
   model = allowedInitialSelection.model;
+  if (modelKey(provider, model) !== unresolvedSelectionKey) {
+    requestedRouteResolution = "resolved";
+  }
   const providerForAuthProfileValidation = provider;
   let sessionEntryForAttempt = autoFallbackPrimaryProbeSessionEntry ?? sessionEntry;
   const initialAgentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
@@ -362,6 +415,7 @@ export async function resolveEmbeddedModelSelection(params: {
     sessionKey: params.sessionKey,
     agentHarnessRuntimeOverride: initialAgentHarnessRuntimeOverride,
     workspaceDir: params.workspaceDir,
+    pluginRegistry: requireActivePluginRegistry(),
   });
 
   const authProfileId = sessionEntryForAttempt?.authProfileOverride;
@@ -436,12 +490,59 @@ export async function resolveEmbeddedModelSelection(params: {
     }
   }
 
-  const catalogForThinking =
+  const configuredThinkLevel = normalizeThinkLevel(
+    resolveAgentConfig(params.cfg, params.sessionAgentId)?.thinkingDefault,
+  );
+  const immutableThinkLevel = params.requestedThinkLevel ?? configuredThinkLevel;
+  const primaryConfiguredThinkLevel =
+    immutableThinkLevel ??
+    resolveConfiguredThinkingDefault({
+      cfg: params.cfg,
+      provider,
+      model,
+    });
+  let catalogForThinking =
     allowedModelCatalog.length > 0
       ? allowedModelCatalog
       : modelCatalog && modelCatalog.length > 0
         ? modelCatalog
         : params.configuredThinkingCatalog;
+  if (
+    params.pluginsEnabled &&
+    primaryConfiguredThinkLevel !== "off" &&
+    !hasResolvedThinkingCatalogEntry({ catalog: catalogForThinking, provider, model })
+  ) {
+    // Thinking capability is a per-model fact; never materialize the full live catalog here.
+    const { loadProviderScopedThinkingCatalog } = await import("../model-catalog.runtime.js");
+    const runtimeCatalog = normalizeThinkingCatalogProviders(
+      await loadProviderScopedThinkingCatalog({
+        config: params.cfg,
+        provider,
+        model,
+        ...(params.sessionAgentId ? { agentId: params.sessionAgentId } : {}),
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      }),
+    );
+    const allowedRuntimeCatalog = createModelVisibilityPolicy({
+      cfg: params.cfg,
+      catalog: runtimeCatalog,
+      defaultProvider,
+      defaultModel,
+      agentId: params.sessionAgentId,
+      allowManifestNormalization: true,
+      allowPluginNormalization: params.pluginsEnabled,
+      ...params.modelManifestContext,
+    }).allowedCatalog;
+    if (
+      hasResolvedThinkingCatalogEntry({
+        catalog: allowedRuntimeCatalog,
+        provider,
+        model,
+      })
+    ) {
+      catalogForThinking = allowedRuntimeCatalog;
+    }
+  }
   const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
   const thinkingRuntime = resolveEffectiveAgentRuntime({
     cfg: params.cfg,
@@ -451,12 +552,8 @@ export async function resolveEmbeddedModelSelection(params: {
     sessionKey: params.sessionKey,
     sessionEntry: sessionEntryForAttempt,
   });
-  const configuredThinkLevel = normalizeThinkLevel(
-    resolveAgentConfig(params.cfg, params.sessionAgentId)?.thinkingDefault,
-  );
-  const immutableThinkLevel = params.requestedThinkLevel ?? configuredThinkLevel;
   const primaryThinkLevel =
-    immutableThinkLevel ??
+    primaryConfiguredThinkLevel ??
     resolveThinkingDefault({
       cfg: params.cfg,
       provider,
@@ -544,6 +641,7 @@ export async function resolveEmbeddedModelSelection(params: {
     sessionEntry,
     provider,
     model,
+    requestedRouteResolution,
     defaultProvider,
     defaultModel,
     configuredDefaultAuthProfileId,

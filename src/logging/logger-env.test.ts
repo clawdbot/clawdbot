@@ -87,4 +87,27 @@ describe("OPENCLAW_LOG_LEVEL", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"');
   });
+
+  it("structures invalid env warnings for JSON console output", () => {
+    setLoggerOverride({
+      level: "silent",
+      consoleLevel: "info",
+      consoleStyle: "json",
+      file: testLogPath,
+    });
+    process.env.OPENCLAW_LOG_LEVEL = "nope";
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+
+    expect(getResolvedConsoleSettings().level).toBe("info");
+
+    const warning = stderrSpy.mock.calls
+      .map(([firstArg]) => String(firstArg))
+      .find((line) => line.includes("OPENCLAW_LOG_LEVEL"));
+    expect(JSON.parse(warning ?? "")).toMatchObject({
+      level: "warn",
+      message: expect.stringContaining('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"'),
+    });
+  });
 });

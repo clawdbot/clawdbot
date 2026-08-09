@@ -3,13 +3,16 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionCreatedActor,
+  SessionClassification,
+  SessionPeerKind,
   SessionPlacement,
   SessionRow,
+  SessionRunStatus,
   SessionSharingRole,
   SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import type { QueueMode } from "../auto-reply/reply/queue/types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,
@@ -23,6 +26,7 @@ import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
   GatewayThinkingLevelOption,
+  SessionBoardFace,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
@@ -40,9 +44,6 @@ export type GatewaySessionsDefaults = {
   thinkingDefault?: string;
 };
 
-/** Runtime status surfaced for the latest session run. */
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
-
 type SubagentRunState = "active" | "interrupted" | "historical";
 
 type SessionCompactionCheckpointPreview = Pick<
@@ -52,6 +53,13 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  /** Optional display metadata; never authoritative for session access or lifecycle. */
+  classification?: SessionClassification;
+  agentId?: string;
+  accountId?: string;
+  peerKind?: SessionPeerKind;
+  isMain?: boolean;
+  isBackground?: boolean;
   /** Additive collaboration state; absent on older gateways. */
   visibility?: SessionVisibility;
   /** Caller-relative role used by Control UI participation controls. */
@@ -83,6 +91,8 @@ export type GatewaySessionRow = {
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
+  /** Preferred Control UI face for generic session navigation. */
+  boardFace?: SessionBoardFace;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -104,7 +114,7 @@ export type GatewaySessionRow = {
   agentStatus?: SessionEntry["agentStatus"];
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   /** Last real user/channel interaction; background work does not advance it. */
   lastInteractionAt?: number;
@@ -118,6 +128,7 @@ export type GatewaySessionRow = {
   thinkingOptions?: string[];
   thinkingDefault?: string;
   fastMode?: FastMode;
+  toolOverrides?: SessionEntry["toolOverrides"];
   effectiveFastMode?: FastMode;
   effectiveFastModeSource?: FastModeSource;
   fastAutoOnSeconds?: number;

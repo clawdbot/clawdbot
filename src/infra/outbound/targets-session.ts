@@ -11,26 +11,22 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { channelRouteTargetsShareConversation } from "../../plugin-sdk/channel-route.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
-  isDeliverableMessageChannel,
+  isNormalizedMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel-core.js";
-import type {
-  DeliverableMessageChannel,
-  GatewayMessageChannel,
-} from "../../utils/message-channel-normalize.js";
 import { resolveTargetPrefixedChannel } from "./channel-target-prefix.js";
 
 /**
  * Resolved delivery destination derived from session history, turn source, or explicit input.
  */
 export type SessionDeliveryTarget = {
-  channel?: DeliverableMessageChannel;
+  channel?: string;
   to?: string;
   accountId?: string;
   threadId?: string | number;
   threadIdSource?: "explicit" | "session" | "turn-source";
   mode: ChannelOutboundTargetMode;
-  lastChannel?: DeliverableMessageChannel;
+  lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
@@ -38,6 +34,7 @@ export type SessionDeliveryTarget = {
 
 function resolveParsedRouteTarget(params: {
   channel: string;
+  accountId?: string;
   rawTarget?: string | null;
   fallbackThreadId?: string | number | null;
 }) {
@@ -54,6 +51,7 @@ function resolveParsedRouteTarget(params: {
   const threadId = normalizeOptionalThreadValue(parsed?.threadId ?? params.fallbackThreadId);
   return {
     channel,
+    accountId: params.accountId,
     rawTo,
     to: parsed?.to ?? rawTo,
     ...(threadId != null ? { threadId } : {}),
@@ -66,10 +64,10 @@ function resolveParsedRouteTarget(params: {
  */
 export function resolveSessionDeliveryTarget(params: {
   entry?: SessionEntry;
-  requestedChannel?: GatewayMessageChannel;
+  requestedChannel?: string;
   explicitTo?: string;
   explicitThreadId?: string | number;
-  fallbackChannel?: DeliverableMessageChannel;
+  fallbackChannel?: string;
   allowMismatchedLastTo?: boolean;
   mode?: ChannelOutboundTargetMode;
   /**
@@ -78,17 +76,18 @@ export function resolveSessionDeliveryTarget(params: {
    * channels share the same session and an inbound message updates `lastChannel`
    * while an agent turn is still in flight.
    */
-  turnSourceChannel?: DeliverableMessageChannel;
+  turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
 }): SessionDeliveryTarget {
   const context = deliveryContextFromSession(params.entry);
   const sessionLastChannel =
-    context?.channel && isDeliverableMessageChannel(context.channel) ? context.channel : undefined;
+    context?.channel && isNormalizedMessageChannel(context.channel) ? context.channel : undefined;
   const parsedSessionTarget = sessionLastChannel
     ? resolveParsedRouteTarget({
         channel: sessionLastChannel,
+        accountId: context?.accountId,
         rawTarget: context?.to,
         fallbackThreadId: context?.threadId,
       })
@@ -99,6 +98,7 @@ export function resolveSessionDeliveryTarget(params: {
     hasTurnSourceChannel && params.turnSourceChannel
       ? resolveParsedRouteTarget({
           channel: params.turnSourceChannel,
+          accountId: params.turnSourceAccountId,
           rawTarget: params.turnSourceTo,
           fallbackThreadId: params.turnSourceThreadId,
         })
@@ -117,8 +117,8 @@ export function resolveSessionDeliveryTarget(params: {
         left: parsedTurnSourceTarget,
         right: parsedSessionTarget,
       }));
-  // Shared sessions can receive cross-channel updates mid-turn; only inherit session threads
-  // when the turn source still identifies the same conversation.
+  // Shared sessions can receive cross-channel or cross-account updates mid-turn;
+  // only inherit session threads from the same account-scoped conversation.
   const lastThreadId = hasTurnSourceThreadId
     ? parsedTurnSourceTarget?.threadId
     : hasTurnSourceChannel &&
@@ -131,7 +131,7 @@ export function resolveSessionDeliveryTarget(params: {
   const requestedChannel =
     requested === "last"
       ? "last"
-      : requested && isDeliverableMessageChannel(requested)
+      : requested && isNormalizedMessageChannel(requested)
         ? requested
         : undefined;
 
@@ -143,12 +143,12 @@ export function resolveSessionDeliveryTarget(params: {
   const explicitPrefixedChannel =
     requestedChannel === "last" ? resolveTargetPrefixedChannel(rawExplicitTo) : undefined;
   let channel =
-    explicitPrefixedChannel && isDeliverableMessageChannel(explicitPrefixedChannel)
+    explicitPrefixedChannel && isNormalizedMessageChannel(explicitPrefixedChannel)
       ? explicitPrefixedChannel
       : requestedChannel === "last"
         ? lastChannel
         : requestedChannel;
-  if (!channel && params.fallbackChannel && isDeliverableMessageChannel(params.fallbackChannel)) {
+  if (!channel && params.fallbackChannel && isNormalizedMessageChannel(params.fallbackChannel)) {
     channel = params.fallbackChannel;
   }
 

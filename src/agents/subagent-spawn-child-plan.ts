@@ -3,6 +3,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
+import { findModelCatalogEntry } from "./model-catalog-lookup.js";
+import { resolveDefaultModelForAgent } from "./model-selection.js";
+import { supportsModelTools } from "./model-tool-support.js";
+import { summarizeSpawnError } from "./spawn-pipeline.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "./spawn-plan.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
@@ -15,20 +19,67 @@ import type {
   SpawnSubagentParams,
   SpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
-import {
-  buildResolvedSubagentModelMetadata,
-  resolveCollectorOutputModelError,
-} from "./subagent-spawn-model.js";
+import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveSubagentModelAndThinkingPlan, splitModelRef } from "./subagent-spawn-plan.js";
 import {
   readRequesterFastMode,
   readRequesterThinkingLevel,
 } from "./subagent-spawn-requester-prefs.js";
 import {
+  loadPreparedModelCatalog,
   normalizeDeliveryContext,
   resolveAgentConfig,
   resolveSandboxRuntimeStatus,
 } from "./subagent-spawn.runtime.js";
+
+function buildResolvedSubagentModelMetadata(resolvedModel?: string): {
+  resolvedModel?: string;
+  resolvedProvider?: string;
+} {
+  const modelRef = resolvedModel?.trim();
+  if (!modelRef) {
+    return {};
+  }
+  const { provider } = splitModelRef(modelRef);
+  return {
+    resolvedModel: modelRef,
+    ...(provider ? { resolvedProvider: provider } : {}),
+  };
+}
+
+async function resolveCollectorOutputModelError(params: {
+  cfg: OpenClawConfig;
+  targetAgentId: string;
+  targetAgentDir: string;
+  workspaceDir?: string;
+  resolvedModel?: string;
+}): Promise<string | undefined> {
+  const selected = splitModelRef(params.resolvedModel);
+  const fallback = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.targetAgentId,
+  });
+  const provider = selected.provider ?? fallback.provider;
+  const model = selected.model ?? fallback.model;
+  if (!provider || !model) {
+    return undefined;
+  }
+  let catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>>;
+  try {
+    catalog = await getSubagentSpawnDeps().loadPreparedModelCatalog({
+      config: params.cfg,
+      agentDir: params.targetAgentDir,
+      workspaceDir: params.workspaceDir,
+    });
+  } catch (error) {
+    return `sessions_spawn could not verify outputSchema model capabilities: ${summarizeSpawnError(error)}`;
+  }
+  const entry = findModelCatalogEntry(catalog, { provider, modelId: model });
+  if (!entry || supportsModelTools(entry)) {
+    return undefined;
+  }
+  return `sessions_spawn outputSchema requires a tool-capable target model; "${provider}/${model}" declares compat.supportsTools=false.`;
+}
 
 type ResolvedSubagentChildPlan = {
   spawnedCwd?: string;

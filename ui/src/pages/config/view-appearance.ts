@@ -1,10 +1,17 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { TEXT_SCALE_STOPS, type TextScaleStop } from "../../app/settings.ts";
+import {
+  TEXT_SCALE_STOPS,
+  UI_APPEARANCE_DEFAULTS,
+  type TextScaleStop,
+} from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import { icons } from "../../components/icons.ts";
 import {
+  renderDocsLink,
+  renderSettingsDefaultState,
   renderSettingsRow,
+  renderSettingsSegmented,
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
@@ -12,10 +19,14 @@ import { t } from "../../i18n/index.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import {
   renderChatPreferencesSection,
+  renderLanguageSection,
   renderLobsterPetSection,
+  serverUiPrefProvenanceHint,
   renderSidebarPreferencesSection,
 } from "./view-appearance-preferences.ts";
 import type { ConfigProps } from "./view-types.ts";
+
+const APPEARANCE_DOCS_URL = "https://docs.openclaw.ai/web/control-ui";
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   90: "configView.textSizes.small",
@@ -123,14 +134,45 @@ export function renderAppearanceSection(
         : t("configView.appearance.importHint"),
     },
   ];
+  const themeDefaultState = renderSettingsDefaultState({
+    value:
+      themeOptions.find((option) => option.id === props.themeResetValue)?.label ??
+      t("configView.themes.claw.label"),
+    overridden: props.themeOverridden,
+    onReset: props.resetTheme,
+  });
+  const themeModeDefaultState = renderSettingsDefaultState({
+    value:
+      props.themeModeResetValue === "light"
+        ? t("common.light")
+        : props.themeModeResetValue === "dark"
+          ? t("common.dark")
+          : t("common.system"),
+    overridden: props.themeModeOverridden,
+    onReset: props.resetThemeMode,
+  });
+  const themeProvenance = serverUiPrefProvenanceHint(props.themeProvenance);
+  const themeModeProvenance = serverUiPrefProvenanceHint(props.themeModeProvenance);
+  const textScaleDefaultState = renderSettingsDefaultState({
+    value: `${UI_APPEARANCE_DEFAULTS.textScale}%`,
+    overridden: props.textScaleOverridden,
+    onReset: props.resetTextScale,
+  });
   return html`
     <div class="settings-page">
+      <p class="settings-page__intro">
+        ${t("configView.appearance.intro")}
+        ${renderDocsLink(APPEARANCE_DOCS_URL, t("common.learnMore"))}
+      </p>
+      ${renderLanguageSection(props)}
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.theme")}</h2>
+          <div class="settings-section__actions">${themeDefaultState.action}</div>
         </div>
         <p class="settings-section__desc">
-          ${t("configView.appearance.chooseTheme")} ${t("configView.syncedHint")}
+          ${t("configView.appearance.chooseTheme")} ${themeDefaultState.description}
+          ${themeProvenance}
         </p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
@@ -142,6 +184,9 @@ export function renderAppearanceSection(
                     props.theme
                       ? "settings-theme-card--active"
                       : ""}"
+                    aria-pressed=${opt.id === "custom" && !props.hasCustomTheme
+                      ? nothing
+                      : String(opt.id === props.theme)}
                     title=${opt.description}
                     @click=${(e: Event) => {
                       if (opt.id === "custom" && !props.hasCustomTheme) {
@@ -168,6 +213,24 @@ export function renderAppearanceSection(
               )}
             </div>
           </div>
+          ${renderSettingsRow({
+            title: t("common.colorMode"),
+            description: html`${themeModeDefaultState.description} ${themeModeProvenance}`,
+            stacked: true,
+            control: html`
+              ${themeModeDefaultState.action}
+              ${renderSettingsSegmented({
+                value: props.themeMode,
+                options: [
+                  { value: "system", label: t("common.system") },
+                  { value: "light", label: t("common.light") },
+                  { value: "dark", label: t("common.dark") },
+                ],
+                ariaLabel: t("common.colorMode"),
+                onChange: (mode, element) => props.setThemeMode(mode, { element }),
+              })}
+            `,
+          })}
           <div class="settings-row settings-row--stacked">
             ${showCustomThemeImport
               ? html`
@@ -248,7 +311,11 @@ export function renderAppearanceSection(
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.textSize")}</h2>
+          <div class="settings-section__actions">${textScaleDefaultState.action}</div>
         </div>
+        <p class="settings-section__desc">
+          ${textScaleDefaultState.description} ${t("quickSettings.personal.browserOnly")}
+        </p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
             <div class="settings-text-scale">
@@ -258,6 +325,7 @@ export function renderAppearanceSection(
                     <button
                       type="button"
                       class="settings-text-scale__btn ${stop === props.textScale ? "active" : ""}"
+                      aria-pressed=${String(stop === props.textScale)}
                       @click=${() => props.setTextScale(stop)}
                     >
                       <span class="settings-text-scale__sample">${t(TEXT_SCALE_LABELS[stop])}</span>

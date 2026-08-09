@@ -18,6 +18,7 @@ type NavigationItem = {
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 export const SIDEBAR_NAV_ROUTES = [
   "workboard",
+  "dashboards",
   "usage",
   "cron",
   "tasks",
@@ -132,6 +133,7 @@ type SettingsNavigationGroup = {
 export type SettingsSearchBlock = {
   routeId: RouteId;
   label: string;
+  pathname?: string;
   search?: string;
   hash: string;
 };
@@ -160,8 +162,8 @@ function settingsSearchHasWordPrefix(value: string, query: string): boolean {
 }
 
 export function settingsSearchTextMatches(value: string, query: string): boolean {
-  const candidate = normalizeLowercaseStringOrEmpty(value);
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query);
+  const candidate = normalizeLowercaseStringOrEmpty(value).normalize("NFC");
+  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
   if (!normalizedQuery) {
     return false;
   }
@@ -176,14 +178,14 @@ export function settingsSearchTextMatches(value: string, query: string): boolean
 // Management surfaces (sessions, worktrees, activity, memory import) are
 // workspace destinations, not settings; model setup is a subpage of Models.
 export const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["custodian", "profile", "config", "appearance", "notifications"] },
+  { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
-    routes: ["connection", "channels", "communications", "nodes"],
+    routes: ["connection", "channels", "communications", "talk", "devices"],
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "ai-agents", "labs", "model-providers", "mcp", "automation"],
+    routes: ["agents", "labs", "model-providers", "mcp", "memory", "automation"],
   },
   {
     labelKey: "nav.settingsGroupSecurity",
@@ -191,14 +193,25 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "advanced", "debug", "logs", "about"],
+    routes: ["infrastructure", "advanced", "debug", "logs", "updates", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
-// Settings subpages render with settings chrome but stay out of the sidebar:
-// model setup is reached from the Models page ("Run setup"). The sidebar
-// highlights nothing for them; search still deep-links via their owning page.
-const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup"];
+// Settings subpages render with settings chrome but stay out of the sidebar.
+// Subpages with a visible owner keep that owner selected so users retain
+// location context while completing the nested flow.
+const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
+  "ai-agents",
+  "model-setup",
+  "lobsterdex",
+];
+export const SETTINGS_SEARCHABLE_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["ai-agents"];
+const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
+  Readonly<Record<NavigationRouteId, NavigationRouteId>>
+> = {
+  "ai-agents": "agents",
+  "model-setup": "model-providers",
+};
 
 const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
@@ -221,17 +234,23 @@ const NAVIGATION_ICONS: NavigationItem = {
   skills: "zap",
   plugins: "puzzle",
   "skill-workshop": "wrench",
-  nodes: "monitorSmartphone",
+  devices: "monitorSmartphone",
   chat: "messageSquare",
+  dashboard: "layoutDashboard",
+  dashboards: "layoutDashboard",
   custodian: "lobster",
   config: "settings",
   profile: "circleUser",
   communications: "send",
   appearance: "palette",
+  lobsterdex: "bug",
   automation: "terminal",
   mcp: "wrench",
+  memory: "book",
+  talk: "mic",
   infrastructure: "globe",
   labs: "flaskConical",
+  updates: "download",
   about: "fileText",
   "ai-agents": "brain",
   "model-setup": "spark",
@@ -248,6 +267,10 @@ const NAVIGATION_ICONS: NavigationItem = {
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return SETTINGS_NAVIGATION_ROUTES.has(routeId);
+}
+
+export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): NavigationRouteId {
+  return SETTINGS_SUBPAGE_OWNER_ROUTES[routeId] ?? routeId;
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
@@ -321,8 +344,10 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     titleKey: "tabs.skillWorkshop",
     subtitleKey: "subtitles.skillWorkshop",
   },
-  nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
+  devices: { titleKey: "tabs.devices", subtitleKey: "subtitles.devices" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  dashboard: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  dashboards: { titleKey: "tabs.dashboards", subtitleKey: "subtitles.dashboards" },
   custodian: { titleKey: "tabs.custodian", subtitleKey: "subtitles.custodian" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
   profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },
@@ -331,10 +356,14 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     subtitleKey: "subtitles.communications",
   },
   appearance: { titleKey: "tabs.appearance", subtitleKey: "subtitles.appearance" },
+  lobsterdex: { titleKey: "tabs.lobsterdex", subtitleKey: "subtitles.lobsterdex" },
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
+  memory: { titleKey: "tabs.memory", subtitleKey: "subtitles.memory" },
+  talk: { titleKey: "tabs.talk", subtitleKey: "subtitles.talk" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
   labs: { titleKey: "tabs.labs", subtitleKey: "subtitles.labs" },
+  updates: { titleKey: "tabs.updates", subtitleKey: "subtitles.updates" },
   about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
   "model-setup": { titleKey: "tabs.modelSetup", subtitleKey: "subtitles.modelSetup" },
@@ -385,15 +414,7 @@ export function formatDocumentTitle(options: {
   return base;
 }
 
-/**
- * Sidebar item label inside the settings takeover. The config route is titled
- * "Settings" globally (gear tooltip, palette) but reads "General" next to its
- * sibling sections.
- */
 export function settingsNavigationLabelForRoute(routeId: NavigationRouteId): string {
-  if (routeId === "config") {
-    return t("nav.settingsGeneral");
-  }
   if (routeId === "custodian") {
     return t("nav.askOpenClaw");
   }

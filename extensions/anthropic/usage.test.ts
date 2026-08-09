@@ -89,10 +89,20 @@ describe("Anthropic provider usage", () => {
       fetchFn: fetchFn as typeof fetch,
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       provider: "anthropic",
+      displayName: "Anthropic",
+      windows: [],
       plan: "Admin API",
-      billing: [{ type: "spend", amount: 12.34, unit: "USD", period: "30d" }],
+      billing: [
+        {
+          type: "spend",
+          label: "30-day API spend",
+          amount: 12.34,
+          unit: "USD",
+          period: "30d",
+        },
+      ],
       costHistory: {
         unit: "USD",
         periodDays: 30,
@@ -107,9 +117,19 @@ describe("Anthropic provider usage", () => {
             totalTokens: 1_700,
           },
         ],
-        models: [{ name: "claude-opus-4-8", totalTokens: 1_700 }],
+        models: [
+          {
+            name: "claude-opus-4-8",
+            inputTokens: 1_000,
+            cacheReadTokens: 300,
+            cacheWriteTokens: 150,
+            outputTokens: 250,
+            totalTokens: 1_700,
+          },
+        ],
         categories: [{ name: "Claude API", amount: 12.34 }],
       },
+      summary: "1,700 tokens",
     });
     for (const [input, init] of fetchFn.mock.calls) {
       const url = requestUrl(input);

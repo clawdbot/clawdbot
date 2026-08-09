@@ -10,9 +10,48 @@ import {
   splitTopLevelStages,
 } from "./tool-display-exec-shell.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
-import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
+import {
+  formatToolDetail,
+  formatToolSummary,
+  isShellToolDisplayName,
+  resolveToolDisplay,
+} from "./tool-display.js";
+
+describe("isShellToolDisplayName", () => {
+  it("matches shell tools whatever case the backend spells them in", () => {
+    // The Claude CLI sends "Bash"; embedded runs send "bash"/"exec".
+    for (const name of ["Bash", "bash", "BASH", "Exec", "exec", "shell"]) {
+      expect(isShellToolDisplayName(name)).toBe(true);
+    }
+    for (const name of ["Read", "web_search", undefined, ""]) {
+      expect(isShellToolDisplayName(name)).toBe(false);
+    }
+  });
+
+  it("keeps the compact summary form for a capitalized shell tool", () => {
+    const display = resolveToolDisplay({ name: "Bash", args: { command: "echo alpha" } });
+    // Compact form is "<emoji> <detail>", not "<emoji> Bash: <detail>".
+    expect(formatToolSummary(display)).toBe(`${display.emoji} ${formatToolDetail(display)}`);
+  });
+});
 
 describe("tool display details", () => {
+  it("puts the camera PTZ operation before its node and device", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "nodes",
+        args: {
+          action: "camera_ptz",
+          ptzOperation: "status",
+          node: "Mac",
+          deviceId: "camera-id",
+        },
+      }),
+    );
+
+    expect(detail).toBe("ptz operation status, node Mac, device id camera-id");
+  });
+
   it("keeps same-line heredoc operators from attaching the body to later stages", () => {
     const command = "cat <<EOF && printf ok\nbody | secret\nEOF\nprintf done";
     const stages = splitTopLevelStages(command);
@@ -222,6 +261,56 @@ describe("tool display details", () => {
     );
 
     expect(detail).toBe("print lines 1-80 from extensions/discord/src/draft-stream.ts");
+  });
+
+  it("keeps normal search patterns concise", () => {
+    for (const [command, expected] of [
+      ['rg "foo|bar" src/agents', 'search "foo|bar" in src/agents'],
+      ["rg 'search engine' src/agents", 'search "search engine" in src/agents'],
+      ["rg 'search textual data' src/agents", 'search "search textual data" in src/agents'],
+      ["rg 'research text in docs' src/agents", 'search "research text in docs" in src/agents'],
+    ]) {
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+        ),
+      ).toBe(expected);
+    }
+  });
+
+  it("uses a neutral label for recursive or malformed search patterns", () => {
+    for (const command of [
+      `rg 'search "foo" in src/agents' src`,
+      `rg 'Bash failed: search "foo" in src|search "bar"' src`,
+      `rg 'run printf -> search "foo" in src' src`,
+      "rg 'search text' src",
+      "rg 'search text in src/agents' src",
+      "rg 'foo|search text in src/agents' src",
+      "rg 'run printf -> search text' src",
+      "rg 'line1\nline2' src",
+      "rg 'line with trailing newline\n' src",
+      "rg '`generated command`' src",
+      `rg '${"x".repeat(121)}' src`,
+      `rg '${" ".repeat(121)}x' src`,
+    ]) {
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+        ),
+      ).toBe("search text in src");
+    }
+  });
+
+  it("sanitizes recursive search patterns inside pipelines", () => {
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "exec",
+          args: { command: `printf x | rg 'search "foo" in src' .` },
+          detailMode: "explain",
+        }),
+      ),
+    ).toBe("print text -> search text in .");
   });
 
   it("moves cd path to context suffix and appends raw command", () => {

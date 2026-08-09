@@ -73,16 +73,26 @@ export type SqliteSchemaCompatibility = {
    * canonical shape.
    */
   allowedMissingTables?: readonly string[];
+  /** Additive columns that may be absent until their owning feature lazily ensures them. */
+  allowedMissingColumns?: readonly string[];
   /**
    * Exact definitions produced by supported additive migrations when SQLite
    * requires a temporary default that the clean schema does not retain.
    */
   allowedColumnDefinitions?: Readonly<Record<string, readonly string[]>>;
   /**
+   * Allow unexpected columns declared as a name plus one bare nullable SQLite
+   * STRICT datatype. Allowed-missing tables remain exact when present.
+   */
+  allowCompatibleAdditiveColumns?: boolean;
+  /**
    * Exact owner-defined trigger groups that may be absent when their derived
-   * schema is disabled, but must be complete and canonical when present.
+   * or lazily ensured schema is absent, but must be complete and canonical
+   * when present.
    */
   optionalCanonicalTriggerGroups?: readonly {
+    /** The trigger group is optional only while this canonical table is absent. */
+    optionalWhenTableMissing?: string;
     tableName: string;
     triggers: readonly {
       name: string;
@@ -123,6 +133,7 @@ export function assertSqliteSchemaContains(
       actualTable.definition,
       expectedTable.definition,
       compatibility,
+      !allowedMissingTables.has(tableName),
     );
     if (definitionMismatch) {
       mismatches.push(`${definitionMismatch} differ for ${tableName}`);
@@ -140,23 +151,39 @@ export function assertSqliteSchemaContains(
         mismatches.push(`unexpected unique index ${actualIndex.name ?? `on ${tableName}`}`);
       }
     }
+    const optionalCanonicalTriggerGroups = collectOptionalCanonicalTriggerGroups(
+      database,
+      compatibility,
+      tableName,
+    );
+    const optionalCanonicalTriggers = optionalCanonicalTriggerGroups.flatMap(
+      (group) => group.triggers,
+    );
+    const allowedMissingCanonicalTriggers = optionalCanonicalTriggerGroups
+      .filter((group) => group.optional)
+      .flatMap((group) => group.triggers);
     for (const expectedTrigger of expectedTable.triggers) {
+      if (
+        allowedMissingCanonicalTriggers.some(
+          (canonicalTrigger) => canonicalTrigger.name === expectedTrigger.name,
+        )
+      ) {
+        continue;
+      }
       if (!actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, expectedTrigger))) {
         mismatches.push(`missing or drifted trigger ${expectedTrigger.name}`);
       }
     }
-    const optionalCanonicalTriggerGroups = collectOptionalCanonicalTriggerGroups(
-      compatibility,
-      tableName,
-    );
     for (const triggerGroup of optionalCanonicalTriggerGroups) {
       const isPresent = actualTable.triggers.some((actualTrigger) =>
-        triggerGroup.some((canonicalTrigger) => actualTrigger.name === canonicalTrigger.name),
+        triggerGroup.triggers.some(
+          (canonicalTrigger) => actualTrigger.name === canonicalTrigger.name,
+        ),
       );
-      if (!isPresent) {
+      if (triggerGroup.optional && !isPresent) {
         continue;
       }
-      for (const canonicalTrigger of triggerGroup) {
+      for (const canonicalTrigger of triggerGroup.triggers) {
         if (
           !actualTable.triggers.some((actualTrigger) => isEqual(actualTrigger, canonicalTrigger))
         ) {
@@ -164,7 +191,6 @@ export function assertSqliteSchemaContains(
         }
       }
     }
-    const optionalCanonicalTriggers = optionalCanonicalTriggerGroups.flat();
     for (const actualTrigger of actualTable.triggers) {
       if (
         !expectedTable.triggers.some((expectedTrigger) =>
@@ -273,17 +299,26 @@ export function collectSqliteNamedIndexContract(
 }
 
 function collectOptionalCanonicalTriggerGroups(
+  database: DatabaseSync,
   compatibility: SqliteSchemaCompatibility,
   tableName: string,
-): Array<Array<{ name: string; sql: string | null }>> {
+): Array<{
+  optional: boolean;
+  triggers: Array<{ name: string; sql: string | null }>;
+}> {
   return (compatibility.optionalCanonicalTriggerGroups ?? [])
     .filter((group) => group.tableName === tableName)
-    .map((group) =>
-      group.triggers.map((trigger) => ({
+    .map((group) => ({
+      optional:
+        !group.optionalWhenTableMissing ||
+        !database
+          .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ? LIMIT 1")
+          .get(group.optionalWhenTableMissing),
+      triggers: group.triggers.map((trigger) => ({
         name: trigger.name,
         sql: normalizeOptionalCanonicalTriggerSql(trigger.sql),
       })),
-    );
+    }));
 }
 
 function normalizeOptionalCanonicalTriggerSql(sql: string): string | null {
@@ -407,15 +442,30 @@ function compareTableDefinitions(
   actual: SqliteTableDefinition | null,
   expected: SqliteTableDefinition | null,
   compatibility: SqliteSchemaCompatibility,
+  allowCompatibleAdditiveColumns: boolean,
 ): "column definitions" | "table constraints" | "table definition" | null {
   if (!actual || !expected) {
     return actual === expected ? null : "table definition";
   }
-  if (actual.columns.size !== expected.columns.size) {
+  const allowedMissingColumns = new Set(compatibility.allowedMissingColumns ?? []);
+  const unexpectedColumns = [...actual.columns].filter(
+    ([columnName]) => !expected.columns.has(columnName),
+  );
+  if (
+    unexpectedColumns.some(
+      ([, definition]) =>
+        !allowCompatibleAdditiveColumns ||
+        !compatibility.allowCompatibleAdditiveColumns ||
+        !isCompatibleAdditiveColumnDefinition(definition),
+    )
+  ) {
     return "column definitions";
   }
   for (const [columnName, expectedDefinition] of expected.columns) {
     const actualDefinition = actual.columns.get(columnName);
+    if (actualDefinition === undefined && allowedMissingColumns.has(`${tableName}.${columnName}`)) {
+      continue;
+    }
     if (actualDefinition === expectedDefinition) {
       continue;
     }
@@ -425,6 +475,18 @@ function compareTableDefinitions(
     }
   }
   return isEqual(actual.constraints, expected.constraints) ? null : "table constraints";
+}
+
+const SQLITE_STRICT_DATATYPES = new Set(["ANY", "BLOB", "INT", "INTEGER", "REAL", "TEXT"]);
+
+function isCompatibleAdditiveColumnDefinition(definition: string): boolean {
+  const name = readSqlToken(definition, 0);
+  const type = name ? readSqlToken(definition, name.end) : null;
+  return Boolean(
+    type?.keyword &&
+    SQLITE_STRICT_DATATYPES.has(type.keyword) &&
+    definition.slice(type.end).trim().length === 0,
+  );
 }
 
 function parseTableDefinition(sql: string | null, tableName: string): SqliteTableDefinition {

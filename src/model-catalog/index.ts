@@ -2,16 +2,19 @@
 // normalized planning APIs instead of reaching into provider-index internals.
 export { loadOpenClawProviderIndex } from "./provider-index/index.js";
 export { planManifestModelCatalogSuppressions } from "./manifest-planner.js";
-export { planProviderIndexModelCatalogRows } from "./provider-index-planner.js";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { planManifestModelCatalogRows } from "./manifest-planner.js";
+import {
+  planManifestModelCatalogRows,
+  type ManifestModelCatalogRowSelection,
+} from "./manifest-planner.js";
 import { getRemoteModelCatalogOverlay } from "./remote-overlay.js";
 
 export function planEffectiveModelCatalogRows(params: {
   registry: Parameters<typeof planManifestModelCatalogRows>[0]["registry"];
   config: OpenClawConfig;
   providerFilter?: string;
+  selection?: ManifestModelCatalogRowSelection;
 }) {
   const remoteOverlay: Readonly<Record<string, ModelCatalogProvider>> | undefined =
     getRemoteModelCatalogOverlay(params.config);
@@ -19,6 +22,7 @@ export function planEffectiveModelCatalogRows(params: {
     registry: params.registry,
     ...(params.providerFilter ? { providerFilter: params.providerFilter } : {}),
     ...(remoteOverlay ? { remoteOverlay } : {}),
+    ...(params.selection ? { selection: params.selection } : {}),
   });
 }
 export type { ManifestModelCatalogSuppressionEntry } from "./manifest-planner.js";

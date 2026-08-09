@@ -6,6 +6,15 @@ private let chatSessionActionsLogger = Logger(
     category: "OpenClawChat")
 
 extension OpenClawChatViewModel {
+    struct SessionBranchSwitchActivity: Equatable {
+        let session: SessionSnapshot
+        let generation: UInt64
+    }
+
+    var isSwitchingSessionBranch: Bool {
+        self.sessionBranchSwitchActivity != nil
+    }
+
     private enum SessionBranchesRefreshPurpose {
         case readOnly
         case reconcile

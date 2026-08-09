@@ -212,7 +212,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     // without inserting a user row between an active tool call and its result.
     let persisted = false;
     try {
-      persisted = appendTranscriptEventSync(
+      const appendResult = appendTranscriptEventSync(
         { agentId, sessionId: sessionEntry.sessionId, sessionKey, storePath },
         {
           type: "custom",
@@ -230,6 +230,12 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
           },
         },
       );
+      persisted = appendResult.ok && appendResult.value;
+      if (!appendResult.ok) {
+        logVerbose(
+          `captured conversation turn reply audit persistence failed: ${appendResult.error.code}`,
+        );
+      }
     } catch (error) {
       logVerbose(`captured conversation turn reply audit persistence failed: ${String(error)}`);
     }

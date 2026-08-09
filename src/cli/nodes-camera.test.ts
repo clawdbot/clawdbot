@@ -8,6 +8,9 @@ import {
 } from "../test-utils/camera-url-test-helpers.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
+type PublishOutputFileAtomically =
+  typeof import("./output-file.runtime.js").publishOutputFileAtomically;
+
 const fetchGuardMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(
     async (params: { url: string; timeoutMs?: number; requireHttps?: boolean }) => {
@@ -20,9 +23,26 @@ const fetchGuardMocks = vi.hoisted(() => ({
   ),
 }));
 
+const outputFileMocks = vi.hoisted(() => ({
+  publishOutputFileAtomically: vi.fn<PublishOutputFileAtomically>(),
+}));
+
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
 }));
+
+vi.mock("./output-file.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./output-file.runtime.js")>(
+    "./output-file.runtime.js",
+  );
+  outputFileMocks.publishOutputFileAtomically.mockImplementation(
+    actual.publishOutputFileAtomically,
+  );
+  return {
+    ...actual,
+    publishOutputFileAtomically: outputFileMocks.publishOutputFileAtomically,
+  };
+});
 
 let cameraTempPath: typeof import("./nodes-camera.js").cameraTempPath;
 let parseCameraClipPayload: typeof import("./nodes-camera.js").parseCameraClipPayload;
@@ -35,9 +55,11 @@ let writeBase64ToFile: typeof import("./nodes-camera.js").writeBase64ToFile;
 let parseScreenRecordPayload: typeof import("./nodes-screen.js").parseScreenRecordPayload;
 let parseScreenSnapshotPayload: typeof import("./nodes-screen.js").parseScreenSnapshotPayload;
 let screenRecordTempPath: typeof import("./nodes-screen.js").screenRecordTempPath;
+let screenSnapshotFormatForPath: typeof import("./nodes-screen.js").screenSnapshotFormatForPath;
 let screenSnapshotTempPath: typeof import("./nodes-screen.js").screenSnapshotTempPath;
 let writeScreenRecordToFile: typeof import("./nodes-screen.js").writeScreenRecordToFile;
 let writeScreenSnapshotToFile: typeof import("./nodes-screen.js").writeScreenSnapshotToFile;
+let publishOutputFileAtomically: PublishOutputFileAtomically;
 
 async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   return await withTempDir("openclaw-test-", run);
@@ -88,10 +110,12 @@ describe("nodes camera helpers", () => {
       parseScreenRecordPayload,
       parseScreenSnapshotPayload,
       screenRecordTempPath,
+      screenSnapshotFormatForPath,
       screenSnapshotTempPath,
       writeScreenRecordToFile,
       writeScreenSnapshotToFile,
     } = await import("./nodes-screen.js"));
+    ({ publishOutputFileAtomically } = await vi.importActual("./output-file.runtime.js"));
   });
 
   beforeEach(() => {
@@ -115,23 +139,47 @@ describe("nodes camera helpers", () => {
     );
   });
 
-  it("collapses Linux facing requests into one unknown-position capture", () => {
-    expect(resolveCameraSnapTargets({ facing: "both", platform: "linux" })).toEqual([
-      { artifactFacing: "unknown" },
-    ]);
-    expect(resolveCameraSnapTargets({ facing: "back", platform: "linux" })).toEqual([
-      { artifactFacing: "unknown" },
-    ]);
+  it.each([undefined, "front", "back", "both"] as const)(
+    "collapses Linux facing=%s into one unknown-position capture",
+    (facing) => {
+      expect(resolveCameraSnapTargets({ facing, platform: "linux" })).toEqual([
+        { artifactFacing: "unknown" },
+      ]);
+    },
+  );
+
+  it("keeps Linux device selection facing-less", () => {
     expect(
       resolveCameraSnapTargets({ facing: "front", platform: "linux", deviceId: "/dev/video2" }),
     ).toEqual([{ artifactFacing: "unknown" }]);
+    expect(
+      resolveCameraSnapTargets({ facing: "both", platform: "linux", deviceId: "/dev/video2" }),
+    ).toEqual([{ artifactFacing: "unknown" }]);
   });
 
-  it("keeps front and back requests for positioned camera platforms", () => {
+  it("uses one unknown target when facing is omitted on a positioned camera platform", () => {
+    expect(resolveCameraSnapTargets({ platform: "macos" })).toEqual([
+      { artifactFacing: "unknown" },
+    ]);
+    expect(resolveCameraSnapTargets({ platform: "macos", deviceId: "camera-device" })).toEqual([
+      { artifactFacing: "unknown" },
+    ]);
+  });
+
+  it("keeps explicit facing requests for positioned camera platforms", () => {
+    expect(resolveCameraSnapTargets({ facing: "front", platform: "macos" })).toEqual([
+      { requestFacing: "front", artifactFacing: "front" },
+    ]);
+    expect(resolveCameraSnapTargets({ facing: "back", platform: "macos" })).toEqual([
+      { requestFacing: "back", artifactFacing: "back" },
+    ]);
     expect(resolveCameraSnapTargets({ facing: "both", platform: "macos" })).toEqual([
       { requestFacing: "front", artifactFacing: "front" },
       { requestFacing: "back", artifactFacing: "back" },
     ]);
+    expect(() =>
+      resolveCameraSnapTargets({ facing: "both", platform: "macos", deviceId: "camera-device" }),
+    ).toThrow("facing=both is not allowed when deviceId is set");
   });
 
   it("labels Linux clips as unknown without sending unsupported facing", () => {
@@ -256,11 +304,47 @@ describe("nodes camera helpers", () => {
     ).rejects.toThrow(/node remoteip/i);
   });
 
-  it("normalizes valid base64 before writing", async () => {
+  it("normalizes valid base64 and preserves the destination mode", async () => {
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
+      await fs.writeFile(out, "existing-screen");
+      await fs.chmod(out, 0o640);
+
       await writeBase64ToFile(out, " aGk\n");
-      await expect(readFileUtf8AndCleanup(out)).resolves.toBe("hi");
+
+      await expect(fs.readFile(out, "utf8")).resolves.toBe("hi");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(out)).mode & 0o777).toBe(0o640);
+      }
+      expect(await fs.readdir(dir)).toEqual(["x.bin"]);
+    });
+  });
+
+  it("preserves an existing output when the decoded media write fails", async () => {
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "x.bin");
+      await fs.writeFile(out, "existing-screen");
+      await fs.chmod(out, 0o640);
+      outputFileMocks.publishOutputFileAtomically.mockImplementationOnce(async (params) => {
+        return await publishOutputFileAtomically({
+          ...params,
+          writeTemp: async (tempPath) => {
+            await params.writeTemp(tempPath);
+            await fs.truncate(tempPath, 1);
+            throw new Error("injected node media write failure");
+          },
+        });
+      });
+
+      await expect(writeScreenRecordToFile(out, "aGk=")).rejects.toThrow(
+        "injected node media write failure",
+      );
+
+      await expect(fs.readFile(out, "utf8")).resolves.toBe("existing-screen");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(out)).mode & 0o777).toBe(0o640);
+      }
+      expect(await fs.readdir(dir)).toEqual(["x.bin"]);
     });
   });
 
@@ -535,8 +619,21 @@ describe("nodes screen helpers", () => {
     );
   });
 
-  it("builds screen snapshot temp path", () => {
-    expect(screenSnapshotTempPath({ tmpDir: "/tmp", id: "id1" })).toBe(
+  it("maps a snapshot output path to the encoding the node should produce", () => {
+    expect(screenSnapshotFormatForPath("/workspace/shot.png")).toBe("png");
+    expect(screenSnapshotFormatForPath("/workspace/shot.PNG")).toBe("png");
+    expect(screenSnapshotFormatForPath("/workspace/shot.jpg")).toBe("jpeg");
+    expect(screenSnapshotFormatForPath("/workspace/shot.jpeg")).toBe("jpeg");
+    // Nothing recognizable is claimed, so the node's own default should stand.
+    expect(screenSnapshotFormatForPath("/workspace/shot")).toBeUndefined();
+    expect(screenSnapshotFormatForPath("/workspace/shot.webp")).toBeUndefined();
+  });
+
+  it("builds screen snapshot temp path from the reported format", () => {
+    expect(screenSnapshotTempPath({ ext: "jpg", tmpDir: "/tmp", id: "id1" })).toBe(
+      path.join("/tmp", "openclaw-screen-snapshot-id1.jpg"),
+    );
+    expect(screenSnapshotTempPath({ ext: "png", tmpDir: "/tmp", id: "id1" })).toBe(
       path.join("/tmp", "openclaw-screen-snapshot-id1.png"),
     );
   });

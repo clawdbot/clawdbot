@@ -97,6 +97,9 @@ function logicalIdentity(
     name: name ?? id,
     provider: entry.provider,
     ...(entry.alias ? { alias: entry.alias } : {}),
+    ...(lifecycleEntry.providerOrder !== undefined
+      ? { providerOrder: lifecycleEntry.providerOrder }
+      : {}),
     ...(lifecycleEntry.status ? { status: lifecycleEntry.status } : {}),
     ...(lifecycleEntry.statusReason ? { statusReason: lifecycleEntry.statusReason } : {}),
     ...(lifecycleEntry.replaces ? { replaces: lifecycleEntry.replaces } : {}),

@@ -144,26 +144,6 @@ internal fun VoiceNotePreparing(modifier: Modifier = Modifier) {
 internal fun voiceNoteRecordLabel(): String = nativeString("Record voice note")
 
 @Composable
-internal fun VoiceNoteRecordButton(
-  enabled: Boolean,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Surface(
-    onClick = onClick,
-    enabled = enabled,
-    modifier = modifier.size(ClawTheme.spacing.touchTarget),
-    shape = CircleShape,
-    color = ClawTheme.colors.surfaceRaised,
-    contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
-  ) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.Default.Mic, contentDescription = voiceNoteRecordLabel(), modifier = Modifier.size(18.dp))
-    }
-  }
-}
-
-@Composable
 internal fun VoiceNoteRecordingControls(
   elapsedMs: Long,
   level: Float,
@@ -225,26 +205,3 @@ internal fun VoiceNoteRecorderError(state: VoiceNoteRecorderState) {
 }
 
 internal fun ChatMessageContent.isAudioAttachment(): Boolean = type == "audio" || mimeType?.startsWith("audio/") == true
-
-@Composable
-internal fun VoiceNoteMessageRow(durationMs: Long?) {
-  Row(
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    Icon(
-      imageVector = Icons.Default.Mic,
-      contentDescription = null,
-      modifier = Modifier.size(16.dp),
-      tint = ClawTheme.colors.textMuted,
-    )
-    Text(text = nativeString("Voice note"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
-    durationMs?.let { duration ->
-      Text(
-        text = formatVoiceNoteDuration(duration),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-      )
-    }
-  }
-}

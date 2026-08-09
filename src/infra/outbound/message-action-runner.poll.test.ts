@@ -28,6 +28,8 @@ function firstMockArg(
 }
 
 vi.mock("./channel-resolution.js", () => ({
+  normalizeDeliverableOutboundChannel: (value?: string | null) =>
+    typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined,
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
   resetOutboundChannelResolutionStateForTest: vi.fn(),
 }));
@@ -120,7 +122,12 @@ async function runPollAction(params: {
       maxSelections?: number;
       threadId?: string;
     };
-    ctx?: { inboundEventKind?: string; params?: Record<string, unknown> };
+    ctx?: {
+      plugin?: ChannelPlugin;
+      inboundEventKind?: string;
+      idempotencyKey?: string;
+      params?: Record<string, unknown>;
+    };
   };
   return {
     ...call.resolveCorePoll?.(),
@@ -191,6 +198,8 @@ describe("runMessageAction poll handling", () => {
     expect(call?.durationHours).toBe(2);
     expect(call?.threadId).toBe("42");
     expect(call?.ctx?.params?.threadId).toBe("42");
+    expect(call?.ctx?.plugin).toBe(pollerTestPlugin);
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledTimes(1);
   });
 
   it.each([0, -1, 1.5, "1.5", "soon"])(
@@ -224,6 +233,21 @@ describe("runMessageAction poll handling", () => {
     });
 
     expect(call?.ctx?.inboundEventKind).toBe("room_event");
+  });
+
+  it("copies the normalized idempotency key into poll execution context", async () => {
+    const call = await runPollAction({
+      cfg: pollerConfig,
+      actionParams: {
+        channel: "poller",
+        target: "poller:123",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+        idempotencyKey: " run-1:message-tool:poll-1:fingerprint ",
+      },
+    });
+
+    expect(call?.ctx?.idempotencyKey).toBe("run-1:message-tool:poll-1:fingerprint");
   });
 
   it("expands maxSelections when pollMulti is enabled", async () => {

@@ -219,7 +219,7 @@ export function buildCommandsListResult(params: {
 
   const skillCommands = listSkillCommandsForAgents({ cfg: params.cfg, agentIds: [params.agentId] });
   const chatCommands = listChatCommandsForConfig(params.cfg, { skillCommands });
-  const skillKeys = new Set(skillCommands.map((sc) => `skill:${sc.skillName}`));
+  const skillsByKey = new Map(skillCommands.map((skill) => [`skill:${skill.skillName}`, skill]));
 
   const commands: CommandEntry[] = [];
 
@@ -234,15 +234,11 @@ export function buildCommandsListResult(params: {
     ) {
       continue;
     }
-    commands.push(
-      mapCommand(
-        cmd,
-        skillKeys.has(cmd.key) ? "skill" : "native",
-        includeArgs,
-        nameSurface,
-        provider,
-      ),
-    );
+    const skill = skillsByKey.get(cmd.key);
+    commands.push({
+      ...mapCommand(cmd, skill ? "skill" : "native", includeArgs, nameSurface, provider),
+      ...(skill ? { skillModelVisible: skill.modelVisible !== false } : {}),
+    });
   }
 
   commands.push(...buildPluginCommandEntries({ provider, nameSurface, cfg: params.cfg }));

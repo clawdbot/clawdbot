@@ -76,6 +76,9 @@ export type RunPreparedReplyParams = {
   modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
   provider: string;
   model: string;
+  requestedRouteResolution?: Awaited<
+    ReturnType<typeof createModelSelectionState>
+  >["requestedRouteResolution"];
   perMessageQueueMode?: InlineDirectives["queueMode"];
   perMessageQueueOptions?: {
     debounceMs?: number;

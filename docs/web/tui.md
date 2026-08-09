@@ -86,6 +86,7 @@ openclaw tui --local
 ## Keyboard shortcuts
 
 - Enter: send message
+- Shift+Enter or Ctrl+J: insert a newline without sending
 - Esc: abort active run
 - Ctrl+C: clear input (press twice to exit)
 - Ctrl+D: exit
@@ -114,7 +115,8 @@ Session controls:
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
 - `/usage <off|tokens|full|reset>` (`reset`/`inherit`/`clear`/`default` clears the session override)
-- `/goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
+- `/goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
+- `/btw <side question>` (alias: `/side`; asks without changing future session context)
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`
 - `/queue <steer|followup|collect|interrupt> [debounce:<duration>] [cap:<n>] [drop:<summarize|old|new>]`
@@ -125,6 +127,7 @@ Session lifecycle:
 - `/new` (spawn a fresh, isolated session under a new key; does not affect other TUI clients on the old session)
 - `/reset` (reset the current session key in place)
 - `/abort` (abort the active run)
+- `/stop` (stop the active or queued run)
 - `/settings`
 - `/exit` (or `/quit`)
 
@@ -219,6 +222,7 @@ Tips:
 
 - On connect, the TUI loads the latest history (default 200 messages).
 - Streaming responses update in place until finalized.
+- Messages sent to the same session from another client appear automatically.
 - The TUI also listens to agent tool events for richer tool cards.
 
 ## Connection details

@@ -1,12 +1,15 @@
 // Control UI module implements app tool stream behavior.
+import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -63,22 +66,16 @@ type ToolStreamHost = {
   chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
+  activityEventSeqById?: Map<string, number>;
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
   planStatus?: PlanStatus | null;
   knownAgentRunIds?: Set<string>;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   waitingApprovalResolvedIds?: Set<string>;
+  requestUpdate?: () => void;
   sessions: Pick<SessionCapability, "setModelOverride">;
 };
-
-function toTrimmedString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
 
 function resolveModelLabel(provider: unknown, model: unknown): string | null {
   const modelValue = toTrimmedString(model);
@@ -209,10 +206,6 @@ function formatToolOutput(value: unknown): string | null {
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
 }
 
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
 function resolveSessionStatusModelOverride(result: unknown): string | null | undefined {
   const details = readRecord(readRecord(result)?.details);
   if (!details || details.changedModel !== true) {
@@ -311,10 +304,11 @@ function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
   if (host.toolStreamSyncTimer != null) {
     return;
   }
-  host.toolStreamSyncTimer = window.setTimeout(
-    () => flushToolStreamSync(host),
-    TOOL_STREAM_THROTTLE_MS,
-  );
+  host.toolStreamSyncTimer = window.setTimeout(() => {
+    flushToolStreamSync(host);
+    // The initial event rendered before this deferred projection existed.
+    host.requestUpdate?.();
+  }, TOOL_STREAM_THROTTLE_MS);
 }
 
 export function resetToolStream(host: ToolStreamHost) {
@@ -324,6 +318,7 @@ export function resetToolStream(host: ToolStreamHost) {
   }
   host.toolStreamById.clear();
   host.toolStreamOrder = [];
+  host.activityEventSeqById?.clear();
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
   host.planStatus = null;
@@ -331,6 +326,34 @@ export function resetToolStream(host: ToolStreamHost) {
   host.waitingApprovalStatuses?.clear();
   // Resolution can beat the overlay queue update. Keep tombstones across transient stream resets
   // until snapshot reconciliation observes the approval leaving the queue.
+}
+
+function activityEventIdentity(payload: AgentEventPayload): string | null {
+  if (payload.stream === "tool") {
+    const toolCallId = toTrimmedString(payload.data?.toolCallId);
+    return toolCallId ? `tool:${payload.runId}:${toolCallId}` : null;
+  }
+  if (payload.stream === "item" && payload.data?.kind === "preamble") {
+    const itemId =
+      toTrimmedString(payload.data?.itemId) ?? toTrimmedString(payload.data?.id) ?? "latest";
+    return `preamble:${payload.runId}:${itemId}`;
+  }
+  return null;
+}
+
+function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  const identity = activityEventIdentity(payload);
+  if (!identity) {
+    return true;
+  }
+  const seq = Number.isSafeInteger(payload.seq) ? payload.seq : 0;
+  const previous = host.activityEventSeqById?.get(identity);
+  if (previous !== undefined && seq <= previous) {
+    return false;
+  }
+  const sequences = (host.activityEventSeqById ??= new Map());
+  sequences.set(identity, seq);
+  return true;
 }
 
 export type CompactionStatus = {
@@ -382,6 +405,27 @@ export function resolveActiveRunOutputTokens(params: {
     }
   }
   return null;
+}
+
+export function resolveChatProjectionRunId(params: {
+  localRunId?: string | null;
+  activeRunIds?: readonly string[];
+  queue?: readonly ChatQueueItem[];
+}): string | null {
+  if (params.localRunId) {
+    return params.localRunId;
+  }
+  const activeRunIds = new Set(params.activeRunIds ?? []);
+  // A session row can lag local completion. Restore its run identity only when
+  // the durable outbox independently proves that the same send is reconnecting.
+  return (
+    params.queue?.find(
+      (item) =>
+        item.sendState === "waiting-reconnect" &&
+        typeof item.sendRunId === "string" &&
+        activeRunIds.has(item.sendRunId),
+    )?.sendRunId ?? null
+  );
 }
 
 type WaitingApprovalSnapshotHost = Pick<
@@ -442,17 +486,11 @@ export function reconcileWaitingApprovalsFromSnapshot(
   return changed;
 }
 
-type PlanHost = ToolStreamHost & {
-  planStatus?: PlanStatus | null;
-  requestUpdate?: () => void;
-};
-
 type CompactionHost = ToolStreamHost & {
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
-  requestUpdate?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -724,6 +762,7 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
   host.fallbackClearTimer = window.setTimeout(() => {
     host.fallbackStatus = null;
     host.fallbackClearTimer = null;
+    host.requestUpdate?.();
   }, FALLBACK_TOAST_DURATION_MS);
 }
 
@@ -793,6 +832,11 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   if (!progress) {
     return false;
   }
+  // Preambles belong to the visible run; a sibling run must never replace,
+  // clear, or persist its commentary into this transcript.
+  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+    return true;
+  }
   if (progress.itemId && !progress.text.trim()) {
     host.chatStreamSegments = host.chatStreamSegments.filter(
       (segment) => segment.itemId !== progress.itemId,
@@ -808,7 +852,7 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
       return true;
     }
     host.chatStreamSegments = host.chatStreamSegments.map((segment, index) =>
-      index === existingIndex ? { ...segment, text: progress.text } : segment,
+      index === existingIndex ? { ...segment, text: progress.text, runId: payload.runId } : segment,
     );
     return true;
   }
@@ -821,6 +865,7 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
     {
       text: progress.text,
       ts: Date.now(),
+      runId: payload.runId,
       ...(progress.itemId ? { itemId: progress.itemId } : {}),
     },
   ];
@@ -873,7 +918,7 @@ export function normalizePlanSnapshot(
   };
 }
 
-function handlePlanEvent(host: PlanHost, payload: AgentEventPayload) {
+function handlePlanEvent(host: ToolStreamHost, payload: AgentEventPayload) {
   // Plan snapshots are run-owned: a stale or spawned-run event in the same
   // session must not overwrite (or clear) the active run's checklist. Mirrors
   // the compaction/fallback acceptance policy (session-scoped when idle).
@@ -898,6 +943,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   // active chat run; individual run-owned projections apply their own match.
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && !uiSessionEventMatches(host, sessionKey, toTrimmedString(payload.agentId))) {
+    return;
+  }
+  // History can replay an older active-run snapshot after newer live activity.
+  // Fence each tool/preamble identity by Gateway sequence so restore fills gaps
+  // without regressing a result or newer progress already rendered by this pane.
+  if (!acceptActivityEvent(host, payload)) {
     return;
   }
   if (payload.stream === "lifecycle" || payload.stream === "tool") {
@@ -945,7 +996,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (payload.stream === "plan") {
-    handlePlanEvent(host as PlanHost, payload);
+    handlePlanEvent(host, payload);
     return;
   }
 
@@ -958,8 +1009,15 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (!toolCallId) {
     return;
   }
-  const name = typeof data.name === "string" ? data.name : "tool";
+  const toolStreamIdentity = buildToolStreamIdentity(payload.runId, toolCallId);
+  let entry = host.toolStreamById.get(toolStreamIdentity);
   const phase = typeof data.phase === "string" ? data.phase : "";
+  // A started call owns its concrete identity even when later events omit or
+  // contradict it; an unnamed placeholder can still adopt its first real name.
+  const name =
+    phase !== "start" && entry?.name && entry.name !== "tool"
+      ? entry.name
+      : (toTrimmedString(data.name) ?? entry?.name ?? "tool");
   if (phase === "start" && payload.runId === host.chatRunId) {
     host.chatRunStartup = { state: "activity", runId: payload.runId };
   }
@@ -978,7 +1036,6 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   const now = Date.now();
-  let entry = host.toolStreamById.get(toolCallId);
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.
@@ -988,11 +1045,14 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       host.chatStream &&
       host.chatStream.trim().length > 0
     ) {
+      const segmentStartedAt = host.chatStreamStartedAt ?? now;
       host.chatStreamSegments = [
         ...host.chatStreamSegments,
-        { text: host.chatStream, ts: now, toolCallId },
+        { text: host.chatStream, ts: segmentStartedAt, runId: payload.runId, toolCallId },
       ];
       host.chatStream = null;
+      // The segment becomes the elapsed-time owner after the live tail is flushed.
+      // Preserve the run start or replaying a tool event resets the working timer.
       host.chatStreamStartedAt = null;
     }
     entry = {
@@ -1009,8 +1069,8 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       receivedAt: now,
       message: {},
     };
-    host.toolStreamById.set(toolCallId, entry);
-    host.toolStreamOrder.push(toolCallId);
+    host.toolStreamById.set(toolStreamIdentity, entry);
+    host.toolStreamOrder.push(toolStreamIdentity);
   } else {
     entry.name = name;
     if (args !== undefined) {

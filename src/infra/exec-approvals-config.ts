@@ -53,8 +53,8 @@ function resolveExecApprovalsStateDir(env: NodeJS.ProcessEnv = process.env): {
   };
 }
 
-export function resolveExecApprovalsPath(): string {
-  return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_FILE);
+export function resolveExecApprovalsPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveExecApprovalsStateDir(env).path, EXEC_APPROVALS_FILE);
 }
 
 export function resolveExecApprovalsSocketPath(): string {
@@ -63,15 +63,16 @@ export function resolveExecApprovalsSocketPath(): string {
 
 export function resolveExecApprovalsDisplayPath(): string {
   const stateDir = resolveExecApprovalsStateDir().displayPath;
+  const locator = path.join("state", "openclaw.sqlite#exec_approvals_config");
   return stateDir === DEFAULT_EXEC_APPROVALS_STATE_DIR
-    ? `${stateDir}/${EXEC_APPROVALS_FILE}`
-    : path.join(stateDir, EXEC_APPROVALS_FILE);
+    ? `${stateDir}/${locator}`
+    : path.join(stateDir, locator);
 }
 
 export function resolveExecApprovalsTranscriptPath(): string {
   return process.env.OPENCLAW_STATE_DIR?.trim()
-    ? `$OPENCLAW_STATE_DIR/${EXEC_APPROVALS_FILE}`
-    : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/${EXEC_APPROVALS_FILE}`;
+    ? "$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config"
+    : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/state/openclaw.sqlite#exec_approvals_config`;
 }
 
 export function createFailClosedExecApprovalsFallback(): ExecApprovalsFile {
@@ -152,7 +153,8 @@ function isValidPersistedExecApprovals(value: unknown): value is ExecApprovalsFi
   return true;
 }
 
-export function parsePersistedExecApprovals(raw: string): ExecApprovalsFile {
+/** Parse only structurally valid persisted approvals without inventing fallback policy. */
+export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (isValidPersistedExecApprovals(parsed)) {
@@ -161,8 +163,7 @@ export function parsePersistedExecApprovals(raw: string): ExecApprovalsFile {
   } catch {
     // A partial Windows fallback write is existing state, not a missing policy.
   }
-  // Never let malformed persisted state inherit permissive product defaults.
-  return createFailClosedExecApprovalsFallback();
+  return null;
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {

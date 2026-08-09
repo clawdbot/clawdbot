@@ -294,4 +294,46 @@ describe("ssrf pinning", () => {
       }),
     ).rejects.toThrow(SsrFBlockedError);
   });
+
+  describe("asynchronous delivery contract", () => {
+    function createLookup() {
+      return createPinnedLookup({
+        hostname: "api.telegram.org",
+        addresses: ["149.154.167.220", "2001:67c:4e8:f004::9"],
+      });
+    }
+
+    async function flushLookupCallback(): Promise<void> {
+      await new Promise<void>((resolve) => {
+        process.nextTick(resolve);
+      });
+    }
+
+    it("defers callbacks without lookup options", async () => {
+      const callback = vi.fn();
+      createLookup()("api.telegram.org", callback);
+
+      expect(callback).not.toHaveBeenCalled();
+      await flushLookupCallback();
+      expect(callback).toHaveBeenCalledWith(null, "149.154.167.220", 4);
+    });
+
+    it("defers callbacks for all-address lookups", async () => {
+      const callback = vi.fn();
+      createLookup()("api.telegram.org", { all: true }, callback);
+
+      expect(callback).not.toHaveBeenCalled();
+      await flushLookupCallback();
+      expect(callback).toHaveBeenCalledWith(null, [{ address: "149.154.167.220", family: 4 }]);
+    });
+
+    it("defers callbacks for explicit address families", async () => {
+      const callback = vi.fn();
+      createLookup()("api.telegram.org", { family: 6 }, callback);
+
+      expect(callback).not.toHaveBeenCalled();
+      await flushLookupCallback();
+      expect(callback).toHaveBeenCalledWith(null, "2001:67c:4e8:f004::9", 6);
+    });
+  });
 });

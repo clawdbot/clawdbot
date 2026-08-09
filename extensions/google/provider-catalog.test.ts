@@ -122,6 +122,7 @@ describe("google provider catalog", () => {
         contextWindow: 1_048_576,
         maxTokens: 65_536,
         input: ["text", "image"],
+        compat: { codeMode: "preferred" },
       }),
       expect.objectContaining({
         id: "gemini-3.6-flash",
@@ -130,6 +131,7 @@ describe("google provider catalog", () => {
         contextWindow: 1_048_576,
         maxTokens: 65_536,
         input: ["text", "image"],
+        compat: { codeMode: "preferred" },
       }),
       expect.objectContaining({
         id: "gemma-3-1b-it",
@@ -142,6 +144,11 @@ describe("google provider catalog", () => {
         input: ["text", "image"],
       }),
     ]);
+    expect(
+      provider.models
+        .filter((model) => model.id.startsWith("gemma-"))
+        .every((model) => model.compat === undefined),
+    ).toBe(true);
     const request = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(request?.url).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
@@ -151,6 +158,46 @@ describe("google provider catalog", () => {
       "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&pageToken=page-2",
     );
     expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it("propagates static compat to discovered id variants of the same weights", async () => {
+    const cases: ReadonlyArray<{ id: string; compat: { codeMode: string } | undefined }> = [
+      { id: "gemini-3.5-flash", compat: { codeMode: "preferred" } },
+      { id: "gemini-3.5-flash-preview-06-17", compat: { codeMode: "preferred" } },
+      { id: "gemini-3.1-pro-preview-05-06", compat: { codeMode: "preferred" } },
+      { id: "gemini-flash-latest", compat: { codeMode: "preferred" } },
+      { id: "gemini-flash-lite-latest", compat: { codeMode: "preferred" } },
+      { id: "gemini-pro-latest", compat: { codeMode: "preferred" } },
+      // Dated variant of unflagged weights resolves but carries no compat.
+      { id: "gemini-2.5-flash-preview-05-20", compat: undefined },
+      // Unknown family member fails closed: no static entry, no compat.
+      { id: "gemini-3.9-flash", compat: undefined },
+    ];
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
+      response: Response.json({
+        models: cases.map(({ id }) => ({
+          name: `models/${id}`,
+          displayName: id,
+          inputTokenLimit: 1_048_576,
+          outputTokenLimit: 65_536,
+          supportedGenerationMethods: ["generateContent"],
+          thinking: true,
+        })),
+      }),
+      finalUrl: url,
+      release: async () => undefined,
+    }));
+
+    const provider = await buildGoogleLiveCatalogProvider({
+      apiKey: "GEMINI_API_KEY",
+      fetchGuard,
+    });
+
+    for (const { id, compat } of cases) {
+      const model = provider.models.find((entry) => entry.id === id);
+      expect(model, id).toBeDefined();
+      expect(model?.compat, id).toEqual(compat);
+    }
   });
 
   it("falls back to bundled rows when live discovery is unusable", async () => {

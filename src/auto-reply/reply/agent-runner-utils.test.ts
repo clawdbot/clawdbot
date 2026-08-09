@@ -45,6 +45,7 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
     config: { models: { providers: {} } },
     provider: "openai",
     model: "gpt-4.1",
+    requestedRouteResolution: "resolved",
     agentDir: "/tmp/agent",
     sessionKey: "agent:test:session",
     sessionFile: "/tmp/session.json",
@@ -88,6 +89,7 @@ describe("agent-runner-utils", () => {
       cfg: run.config,
       provider: run.provider,
       model: run.model,
+      requestedRouteResolution: "resolved",
       agentDir: run.agentDir,
       agentId: run.agentId,
       sessionKey: run.sessionKey,
@@ -201,6 +203,24 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.runBaseParams.runId).toBe("run-1");
     expect(resolved.runBaseParams.promptCacheKey).toBe("stable-session-cache-key");
+  });
+
+  it("uses the queued conversation policy snapshot", () => {
+    const run = makeRun({ conversationToolPolicy: { deny: ["exec"] } });
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: {
+        Provider: "telegram",
+        ConversationToolPolicy: { deny: ["write"] },
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.runBaseParams.conversationToolPolicy).toEqual({ deny: ["exec"] });
   });
 
   it("uses session chat type over stale queued metadata for embedded execution params", () => {

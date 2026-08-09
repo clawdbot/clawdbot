@@ -20,6 +20,7 @@ export type WorkerTunnelRequest = {
 
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];
+  transportRetry: "idempotent" | "never";
   input?: string;
   timeoutMs?: number;
   signal?: AbortSignal;

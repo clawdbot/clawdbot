@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runGhCommand } from "../../scripts/lib/ghsa-patch-subprocess.mjs";
+import { runGhCommand } from "../../scripts/lib/ghsa-patch-subprocess.mts";
 
 describe("GHSA patch subprocess", () => {
   it("bounds each GitHub lookup with a timeout and SIGKILL", () => {

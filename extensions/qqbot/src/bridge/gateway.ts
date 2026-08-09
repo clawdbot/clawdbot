@@ -23,7 +23,7 @@ import { ensurePlatformAdapter } from "./bootstrap.js";
 import { setBridgeLogger } from "./logger.js";
 import { toGatewayAccount } from "./narrowing.js";
 import { resolveQQBotPluginVersion } from "./plugin-version.js";
-import { getQQBotRuntime, getQQBotRuntimeForEngine } from "./runtime.js";
+import { getQQBotRuntime } from "./runtime.js";
 import {
   createSdkAccessAdapter,
   createSdkHistoryAdapter,
@@ -113,7 +113,9 @@ function createEngineAdapters(): EngineAdapters {
 export async function startGateway(ctx: GatewayContext): Promise<void> {
   ensurePlatformAdapter();
 
-  const runtime = getQQBotRuntimeForEngine();
+  const pluginRuntime = getQQBotRuntime();
+  const runtime = pluginRuntime as unknown as CoreGatewayContext["runtime"];
+  const getCurrentConfig = () => pluginRuntime.config.current() as OpenClawConfig;
   const accountLogger = createAccountLogger(ctx.log, ctx.account.accountId);
 
   // Per-account registration (still global — sender is a leaf utility).
@@ -141,6 +143,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     account: toGatewayAccount(ctx.account),
     abortSignal: ctx.abortSignal,
     cfg: ctx.cfg,
+    getCurrentConfig,
     onReady: ctx.onReady,
     onResumed: ctx.onResumed,
     onError: ctx.onError,

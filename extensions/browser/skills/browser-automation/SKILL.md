@@ -21,12 +21,8 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - `suggestedTargetId` is the label when one exists, otherwise the stable `tabId` handle like `t1`.
    - Avoid relying on raw DevTools `targetId` except for immediate diagnostics; it can change under Chromium target replacement.
 3. Read before you click:
-   - For “read the page and answer X,” use `action="extract"` with `query` so only the answer returns.
-   - Prefer `selector` to scope extraction on large pages and list views; use `ignoreSelectors` to drop repeated chrome.
-   - Use `schema` when downstream work needs validated, machine-usable fields instead of prose.
-   - For virtualized lists, scroll through each segment, extract it, then merge the structured results.
-   - Use `action="snapshot"` instead when you need action refs or page structure.
-   - If extract returns `NOT_FOUND` or asks for snapshot fallback, inspect the page with a snapshot.
+   - For “read the page and answer X,” use a selector-scoped `action="snapshot"` or `act:evaluate` that returns only relevant text or structured data. Let the active agent model answer from that bounded result; use efficient snapshots for controls and action discovery because they omit most non-interactive prose.
+   - For virtualized lists, scroll through each segment, capture only the relevant rows, then merge the results.
    - Use `action="snapshot"` on the intended `targetId`.
    - Use the same `targetId` for follow-up actions so refs stay on the same tab.
    - For durable Playwright refs, request `refs="aria"` when supported. If you receive `axN` refs from `snapshotFormat="aria"`, use them only after that same snapshot call; stale or unbound `axN` refs fail fast and need a fresh snapshot.
@@ -34,7 +30,8 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - Use `labels=true` on snapshot or screenshot when visual position matters. On Playwright-backed profiles, the response includes an `annotations` array (`{ref, number, role, name?, box}`) with each ref's bounding box in the captured image's coordinate space, so you can reason about position without re-snapshotting; screenshot labels can also combine with `fullPage=true` (CLI: `--full-page`) to label the whole document, or `ref` / `element` to clip to one element. `profile="user"` and other existing-session (chrome-mcp) profiles render an overlay into page screenshots but do not attach `annotations` or use the Playwright full-page/ref/element projection helper, so read positions from the labeled image itself on those profiles. The raw-CDP fallback (no Playwright) does not support labeled screenshots at all and returns a 501, so only request `labels` when Playwright is available.
 4. Act narrowly:
    - Prefer `action="act"` with a ref from the latest snapshot.
-   - After navigation, modal changes, or form submission, snapshot again before the next action.
+   - `navigate` returns the loaded page's compact snapshot inline, and batch `act` results that report a cross-document navigation include fresh page state; use those refs directly instead of a follow-up snapshot call.
+   - After a single act that triggers navigation, and after modal changes or form submissions, snapshot again before the next action.
    - Avoid blind waits. Wait for visible UI state when possible.
 5. Report real blockers:
    - If the page needs login, permission, captcha, 2FA, camera/microphone approval, or another manual step, stop and tell the user exactly what is needed.

@@ -15,6 +15,7 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
@@ -49,9 +50,8 @@ import {
   resolveSessionAgentId,
   resolveSessionModelRef,
   persistInboundImagesForTranscript,
-  sanitizeInboundSystemTags,
   sendDurableMessageBatch,
-  canonicalizeSessionEntryAliases,
+  upsertSessionEntry,
 } from "./server-node-events.runtime.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -173,13 +173,7 @@ function shouldDropDuplicateVoiceTranscript(params: {
         break;
       }
     }
-    while (recentVoiceTranscripts.size > MAX_RECENT_VOICE_TRANSCRIPTS) {
-      const oldestKey = recentVoiceTranscripts.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      recentVoiceTranscripts.delete(oldestKey);
-    }
+    pruneMapToMaxSize(recentVoiceTranscripts, MAX_RECENT_VOICE_TRANSCRIPTS);
   }
 
   return false;
@@ -329,13 +323,7 @@ function shouldDropDuplicateExecFinished(params: {
         break;
       }
     }
-    while (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
-      const oldestKey = recentExecFinishedRuns.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      recentExecFinishedRuns.delete(oldestKey);
-    }
+    pruneMapToMaxSize(recentExecFinishedRuns, MAX_RECENT_EXEC_FINISHED_RUNS);
   }
 
   return false;
@@ -357,13 +345,7 @@ function pruneBoundedTimestampMap(
       return;
     }
   }
-  while (map.size > params.maxEntries) {
-    const oldestKey = map.keys().next().value;
-    if (oldestKey === undefined) {
-      return;
-    }
-    map.delete(oldestKey);
-  }
+  pruneMapToMaxSize(map, params.maxEntries);
 }
 
 function compactExecEventOutput(raw: string) {
@@ -395,7 +377,6 @@ type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
 async function touchSessionStore(params: {
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
-  storeKeys: LoadedSessionEntry["storeKeys"];
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
@@ -404,14 +385,12 @@ async function touchSessionStore(params: {
   if (!storePath) {
     return;
   }
-  await canonicalizeSessionEntryAliases({
-    storePath,
-    target: {
-      canonicalKey: params.canonicalKey,
-      storeKeys: params.storeKeys,
+  await upsertSessionEntry(
+    {
+      sessionKey: params.canonicalKey,
+      storePath,
     },
-    update: (entry) => ({
-      ...entry,
+    {
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
@@ -421,15 +400,14 @@ async function touchSessionStore(params: {
       systemSent: params.entry?.systemSent,
       sendPolicy: params.entry?.sendPolicy,
       delivery: params.entry?.delivery,
-    }),
-  });
+    },
+  );
 }
 
 function queueSessionStoreTouch(params: {
   ctx: NodeEventContext;
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
-  storeKeys: LoadedSessionEntry["storeKeys"];
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
@@ -444,7 +422,6 @@ function queueSessionStoreTouch(params: {
     await touchSessionStore({
       storePath: params.storePath,
       canonicalKey: params.canonicalKey,
-      storeKeys: params.storeKeys,
       entry: params.entry,
       sessionId: params.sessionId,
       now: params.now,
@@ -585,7 +562,7 @@ export const handleNodeEvent = async (
       const cfg = getRuntimeConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
-      const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
@@ -624,18 +601,17 @@ export const handleNodeEvent = async (
             ctx,
             storePath,
             canonicalKey,
-            storeKeys,
             entry,
             sessionId,
             now: receivedAt,
             isConnectionCurrent: opts?.isConnectionCurrent,
           });
 
-          // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
-          // This maps agent bus events (keyed by per-turn runId) to chat events (keyed by clientRunId).
+          // Voice now has a unique per-turn run id, so it is also the stable
+          // client identity for chat streaming and abort lifecycle ownership.
           ctx.addChatRun(runId, {
             sessionKey: canonicalKey,
-            clientRunId: `voice-${randomUUID()}`,
+            clientRunId: runId,
           });
         },
       });
@@ -674,7 +650,7 @@ export const handleNodeEvent = async (
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
-      const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
@@ -699,6 +675,8 @@ export const handleNodeEvent = async (
         const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
         const supportsInlineImages = await resolveGatewayModelSupportsImages({
           loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
+          loadGatewayModelCatalogSnapshot: ctx.loadGatewayModelCatalogSnapshot,
+          agentId: sessionAgentId,
           provider: modelRef.provider,
           model: modelRef.model,
         });
@@ -769,7 +747,6 @@ export const handleNodeEvent = async (
       await touchSessionStore({
         storePath,
         canonicalKey,
-        storeKeys,
         entry,
         sessionId,
         now,
@@ -898,20 +875,16 @@ export const handleNodeEvent = async (
       if (!keyRaw) {
         return undefined;
       }
-      const key = sanitizeInboundSystemTags(keyRaw);
+      const key = keyRaw;
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
       const { canonicalKey: sessionKey, entry } = loadSessionEntry(sessionKeyRaw);
       if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
         return undefined;
       }
       const packageNameRaw = normalizeOptionalString(obj.packageName);
-      const packageName = packageNameRaw ? sanitizeInboundSystemTags(packageNameRaw) : null;
-      const title = compactNotificationEventText(
-        sanitizeInboundSystemTags(normalizeOptionalString(obj.title) ?? ""),
-      );
-      const text = compactNotificationEventText(
-        sanitizeInboundSystemTags(normalizeOptionalString(obj.text) ?? ""),
-      );
+      const packageName = packageNameRaw ?? null;
+      const title = compactNotificationEventText(normalizeOptionalString(obj.title) ?? "");
+      const text = compactNotificationEventText(normalizeOptionalString(obj.text) ?? "");
 
       let summary = `Notification ${change} (node=${nodeId} key=${key}`;
       if (packageName) {
@@ -947,7 +920,9 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      await ctx.nodeSubscribe(nodeId, sessionKey, opts?.connId);
+      const { canonicalKey } = loadSessionEntry(sessionKey);
+      // Fanout is keyed by the canonical session; retain the connection owner for safe reconnect.
+      await ctx.nodeSubscribe(nodeId, canonicalKey, opts?.connId);
       return undefined;
     }
     case "chat.unsubscribe": {
@@ -958,7 +933,8 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      await ctx.nodeUnsubscribe(nodeId, sessionKey, opts?.connId);
+      const { canonicalKey } = loadSessionEntry(sessionKey);
+      await ctx.nodeUnsubscribe(nodeId, canonicalKey, opts?.connId);
       return undefined;
     }
     case "exec.started":
@@ -1005,22 +981,17 @@ export const handleNodeEvent = async (
       if (evt.event === "exec.denied") {
         return undefined;
       }
-      const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
+      const command = normalizeOptionalString(obj.command) ?? "";
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)
           ? obj.exitCode
           : undefined;
       const timedOut = obj.timedOut === true;
-      const output = sanitizeInboundSystemTags(normalizeOptionalString(obj.output) ?? "");
-      // Strip parens from the untrusted RAW reason before sanitizeInboundSystemTags
-      // runs: the `Exec denied (node=..., <reason>): cmd` wire format is parsed by
-      // matching the first balanced `(...)` and stray parens in user-supplied
-      // input would break the metadata/body boundary. We strip pre-sanitize so
-      // that legitimate `[System Message]` style tags can still be converted to
-      // `(System Message)` by sanitizeInboundSystemTags afterward.
-      const reason = sanitizeInboundSystemTags(
-        (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, ""),
-      );
+      const output = normalizeOptionalString(obj.output) ?? "";
+      // Strip parens from the raw reason: the `Exec denied (node=..., <reason>): cmd`
+      // wire format is parsed by matching the first balanced `(...)`, and stray
+      // parens in user-supplied input would break the metadata/body boundary.
+      const reason = (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, "");
 
       let text;
       if (evt.event === "exec.started") {

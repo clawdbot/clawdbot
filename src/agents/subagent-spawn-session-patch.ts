@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -78,6 +79,7 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
       entry.model = model;
       entry.modelOverride = model;
       entry.modelOverrideSource = patch.modelOverrideSource === "auto" ? "auto" : "user";
+      entry.modelOverrideRouteResolution = "resolved";
       const fallbackOriginProvider = normalizeOptionalString(
         patch.modelOverrideFallbackOriginProvider,
       );
@@ -134,6 +136,12 @@ export async function createInitialSubagentSession(params: {
     ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
     ...(params.incognito ? { incognito: true } : {}),
   };
+  // Spawn owns a fresh child lifecycle. Cleanup freezes both fields before
+  // launch so it cannot delete a reset successor that reuses the session id.
+  const childSessionIdentity = {
+    sessionId: randomUUID(),
+    lifecycleRevision: randomUUID(),
+  };
   try {
     const target = params.incognito
       ? {
@@ -153,6 +161,7 @@ export async function createInitialSubagentSession(params: {
       },
       {
         ...buildDirectChildSessionPatch(initialChildSessionPatch),
+        ...childSessionIdentity,
         ...buildSessionCreationStamp({
           via: "spawn",
           actor: { type: "agent", id: params.requesterInternalKey },

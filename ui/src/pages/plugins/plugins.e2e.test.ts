@@ -405,8 +405,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await workboardCard.getByRole("button", { name: "Enable", exact: true }).waitFor();
       await captureScreenshot(page, "01-installed-desktop.png");
 
-      // Rows open a detail overlay; close it before continuing.
-      await workboardCard.click();
+      // The row's primary action is a real named button, so keyboard users can inspect plugins.
+      const detailsButton = workboardCard.getByRole("button", { name: "Workboard", exact: true });
+      await detailsButton.focus();
+      await page.keyboard.press("Enter");
       const detail = page.locator(".plugins-detail");
       await detail.waitFor({ state: "visible" });
       expect(await detail.textContent()).toContain("Workboard");
@@ -494,24 +496,26 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         version: "1.2.3",
         acknowledgeClawHubRisk: true,
       });
-      const postInstallListRequest = await waitForNextRequest(
-        gateway,
-        "plugins.list",
-        listCountBeforeInstall,
-      );
+      // The mutation boundary refreshes config before the page refreshes the
+      // plugin catalog; release the deferred requests in that contract order.
       const postInstallConfigRequest = await waitForNextRequest(
         gateway,
         "config.get",
         configCountBeforeInstall,
       );
-      expect(requestParams(postInstallListRequest)).toEqual({});
       expect(requestParams(postInstallConfigRequest)).toEqual({});
+      await gateway.resolveDeferred("config.get", configSnapshot(false));
+      const postInstallListRequest = await waitForNextRequest(
+        gateway,
+        "plugins.list",
+        listCountBeforeInstall,
+      );
+      expect(requestParams(postInstallListRequest)).toEqual({});
       await expect.poll(() => searchRow.getAttribute("aria-busy")).toBe("true");
       expect(await searchRow.getByRole("status").textContent()).toContain(
         "A Gateway restart is required",
       );
       await gateway.resolveDeferred("plugins.list", installedInventory);
-      await gateway.resolveDeferred("config.get", configSnapshot(false));
       await expect.poll(() => searchRow.getAttribute("aria-busy")).toBe("false");
       // Installed search results swap Install for the enable/disable toggle.
       await page
@@ -535,22 +539,22 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         enableCountBefore,
       );
       expect(requestParams(enableRequest)).toEqual({ pluginId: "workboard", enabled: true });
-      const postEnableListRequest = await waitForNextRequest(
-        gateway,
-        "plugins.list",
-        listCountBeforeEnable,
-      );
       const postEnableConfigRequest = await waitForNextRequest(
         gateway,
         "config.get",
         configCountBeforeEnable,
       );
-      expect(requestParams(postEnableListRequest)).toEqual({});
       expect(requestParams(postEnableConfigRequest)).toEqual({});
       await gateway.setMethodResponse("plugins.list", finalInventory);
       await gateway.setMethodResponse("config.get", configSnapshot(true));
-      await gateway.resolveDeferred("plugins.list", finalInventory);
       await gateway.resolveDeferred("config.get", configSnapshot(true));
+      const postEnableListRequest = await waitForNextRequest(
+        gateway,
+        "plugins.list",
+        listCountBeforeEnable,
+      );
+      expect(requestParams(postEnableListRequest)).toEqual({});
+      await gateway.resolveDeferred("plugins.list", finalInventory);
       await waitForNextRequest(gateway, "connect", connectCountBeforeEnable);
       await expect.poll(() => workboardCard.getAttribute("aria-busy")).toBe("false");
 
@@ -577,10 +581,20 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         uninstallCountBefore,
       );
       expect(requestParams(uninstallRequest)).toEqual({ pluginId: "calendar-plus" });
-      await waitForNextRequest(gateway, "plugins.list", listCountBeforeRemove);
-      await waitForNextRequest(gateway, "config.get", configCountBeforeRemove);
-      await gateway.resolveDeferred("plugins.list", uninstalledInventory);
+      const postUninstallConfigRequest = await waitForNextRequest(
+        gateway,
+        "config.get",
+        configCountBeforeRemove,
+      );
+      expect(requestParams(postUninstallConfigRequest)).toEqual({});
       await gateway.resolveDeferred("config.get", configSnapshot(true));
+      const postUninstallListRequest = await waitForNextRequest(
+        gateway,
+        "plugins.list",
+        listCountBeforeRemove,
+      );
+      expect(requestParams(postUninstallListRequest)).toEqual({});
+      await gateway.resolveDeferred("plugins.list", uninstalledInventory);
       await calendarRow.waitFor({ state: "detached" });
       expect(await page.locator(".plugins-page-notice").textContent()).toContain(
         "Removed calendar-plus",

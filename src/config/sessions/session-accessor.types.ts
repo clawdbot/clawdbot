@@ -1,8 +1,9 @@
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type {
+  DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
-  ResetSessionEntryLifecycleMutation,
+  ResetSessionEntryLifecycleParams,
   ResetSessionEntryLifecycleResult,
   DeletedAgentSessionEntryPurgeParams,
   SessionArchivedTranscriptCleanupRule,
@@ -19,6 +20,7 @@ import type {
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
+import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 /**
@@ -61,8 +63,10 @@ export type LogicalSessionAccessScope = {
   sessionKey: string;
 };
 
-export type SessionEntryListScope = Partial<Omit<SessionAccessScope, "sessionKey">>;
-export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
+export type SessionEntryListScope = Partial<Omit<SessionAccessScope, "sessionKey">> & {
+  /** Listing views do not consume the large per-run prompt snapshots. */
+  projection?: "full" | "list";
+};
 
 export type ResolvedSessionEntryAccessTarget = {
   /** Agent owner inferred from the canonical session key. */
@@ -150,20 +154,23 @@ export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "se
   /** Canonical key when the caller has a session-store identity for this read. */
   sessionKey?: string;
   /** Entry already loaded by hot callers; avoids rereading the session store. */
-  sessionEntry?: Pick<SessionEntry, "sessionFile"> & Partial<Pick<SessionEntry, "sessionId">>;
+  sessionEntry?: Partial<Pick<SessionEntry, "sessionId">>;
 };
 
-export type SessionTranscriptReadTarget = Omit<
-  SessionTranscriptRuntimeTarget,
-  "agentId" | "sessionKey"
-> & {
+export interface SessionTranscriptReadTarget {
   agentId?: string;
+  sessionId: string;
   sessionKey?: string;
-};
+  storePath: string;
+}
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
   /** Optional for appenders that resolve it from the session entry. */
   sessionId?: string;
+  /** Optional run-owned fence checked inside the transcript write transaction. */
+  expectedWriterRunId?: string;
+  /** Optional lifecycle fence paired with sessionId for run-owned writes. */
+  expectedLifecycleRevision?: string;
 };
 
 export type SessionEntrySummary = {
@@ -284,6 +291,8 @@ export type SessionTranscriptVisibleMessageDeltaResult =
   | { kind: "missing" };
 
 export type TranscriptMessageAppendOptions<TMessage> = {
+  /** Rebase a stale explicit parent when the current tail still descends from it. */
+  appendIntent?: "active-branch";
   /** Runtime config used for message redaction and transcript header metadata. */
   config?: OpenClawConfig;
   /** Working directory recorded in a newly created transcript header. */
@@ -311,6 +320,10 @@ export type TranscriptMessageAppendResult<TMessage> = {
   message: TMessage;
   /** Existing or newly generated transcript message id. */
   messageId: string;
+  /** Parent id actually used by the durable transcript append. */
+  effectiveParentId?: string | null;
+  /** Authoritative immutable identity issued by the append transaction. */
+  anchor?: TranscriptEntryAnchor;
 };
 
 /** Transcript update fields supplied by callers; the target is resolved here. */
@@ -326,13 +339,29 @@ export type SessionTranscriptWriteLockAccessorContext = {
   appendMessage: <TMessage>(
     options: TranscriptMessageAppendOptions<TMessage>,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
+  /** Appends with commit-time idempotency and returns the committed visible sequence. */
+  appendMessageWithMessageSequence: <TMessage>(
+    options: TranscriptMessageAppendOptions<TMessage>,
+  ) => Promise<{
+    messageSeq?: number;
+    result: TranscriptMessageAppendResult<TMessage> | undefined;
+  }>;
+  /** Reads bounded indexed facts for supplied transcript mirror identities. */
+  readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
+    anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
+    existingIdempotencyKeys: Set<string>;
+    messagesByIdempotencyKey: Map<string, unknown>;
+  }>;
   readEvents: () => Promise<TranscriptEvent[]>;
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
 };
 
 export type SessionTranscriptWriteTransactionContext = {
-  /** Canonical marker for the same agent database owned by the transaction. */
-  sessionFile: string;
+  /** Canonical transcript identity owned by the transaction. */
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
 };
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
@@ -348,7 +377,6 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
 
 export type SessionTranscriptTurnWriteContext = {
   agentId?: string;
-  sessionFile: string;
   sessionId?: string;
   sessionKey?: string;
   storePath?: string;
@@ -367,13 +395,15 @@ export type SessionTranscriptTurnPersistOptions = {
   expectedSessionId?: string;
   /** Rejects the turn when lifecycle ownership changed without rotating the session id. */
   expectedLifecycleRevision?: string;
+  /** Rejects the turn when another admitted run owns transcript writes. */
+  expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
   /** Rejects the turn unless the persisted row still has this exact lifecycle owner state. */
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   /** Lifecycle metadata committed when the guarded turn inserts or idempotently matches a message. */
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   /** Message rows to append under one transcript write lock. */
   messages: readonly SessionTranscriptTurnMessageAppend[];
-  /** Controls whether the update event includes the last appended message. */
+  /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;
   /** Emit file-only updates even when every candidate message was skipped. */
   publishWhen?: "always" | "when-appended";
@@ -386,20 +416,19 @@ export type SessionTranscriptTurnPersistOptions = {
   touchSessionEntry?: boolean;
 };
 
-export type SessionTranscriptTurnPersistResult = {
+export interface SessionTranscriptTurnPersistResult {
   appendedCount: number;
   messages: TranscriptMessageAppendResult<unknown>[];
   rejectedReason?: "session-rebound";
   sessionEntry: SessionEntry | undefined;
-  sessionFile: string;
-};
+}
 
-export type SessionTranscriptRuntimeTarget = {
+export interface SessionTranscriptRuntimeTarget {
   agentId: string;
-  sessionFile: string;
   sessionId: string;
   sessionKey: string;
-};
+  storePath: string;
+}
 
 export type SessionTranscriptManualTrimResult =
   | {
@@ -482,6 +511,8 @@ export type ReplySessionInitializationCommitResult =
     };
 
 export type SessionEntryPatchOptions = {
+  /** Synchronous final ownership check executed inside the commit transaction. */
+  assertCommitAllowed?: () => void;
   /** Entry to synthesize when a patch operation is allowed to create. */
   fallbackEntry?: SessionEntry;
   /** Fully resolved maintenance settings when the caller already has config loaded. */
@@ -793,13 +824,13 @@ export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
 export type SessionEntryCreateWithTranscriptOptions = {
   /** Protect the newly created row from maintenance during its initial write. */
   activeSessionKey?: string;
+  /** Working directory stored in the initial transcript header. */
+  cwd?: string;
   /** SQLite commits are authoritative; retained for the shared caller contract. */
   requireWriteSuccess?: boolean;
 };
 
-export type SessionPatchProjectionSnapshot = {
-  entries: ReadonlyArray<{ sessionKey: string; entry: SessionEntry }>;
-};
+export type SessionPatchProjectionSnapshot = { store: Readonly<Record<string, SessionEntry>> };
 
 export type SessionPatchProjectionTarget = {
   candidateKeys?: readonly string[];
@@ -809,6 +840,7 @@ export type SessionPatchProjectionTarget = {
 export type SessionPatchProjectionContext = SessionPatchProjectionSnapshot &
   SessionPatchProjectionTarget & {
     existingEntry?: SessionEntry;
+    isLabelInUse: (label: string) => boolean;
   };
 
 export type SessionPatchProjectionFailure = { ok: false };
@@ -817,8 +849,21 @@ export type SessionPatchProjectionResult<TFailure extends SessionPatchProjection
   | { ok: true; entry: SessionEntry }
   | TFailure;
 
+export type SessionPatchProjectionOperation<TFailure extends SessionPatchProjectionFailure> = {
+  /** Revalidates request-scoped authorization after projection and before persistence. */
+  authorize?: () => TFailure | undefined;
+  /** Converts a target-local projection exception without aborting sibling targets. */
+  onError?: (error: unknown) => TFailure;
+  resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
+  project: (
+    context: SessionPatchProjectionContext,
+  ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
+};
+
 export type {
+  DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
+  ResetSessionEntryLifecycleParams,
   ResetSessionEntryLifecycleResult,
   SessionLifecycleArchivedTranscript,
   SessionLifecycleArtifactCleanupParams,
@@ -832,52 +877,4 @@ export type {
   SessionEntryLifecycleMutationResult,
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
-};
-
-export type ResetSessionEntryLifecycleParams = {
-  /** Preserve legacy rotation archival unless the caller appended an in-log boundary. */
-  archivePreviousTranscript?: boolean;
-  /** Runs after the persisted entry changes and any requested archival completes. */
-  afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
-  /** Agent owner used to resolve backend transcript artifacts. */
-  agentId?: string;
-  /** Builds the persisted replacement entry from the current backend row. */
-  buildNextEntry: (context: {
-    currentEntry?: SessionEntry;
-    primaryKey: string;
-  }) => Promise<SessionEntry> | SessionEntry;
-  /** Atomically append this boundary with the reset entry mutation. */
-  resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
-  /** Explicit store target for file-backed stores and SQLite migration adapters. */
-  storePath: string;
-  /** Canonical key plus aliases that identify the logical entry. */
-  target: SessionLifecycleStoreTarget;
-};
-
-export type DeleteSessionEntryLifecycleParams = {
-  /** Agent owner used to resolve backend transcript artifacts. */
-  agentId?: string;
-  /** Whether transcript artifacts should be archived/deleted with the entry. */
-  archiveTranscript: boolean;
-  /** Delete transcript rows without writing an archive artifact. */
-  deleteTranscriptWithoutArchive?: boolean;
-  /** Optional exact row guard checked under the storage writer lock. */
-  expectedEntry?: SessionEntry;
-  /** Optional provider-run identity guard checked under the storage writer lock. */
-  expectedSessionId?: string | null;
-  /** Optional owner revision guard checked under the storage writer lock. */
-  expectedLifecycleRevision?: string;
-  /** Optional persisted revision guard checked under the storage writer lock. */
-  expectedUpdatedAt?: number;
-  /** Fail when the underlying store cannot confirm a durable write. */
-  requireWriteSuccess?: boolean;
-  /** Explicit store target for file-backed stores and SQLite migration adapters. */
-  storePath: string;
-  /** Canonical key plus aliases that identify the logical entry. */
-  target: SessionLifecycleStoreTarget;
-};
-
-export type CanonicalizeSessionEntryAliasesResult = {
-  canonicalKey: string;
-  entry?: SessionEntry;
 };

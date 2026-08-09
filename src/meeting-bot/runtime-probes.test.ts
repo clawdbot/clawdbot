@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MeetingPlatformAdapter } from "./platform-adapter.js";
 import { createMeetingRuntimeProbes } from "./runtime-probes.js";
 import type { MeetingBrowserHealth } from "./session-types.js";
 
@@ -66,7 +67,7 @@ describe.each(cases)("$name meeting runtime probe parity", (testCase) => {
       },
       resolveTimeoutMs: () => 5,
       shouldWaitForListening: testCase.shouldWaitForListening,
-      talkBackMode: (mode) => mode === "agent" || mode === "bidi",
+      talkBackMode: MeetingPlatformAdapter.isTalkBackMode,
     });
 
   it("preserves the platform invalid-request contract", async () => {

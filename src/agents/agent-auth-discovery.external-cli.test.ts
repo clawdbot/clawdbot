@@ -5,9 +5,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 const storeMocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
-  loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
-  loadAuthProfileStoreForRuntime: vi.fn(() => ({ version: 1, profiles: {} })),
-  loadAuthProfileStoreForSecretsRuntime: vi.fn(() => ({ version: 1, profiles: {} })),
 }));
 
 const credentialMocks = vi.hoisted(() => ({
@@ -44,6 +41,7 @@ import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-d
 describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    credentialMocks.resolveAgentCredentialMapFromStore.mockReturnValue({});
   });
 
   it("threads scoped external CLI discovery into writable auth store loading", () => {
@@ -64,10 +62,9 @@ describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
       config: cfg,
       externalCli,
     });
-    expect(storeMocks.loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
 
-  it("preserves scoped external CLI discovery for read-only auth store loading", () => {
+  it("reuses the active runtime generation for read-only auth discovery", () => {
     const cfg = {} as OpenClawConfig;
     const externalCli = externalCliDiscoveryForProviders({
       cfg,
@@ -81,12 +78,35 @@ describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
       readOnly: true,
     });
 
-    expect(storeMocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw-agent", {
+    expect(storeMocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-agent", {
       allowKeychainPrompt: false,
       config: cfg,
       externalCli,
       readOnly: true,
     });
+  });
+
+  it("merges prepared ambient credentials without repeating ambient discovery", () => {
+    credentialMocks.resolveAgentCredentialMapFromStore.mockReturnValue({
+      fireworks: { type: "api_key", key: "agent-key" },
+    });
+
+    const credentials = resolveAgentCredentialsForDiscovery("/tmp/openclaw-agent", {
+      ambientCredentials: {
+        fireworks: { type: "api_key", key: "ambient-key" },
+        "claude-cli": { type: "api_key", key: "synthetic-key" },
+      },
+      env: {},
+      readOnly: true,
+    });
+
+    expect(credentials).toEqual({
+      fireworks: { type: "api_key", key: "agent-key" },
+      "claude-cli": { type: "api_key", key: "synthetic-key" },
+    });
+    expect(discoveryCoreMocks.addEnvBackedAgentCredentials).not.toHaveBeenCalled();
+    expect(syntheticAuthMocks.resolveRuntimeSyntheticAuthProviderRefs).not.toHaveBeenCalled();
+    expect(syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
   });
 
   it("can skip runtime external auth overlays and scope synthetic auth discovery", () => {
@@ -106,6 +126,9 @@ describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
     expect(syntheticAuthMocks.resolveRuntimeSyntheticAuthProviderRefs).not.toHaveBeenCalled();
     expect(syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith({
       provider: "fireworks",
+      config: undefined,
+      workspaceDir: undefined,
+      env: {},
       context: {
         config: undefined,
         provider: "fireworks",
@@ -113,4 +136,29 @@ describe("resolveAgentCredentialsForDiscovery external CLI scoping", () => {
       },
     });
   });
+
+  it.each(["oauth", "token"] as const)(
+    "skips synthetic api-key fills under a %s provider pin",
+    (auth) => {
+      syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue({
+        apiKey: "synthetic-key",
+      });
+      const cfg = {
+        models: {
+          providers: {
+            fireworks: { auth, baseUrl: "https://example.invalid", models: [] },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      const credentials = resolveAgentCredentialsForDiscovery("/tmp/openclaw-agent", {
+        config: cfg,
+        env: {},
+        syntheticAuthProviderRefs: ["fireworks"],
+      });
+
+      expect(credentials.fireworks).toBeUndefined();
+      expect(syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
+    },
+  );
 });

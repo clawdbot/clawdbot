@@ -20,16 +20,26 @@ import {
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import {
+  isCodexAlreadyTerminalInterruptError,
+  retireUnsafeCodexTurnClientBestEffort,
+  unsubscribeCodexThreadBestEffort,
+} from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import {
   requireCodexSupervisionModelSelection,
   resolveCodexBindingAppServerConnection,
 } from "./binding-connection.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
-import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
+import {
+  isCodexAppServerApprovalRequest,
+  isCodexAppServerIndeterminateRequestCancellationError,
+  type CodexAppServerClient,
+} from "./client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   readCodexPluginConfig,
+  resolveCodexAppServerHomeScope,
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexModelBackedReviewerPolicyContext,
   shouldAutoApproveCodexAppServerApprovals,
@@ -199,6 +209,7 @@ export async function runCodexAppServerSideQuestion(
         authProfileId: preparedRuntimeAuth.plan.forwardedAuthProfileId,
         authProfileStore: preparedRuntimeAuth.authProfileStore,
         agentDir: params.agentDir,
+        homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
         config: params.cfg,
         subscriptionProfileRequiredError:
           "Prepared Codex subscription route requires a scoped native OAuth or token profile.",
@@ -657,31 +668,39 @@ export async function runCodexAppServerSideQuestion(
           readCodexSupportedReasoningEfforts(params.runtimeModel?.compat),
         );
     const turnResponse = assertCodexTurnStartResponse(
-      await client.request(
-        "turn/start",
-        {
-          threadId: childThreadId,
-          input: [{ type: "text", text: params.question.trim(), text_elements: [] }],
-          cwd,
-          model: modelSelection.model,
-          ...(usesSupervisionConnection ? {} : { personality: CODEX_NATIVE_PERSONALITY_NONE }),
-          ...(serviceTier ? { serviceTier } : {}),
-          ...(usesSupervisionConnection
-            ? {}
-            : {
-                effort,
-                collaborationMode: {
-                  mode: "default" as const,
-                  settings: {
-                    model: modelSelection.model,
-                    reasoning_effort: effort,
-                    developer_instructions: null,
+      await client
+        .request(
+          "turn/start",
+          {
+            threadId: childThreadId,
+            input: [{ type: "text", text: params.question.trim(), text_elements: [] }],
+            cwd,
+            model: modelSelection.model,
+            ...(usesSupervisionConnection ? {} : { personality: CODEX_NATIVE_PERSONALITY_NONE }),
+            ...(serviceTier ? { serviceTier } : {}),
+            ...(usesSupervisionConnection
+              ? {}
+              : {
+                  effort,
+                  collaborationMode: {
+                    mode: "default" as const,
+                    settings: {
+                      model: modelSelection.model,
+                      reasoning_effort: effort,
+                      developer_instructions: null,
+                    },
                   },
-                },
-              }),
-        },
-        { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
-      ),
+                }),
+          },
+          { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
+        )
+        .catch((error: unknown) => {
+          if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
+            // Codex serializes an empty-id startup interrupt after this written turn/start.
+            turnId = "";
+          }
+          throw error;
+        }),
     );
     turnId = turnResponse.turn.id;
     collector.setTurn(childThreadId, turnId);
@@ -1117,7 +1136,7 @@ async function cleanupCodexSideThread(
   if (!params.threadId) {
     return;
   }
-  if (params.interrupt && params.turnId) {
+  if (params.interrupt && params.turnId !== undefined) {
     try {
       await client.request(
         "turn/interrupt",
@@ -1125,17 +1144,21 @@ async function cleanupCodexSideThread(
         { timeoutMs: params.timeoutMs },
       );
     } catch (error) {
-      embeddedAgentLog.debug("codex /btw side thread interrupt cleanup failed", { error });
+      if (!isCodexAlreadyTerminalInterruptError(error)) {
+        embeddedAgentLog.debug("codex /btw side thread interrupt cleanup failed", { error });
+        await retireUnsafeCodexTurnClientBestEffort(client, "side turn interrupt");
+        // An unconfirmed native turn must never lose its only visible subscription.
+        return;
+      }
     }
   }
-  try {
-    await client.request(
-      "thread/unsubscribe",
-      { threadId: params.threadId },
-      { timeoutMs: params.timeoutMs },
-    );
-  } catch (error) {
-    embeddedAgentLog.debug("codex /btw side thread unsubscribe cleanup failed", { error });
+  if (
+    !(await unsubscribeCodexThreadBestEffort(client, {
+      threadId: params.threadId,
+      timeoutMs: params.timeoutMs,
+    }))
+  ) {
+    await retireUnsafeCodexTurnClientBestEffort(client, "side thread unsubscribe");
   }
 }
 

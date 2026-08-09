@@ -3,9 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -63,16 +64,24 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  resetPluginRuntimeStateForTest();
-  if (fixtureRoot) {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
+  try {
+    resetPluginRuntimeStateForTest();
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+    if (stateDir) {
+      await fs.rm(path.join(stateDir, "canvas", "documents", "cv_test"), {
+        recursive: true,
+        force: true,
+      });
+    }
+  } finally {
+    vi.resetModules();
   }
-  if (stateDir) {
-    await fs.rm(path.join(stateDir, "canvas", "documents", "cv_test"), {
-      recursive: true,
-      force: true,
-    });
-  }
+});
+
+afterEach(() => {
+  __setFsSafeTestHooksForTest(undefined);
 });
 
 describe("loadWebMedia", () => {
@@ -450,6 +459,35 @@ describe("loadWebMedia", () => {
     ).rejects.toThrow(/dimensions exceed model image limits/i);
   });
 
+  it("renames opaque PNGs converted to JPEG across direct and local image owners", async () => {
+    const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+    const sourcePng = createLargeColorBlockPng(64);
+    const imageCompression = { models: [{ maxSidePx: 32, preferredSidePx: 32 }] };
+
+    const direct = await optimizeImageBufferForWebMedia({
+      buffer: sourcePng,
+      contentType: "image/png",
+      fileName: "portrait.png",
+      maxBytes: 1024 * 1024,
+      imageCompression,
+    });
+    const convertedPath = path.join(fixtureRoot, "portrait.png");
+    await fs.writeFile(convertedPath, sourcePng);
+    const loaded = await loadWebMedia(convertedPath, {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+      imageCompression,
+    });
+
+    for (const result of [direct, loaded]) {
+      expect(result.kind).toBe("image");
+      expect(result.contentType).toBe("image/jpeg");
+      expect(result.fileName).toBe("portrait.jpg");
+      expect(result.buffer.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+      expect(readJpegDimensions(result.buffer)).toEqual({ width: 32, height: 32 });
+    }
+  });
+
   it("applies model image maxBytes to the effective image cap", async () => {
     await expect(
       loadWebMediaRaw(tinyPngFile, {
@@ -536,6 +574,87 @@ describe("loadWebMedia", () => {
     });
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("rejects oversized local media before an unbounded file-handle read", async () => {
+    const maxBytes = 1024 * 1024;
+    const oversizedFile = path.join(fixtureRoot, "oversized.bin");
+    await fs.writeFile(oversizedFile, Buffer.alloc(maxBytes + 1));
+    let unboundedReadCalled = false;
+    __setFsSafeTestHooksForTest({
+      afterOpen: (filePath, handle) => {
+        if (filePath !== oversizedFile) {
+          return;
+        }
+        vi.spyOn(handle, "readFile").mockImplementation(async () => {
+          unboundedReadCalled = true;
+          throw new Error("unbounded read invoked");
+        });
+      },
+    });
+
+    await expect(
+      loadWebMediaRaw(oversizedFile, {
+        maxBytes,
+        localRoots: [fixtureRoot],
+      }),
+    ).rejects.toThrow("Media exceeds 1MB limit");
+    expect(unboundedReadCalled).toBe(false);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects local media when an allowed ancestor symlink retargets before open",
+    async () => {
+      const base = await fs.mkdtemp(path.join(fixtureRoot, "ancestor-race-"));
+      const allowedRoot = path.join(base, "allowed");
+      const insideDir = path.join(allowedRoot, "inside");
+      const outsideDir = path.join(base, "outside");
+      const aliasDir = path.join(allowedRoot, "slot");
+      const mediaPath = path.join(aliasDir, "image.png");
+      await fs.mkdir(insideDir, { recursive: true });
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(insideDir, "image.png"), TINY_PNG_BUFFER);
+      await fs.writeFile(
+        path.join(outsideDir, "image.png"),
+        createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 0 }),
+      );
+      await fs.symlink(insideDir, aliasDir);
+      __setFsSafeTestHooksForTest({
+        afterPreOpenLstat: async (filePath) => {
+          if (filePath !== mediaPath) {
+            return;
+          }
+          await fs.rm(aliasDir);
+          await fs.symlink(outsideDir, aliasDir);
+        },
+      });
+
+      try {
+        await expect(
+          loadWebMediaRaw(mediaPath, {
+            maxBytes: 1024 * 1024,
+            localRoots: [allowedRoot],
+            optimizeImages: false,
+          }),
+        ).rejects.toMatchObject({ code: "path-not-allowed" });
+      } finally {
+        await fs.rm(base, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("keeps the one-argument contract for custom local readers", async () => {
+    const maxBytes = 1024 * 1024;
+    const readFile = vi.fn(async (_filePath: string) => Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    await loadWebMediaRaw("/sandbox/image.png", {
+      maxBytes,
+      sandboxValidated: true,
+      readFile,
+    });
+
+    expect(readFile).toHaveBeenCalledWith("/sandbox/image.png");
+    expect(readFile.mock.calls[0]).toHaveLength(1);
   });
 
   it("does not treat image-named generic container bytes as local image media", async () => {
@@ -1305,6 +1424,48 @@ describe("loadWebMedia", () => {
       await fs.rm(filePath, { force: true });
     }
   });
+
+  // Swap at open 2 trips the hardlink guard (invalid-path); swap at open 3 trips
+  // the fs-safe pre-open identity re-check, an access denial (path-not-allowed).
+  it.runIf(process.platform !== "win32").each([
+    [2, "invalid-path"],
+    [3, "path-not-allowed"],
+  ] as const)(
+    "rejects an inbound media store URI swapped to a hardlink on guarded open %s",
+    async (swapOpen, expectedCode) => {
+      const id = `signal-hardlink-race-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`;
+      const filePath = path.join(stateDir, "media", "inbound", id);
+      const outsidePath = path.join(fixtureRoot, `${id}.outside`);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, "inside");
+      await fs.writeFile(outsidePath, "outside-secret");
+      let matchingOpens = 0;
+      __setFsSafeTestHooksForTest({
+        afterPreOpenLstat: async (openedPath) => {
+          if (path.basename(openedPath) !== id) {
+            return;
+          }
+          matchingOpens += 1;
+          if (matchingOpens !== swapOpen) {
+            return;
+          }
+          await fs.rm(filePath);
+          await fs.link(outsidePath, filePath);
+        },
+      });
+
+      try {
+        await expectLoadWebMediaErrorCode(
+          loadWebMediaRaw(`media://inbound/${id}`, { maxBytes: 1024 }),
+          expectedCode,
+        );
+        expect(matchingOpens).toBe(swapOpen);
+      } finally {
+        await fs.rm(filePath, { force: true });
+        await fs.rm(outsidePath, { force: true });
+      }
+    },
+  );
 
   it("accepts legacy MEDIA prefixes around inbound media store URIs", async () => {
     const id = `signal-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;

@@ -1,6 +1,7 @@
 // Qa Channel plugin module implements bus client behavior.
 import http from "node:http";
 import https from "node:https";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -48,6 +49,10 @@ type JsonResult<T> = Promise<T>;
 const QA_BUS_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 /** Total deadline for local qa-bus POST requests and long-poll response grace. */
 const QA_BUS_REQUEST_TIMEOUT_MS = 10_000;
+// Final replies can contend with CPU-heavy QA lanes on the shared release
+// runner. Keep delivery inside the outer turn budget without treating a brief
+// local scheduling stall as a channel failure.
+const QA_BUS_MESSAGE_REQUEST_TIMEOUT_MS = 30_000;
 /** Total deadline for local qa-bus state requests. */
 const QA_BUS_STATE_TIMEOUT_MS = 10_000;
 
@@ -120,7 +125,7 @@ async function postJson<T>(
             resolve(parsed as T);
           },
           (error: unknown) => {
-            reject(toLintErrorObject(error, "Non-Error rejection"));
+            reject(toErrorObject(error, "Non-Error rejection"));
           },
         );
         response.on("error", reject);
@@ -190,7 +195,9 @@ export async function sendQaBusMessage(params: {
   attachments?: import("./protocol.js").QaBusAttachment[];
   toolCalls?: QaBusToolCall[];
 }) {
-  return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params);
+  return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params, {
+    timeoutMs: QA_BUS_MESSAGE_REQUEST_TIMEOUT_MS,
+  });
 }
 
 export async function createQaBusThread(params: {
@@ -279,18 +286,4 @@ export async function getQaBusState(baseUrl: string): Promise<QaBusStateSnapshot
   } finally {
     await release();
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

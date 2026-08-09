@@ -17,8 +17,8 @@ import {
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export type JoinOptions = {
-  transport?: GoogleMeetTransport;
-  mode?: GoogleMeetModeInput;
+  transport?: string;
+  mode?: string;
   message?: string;
   timeoutMs?: string;
   dialInNumber?: string;
@@ -122,8 +122,8 @@ export type GoogleMeetExportManifest = {
 
 export type SetupOptions = {
   json?: boolean;
-  mode?: GoogleMeetModeInput;
-  transport?: GoogleMeetTransport;
+  mode?: string;
+  transport?: string;
 };
 
 type GoogleMeetGatewayMethod =
@@ -158,7 +158,7 @@ export type JsonOptions = {
 };
 
 export type RecoverTabOptions = JsonOptions & {
-  transport?: GoogleMeetTransport;
+  transport?: string;
 };
 
 export type CreateOptions = {
@@ -170,14 +170,46 @@ export type CreateOptions = {
   accessType?: string;
   entryPointAccess?: string;
   join?: boolean;
-  transport?: GoogleMeetTransport;
-  mode?: GoogleMeetModeInput;
+  transport?: string;
+  mode?: string;
   message?: string;
   dialInNumber?: string;
   pin?: string;
   dtmfSequence?: string;
   json?: boolean;
 };
+
+export function parseGoogleMeetMode(value: string | undefined): GoogleMeetModeInput | undefined {
+  if (
+    value === undefined ||
+    value === "agent" ||
+    value === "bidi" ||
+    value === "transcribe" ||
+    value === "realtime"
+  ) {
+    return value;
+  }
+  throw new Error(`mode must be agent, bidi, transcribe, or realtime; received ${value}`);
+}
+
+export function parseGoogleMeetTransport(
+  value: string | undefined,
+): GoogleMeetTransport | undefined {
+  if (value === undefined || value === "chrome" || value === "chrome-node" || value === "twilio") {
+    return value;
+  }
+  throw new Error(`transport must be chrome, chrome-node, or twilio; received ${value}`);
+}
+
+export function parseGoogleMeetBrowserTransport(
+  value: string | undefined,
+): "chrome" | "chrome-node" | undefined {
+  const transport = parseGoogleMeetTransport(value);
+  if (transport === "twilio") {
+    throw new Error(`transport must be chrome or chrome-node; received ${value}`);
+  }
+  return transport;
+}
 
 export function writeStdoutJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -371,10 +403,10 @@ export function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["
     writeStdoutLine("captioning: %s", formatBoolean(health?.captioning));
     writeStdoutLine("transcript lines: %s", health?.transcriptLines ?? 0);
     writeStdoutLine("last caption: %s", formatOptional(health?.lastCaptionAt));
-    writeStdoutLine("manual action: %s", formatBoolean(health?.manualActionRequired));
-    if (health?.manualActionRequired) {
-      writeStdoutLine("manual reason: %s", formatOptional(health.manualActionReason));
-      writeStdoutLine("manual message: %s", formatOptional(health.manualActionMessage));
+    writeStdoutLine("manual action: %s", formatBoolean(Boolean(health?.manualAction)));
+    if (health?.manualAction) {
+      writeStdoutLine("manual reason: %s", formatOptional(health.manualAction.reason));
+      writeStdoutLine("manual message: %s", formatOptional(health.manualAction.message));
     }
     writeStdoutLine("speech ready: %s", formatBoolean(health?.speechReady));
     if (health?.speechReady === false) {
@@ -451,7 +483,6 @@ export function writeRecoverCurrentTabResult(
             : "signed-in Google Chrome profile",
         realtime: { enabled: false, toolPolicy: "safe-read-only" },
         chrome: {
-          audioBackend: "blackhole-2ch",
           launched: true,
           nodeId: result.nodeId,
           health: result.browser,

@@ -1,9 +1,13 @@
 // Telegram plugin module implements targets behavior.
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 
 export type TelegramTarget = {
   chatId: string;
   messageThreadId?: number;
+  directMessagesTopicId?: number;
   chatType: "direct" | "group" | "unknown";
 };
 
@@ -49,7 +53,7 @@ export function isNumericTelegramChatId(raw: string): boolean {
 
 export function normalizeTelegramOutboundTarget(raw: string): string {
   const trimmed = raw.trim();
-  const legacyGroupMatch = /^group:(-?\d+(?::topic:\d+|:\d+)?)$/i.exec(trimmed);
+  const legacyGroupMatch = /^group:(-?\d+(?::(?:direct-topic|topic):\d+|:\d+)?)$/i.exec(trimmed);
   if (legacyGroupMatch?.[1]) {
     return legacyGroupMatch[1];
   }
@@ -88,6 +92,7 @@ export function normalizeTelegramLookupTarget(raw: string): string | undefined {
  * - `chatId` (plain chat ID, t.me link, @username, or internal prefixes like `telegram:...`)
  * - `chatId:topicId` (numeric topic/thread ID)
  * - `chatId:topic:topicId` (explicit topic marker; preferred)
+ * - `chatId:direct-topic:topicId` (channel Direct Messages topic)
  */
 function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown" {
   const trimmed = chatId.trim();
@@ -102,49 +107,29 @@ function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown"
 
 export function parseTelegramTarget(to: string): TelegramTarget {
   const normalized = stripTelegramInternalPrefixes(to);
-
-  const topicMatch = /^(.+?):topic:(\d+)$/.exec(normalized);
-  if (topicMatch) {
-    const chatId = topicMatch[1];
-    const threadIdText = topicMatch[2];
-    if (chatId === undefined || threadIdText === undefined) {
-      return { chatId: normalized, chatType: resolveTelegramChatType(normalized) };
+  const directMatch = /^(.+?):direct-topic:(\d+)$/.exec(normalized);
+  if (directMatch) {
+    const chatId = directMatch[1];
+    const topicIdText = directMatch[2];
+    if (chatId !== undefined && topicIdText !== undefined) {
+      const directMessagesTopicId = parseStrictPositiveInteger(topicIdText);
+      if (directMessagesTopicId !== undefined) {
+        return { chatId, directMessagesTopicId, chatType: resolveTelegramChatType(chatId) };
+      }
     }
-    const messageThreadId = parseStrictNonNegativeInteger(threadIdText);
-    if (messageThreadId === undefined) {
-      return {
-        chatId: normalized,
-        chatType: resolveTelegramChatType(normalized),
-      };
-    }
-    return {
-      chatId,
-      messageThreadId,
-      chatType: resolveTelegramChatType(chatId),
-    };
+    return { chatId: normalized, chatType: "unknown" };
   }
-
-  const colonMatch = /^(.+):(\d+)$/.exec(normalized);
-  if (colonMatch) {
-    const chatId = colonMatch[1];
-    const threadIdText = colonMatch[2];
-    if (chatId === undefined || threadIdText === undefined) {
-      return { chatId: normalized, chatType: resolveTelegramChatType(normalized) };
+  const match = /^(.+?):topic:(\d+)$/.exec(normalized) ?? /^(.+):(\d+)$/.exec(normalized);
+  if (match) {
+    const chatId = match[1];
+    const threadIdText = match[2];
+    if (chatId !== undefined && threadIdText !== undefined) {
+      const messageThreadId = parseStrictNonNegativeInteger(threadIdText);
+      if (messageThreadId !== undefined) {
+        return { chatId, messageThreadId, chatType: resolveTelegramChatType(chatId) };
+      }
     }
-    const messageThreadId = parseStrictNonNegativeInteger(threadIdText);
-    if (messageThreadId === undefined) {
-      return {
-        chatId: normalized,
-        chatType: resolveTelegramChatType(normalized),
-      };
-    }
-    return {
-      chatId,
-      messageThreadId,
-      chatType: resolveTelegramChatType(chatId),
-    };
   }
-
   return {
     chatId: normalized,
     chatType: resolveTelegramChatType(normalized),
