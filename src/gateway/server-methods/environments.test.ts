@@ -20,7 +20,10 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
 
 const NOW = 10_000;
 
-type TestWorkerRecord = WorkerEnvironmentRecord & { tunnelStatus: WorkerTunnelStatus };
+type TestWorkerRecord = WorkerEnvironmentRecord & {
+  tunnelStatus: WorkerTunnelStatus;
+  error?: string;
+};
 
 type TestWorkerService = {
   list: () => TestWorkerRecord[];
@@ -256,6 +259,21 @@ describe("environment gateway methods", () => {
     ["orphaned", "error"],
   ] as const)("maps worker state %s to %s", (state, status) => {
     expect(summarizeWorkerEnvironment(workerRecord({ state }), NOW).status).toBe(status);
+  });
+
+  it("projects recorded errors only for terminal error states", () => {
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ state: "failed", error: "provider teardown failed" }),
+        NOW,
+      ).worker,
+    ).toMatchObject({ error: "provider teardown failed" });
+    expect(
+      summarizeWorkerEnvironment(
+        workerRecord({ state: "ready", error: "stale transient error" }),
+        NOW,
+      ).worker,
+    ).not.toHaveProperty("error");
   });
 
   it("returns status for one node environment", async () => {

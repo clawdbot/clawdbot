@@ -69,6 +69,9 @@ function sessionMenuActionDisabledReasons(
     requiredScope: "operator.write",
   });
   const deleteRows = batchRows ?? [session];
+  const cloudWorkerStopReason = session.cloudWorkerStopAction
+    ? reason(session.cloudWorkerStopAction)
+    : undefined;
   const deleteReason = deleteRows
     .map((row) =>
       reason({
@@ -104,14 +107,7 @@ function sessionMenuActionDisabledReasons(
                 }),
               }
             : {}),
-          ...(reason({ method: "sessions.reclaim", requiredScope: "operator.admin" })
-            ? {
-                "stop-cloud-worker": reason({
-                  method: "sessions.reclaim",
-                  requiredScope: "operator.admin",
-                }),
-              }
-            : {}),
+          ...(cloudWorkerStopReason ? { "stop-cloud-worker": cloudWorkerStopReason } : {}),
         }),
   };
 }
@@ -248,6 +244,14 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
   const sharedCategory = rows.every((row) => (row.category ?? null) === (rows[0]?.category ?? null))
     ? (rows[0]?.category ?? null)
     : null;
+  const cloudWorkerStopAction = session.cloudWorkerStopAction;
+  const cloudWorkerStopAllowed = Boolean(
+    !batchRows &&
+    cloudWorkerStopAction &&
+    (cloudWorkerStopAction.method !== "sessions.reclaim" || !session.hasActiveRun) &&
+    context &&
+    isGatewayMethodAdvertised(context.gateway.snapshot, cloudWorkerStopAction.method) === true,
+  );
   return keyed(
     menu,
     html`
@@ -272,13 +276,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         )}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
         .archiveAllowed=${archiveAllowed}
-        .cloudWorkerStopAllowed=${Boolean(
-          !batchRows &&
-          session.cloudWorkerActive &&
-          !session.hasActiveRun &&
-          context &&
-          isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.reclaim") === true,
-        )}
+        .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${host.knownSessionGroups()}
         .canOpenChat=${true}
         .work=${batchRows ? null : controller.sessionMenuWork}

@@ -607,11 +607,11 @@ export const handleNodeEvent = async (
             isConnectionCurrent: opts?.isConnectionCurrent,
           });
 
-          // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
-          // This maps agent bus events (keyed by per-turn runId) to chat events (keyed by clientRunId).
+          // Voice now has a unique per-turn run id, so it is also the stable
+          // client identity for chat streaming and abort lifecycle ownership.
           ctx.addChatRun(runId, {
             sessionKey: canonicalKey,
-            clientRunId: `voice-${randomUUID()}`,
+            clientRunId: runId,
           });
         },
       });

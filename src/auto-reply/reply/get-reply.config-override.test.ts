@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 registerGetReplyRuntimeOverrides(mocks);
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadResolvedPublishedModelCatalogOwner: mocks.loadResolvedPublishedModelCatalogOwner,
 }));
 

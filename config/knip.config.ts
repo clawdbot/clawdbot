@@ -108,6 +108,8 @@ const rootEntries = [
   "src/entry.ts!",
   // Built as the official image's Docker HEALTHCHECK entrypoint.
   "src/docker-healthcheck.ts!",
+  // Uploaded in the worker bundle and launched by rsync; no static host import exists.
+  "src/worker/workspace-rsync-receiver.ts!",
   // Shipped compatibility facade for statusCommand and getStatusSummary.
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
@@ -277,6 +279,8 @@ const rootToolingAndWorkspaceDependencies = [
   "oxlint",
   "oxlint-tsgolint",
   "signal-utils",
+  // Root declaration builds compile terminal-core source and resolve this package from root.
+  "string-width",
 ] as const;
 
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {

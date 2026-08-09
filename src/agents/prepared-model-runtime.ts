@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
+import { createPublishedGatewayInboundPluginRegistryLoader } from "./prepared-model-runtime.inbound-registry.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimeOwnerRetention,
@@ -20,6 +21,7 @@ import {
   publishPreparedModelRuntimeOwnerBatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
+  resolveConfiguredOwnerByAgentId,
   resolvePublishedOwner,
   toError,
   type PreparedModelRuntimeOwner,
@@ -66,6 +68,16 @@ type PreparedModelRuntimePublicationEvent =
   | { phase: "invalidated" | "published" }
   | { phase: "failed"; error: Error };
 const publicationListeners = new Set<(event: PreparedModelRuntimePublicationEvent) => void>();
+
+export const loadPublishedGatewayInboundPluginRegistry =
+  createPublishedGatewayInboundPluginRegistryLoader({
+    isGatewayLifecycleActive: () => gatewayLifecycleActive,
+    getPendingReplacement: () => pendingModelRuntimeReplacement?.promise,
+    resolveConfiguredOwner: (agentId) => resolveConfiguredOwnerByAgentId(owners, agentId),
+    getPublishedSnapshot: (owner) =>
+      owner.snapshot && !owner.needsRefresh && !owner.pending ? owner.snapshot : undefined,
+    prepareSnapshot: (owner) => prepareModelRuntimeSnapshot(owner.input),
+  });
 
 /** Observes committed prepared model/auth generations without starting discovery. */
 export function registerPreparedModelRuntimePublicationListener(

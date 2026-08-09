@@ -493,7 +493,9 @@ describe("worker live events", () => {
 
   it.each([RUN, "run-sibling"])("resyncs after a swept context before %s", (runId) => {
     ack(msg(1, "before"));
-    expect(sweepStaleRunContexts(-1)).toBe(1);
+    expect(getAgentRunContext(RUN)).toBeDefined();
+    sweepStaleRunContexts(-1);
+    expect(getAgentRunContext(RUN)).toBeUndefined();
     fail(msg(2, "stale", 1, runId), "resync-required");
     ack(msg(1, "fresh", 0, runId));
     expect(deltas()).toEqual(["before", "fresh"]);

@@ -23,6 +23,10 @@ import {
   restoreBuildAllStepCacheOutputs,
   writeBuildAllStepCacheStamp,
 } from "../../scripts/build-all.mjs";
+import {
+  listPluginSdkDeclarationOutputs,
+  pluginSdkEntrypoints,
+} from "../../scripts/lib/plugin-sdk-entries.mjs";
 
 function getBuildAllStep(label: string) {
   const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
@@ -58,6 +62,7 @@ function withBuildCacheFixture(
               recursive?: boolean;
             }
         >;
+        requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
         restore?: "always";
         runOnHit?: {
           env?: NodeJS.ProcessEnv;
@@ -383,6 +388,18 @@ describe("resolveBuildAllSteps", () => {
         }),
       ]),
     );
+    const requiredOutputs = unified.cache?.requiredOutputs;
+    if (typeof requiredOutputs !== "function") {
+      throw new Error("Missing tsdown-unified required output resolver");
+    }
+    const productionOutputs = requiredOutputs({});
+    const privateQaOutputs = requiredOutputs({ OPENCLAW_BUILD_PRIVATE_QA: "1" });
+    expect(productionOutputs).toEqual(listPluginSdkDeclarationOutputs());
+    expect(privateQaOutputs).toEqual(listPluginSdkDeclarationOutputs(pluginSdkEntrypoints));
+    expect(productionOutputs).toContain("dist/plugin-sdk/core.d.ts");
+    expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
+    expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");
+    expect(privateQaOutputs).toContain("dist/plugin-sdk/test-fixtures.d.ts");
   });
 
   it("uses a runtime artifact plus plugin SDK export profile for ci artifacts", () => {
@@ -863,6 +880,67 @@ describe("resolveBuildAllStepCacheState", () => {
         signature: fresh.signature,
         stampedOutputs: ["dist/output.js"],
         stampPath: fresh.stampPath,
+      });
+    });
+  });
+
+  it("rejects a matching legacy stamp that omits a required output", () => {
+    withBuildCacheFixture(({ rootDir, step }) => {
+      const legacyState = resolveBuildAllStepCacheState(step, { rootDir });
+      writeBuildAllStepCacheStamp(step, legacyState, { rootDir });
+      const legacyStamp = JSON.parse(fs.readFileSync(legacyState.stampPath!, "utf8"));
+      expect(legacyStamp).toMatchObject({
+        version: 4,
+        signature: legacyState.signature,
+        outputs: ["dist/output.js"],
+      });
+      fs.rmSync(path.join(rootDir, "dist"), { force: true, recursive: true });
+
+      const completeStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          requiredOutputs: ["dist/output.js", "dist/plugin-sdk/core.d.ts"],
+          restore: "always" as const,
+        },
+      };
+      const stale = resolveBuildAllStepCacheState(completeStep, { rootDir });
+
+      expect(stale).toMatchObject({
+        fresh: false,
+        reason: "stale",
+        restorable: false,
+        signature: legacyState.signature,
+        stampedOutputs: ["dist/output.js"],
+      });
+      expect(restoreBuildAllStepCacheOutputs(stale, { rootDir })).toBe(false);
+    });
+  });
+
+  it("does not replace a cache stamp from incomplete current outputs", () => {
+    withBuildCacheFixture(({ rootDir, outputPath, step }) => {
+      const initialState = resolveBuildAllStepCacheState(step, { rootDir });
+      writeBuildAllStepCacheStamp(step, initialState, { rootDir });
+      const stampBefore = fs.readFileSync(initialState.stampPath!, "utf8");
+      const cachedOutputPath = path.join(initialState.outputRoot!, "dist/output.js");
+      expect(fs.readFileSync(cachedOutputPath, "utf8")).toBe("output");
+
+      fs.writeFileSync(outputPath, "incomplete refresh");
+      const completeStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          requiredOutputs: ["dist/output.js", "dist/plugin-sdk/core.d.ts"],
+        },
+      };
+      const incompleteState = resolveBuildAllStepCacheState(completeStep, { rootDir });
+      expect(finalizeBuildAllStepCache(completeStep, incompleteState, { rootDir })).toBe(true);
+
+      expect(fs.readFileSync(initialState.stampPath!, "utf8")).toBe(stampBefore);
+      expect(fs.readFileSync(cachedOutputPath, "utf8")).toBe("output");
+      expect(resolveBuildAllStepCacheState(completeStep, { rootDir })).toMatchObject({
+        fresh: false,
+        reason: "stale",
       });
     });
   });

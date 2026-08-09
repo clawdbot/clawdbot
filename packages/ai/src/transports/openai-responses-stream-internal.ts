@@ -48,6 +48,7 @@ import {
   type ResponsesThinkingBlock,
   type TextBlockReference,
 } from "./openai-responses-stream-terminal-internal.js";
+import { transportAbortError } from "./transport-stream-shared.js";
 
 type ResponsesConsumedEventType =
   | "error"
@@ -712,6 +713,11 @@ export async function processResponsesStream<TApi extends Api>(
         }
         throw new ResponsesStreamFailure(failure, event.response);
       }
+    }
+    // openai-node turns an aborted SSE iterator into normal completion; preserve
+    // the caller's authoritative reason before classifying terminal stream state.
+    if (options?.signal?.aborted) {
+      throw transportAbortError(options.signal);
     }
     if (streamingToolCalls.hasActive()) {
       throw new Error("Responses stream ended with unresolved tool calls");

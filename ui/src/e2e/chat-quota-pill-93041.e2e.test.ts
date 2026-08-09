@@ -18,18 +18,38 @@ const authStatusWithUsage = {
   providers: [
     {
       provider: "openai",
-      displayName: "Codex",
+      displayName: "OpenAI",
       status: "ok",
       profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
       usage: {
         providerId: "openai",
-        windows: [
-          { label: "5h", usedPercent: 42, resetAt: Date.now() + 3 * 3_600_000 },
-          { label: "Week", usedPercent: 71, resetAt: Date.now() + 4 * 86_400_000 },
-        ],
+        windows: [{ label: "Week", usedPercent: 71, resetAt: Date.now() + 4 * 86_400_000 }],
       },
     },
   ],
+};
+
+const gatewayInjectedSessions = {
+  count: 1,
+  defaults: { contextTokens: 200_000, model: "gateway-injected", modelProvider: "openclaw" },
+  path: "",
+  sessions: [
+    {
+      contextTokens: 200_000,
+      displayName: "Main",
+      hasActiveRun: false,
+      key: "main",
+      kind: "direct",
+      label: "Main",
+      model: "gateway-injected",
+      modelProvider: "openclaw",
+      status: "done",
+      totalTokens: 46_000,
+      totalTokensFresh: true,
+      updatedAt: Date.now(),
+    },
+  ],
+  ts: Date.now(),
 };
 
 const claudeSubscriptionAuthStatus = {
@@ -89,6 +109,7 @@ const claudeSubscriptionSessions = {
 async function openChat(
   authStatus: unknown,
   extraMethodResponses: Record<string, unknown> = {},
+  deferredMethods: string[] = [],
 ): Promise<{
   context: BrowserContext;
   page: Page;
@@ -104,6 +125,7 @@ async function openChat(
     page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const gateway = await installMockGateway(page, {
+      deferredMethods,
       methodResponses: { "models.authStatus": authStatus, ...extraMethodResponses },
     });
     await page.goto(`${suite.server.baseUrl}chat`);
@@ -123,7 +145,9 @@ async function closeChat(fixture: { context: BrowserContext; page: Page }): Prom
 
 suite.define(() => {
   it("renders provider usage inside the desktop context popover", async () => {
-    const fixture = await openChat(authStatusWithUsage);
+    const fixture = await openChat(authStatusWithUsage, {
+      "sessions.list": gatewayInjectedSessions,
+    });
     const { page } = fixture;
     try {
       const contextRing = page.locator(".context-ring");
@@ -140,8 +164,17 @@ suite.define(() => {
       expect(await usageLink.getAttribute("href")).toBe("/usage");
       const rows = await page.locator(".context-usage__limit").allTextContents();
       const normalized = rows.map((row) => row.replace(/\s+/g, " ").trim());
-      expect(normalized[0]).toMatch(/^5-hour limit Resets .+ 42%$/);
-      expect(normalized[1]).toMatch(/^Weekly · all models Resets .+ 71%$/);
+      expect(normalized).toHaveLength(1);
+      expect(normalized[0]).toMatch(/^Weekly Resets .+ 71%$/);
+      expect(
+        (await page.locator('[data-chat-usage-provider="true"]').textContent())
+          ?.replace(/\s+/g, " ")
+          .trim(),
+      ).toBe("Provider: OpenAI");
+      const popoverText = (await page.locator(".context-usage__popover").textContent()) ?? "";
+      expect(popoverText).not.toContain("openclaw");
+      expect(popoverText).not.toContain("gateway-injected");
+      expect(popoverText).not.toContain("Model:");
     } finally {
       await closeChat(fixture);
     }
@@ -165,7 +198,7 @@ suite.define(() => {
       const rows = await page.locator(".context-usage__limit").allTextContents();
       const normalized = rows.map((row) => row.replace(/\s+/g, " ").trim());
       expect(normalized[0]).toMatch(/^5-hour limit Resets .+ 22%$/);
-      expect(normalized[1]).toMatch(/^Weekly · all models Resets .+ 25%$/);
+      expect(normalized[1]).toMatch(/^Weekly Resets .+ 25%$/);
       expect(normalized[2]).toBe("Fable 45%");
       expect(normalized[3]).toBe("Usage credits $157.85 of $400.00");
 
@@ -179,10 +212,14 @@ suite.define(() => {
   });
 
   it("shows no plan usage when no provider usage windows are present", async () => {
-    const fixture = await openChat({ ts: baseTime, providers: [] });
+    const fixture = await openChat(
+      { ts: baseTime, providers: [] },
+      { "sessions.list": gatewayInjectedSessions },
+    );
     const { page } = fixture;
     try {
-      await page.locator(".agent-chat__composer-controls").first().waitFor({ state: "visible" });
+      const contextRing = page.locator(".context-ring");
+      await contextRing.waitFor({ state: "visible" });
       await page.waitForFunction(() => {
         const pane = document.querySelector("openclaw-chat-pane") as
           | (HTMLElement & {
@@ -191,7 +228,42 @@ suite.define(() => {
           | null;
         return Array.isArray(pane?.state?.modelAuthStatusResult?.providers);
       });
+      await contextRing.click();
+      const popover = page.locator(".context-usage__popover");
+      await popover.waitFor({ state: "visible" });
+      await popover.screenshot({ path: path.join(artifactDir, "04-usage-unavailable.png") });
       expect(await page.locator('[data-chat-provider-usage="true"]').count()).toBe(0);
+      const popoverText = (await popover.textContent()) ?? "";
+      expect(popoverText).not.toContain("openclaw");
+      expect(popoverText).not.toContain("gateway-injected");
+      expect(popoverText).not.toContain("Model:");
+    } finally {
+      await closeChat(fixture);
+    }
+  });
+
+  it("does not expose session routing metadata while plan usage is loading", async () => {
+    // Sidebar attention and the chat pane each request auth status at startup.
+    // Hold both so the popover is observed before any quota snapshot arrives.
+    const fixture = await openChat(
+      authStatusWithUsage,
+      { "sessions.list": gatewayInjectedSessions },
+      ["models.authStatus", "models.authStatus"],
+    );
+    const { page } = fixture;
+    try {
+      const contextRing = page.locator(".context-ring");
+      await contextRing.waitFor({ state: "visible" });
+      await contextRing.click();
+      const popover = page.locator(".context-usage__popover");
+      await popover.waitFor({ state: "visible" });
+      await popover.screenshot({ path: path.join(artifactDir, "05-usage-loading.png") });
+
+      expect(await page.locator('[data-chat-provider-usage="true"]').count()).toBe(0);
+      const popoverText = (await popover.textContent()) ?? "";
+      expect(popoverText).not.toContain("openclaw");
+      expect(popoverText).not.toContain("gateway-injected");
+      expect(popoverText).not.toContain("Model:");
     } finally {
       await closeChat(fixture);
     }

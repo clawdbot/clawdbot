@@ -1,9 +1,37 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { PendingCloudRecoveryState } from "./cloud-recovery-state.ts";
-import { readCloudSessionRecovery } from "./cloud-recovery.ts";
+import {
+  PendingCloudRecoveryState,
+  resolveSubmissionOutcomeReason,
+} from "./cloud-recovery-state.ts";
+import { readCloudSessionRecovery, writeCloudSessionRecovery } from "./cloud-recovery.ts";
 
 describe("pending cloud recovery state", () => {
   beforeEach(() => sessionStorage.clear());
+
+  it.each([
+    {
+      name: "a replacement Gateway",
+      gatewayIdentityChanged: true,
+      cloudDraftOwned: true,
+      expected: "gateway-changed",
+    },
+    {
+      name: "a normal local submission",
+      gatewayIdentityChanged: false,
+      cloudDraftOwned: false,
+      expected: "gateway-changed",
+    },
+    {
+      name: "an interrupted cloud draft",
+      gatewayIdentityChanged: false,
+      cloudDraftOwned: true,
+      expected: "cloud-interrupted",
+    },
+  ])("classifies $name accurately", ({ expected, gatewayIdentityChanged, cloudDraftOwned }) => {
+    expect(resolveSubmissionOutcomeReason({ gatewayIdentityChanged, cloudDraftOwned })).toBe(
+      expected,
+    );
+  });
 
   it("stages an idempotent create before the Gateway request", () => {
     const pending = new PendingCloudRecoveryState();
@@ -129,5 +157,36 @@ describe("pending cloud recovery state", () => {
     });
     expect(captured?.attachments).not.toBe(pending.attachments);
     expect(captured?.createParams).not.toBe(pending.createParams);
+  });
+
+  it("neutralizes a stale local owner without clearing newer durable recovery", () => {
+    const pending = new PendingCloudRecoveryState();
+    expect(
+      pending.stageCreate({
+        agentId: "cloud",
+        profileId: "aws",
+        message: "stale task",
+        gatewayUrl: "ws://gateway.example",
+        recoveryScope: "principal-a",
+        createParams: { agentId: "cloud", message: "", worktree: true },
+      }),
+    ).not.toBeNull();
+    const staleKey = pending.sessionKey;
+    const newerRecovery = {
+      sessionKey: "agent:cloud:newer",
+      messageId: "message-newer",
+      message: "newer task",
+      profileId: "aws",
+      agentId: "cloud",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      phase: "dispatching" as const,
+    };
+    expect(writeCloudSessionRecovery(newerRecovery)).toBe(true);
+
+    pending.clearFor("ws://gateway.example", "principal-a", staleKey);
+
+    expect(pending.sessionKey).toBe("");
+    expect(readCloudSessionRecovery("ws://gateway.example", "principal-a")).toEqual(newerRecovery);
   });
 });

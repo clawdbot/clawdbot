@@ -492,6 +492,12 @@ Enabling browser control gives the model a real browser. If that profile already
   window. This temporarily accepts old Bearer, Basic, and token-subprotocol
   relay clients. Update every relay client, then set it to `false`. V2 clients
   never downgrade after a failed proof or unsupported response.
+- Chrome extension pairing stores its access mode in extension-owned Chrome
+  storage, not Gateway config. **All tabs** exposes every eligible ordinary tab
+  in that Chrome profile except session-paused tabs; **Selected tabs** uses the
+  OpenClaw tab group as its ACL. Existing pairings migrate to **Selected tabs**,
+  while new personal-browser pairings recommend **All tabs**. Incognito and
+  internal Chrome pages remain excluded in either mode.
 - Run a **node host** on the browser machine and let the Gateway proxy browser actions when the Gateway is remote from the browser (see [Browser tool](/tools/browser)); treat node pairing like admin access, keep Gateway and node host on the same tailnet, and avoid exposing relay/control ports over LAN, public internet, or Tailscale Funnel.
 
 ### Browser SSRF policy (strict by default)

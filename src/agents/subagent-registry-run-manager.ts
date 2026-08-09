@@ -388,7 +388,9 @@ export function createSubagentRunManager(params: {
       const waitTerminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(wait);
       const waitBlocked = waitTerminalOutcome?.reason === "blocked";
       const waitAborted =
-        waitTerminalOutcome?.reason === "aborted" || waitTerminalOutcome?.reason === "cancelled";
+        waitTerminalOutcome?.reason === "aborted" ||
+        waitTerminalOutcome?.reason === "cancelled" ||
+        waitTerminalOutcome?.reason === "superseded";
       const waitStatus = waitTerminalOutcome?.status ?? wait.status;
       if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
         params.clearPendingLifecycleError(runId);

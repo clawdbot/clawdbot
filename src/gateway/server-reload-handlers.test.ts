@@ -760,6 +760,7 @@ function createManagedRestartSequenceHarness(
   const requestRecoveryRestart = vi.fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>(
     () => ({ status: "emitted" }),
   );
+  const assertRestartReady = vi.fn(async () => {});
   const sharedGatewaySessionGenerationState = { current: undefined, required: null };
   let generationInvalidated = false;
   const reloader = startManagedGatewayConfigReloader({
@@ -789,6 +790,7 @@ function createManagedRestartSequenceHarness(
     acceptTerminalConfig: terminalPolicy.acceptConfig,
     sharedGatewaySessionGenerationState,
     requestRecoveryRestart,
+    assertRestartReady,
   });
   const writeConfig = (
     config: OpenClawConfig,
@@ -811,6 +813,7 @@ function createManagedRestartSequenceHarness(
 
   return {
     activateRuntimeSecrets,
+    assertRestartReady,
     deferredConfig,
     initialConfig,
     invalidConfig,
@@ -4329,13 +4332,15 @@ describe("gateway Gmail hot reload handlers", () => {
       hoisted.activeTaskBlockers.length = 0;
       await vi.advanceTimersByTimeAsync(500);
       expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(harness.assertRestartReady).toHaveBeenCalledOnce();
       expect(harness.logReload.warn).toHaveBeenCalledWith(
-        expect.stringContaining("gateway restart secrets preflight failed"),
+        expect.stringContaining("gateway restart preflight failed"),
       );
 
       harness.setSecretAvailable("RESTART_A_TOKEN");
       await vi.advanceTimersByTimeAsync(1_000);
       expect(harness.requestRecoveryRestart).toHaveBeenCalledOnce();
+      expect(harness.assertRestartReady).toHaveBeenCalledTimes(2);
       expect(harness.activateRuntimeSecrets).toHaveBeenCalledTimes(3);
     } finally {
       hoisted.activeTaskBlockers.length = 0;

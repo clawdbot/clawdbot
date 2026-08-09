@@ -305,15 +305,15 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       );
       return haystack.includes(query);
     });
-    // Execution mutates stored job state in place. Detach the complete result
-    // under the lock so every returned page still matches its revision later.
-    const snapshot = structuredClone(sortCronJobs(filtered, sortBy, sortDir));
-    const snapshotRevision = resolveCronListSnapshotRevision(snapshot);
-    const total = snapshot.length;
+    // Hash the complete sorted result under the lock, but detach only the page
+    // that can outlive later in-place execution state changes.
+    const sortedJobs = sortCronJobs(filtered, sortBy, sortDir);
+    const snapshotRevision = resolveCronListSnapshotRevision(sortedJobs);
+    const total = sortedJobs.length;
     const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
     const defaultLimit = total === 0 ? 50 : total;
     const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-    const jobs = snapshot.slice(offset, offset + limit);
+    const jobs = structuredClone(sortedJobs.slice(offset, offset + limit));
     const nextOffset = offset + jobs.length;
     return {
       jobs,

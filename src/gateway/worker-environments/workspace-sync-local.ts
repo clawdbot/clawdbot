@@ -152,7 +152,7 @@ export async function runLocalCommandToFile(params: {
   }
 }
 
-export async function writeEligibleGitFiles(params: {
+async function writeEligibleGitFiles(params: {
   gitRoot: string;
   eligiblePath: string;
   ignoredPath: string;
@@ -230,4 +230,90 @@ export async function writeEligibleGitFiles(params: {
   } finally {
     await output.close();
   }
+}
+
+export async function createGitTransferList(params: {
+  gitRoot: string;
+  temporaryDirectory: string;
+  signal: AbortSignal;
+  timeoutMs: number;
+}): Promise<string> {
+  const eligiblePath = path.join(params.temporaryDirectory, "eligible");
+  const ignoredPath = path.join(params.temporaryDirectory, "ignored");
+  const selectedPath = path.join(params.temporaryDirectory, "selected");
+  const outputPath = path.join(params.temporaryDirectory, "transfer-list");
+  await fs.mkdir(params.temporaryDirectory, { mode: 0o700 });
+  await runLocalCommandToFile({
+    argv: [
+      "git",
+      "-C",
+      params.gitRoot,
+      "ls-files",
+      "--full-name",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "-z",
+    ],
+    outputPath: eligiblePath,
+    signal: params.signal,
+    timeoutMs: params.timeoutMs,
+  });
+  const worktreeIncludePath = path.join(params.gitRoot, ".worktreeinclude");
+  const worktreeInclude = await fs.lstat(worktreeIncludePath).catch(() => undefined);
+  if (worktreeInclude?.isFile()) {
+    const [ignoredResult, selectedResult] = await Promise.allSettled([
+      runLocalCommandToFile({
+        argv: [
+          "git",
+          "-C",
+          params.gitRoot,
+          "ls-files",
+          "--full-name",
+          "--others",
+          "--ignored",
+          "--exclude-standard",
+          "-z",
+        ],
+        outputPath: ignoredPath,
+        signal: params.signal,
+        timeoutMs: params.timeoutMs,
+      }),
+      runLocalCommandToFile({
+        argv: [
+          "git",
+          "-C",
+          params.gitRoot,
+          "ls-files",
+          "--full-name",
+          "--others",
+          "--ignored",
+          `--exclude-from=${worktreeIncludePath}`,
+          "-z",
+        ],
+        outputPath: selectedPath,
+        signal: params.signal,
+        timeoutMs: params.timeoutMs,
+      }),
+    ]);
+    if (ignoredResult.status === "rejected") {
+      throw ignoredResult.reason;
+    }
+    if (selectedResult.status === "rejected") {
+      throw selectedResult.reason;
+    }
+  } else {
+    await Promise.all([
+      fs.writeFile(ignoredPath, "", { mode: 0o600 }),
+      fs.writeFile(selectedPath, "", { mode: 0o600 }),
+    ]);
+  }
+  await writeEligibleGitFiles({
+    gitRoot: params.gitRoot,
+    eligiblePath,
+    ignoredPath,
+    selectedPath,
+    outputPath,
+  });
+  return outputPath;
 }

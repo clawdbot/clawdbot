@@ -175,6 +175,12 @@ export function resolveTuiSessionKey(params: {
       mainKey: params.sessionMainKey,
     });
   }
+  const parsed = parseAgentSessionKey(trimmed);
+  if (parsed?.rest === "global") {
+    // Initial agent selection already consumed the explicit owner prefix. TUI operations
+    // need the literal sentinel so they carry that owner separately as agentId.
+    return "global";
+  }
   if (trimmed === "global" || trimmed === "unknown") {
     return trimmed;
   }

@@ -16,7 +16,7 @@ import {
   DEFAULT_PROVIDER,
   getModelRefStatus,
   loadResolvedPublishedModelCatalogOwner,
-  loadPreparedModelCatalogSnapshot,
+  loadProviderScopedThinkingCatalog,
   normalizeModelSelection,
   publishedModelCatalogOwnerMatchesAgent,
   resolveAgentConfig,
@@ -125,15 +125,16 @@ async function resolveCronThinkingCatalog(params: {
   ) {
     return catalog;
   }
+  // Thinking capability is a per-model fact; never materialize the full live catalog on cron turns.
   return normalizeThinkingCatalogProviders(
-    (
-      await loadPreparedModelCatalogSnapshot({
-        config: params.owner.config,
-        agentId: params.owner.agentId,
-        agentDir: params.owner.agentDir,
-        workspaceDir: params.owner.workspaceDir,
-      })
-    ).entries,
+    await loadProviderScopedThinkingCatalog({
+      config: params.owner.config,
+      provider: params.provider,
+      model: params.model,
+      agentId: params.owner.agentId,
+      agentDir: params.owner.agentDir,
+      workspaceDir: params.owner.workspaceDir,
+    }),
   );
 }
 

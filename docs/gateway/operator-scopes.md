@@ -58,6 +58,11 @@ dispatch so authorization failures have one canonical structured response:
   `operator.talk.secrets`.
 - `talk.client.*`, `talk.session.*`, `talk.speak`, and `talk.mode` need
   `operator.talk` (or the compatible broader `operator.write`).
+- `sessions.patch` needs `operator.write` for session organization fields and
+  the per-session `model` override. Other runtime overrides, including
+  thinking, fast, verbose, trace, and reasoning levels, need `operator.admin`.
+  Persisting a selected model as the configured agent default is also
+  admin-only.
 
 Some handlers then apply stricter checks based on the concrete thing being
 approved or mutated:

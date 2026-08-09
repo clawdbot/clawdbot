@@ -1,5 +1,6 @@
 import {
   embeddedAgentLog,
+  runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -158,6 +159,16 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   };
+  const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
+    runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step,
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await operation();
+      },
+    });
   const unregisterNativeSubagentMonitor = () => {
     state.nativeSubagentMonitor?.unregister();
     state.nativeSubagentMonitor = undefined;
@@ -260,6 +271,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     releaseSharedClientLeaseOnce,
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
+    runCleanupStep,
     registerNativeSubagentMonitor,
     releaseCurrentRoute,
     startupTimeoutMs,

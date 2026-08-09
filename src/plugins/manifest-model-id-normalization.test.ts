@@ -7,6 +7,10 @@ import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/e
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
+// Registers the snapshot resolver in the runtime bridge slot. Production and
+// jiti load it via the bridge's require fallback; vitest workers lack a CJS TS
+// hook, so the no-snapshot fallback path needs the ESM registration.
+import "./plugin-metadata-snapshot.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 

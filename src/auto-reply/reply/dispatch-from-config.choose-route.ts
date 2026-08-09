@@ -28,6 +28,7 @@ import {
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
 import { createReplyDispatchEvent } from "./dispatch-from-config.events.js";
+import { readAskUserQuestionId } from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import {
@@ -144,14 +145,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const hasAskUserPayload = (payload: ReplyPayload) => {
     const askUser = payload.channelData?.askUser;
     return askUser && typeof askUser === "object" && !Array.isArray(askUser);
-  };
-  const readAskUserQuestionId = (payload: ReplyPayload) => {
-    const askUser = payload.channelData?.askUser;
-    if (!askUser || typeof askUser !== "object" || Array.isArray(askUser)) {
-      return undefined;
-    }
-    const questionId = (askUser as { questionId?: unknown }).questionId;
-    return typeof questionId === "string" ? questionId : undefined;
   };
   const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
     if (!finalReplyDeliveryStarted) {
@@ -326,6 +319,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     await flushPendingCommentaryProgress();
     throwIfFinalDeliveryAborted();
     const payloadMetadata = getReplyPayloadMetadata(payload);
+    const expectedWriterRunId = normalizeOptionalString(params.replyOptions?.runId);
+    const expectedLifecycleRevision = sessionStoreEntry.entry?.lifecycleRevision;
     const sourceReplySessionBinding = resolvePreparedTranscriptBinding(
       payloadMetadata?.sourceReplyTranscriptMirror?.sessionKey,
     );
@@ -335,6 +330,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           ...(sourceReplySessionBinding
             ? { expectedSessionId: sourceReplySessionBinding.sessionId }
             : {}),
+          ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
+          ...(expectedWriterRunId ? { expectedWriterRunId } : {}),
           storePath: sourceReplySessionBinding?.storePath ?? sessionStoreEntry.storePath,
         }
       : undefined;
@@ -478,6 +475,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
               ...(transcriptMirrorSessionBinding
                 ? { expectedSessionId: transcriptMirrorSessionBinding.sessionId }
                 : {}),
+              ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
+              ...(expectedWriterRunId ? { expectedWriterRunId } : {}),
               storePath: transcriptMirrorSessionBinding?.storePath ?? sessionStoreEntry.storePath,
               preferText: true,
               ...(hasTranscriptOwner ? { transcriptOwner: true } : {}),

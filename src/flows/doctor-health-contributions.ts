@@ -1,6 +1,7 @@
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
+import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
   runCoreContributionHealth,
@@ -414,31 +415,44 @@ export async function resolveDoctorContributionHealthChecks(): Promise<readonly 
   return checks;
 }
 
-export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
+async function runDoctorHealthContributionList(
+  ctx: DoctorHealthFlowContext,
+  contributions: readonly DoctorHealthContribution[],
+): Promise<void> {
   const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
-  if (!runWithPluginMetadataSnapshot) {
-    for (const contribution of resolveDoctorHealthContributions()) {
-      await contribution.run(ctx);
+  for (const contribution of contributions) {
+    try {
+      if (!runWithPluginMetadataSnapshot) {
+        await contribution.run(ctx);
+        continue;
+      }
+      const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+        await import("../agents/agent-scope.js");
+      const workspaceDir = resolveAgentWorkspaceDir(
+        ctx.cfg,
+        resolveDefaultAgentId(ctx.cfg),
+        ctx.env ?? process.env,
+      );
+      await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
+        contribution.run(ctx),
+      );
+    } catch (error) {
+      const { note } = await loadNoteModule();
+      note(`${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`, "Doctor warnings");
     }
-    return;
   }
+}
 
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
-    await import("../agents/agent-scope.js");
-  for (const contribution of resolveDoctorHealthContributions()) {
-    const workspaceDir = resolveAgentWorkspaceDir(
-      ctx.cfg,
-      resolveDefaultAgentId(ctx.cfg),
-      ctx.env ?? process.env,
-    );
-    await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
-      contribution.run(ctx),
-    );
-  }
+export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runDoctorHealthContributionList(ctx, resolveDoctorHealthContributions());
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.doctorHealthContributionsTestApi")
-  ] = { createDoctorHealthContribution, resolveDoctorHealthContributions };
+  ] = {
+    createDoctorHealthContribution,
+    resolveDoctorHealthContributions,
+    runDoctorHealthContributionList,
+  };
 }

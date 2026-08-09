@@ -219,6 +219,13 @@ function expectOpenAiStreamingResponsesText(server: MockServer, body: Record<str
   return expectStreamingResponsesText(server, { model: "gpt-5.6-luna", ...body });
 }
 
+function parseStreamingResponseEvents(body: string): StreamEvent[] {
+  return body
+    .split("\n")
+    .filter((line) => line.startsWith("data: {") && line.endsWith("}"))
+    .map((line) => JSON.parse(line.slice("data: ".length)) as StreamEvent);
+}
+
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
 function requireArray(value: unknown, label: string): unknown[] {
@@ -911,6 +918,36 @@ describe("qa mock openai server", () => {
     expect(blockContinuationBody).toContain('"item_id":"msg_mock_block_2"');
     expect(blockContinuationBody).toContain("BLOCK_TWO_OK");
     expect(blockContinuationBody).not.toContain('"item_id":"msg_mock_block_1"');
+  });
+
+  it("serves Telegram visible and unsent failure directives", async () => {
+    const server = await startMockServer();
+    const visibleEvents = parseStreamingResponseEvents(
+      await expectOpenAiStreamingResponsesText(server, {
+        input: [makeUserInput("Telegram visible partial failure QA check")],
+      }),
+    );
+    const unsentEvents = parseStreamingResponseEvents(
+      await expectOpenAiStreamingResponsesText(server, {
+        input: [makeUserInput("Telegram unsent failure QA check")],
+      }),
+    );
+
+    expect(visibleEvents.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.output_item.added",
+      "response.output_text.delta",
+      "response.failed",
+    ]);
+    expect(visibleEvents[2]).toMatchObject({
+      type: "response.output_text.delta",
+      delta: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
+    });
+    expect(unsentEvents.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.failed",
+    ]);
+    expect(unsentEvents.some((event) => event.type === "response.output_text.delta")).toBe(false);
   });
 
   it("plans deterministic tool-progress reads from prompt paths", async () => {

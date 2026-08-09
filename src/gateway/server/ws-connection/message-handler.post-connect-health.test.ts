@@ -1428,6 +1428,30 @@ describe("resolvePinnedClientMetadata", () => {
   );
 
   it.each([
+    ["darwin", "macos", "Mac"],
+    ["win32", "windows", "Windows"],
+  ])(
+    "normalizes exact legacy node-host platform %s to canonical %s",
+    (legacyPlatform, canonicalPlatform, deviceFamily) => {
+      expect(
+        testing.resolvePinnedClientMetadata({
+          clientId: "node-host",
+          clientMode: "node",
+          claimedPlatform: legacyPlatform,
+          claimedDeviceFamily: deviceFamily,
+          pairedPlatform: legacyPlatform,
+          pairedDeviceFamily: deviceFamily,
+        }),
+      ).toEqual({
+        platformMismatch: false,
+        deviceFamilyMismatch: false,
+        pinnedPlatform: canonicalPlatform,
+        pinnedDeviceFamily: deviceFamily,
+      });
+    },
+  );
+
+  it.each([
     ["macos", "darwin", "Mac"],
     ["windows", "win32", "Windows"],
   ])(

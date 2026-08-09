@@ -76,7 +76,7 @@ export interface ShellViewHost {
   openNewSession(agentId: string, target?: NewSessionTarget): void;
   openPalette(): void;
   refreshControlUi(): void;
-  replaceChatWithCurrentSession(): void;
+  replaceChatWithCurrentSession(): boolean;
   resizeNavigation(splitRatio: number): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost;
@@ -457,6 +457,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           .router=${runtime.router}
           .retryContext=${context}
           .onNotFound=${() => host.replaceChatWithCurrentSession()}
+          .notFoundRecoveryReady=${gatewayConnected}
         ></openclaw-router-outlet>
       </main>
       <openclaw-terminal-panel

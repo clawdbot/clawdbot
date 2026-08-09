@@ -23,6 +23,7 @@ import type {
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
+  CronStoredJob,
   CronStoreFile,
   CronToolsAllowProvenance,
 } from "../types.js";
@@ -365,12 +366,12 @@ export type CronRunResult =
 export type CronRemoveResult = { ok: true; removed: boolean } | { ok: false; removed: false };
 
 /** Created cron job returned by service mutation calls. */
-type CronDeclarativeAddResult = CronJob & {
+type CronDeclarativeAddResult = CronStoredJob & {
   created: boolean;
   updated?: boolean;
-  job: CronJob;
+  job: CronStoredJob;
 };
-export type CronAddResult = CronJob | CronDeclarativeAddResult;
+export type CronAddResult = CronStoredJob | CronDeclarativeAddResult;
 /** Updated cron job returned by service mutation calls. */
 export type CronUpdateResult = CronJob;
 

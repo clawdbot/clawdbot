@@ -12,6 +12,8 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -1298,7 +1300,21 @@ export async function autoMigrateLegacyState(params: {
   }
   const mediaPersistence =
     params.doctorOnlyStateMigrations === true
-      ? migrateLegacyMediaPersistence({ env: { ...env, OPENCLAW_STATE_DIR: stateDir } })
+      ? migrateLegacyMediaPersistence({
+          configuredAgentDatabaseTargets: resolveSessionStoreTargets(
+            params.cfg,
+            { allAgents: true },
+            { env },
+          ).map((target) => ({
+            agentId: target.agentId,
+            path: resolveSqliteTargetFromSessionStorePath(target.storePath, {
+              agentId: target.agentId,
+              defaultAgentId: resolveDefaultAgentId(params.cfg),
+              env,
+            }).path,
+          })),
+          env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+        })
       : { changes: [], warnings: [] };
   if (mediaPersistence.warnings.length > 0) {
     return {

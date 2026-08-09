@@ -46,7 +46,11 @@ import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
-import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  authorizeHttpGatewayConnect,
+  type GatewayAuthResult,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
 import {
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -309,29 +313,54 @@ async function authorizeControlUiReadRequest(
   const clientIp =
     resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
     req.socket?.remoteAddress;
-  const authResult = await authorizeHttpGatewayConnect({
-    auth: opts.auth,
-    connectAuth: token ? { token, password: token } : null,
-    req,
-    browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: token ? opts.rateLimiter : undefined,
-    clientIp,
-    rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-  });
+  const supportsDeviceTokenFallback =
+    Boolean(token) && opts.auth.mode !== "trusted-proxy" && opts.auth.mode !== "none";
+  const sharedSecretRateCheck = supportsDeviceTokenFallback
+    ? opts.rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET)
+    : undefined;
+
+  // A device token must not pay the shared-secret brute-force penalty.
+  // Defer lockout and penalties until every credential class has failed.
+  const authResult: GatewayAuthResult =
+    sharedSecretRateCheck && !sharedSecretRateCheck.allowed
+      ? {
+          ok: false,
+          reason: "rate_limited",
+          rateLimited: true,
+          retryAfterMs: sharedSecretRateCheck.retryAfterMs,
+        }
+      : await authorizeHttpGatewayConnect({
+          auth: opts.auth,
+          connectAuth: token ? { token, password: token } : null,
+          req,
+          browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
+          trustedProxies: opts.trustedProxies,
+          allowRealIpFallback: opts.allowRealIpFallback,
+          rateLimiter: supportsDeviceTokenFallback
+            ? undefined
+            : token
+              ? opts.rateLimiter
+              : undefined,
+          clientIp,
+          rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        });
+  const sharedSecretMismatch =
+    authResult.reason === "token_mismatch" || authResult.reason === "password_mismatch";
+  if (
+    authResult.ok &&
+    supportsDeviceTokenFallback &&
+    (authResult.method === "token" || authResult.method === "password")
+  ) {
+    opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+  }
   const sharedAuthGeneration = resolveSharedGatewaySessionGeneration(
     opts.auth,
     opts.trustedProxies,
   );
   let resolvedAuthResult = authResult;
   let verifiedDeviceScopes: string[] | undefined;
-  if (
-    !resolvedAuthResult.ok &&
-    token &&
-    opts.auth.mode !== "trusted-proxy" &&
-    opts.auth.mode !== "none"
-  ) {
+  let deviceTokenValidationFailed = false;
+  if (!resolvedAuthResult.ok && token && supportsDeviceTokenFallback) {
     const deviceRateCheck = opts.rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
     if (deviceRateCheck && !deviceRateCheck.allowed) {
       resolvedAuthResult = {
@@ -351,11 +380,17 @@ async function authorizeControlUiReadRequest(
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
         resolvedAuthResult = { ok: true, method: "device-token" };
       } else {
-        await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+        deviceTokenValidationFailed = true;
       }
     }
   }
   if (!resolvedAuthResult.ok) {
+    if (supportsDeviceTokenFallback && sharedSecretMismatch) {
+      await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+    }
+    if (deviceTokenValidationFailed) {
+      await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+    }
     sendGatewayAuthFailure(res, resolvedAuthResult);
     return false;
   }
@@ -1082,6 +1117,7 @@ export async function handleControlUiHttpRequest(
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       seamColor: config?.ui?.seamColor,
       terminalEnabled,
+      cliAgentsEnabled: config?.gateway?.cliAgents?.enabled === true,
       pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
         pluginId,
         path: grantPath,

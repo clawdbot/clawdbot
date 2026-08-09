@@ -10,6 +10,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createBrowserAnnotationHandoff } from "../../app/browser-annotation-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -120,6 +121,7 @@ describe("chat pane first-turn attachment lifecycle", () => {
       agentSelection: { state: { selectedId: "main" } },
       agents: { state: { agentsList: null } },
       initialUserMessage: createInitialUserMessageHandoff(),
+      browserAnnotationHandoff: createBrowserAnnotationHandoff(),
       sessions: {},
     } as unknown as ApplicationContext;
     prepareInitialUserMessageHandoff(

@@ -32,7 +32,9 @@ type GatewayAccountHealthProof = {
 };
 
 function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export function withSiblingAccount(config: OpenClawConfig, baseUrl?: string): OpenClawConfig {
@@ -43,18 +45,16 @@ export function withSiblingAccount(config: OpenClawConfig, baseUrl?: string): Op
       ...config.channels,
       [CHANNEL_ID]: {
         ...channel,
-        ...(baseUrl
-          ? {
-              enabled: true,
-              baseUrl,
-              botUserId: "openclaw",
-              botDisplayName: "OpenClaw QA",
-              allowFrom: ["*"],
-              pollTimeoutMs: 250,
-            }
-          : {}),
+        ...(baseUrl && {
+          enabled: true,
+          baseUrl,
+          botUserId: "openclaw",
+          botDisplayName: "OpenClaw QA",
+          allowFrom: ["*"],
+          pollTimeoutMs: 250,
+        }),
         accounts: {
-          ...((channel?.accounts as Record<string, unknown> | undefined) ?? {}),
+          ...(channel?.accounts as Record<string, unknown> | undefined),
           [TARGET_ACCOUNT_ID]: { enabled: true },
         },
       },

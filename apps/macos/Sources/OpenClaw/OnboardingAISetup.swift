@@ -282,6 +282,13 @@ final class OnboardingAISetupModel {
               await self.gateway.isCurrentServerLease(lease)
         else { return .superseded }
         if let activationOwner = pendingActivationOwner {
+            if activationOwner.isUnbound {
+                // Unbound receipts never resume across relaunch or verification
+                // retry; a fresh activation is the only safe continuation.
+                self.pendingActivationVerification = false
+                clearPendingHandoff(ifOwnedBy: context)
+                return .freshSetupAllowed
+            }
             guard let currentFingerprint = await gateway.activationOwnershipFingerprint(
                 ifCurrentServerLease: lease)
             else {
@@ -354,6 +361,16 @@ final class OnboardingAISetupModel {
                         return .freshSetupAllowed
                     }
                 case .completed:
+                    guard let receiptOwner = self.pendingActivationOwner, !receiptOwner.isUnbound
+                    else {
+                        // Ownerless and unbound receipts carry no auth binding,
+                        // so they can belong to replaced credentials on this
+                        // route. Never let one authorize a handoff — repeat a
+                        // fresh activation instead.
+                        self.pendingActivationVerification = false
+                        clearPendingHandoff(ifOwnedBy: context)
+                        return .freshSetupAllowed
+                    }
                     finishConnected(
                         kind: "existing-model",
                         result: result,
@@ -660,7 +677,12 @@ extension OnboardingAISetupModel {
             self.detectedPrepareOptions = result.prepareOptions
             self.candidatePresentation = Dictionary(
                 result.candidates.map { candidate in
-                    (candidate.kind, CandidatePresentation(icon: candidate.icon, website: candidate.website))
+                    (
+                        candidate.kind,
+                        CandidatePresentation(
+                            brandId: candidate.brandId,
+                            icon: candidate.icon,
+                            website: candidate.website))
                 },
                 uniquingKeysWith: { current, _ in current })
             let providerAuthReconciliationPending = self.providerAuthReconciliationPending
@@ -860,24 +882,22 @@ extension OnboardingAISetupModel {
                 "The Gateway connection changed. Check for AI accounts again."))
             return
         }
-        guard let routeFingerprint = await gateway.activationOwnershipFingerprint(
+        let routeFingerprint = await gateway.activationOwnershipFingerprint(
             ifCurrentServerLease: lease)
-        else {
-            let failure = Self.transportFailure(
-                "Secure storage is unavailable, so OpenClaw cannot safely resume this AI setup.")
-            self.statuses[kind] = .failed(failure)
-            self.exposeActivationFailure(failure, whenTerminal: !tryNextCandidateOnFailure)
-            self.phase = .ready
-            return
-        }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         let params = Self.activationParams(
             kind: kind,
             modelRef: modelRef,
             supportsExactModel: supportsExactModel)
-        let activationOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
-            id: UUID().uuidString,
-            routeFingerprint: routeFingerprint)
+        // Keychain-unavailable degrades to an unbound per-attempt lease instead
+        // of refusing setup: live matching stays attempt-exact, and relaunch
+        // repeats activation rather than trusting the receipt, so a broken
+        // login keychain cannot dead-end onboarding.
+        let activationOwner = routeFingerprint.map { fingerprint in
+            OnboardingSystemAgentResumeStore.ActivationOwner(
+                id: UUID().uuidString,
+                routeFingerprint: fingerprint)
+        } ?? .unbound()
         self.pendingActivationOwner = activationOwner
         self.pendingActivationRequiresFreshActivation = true
         // Activation can persist before the response reaches the app. Cover the
@@ -965,6 +985,9 @@ extension OnboardingAISetupModel {
                 // A managed Gateway can restart after persisting fresh-Mac Codex setup.
                 // The retired process cannot mutate further, so accept only the same
                 // route/auth owner, an exact persisted transition, and a fresh live turn.
+                // Unbound (keychain-unavailable) leases cannot prove ownership;
+                // reconciliation's fingerprint guard rejects them and setup
+                // falls through to the deadline probe instead.
                 if !Task.isCancelled,
                    await !(self.gateway.isCurrentServerLease(lease)),
                    await self.reconcileActivationAfterGatewayRestart(
@@ -1105,6 +1128,7 @@ extension OnboardingAISetupModel {
         self.startProviderWizard(
             AuthOption(
                 id: option.id,
+                brandId: option.brandId,
                 label: option.label,
                 hint: option.hint,
                 groupLabel: nil,
@@ -1491,18 +1515,17 @@ extension OnboardingAISetupModel {
             return
         }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-        guard let routeFingerprint = await gateway.activationOwnershipFingerprint(
+        let routeFingerprint = await gateway.activationOwnershipFingerprint(
             ifCurrentServerLease: lease)
-        else {
-            self.manualError = Self.transportFailure(
-                "Secure storage is unavailable, so OpenClaw cannot safely resume this AI setup.")
-            return
-        }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         let requestTimeoutMs = Self.activationRequestTimeoutMs(for: "api-key")
-        let activationOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
-            id: UUID().uuidString,
-            routeFingerprint: routeFingerprint)
+        // Same keychain-unavailable degradation as detected candidates: an
+        // unbound lease keeps the ambiguity window without a resume receipt.
+        let activationOwner = routeFingerprint.map { fingerprint in
+            OnboardingSystemAgentResumeStore.ActivationOwner(
+                id: UUID().uuidString,
+                routeFingerprint: fingerprint)
+        } ?? .unbound()
         self.pendingActivationOwner = activationOwner
         self.pendingActivationRequiresFreshActivation = true
         // Manual activation has the same persist-before-response ambiguity as
@@ -1650,16 +1673,4 @@ extension OnboardingAISetupModel {
         self.connectedSetupLines = Self.normalizedSetupLines(lines)
     }
     #endif
-}
-
-private enum OnboardingAISetupError: LocalizedError {
-    case providerCatalogUnavailable
-
-    var errorDescription: String? {
-        switch self {
-        case .providerCatalogUnavailable:
-            "The Gateway is running an older OpenClaw version that doesn’t provide the " +
-                "supported provider list. Update OpenClaw on the gateway, then try again."
-        }
-    }
 }

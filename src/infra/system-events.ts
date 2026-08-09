@@ -14,6 +14,7 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { generateSecureUuid } from "./secure-random.js";
 import {
   cloneSystemEventOwner,
   recordSystemEventOwner,
@@ -22,6 +23,12 @@ import {
 } from "./system-event-ownership.js";
 
 export type SystemEvent = {
+  /**
+   * OpenClaw-assigned opaque identity for one queued occurrence. Preserve it when returning a
+   * snapshot to consume. It changes on replacement or re-enqueue; optional only for legacy
+   * ID-less compatibility.
+   */
+  id?: string;
   text: string;
   ts: number;
   contextKey?: string | null;
@@ -148,6 +155,7 @@ function enqueueOwnedSystemEventEntry(
     entry.lastContextKey = normalizedContextKey;
   }
   const event: SystemEvent = {
+    id: generateSecureUuid(),
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
@@ -220,6 +228,7 @@ function replaceSystemEventEntry(text: string, options: SystemEventOptions): Sys
       !areDeliveryContextsEqual(event.deliveryContext, normalizedDeliveryContext),
   );
   const event: SystemEvent = {
+    id: generateSecureUuid(),
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
@@ -248,7 +257,7 @@ function isDuplicateSystemEvent(
   );
 }
 
-function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
+function areLegacySystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
   return (
     left.text === right.text &&
     left.ts === right.ts &&
@@ -256,6 +265,14 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     resolveSystemEventOwnerAgentId(left) === resolveSystemEventOwnerAgentId(right) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
+}
+
+function matchesConsumedSystemEvent(queued: SystemEvent, consumed: SystemEvent): boolean {
+  if (consumed.id !== undefined) {
+    // Queue-owned IDs govern modern consumption; only legacy ID-less snapshots use structure.
+    return queued.id === consumed.id;
+  }
+  return areLegacySystemEventsEqual(queued, consumed);
 }
 
 function resetQueueState(key: string, entry: SessionQueue) {
@@ -286,7 +303,7 @@ export function consumeSystemEventEntries(
   if (
     consumedEntries.length > entry.queue.length ||
     !consumedEntries.every((event, index) =>
-      areSystemEventsEqual(expectDefined(entry.queue[index], "queue entry at index"), event),
+      matchesConsumedSystemEvent(expectDefined(entry.queue[index], "queue entry at index"), event),
     )
   ) {
     // A keyed replacement may remove one inspected entry while a prompt is in flight.
@@ -310,7 +327,7 @@ export function consumeSelectedSystemEventEntries(
   }
   const removed: SystemEvent[] = [];
   for (const consumed of consumedEntries) {
-    const index = entry.queue.findIndex((event) => areSystemEventsEqual(event, consumed));
+    const index = entry.queue.findIndex((event) => matchesConsumedSystemEvent(event, consumed));
     if (index === -1) {
       continue;
     }

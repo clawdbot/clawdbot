@@ -192,8 +192,9 @@ every human `Thanks @...` attribution.
 9. Check release-note side conditions:
    - inspect `src/plugins/compat/registry.ts`
    - inspect `src/commands/doctor/shared/deprecation-compat.ts`
-   - if any compatibility `removeAfter` is on/before release date, resolve it
-     or explicitly record the blocker before shipping
+   - if a deprecated compatibility record reaches `removeAfter`, remove it when
+     proven safe or move it to `removal-pending` and record the blocker; keep a
+     due `removal-pending` record only until its documented conditions are met
 10. Validate and ship:
 
 - after the manifest-driven rewrite, regenerate and verify the complete

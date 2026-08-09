@@ -11,6 +11,7 @@ import {
   sanitizeIMessageFinalOutboundText,
   sanitizeOutboundText,
 } from "./monitor/sanitize-outbound.js";
+import { resolveIMessageRemoteHost } from "./remote-host.js";
 import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
 
 type ApprovalReactionsModule = typeof import("./approval-reactions.js");
@@ -1709,6 +1710,226 @@ describe("sendMessageIMessage receipts", () => {
     );
   });
 
+  it("keeps named-account remote transport identity isolated", async () => {
+    const client = createClient({ guid: "p:0/imsg-account-isolation" });
+    const createClientForAccount = vi.fn(async () => client);
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            cliPath: "/gateway/default-imsg",
+            dbPath: "/Users/default/Library/Messages/chat.db",
+            remoteHost: "default@messages-a",
+            accounts: {
+              work: {
+                cliPath: "/gateway/work-imsg",
+                dbPath: "~/Library/Messages/chat.db",
+                remoteHost: "work@messages-b",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      createClient: createClientForAccount,
+    });
+
+    expect(createClientForAccount).toHaveBeenCalledWith({
+      cliPath: "/gateway/work-imsg",
+      dbPath: "~/Library/Messages/chat.db",
+      remoteHost: "work@messages-b",
+    });
+    expect(createClientForAccount).not.toHaveBeenCalledWith(
+      expect.objectContaining({ remoteHost: "default@messages-a" }),
+    );
+  });
+
+  it("stages normal outbound media for the selected remote account", async () => {
+    const client = createClient({ guid: "p:0/remote-media" });
+    const createClientForAccount = vi.fn(async () => client);
+    const withRemoteFile = vi.fn(
+      async (params: { use: (remotePath: string) => Promise<Record<string, unknown>> }) =>
+        await params.use("/tmp/openclaw-imessage-safe/photo.png"),
+    );
+
+    await sendMessageIMessage("chat_id:42", "", {
+      config: {
+        channels: {
+          imessage: {
+            accounts: {
+              work: {
+                cliPath: "/gateway/work-imsg",
+                dbPath: "~/Library/Messages/chat.db",
+                remoteHost: "work@messages-b",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      mediaUrl: "/gateway/photo.png",
+      resolveAttachmentImpl: async () => ({
+        path: "/gateway/photo.png",
+        contentType: "image/png",
+      }),
+      createClient: createClientForAccount,
+      withRemoteFile: withRemoteFile as never,
+    });
+
+    expect(withRemoteFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remoteHost: "work@messages-b",
+        localPath: "/gateway/photo.png",
+      }),
+    );
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send.attachment",
+      {
+        chat_id: 42,
+        file: "/tmp/openclaw-imessage-safe/photo.png",
+      },
+      expect.any(Object),
+    );
+  });
+
+  it("auto-detects a wrapper-only remote account for raw db paths and media staging", async () => {
+    const cliPath = createOutboundMediaFile(
+      "imsg-legacy-ssh",
+      Buffer.from('#!/bin/sh\nexec ssh -T legacy@messages-mac imsg "$@"\n'),
+    );
+    const client = createClient({ guid: "p:0/legacy-remote-media" });
+    const createClientForAccount = vi.fn(async () => client);
+    const withRemoteFile = vi.fn(
+      async (params: { use: (remotePath: string) => Promise<Record<string, unknown>> }) =>
+        await params.use("/tmp/openclaw-imessage-safe/photo.png"),
+    );
+
+    await sendMessageIMessage("chat_id:42", "", {
+      config: {
+        channels: {
+          imessage: {
+            cliPath,
+            dbPath: "~/Library/Messages/chat.db",
+          },
+        },
+      },
+      mediaUrl: "/gateway/photo.png",
+      resolveAttachmentImpl: async () => ({ path: "/gateway/photo.png" }),
+      createClient: createClientForAccount,
+      withRemoteFile: withRemoteFile as never,
+    });
+
+    expect(createClientForAccount).toHaveBeenCalledWith({
+      cliPath,
+      dbPath: "~/Library/Messages/chat.db",
+      remoteHost: "legacy@messages-mac",
+    });
+    expect(withRemoteFile).toHaveBeenCalledWith(
+      expect.objectContaining({ remoteHost: "legacy@messages-mac" }),
+    );
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send.attachment",
+      expect.objectContaining({ file: "/tmp/openclaw-imessage-safe/photo.png" }),
+      expect.any(Object),
+    );
+  });
+
+  it("keeps a non-SSH wrapper on the local attachment path", async () => {
+    const cliPath = createOutboundMediaFile(
+      "imsg-local-wrapper",
+      Buffer.from('#!/bin/sh\nexec /opt/homebrew/bin/imsg "$@"\n'),
+    );
+    const runCliJson = vi
+      .fn()
+      .mockResolvedValueOnce({ guid: "iMessage;+;chat0000" })
+      .mockResolvedValueOnce({ guid: "p:0/local-media" });
+    const withRemoteFile = vi.fn();
+
+    await sendMessageIMessage("chat_id:42", "", {
+      config: { channels: { imessage: { cliPath } } },
+      mediaUrl: "/gateway/photo.png",
+      resolveAttachmentImpl: async () => ({ path: "/gateway/photo.png" }),
+      runCliJson,
+      withRemoteFile: withRemoteFile as never,
+    });
+
+    expect(runCliJson).toHaveBeenCalledWith(
+      expect.arrayContaining(["send-attachment", "--file", "/gateway/photo.png"]),
+    );
+    expect(withRemoteFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["-J jump@bastion bot@messages-mac", "jump host"],
+    ["-o ProxyCommand=jump@proxy bot@messages-mac", "proxy host"],
+  ])("fails closed before staging media from an ambiguous %s wrapper (%s)", async (sshOperands) => {
+    const cliPath = createOutboundMediaFile(
+      "imsg-jump-wrapper",
+      Buffer.from(`#!/bin/sh\nexec ssh ${sshOperands} imsg "$@"\n`),
+    );
+    const runCliJson = vi
+      .fn()
+      .mockResolvedValueOnce({ guid: "iMessage;+;chat0000" })
+      .mockResolvedValueOnce({ guid: "p:0/local-media" });
+    const withRemoteFile = vi.fn();
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "", {
+        config: { channels: { imessage: { cliPath } } },
+        mediaUrl: "/gateway/photo.png",
+        resolveAttachmentImpl: async () => ({ path: "/gateway/photo.png" }),
+        runCliJson,
+        withRemoteFile: withRemoteFile as never,
+      }),
+    ).rejects.toThrow("configure channels.imessage.remoteHost explicitly");
+
+    expect(runCliJson).not.toHaveBeenCalled();
+    expect(withRemoteFile).not.toHaveBeenCalled();
+  });
+
+  it("stages ambiguous-wrapper media only to an explicit remoteHost", async () => {
+    const cliPath = createOutboundMediaFile(
+      "imsg-explicit-jump-wrapper",
+      Buffer.from('#!/bin/sh\nexec ssh -J jump@bastion bot@messages-mac imsg "$@"\n'),
+    );
+    const client = createClient({ guid: "p:0/explicit-remote-media" });
+    const createClientForAccount = vi.fn(async () => client);
+    const withRemoteFile = vi.fn(
+      async (params: { use: (remotePath: string) => Promise<Record<string, unknown>> }) =>
+        await params.use("/tmp/openclaw-imessage-safe/photo.png"),
+    );
+
+    await sendMessageIMessage("chat_id:42", "", {
+      config: {
+        channels: {
+          imessage: { cliPath, remoteHost: "bot@messages-mac" },
+        },
+      },
+      mediaUrl: "/gateway/photo.png",
+      resolveAttachmentImpl: async () => ({ path: "/gateway/photo.png" }),
+      createClient: createClientForAccount,
+      withRemoteFile: withRemoteFile as never,
+    });
+
+    expect(createClientForAccount).toHaveBeenCalledWith({
+      cliPath,
+      dbPath: undefined,
+      remoteHost: "bot@messages-mac",
+    });
+    expect(withRemoteFile).toHaveBeenCalledWith(
+      expect.objectContaining({ remoteHost: "bot@messages-mac" }),
+    );
+    expect(withRemoteFile).not.toHaveBeenCalledWith(
+      expect.objectContaining({ remoteHost: "jump@bastion" }),
+    );
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send.attachment",
+      expect.objectContaining({ file: "/tmp/openclaw-imessage-safe/photo.png" }),
+      expect.any(Object),
+    );
+  });
+
   it("floors a configured probe timeout so one delayed imsg fallback can resolve", async () => {
     vi.useFakeTimers();
     const delayedFallbackMs = 158_000;
@@ -1740,6 +1961,7 @@ describe("sendMessageIMessage receipts", () => {
       },
       client,
     });
+    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
     await vi.advanceTimersByTimeAsync(delayedFallbackMs);
 
     await expect(send).resolves.toMatchObject({ messageId: "p:0/imsg-delayed-fallback" });
@@ -2720,7 +2942,7 @@ describe("sendMessageIMessage receipts", () => {
       config: IMESSAGE_TEST_CFG,
       client,
     });
-    expect(getClientMocks(client).request).toHaveBeenCalled();
+    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
 
     vi.advanceTimersByTime(61_000);
     expect(
@@ -2883,7 +3105,6 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not use the local default chat.db path for custom cliPath wrappers", async () => {
-    vi.useFakeTimers({ now: 1_000 });
     vi.stubEnv("HOME", "/Users/me");
     const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
     const runCliJson = vi.fn();
@@ -2908,7 +3129,6 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
-    await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
 
     expect(runCliJson).not.toHaveBeenCalled();
@@ -2921,11 +3141,12 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not use the local default chat.db path for auto-detected ssh wrappers", async () => {
-    vi.useFakeTimers({ now: 1_000 });
     vi.stubEnv("HOME", "/Users/me");
     const wrapperDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-wrapper-"));
     const wrapperPath = path.join(wrapperDir, "imsg");
     fs.writeFileSync(wrapperPath, '#!/bin/sh\nexec ssh -T gateway-host imsg "$@"\n');
+    await resolveIMessageRemoteHost({ cliPath: wrapperPath });
+    vi.useFakeTimers({ now: 1_000 });
     const client = createRejectingClient(new Error("imsg rpc timeout (send)"));
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
@@ -2940,6 +3161,7 @@ describe("sendMessageIMessage receipts", () => {
           resolveSentMessageGuidImpl,
         }),
       ).rejects.toThrow("imsg rpc timeout (send)");
+      await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
       await vi.advanceTimersByTimeAsync(5_000);
       await rejection;
     } finally {
@@ -2988,6 +3210,7 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
+    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
     await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
 
@@ -3009,6 +3232,7 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
+    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
     await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
 
@@ -3048,6 +3272,7 @@ describe("sendMessageIMessage receipts", () => {
         resolveSentMessageGuidImpl,
       }),
     ).rejects.toThrow("imsg rpc timeout (send)");
+    await vi.waitFor(() => expect(getClientMocks(client).request).toHaveBeenCalled());
     await vi.advanceTimersByTimeAsync(5_000);
     await rejection;
 
@@ -3099,17 +3324,17 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not poll for approval prompt GUIDs when chat.db is unavailable", async () => {
+    vi.useFakeTimers();
     const client = createClient({ status: "sent" });
     const approvalText = createApprovalText();
-    const startedAt = performance.now();
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
       client,
-      dbPath: "/path/to/missing/chat.db",
     });
 
-    expect(performance.now() - startedAt).toBeLessThan(250);
+    // Fake timers are intentionally not advanced: entering the polling loop
+    // would leave this awaited send pending and fail the test by timeout.
     expect(result.messageId).toBe("ok");
     expect(result.guid).toBeUndefined();
   });

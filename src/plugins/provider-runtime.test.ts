@@ -196,7 +196,6 @@ function expectProviderRuntimePluginLoad(params: { provider: string; expectedPlu
   expect(plugin?.id).toBe(params.expectedPluginId);
   expectRecordFields(getLastResolvePluginProvidersParams(), {
     providerRefs: [params.provider],
-    bundledProviderVitestCompat: true,
   });
 }
 
@@ -875,7 +874,7 @@ describe("provider-runtime", () => {
       plugins: {
         entries: {
           demo: { enabled: true, config: { endpoint: "https://demo.example" } },
-          "active-memory": { enabled: true, config: { qmd: { searchMode: "fast" } } },
+          "active-memory": { enabled: true, config: { queryMode: "recent" } },
         },
       },
     } as OpenClawConfig;
@@ -1017,9 +1016,7 @@ describe("provider-runtime", () => {
       }),
     };
     resolvePluginProvidersMock.mockImplementation((params) =>
-      params.applyAutoEnable === false && params.bundledProviderVitestCompat === false
-        ? []
-        : [runtimeProvider],
+      params.applyAutoEnable === false ? [] : [runtimeProvider],
     );
 
     expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(runtimeProvider);
@@ -1171,7 +1168,7 @@ describe("provider-runtime", () => {
       plugins: {
         entries: {
           demo: { enabled: true, config: { endpoint: "https://demo.example" } },
-          "active-memory": { enabled: true, config: { qmd: { searchMode: "fast" } } },
+          "active-memory": { enabled: true, config: { queryMode: "recent" } },
         },
       },
     } as OpenClawConfig;

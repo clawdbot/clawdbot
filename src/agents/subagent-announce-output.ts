@@ -340,7 +340,11 @@ export function applySubagentWaitOutcome(params: {
   // primary normalizers, so preserve the shared timeout/cancel precedence here.
   if (terminalOutcome?.status === "timeout") {
     outcome = { status: "timeout" };
-  } else if (terminalOutcome?.reason === "aborted" || terminalOutcome?.reason === "cancelled") {
+  } else if (
+    terminalOutcome?.reason === "aborted" ||
+    terminalOutcome?.reason === "cancelled" ||
+    terminalOutcome?.reason === "superseded"
+  ) {
     outcome = { status: "error", error: "subagent run terminated" };
   } else if (
     terminalOutcome?.reason === "blocked" ||

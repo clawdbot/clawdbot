@@ -32,21 +32,31 @@ function createOwner(config: OpenClawConfig, id: string): PreparedModelRuntimeSn
 
 function createHarness(
   initialConfig: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } },
+  runtimeOptions: {
+    beforeRefresh?: () => Promise<void>;
+    refreshOnRead?: boolean;
+  } = {},
 ) {
   let config = initialConfig;
   let owner = createOwner(config, "first");
   let skillsVersion = 1;
   let pluginRegistryVersion = 1;
-  const authStore: AuthProfileStore = { version: 1, profiles: {} };
+  let authStore: AuthProfileStore | undefined = { version: 1, profiles: {} };
+  let authStoreRevision = 1;
   const getPreparedOwner = vi.fn(() => owner);
   const getPreparedAuthStore = vi.fn(() => authStore);
+  const getAuthStoreRevision = vi.fn(() => authStoreRevision);
   const getSkillsVersion = vi.fn(() => skillsVersion);
   const getPluginRegistryVersion = vi.fn(() => pluginRegistryVersion);
   const buildCommands = vi.fn(async () => ({
     commands: [{ name: `command-${skillsVersion}-${pluginRegistryVersion}` }],
   }));
   const buildProjection = vi.fn(
-    async ({ facts }: { facts: { owner: PreparedModelRuntimeSnapshot } }) => ({
+    async ({
+      facts,
+    }: {
+      facts: { authStore: AuthProfileStore; owner: PreparedModelRuntimeSnapshot };
+    }) => ({
       modelCatalog: facts.owner.modelCatalog.entries,
       models: facts.owner.modelCatalog.entries,
     }),
@@ -64,9 +74,11 @@ function createHarness(
     getConfig: () => config,
     getContext: () => context,
     log: context.logGateway,
+    ...runtimeOptions,
     deps: {
       getPreparedOwner,
       getPreparedAuthStore,
+      getAuthStoreRevision,
       getSkillsVersion,
       getPluginRegistryVersion,
       buildCommands,
@@ -77,12 +89,19 @@ function createHarness(
     buildCommands,
     buildProjection,
     getPluginRegistryVersion,
+    getAuthStoreRevision,
     getPreparedAuthStore,
     getPreparedOwner,
     getSkillsVersion,
     runtime,
     setConfig(next: OpenClawConfig) {
       config = next;
+    },
+    setAuthStore(next: AuthProfileStore | undefined) {
+      authStore = next;
+    },
+    setAuthStoreRevision(next: number) {
+      authStoreRevision = next;
     },
     setOwner(next: PreparedModelRuntimeSnapshot) {
       owner = next;
@@ -97,6 +116,19 @@ function createHarness(
 }
 
 describe("gateway chat metadata runtime", () => {
+  test("refreshes lazily on the first read when configured", async () => {
+    const beforeRefresh = vi.fn(async () => {});
+    const harness = createHarness(undefined, { beforeRefresh, refreshOnRead: true });
+
+    expect(harness.buildProjection).not.toHaveBeenCalled();
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "first" })],
+    });
+
+    expect(beforeRefresh).toHaveBeenCalledOnce();
+    expect(harness.buildProjection).toHaveBeenCalledOnce();
+  });
+
   test("single-flights equivalent refreshes and reads", async () => {
     const harness = createHarness();
     const releaseModels = createDeferred();
@@ -130,6 +162,7 @@ describe("gateway chat metadata runtime", () => {
     await harness.runtime.refresh();
     harness.getPreparedOwner.mockClear();
     harness.getPreparedAuthStore.mockClear();
+    harness.getAuthStoreRevision.mockClear();
     harness.getSkillsVersion.mockClear();
     harness.getPluginRegistryVersion.mockClear();
 
@@ -139,6 +172,7 @@ describe("gateway chat metadata runtime", () => {
     expect(first).toBe(second);
     expect(harness.getPreparedOwner).not.toHaveBeenCalled();
     expect(harness.getPreparedAuthStore).not.toHaveBeenCalled();
+    expect(harness.getAuthStoreRevision).not.toHaveBeenCalled();
     expect(harness.getSkillsVersion).not.toHaveBeenCalled();
     expect(harness.getPluginRegistryVersion).not.toHaveBeenCalled();
   });
@@ -148,6 +182,7 @@ describe("gateway chat metadata runtime", () => {
     await harness.runtime.refresh();
     harness.getPreparedOwner.mockClear();
     harness.getPreparedAuthStore.mockClear();
+    harness.getAuthStoreRevision.mockClear();
     harness.getSkillsVersion.mockClear();
     harness.getPluginRegistryVersion.mockClear();
 
@@ -169,6 +204,7 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
     expect(harness.getPreparedOwner).not.toHaveBeenCalled();
     expect(harness.getPreparedAuthStore).not.toHaveBeenCalled();
+    expect(harness.getAuthStoreRevision).not.toHaveBeenCalled();
     expect(harness.getSkillsVersion).not.toHaveBeenCalled();
     expect(harness.getPluginRegistryVersion).not.toHaveBeenCalled();
   });
@@ -320,6 +356,50 @@ describe("gateway chat metadata runtime", () => {
     expect(second).toBe(first);
     expect(harness.buildCommands).toHaveBeenCalledTimes(1);
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
+  });
+
+  test("rebuilds after an auth store publishes a newer revision", async () => {
+    const harness = createHarness();
+    harness.setAuthStore(undefined);
+    harness.buildProjection.mockImplementation(async ({ facts }) => ({
+      modelCatalog: facts.owner.modelCatalog.entries,
+      models: facts.owner.modelCatalog.entries.map((model) => ({
+        ...model,
+        available: Object.keys(facts.authStore.profiles).length > 0,
+      })),
+    }));
+
+    await harness.runtime.refresh();
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ available: false })],
+    });
+
+    harness.setAuthStore({
+      version: 1,
+      profiles: { "test:default": { type: "api_key", provider: "test" } },
+    });
+    harness.setAuthStoreRevision(2);
+    await harness.runtime.refresh();
+
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ available: true })],
+    });
+    expect(harness.buildProjection).toHaveBeenCalledTimes(2);
+  });
+
+  test("retains a generation while auth store revisions are unchanged", async () => {
+    const harness = createHarness();
+    harness.getPreparedAuthStore.mockImplementation(() => ({ version: 1, profiles: {} }));
+    await harness.runtime.refresh();
+    const first = await harness.runtime.read({ agentId: "main" });
+
+    await harness.runtime.refresh();
+    const second = await harness.runtime.read({ agentId: "main" });
+
+    expect(second).toBe(first);
+    expect(harness.buildProjection).toHaveBeenCalledTimes(1);
+    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
+    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);
   });
 
   test("refreshes config, catalog-auth, skills, and plugin generations", async () => {

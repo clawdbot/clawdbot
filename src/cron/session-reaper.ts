@@ -4,6 +4,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
+  loadExactSessionEntryReadOnly,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
@@ -12,6 +13,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
+import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { Logger } from "./service/state.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
@@ -53,6 +55,31 @@ type ReaperResult = {
   swept: boolean;
   pruned: number;
 };
+
+/** Removes the reusable base session whose owning isolated cron job was deleted. */
+export async function removeCronJobBaseSession(params: {
+  agentId: string;
+  jobId: string;
+  sessionStorePath: string;
+}): Promise<boolean> {
+  const sessionKey = resolveCronAgentSessionKey({
+    agentId: params.agentId,
+    sessionKey: `cron:${params.jobId}`,
+  });
+  const existing = loadExactSessionEntryReadOnly({
+    storePath: params.sessionStorePath,
+    sessionKey,
+  })?.entry;
+  if (!existing) {
+    return false;
+  }
+  const result = await applySessionEntryLifecycleMutation({
+    agentId: params.agentId,
+    storePath: params.sessionStorePath,
+    removals: [{ sessionKey, archiveRemovedTranscript: true, expectedEntry: existing }],
+  });
+  return result.removedEntries > 0;
+}
 
 /**
  * Sweeps completed isolated cron run sessions while preserving base cron sessions.

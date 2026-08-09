@@ -188,6 +188,15 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[2]?.options.input).toContain('ln -s "$lock_identity" "$lock"');
     expect(runner.calls[2]?.options.input).toContain("worker bundle archive digest mismatch");
     expect(runner.calls[2]?.options.input).toContain("worker install content does not match");
+    expect(runner.calls[2]?.options.input).toContain(
+      'mv "$staging" "$install_dir"\nfinish_with_receipt',
+    );
+    expect(runner.calls[2]?.options.input).toMatch(
+      /finish_with_receipt\(\) \{[\s\S]*?rm -f -- "\$upload"\s+printf [^\n]+ receipt/u,
+    );
+    expect(runner.calls[2]?.options.input).toMatch(
+      /if receipt_matches; then\s+finish_with_receipt/u,
+    );
     expect(runner.calls[2]?.argv.at(-1)).toContain(BUNDLE_HASH);
     expect(runner.calls[2]?.argv.at(-1)).toContain(TARBALL_SHA256);
     expect(runner.calls[2]?.argv.at(-1)).toContain(VERSION);

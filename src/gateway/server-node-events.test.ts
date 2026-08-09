@@ -1324,8 +1324,7 @@ describe("voice transcript events", () => {
     const [runId, runMetadata] = mockCall(addChatRun) ?? [];
     expect(runId).toBe(optsRecord.runId);
     const clientRunId = (runMetadata as { clientRunId?: unknown } | undefined)?.clientRunId;
-    expect(typeof clientRunId).toBe("string");
-    expect(clientRunId).toMatch(/^voice-/);
+    expect(clientRunId).toBe(runId);
   });
 
   it("does not block agent dispatch when session-store touch fails", async () => {

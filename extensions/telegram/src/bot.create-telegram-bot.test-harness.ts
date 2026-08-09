@@ -218,7 +218,7 @@ const menuSyncHoisted = vi.hoisted(() => ({
     await bot.api.setMyCommands(commandsToRegister);
   }),
 }));
-const syncTelegramMenuCommands = menuSyncHoisted.syncTelegramMenuCommands;
+export const syncTelegramMenuCommands = menuSyncHoisted.syncTelegramMenuCommands;
 
 function parseModelRef(raw: string): { provider?: string; model: string } {
   const trimmed = raw.trim();
@@ -519,9 +519,6 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   syncTelegramMenuCommands: syncTelegramMenuCommands as TelegramBotDeps["syncTelegramMenuCommands"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
   resolveApproval: resolveExecApprovalSpy,
-  resolveLegacyApproval: async (params) => {
-    await resolveExecApprovalSpy(params);
-  },
 };
 
 vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);

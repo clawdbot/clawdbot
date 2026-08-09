@@ -16,9 +16,10 @@ type Method =
   | "taskSuggestions.accept"
   | "taskSuggestions.dismiss";
 
-async function call(method: Method, params: Record<string, unknown>) {
+const GIT_CWD = process.cwd();
+
+async function call(method: Method, params: Record<string, unknown>, broadcast = vi.fn()) {
   const calls: Parameters<RespondFn>[] = [];
-  const broadcast = vi.fn();
   const respond: RespondFn = (...args) => {
     calls.push(args);
   };
@@ -55,10 +56,10 @@ afterEach(async () => {
 describe("task suggestion gateway methods", () => {
   it("creates, lists, and resolves an ephemeral suggestion", async () => {
     const created = await call("taskSuggestions.create", {
-      title: "Remove stale adapter",
-      prompt: "Delete src/example.ts and update its tests.",
-      tldr: "The adapter is unreachable and adds maintenance cost.",
-      cwd: "/repo",
+      title: "  Remove stale adapter  ",
+      prompt: "  Delete src/example.ts and update its tests.  ",
+      tldr: "  The adapter is unreachable and adds maintenance cost.  ",
+      cwd: GIT_CWD,
       sessionKey: "agent:main:main",
     });
     const payload = requirePayload(created) as { taskId: string };
@@ -67,7 +68,12 @@ describe("task suggestion gateway methods", () => {
       "task.suggestion",
       expect.objectContaining({
         action: "created",
-        suggestion: expect.objectContaining({ agentId: "main" }),
+        suggestion: expect.objectContaining({
+          agentId: "main",
+          title: "Remove stale adapter",
+          prompt: "Delete src/example.ts and update its tests.",
+          tldr: "The adapter is unreachable and adds maintenance cost.",
+        }),
       }),
       { dropIfSlow: true },
     );
@@ -77,7 +83,15 @@ describe("task suggestion gateway methods", () => {
       agentId: "main",
     });
     expect(listed.response?.[1]).toMatchObject({
-      suggestions: [{ id: payload.taskId, cwd: "/repo" }],
+      suggestions: [
+        {
+          id: payload.taskId,
+          cwd: GIT_CWD,
+          title: "Remove stale adapter",
+          prompt: "Delete src/example.ts and update its tests.",
+          tldr: "The adapter is unreachable and adds maintenance cost.",
+        },
+      ],
     });
 
     const resolved = await call("taskSuggestions.dismiss", {
@@ -94,12 +108,12 @@ describe("task suggestion gateway methods", () => {
     expect(empty.response?.[1]).toEqual({ suggestions: [] });
   });
 
-  it("preserves accepted-session replay when successful admission expires a pending suggestion", async () => {
+  it("evicts accepted-session replay before an unseen pending suggestion", async () => {
     const created = await call("taskSuggestions.create", {
       title: "Remove stale adapter",
       prompt: "Delete src/example.ts and update its tests.",
       tldr: "The adapter is unreachable and adds maintenance cost.",
-      cwd: "/repo",
+      cwd: GIT_CWD,
       sessionKey: "agent:main:main",
       agentId: "main",
     });
@@ -114,7 +128,7 @@ describe("task suggestion gateway methods", () => {
           label: "Remove stale adapter",
           task: "Delete src/example.ts and update its tests.",
           worktree: true,
-          cwd: "/repo",
+          cwd: GIT_CWD,
         });
         sessionKey = (params as { key: string }).key;
         expect(sessionKey).toMatch(/^agent:main:dashboard:/);
@@ -122,13 +136,13 @@ describe("task suggestion gateway methods", () => {
       });
 
     const first = await call("taskSuggestions.accept", { taskId });
-    for (let index = 0; index < 100; index += 1) {
+    for (let index = 0; index < 99; index += 1) {
       requirePayload(
         await call("taskSuggestions.create", {
           title: `Pending follow up ${index}`,
           prompt: `Complete pending follow-up task ${index}.`,
           tldr: "The operator has not accepted this follow-up.",
-          cwd: "/repo",
+          cwd: GIT_CWD,
           sessionKey: "agent:main:main",
         }),
       );
@@ -141,23 +155,28 @@ describe("task suggestion gateway methods", () => {
     expect(oldestPending).toBeDefined();
     const admitted = await call("taskSuggestions.create", {
       title: "Latest follow up",
-      prompt: "Preserve the accepted task while admitting new work.",
-      tldr: "Evict only the oldest pending follow-up.",
-      cwd: "/repo",
+      prompt: "Prefer unseen pending work over accepted replay state.",
+      tldr: "Evict only the completed task replay.",
+      cwd: GIT_CWD,
       sessionKey: "agent:main:main",
     });
     expect(admitted.response?.[0]).toBe(true);
-    expect(admitted.broadcast).toHaveBeenNthCalledWith(
-      1,
+    expect(admitted.broadcast).toHaveBeenCalledTimes(1);
+    expect(admitted.broadcast).toHaveBeenCalledWith(
       "task.suggestion",
-      { action: "resolved", taskId: oldestPending?.id, resolution: "expired" },
+      expect.objectContaining({ action: "created" }),
       { dropIfSlow: true },
     );
 
     const retry = await call("taskSuggestions.accept", { taskId });
+    const listed = await call("taskSuggestions.list", {});
 
     expect(first.response?.[1]).toEqual({ taskId, key: sessionKey });
-    expect(retry.response?.[1]).toEqual({ taskId, key: sessionKey });
+    expect(retry.response?.[0]).toBe(false);
+    expect(retry.response?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(
+      (requirePayload(listed) as { suggestions: Array<{ id: string }> }).suggestions,
+    ).toContainEqual(expect.objectContaining({ id: oldestPending?.id }));
     expect(createSession).toHaveBeenCalledTimes(1);
     expect(first.broadcast).toHaveBeenCalledWith(
       "task.suggestion",
@@ -179,7 +198,7 @@ describe("task suggestion gateway methods", () => {
         title: `Accepted follow up ${index}`,
         prompt: `Complete accepted follow-up task ${index}.`,
         tldr: "This follow-up already created its managed task session.",
-        cwd: "/repo",
+        cwd: GIT_CWD,
         sessionKey: "agent:main:main",
       });
       const taskId = (requirePayload(created) as { taskId: string }).taskId;
@@ -192,7 +211,7 @@ describe("task suggestion gateway methods", () => {
       title: "Latest follow up",
       prompt: "Keep accepting new suggestions after earlier tasks completed.",
       tldr: "Accepted-session replay is bounded best-effort state.",
-      cwd: "/repo",
+      cwd: GIT_CWD,
       sessionKey: "agent:main:main",
     });
 
@@ -214,7 +233,7 @@ describe("task suggestion gateway methods", () => {
       title: "Add coverage",
       prompt: "Add the missing regression test.",
       tldr: "The edge case is untested.",
-      cwd: "/repo",
+      cwd: GIT_CWD,
       sessionKey: "agent:main:main",
     });
     const taskId = (requirePayload(created) as { taskId: string }).taskId;
@@ -244,7 +263,7 @@ describe("task suggestion gateway methods", () => {
       title: "Add coverage",
       prompt: "Add the missing regression test.",
       tldr: "The edge case is untested.",
-      cwd: "/repo",
+      cwd: GIT_CWD,
       sessionKey: "agent:main:main",
       agentId: "main",
     });
@@ -298,7 +317,7 @@ describe("task suggestion gateway methods", () => {
       title: "Add coverage",
       prompt: "Add the missing regression test.",
       tldr: "The edge case is untested.",
-      cwd: "/repo",
+      cwd: GIT_CWD,
       sessionKey: "agent:main:main",
       agentId: "main",
     });
@@ -329,7 +348,7 @@ describe("task suggestion gateway methods", () => {
       title: "Add coverage",
       prompt: "Add the missing regression test.",
       tldr: "The edge case is untested.",
-      cwd: "/repo",
+      cwd: GIT_CWD,
       sessionKey: "agent:main:main",
       agentId: "main",
     });
@@ -356,6 +375,47 @@ describe("task suggestion gateway methods", () => {
     expect(listed.response?.[1]).toEqual({ suggestions: [] });
   });
 
+  it("abandons an acceptance when rollback inspection throws", async () => {
+    const created = await call("taskSuggestions.create", {
+      title: "Add coverage",
+      prompt: "Add the missing regression test.",
+      tldr: "The edge case is untested.",
+      cwd: GIT_CWD,
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    const taskId = (requirePayload(created) as { taskId: string }).taskId;
+    vi.spyOn(sessionCreateHandlers, "sessions.create").mockRejectedValue(
+      new Error("initial dispatch failed"),
+    );
+    vi.spyOn(sessionDeleteHandlers, "sessions.delete").mockImplementation(async ({ respond }) => {
+      respond(true, { ok: true, deleted: true }, undefined);
+    });
+    vi.spyOn(managedWorktrees, "findLiveByOwner").mockImplementation(() => {
+      throw new Error("worktree registry unavailable");
+    });
+    const broadcast = vi.fn();
+
+    await expect(call("taskSuggestions.accept", { taskId }, broadcast)).rejects.toThrow(
+      "worktree registry unavailable",
+    );
+
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    expect(broadcast).toHaveBeenCalledWith(
+      "task.suggestion",
+      { action: "resolved", taskId, resolution: "expired" },
+      { dropIfSlow: true },
+    );
+    const listed = await call("taskSuggestions.list", {});
+    expect(listed.response?.[1]).toEqual({ suggestions: [] });
+    const retry = await call("taskSuggestions.accept", { taskId });
+    expect(retry.response?.[0]).toBe(false);
+    expect(retry.response?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "task suggestion cannot be accepted: dismissed",
+    });
+  });
+
   it("rejects a relative cwd before recording or broadcasting", async () => {
     const result = await call("taskSuggestions.create", {
       title: "Add coverage",
@@ -370,12 +430,50 @@ describe("task suggestion gateway methods", () => {
     expect(result.broadcast).not.toHaveBeenCalled();
   });
 
+  it("rejects a cwd outside a git checkout before recording or broadcasting", async () => {
+    const result = await call("taskSuggestions.create", {
+      title: "Add coverage",
+      prompt: "Add the missing regression test.",
+      tldr: "The edge case is untested.",
+      cwd: "/not-a-git-checkout",
+      sessionKey: "agent:main:main",
+    });
+
+    expect(result.response?.[0]).toBe(false);
+    expect(result.response?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "task suggestion cwd must be inside a git checkout",
+    });
+    expect(result.broadcast).not.toHaveBeenCalled();
+  });
+
+  it.each(["title", "prompt", "tldr"] as const)(
+    "rejects whitespace-only %s before recording or broadcasting",
+    async (field) => {
+      const params = {
+        title: "Add coverage",
+        prompt: "Add the missing regression test.",
+        tldr: "The edge case is untested.",
+        cwd: GIT_CWD,
+        sessionKey: "agent:main:main",
+      };
+      params[field] = " \n\t ";
+
+      const result = await call("taskSuggestions.create", params);
+
+      expect(result.response?.[0]).toBe(false);
+      expect(result.response?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+      expect(result.response?.[2]?.message).toContain(field);
+      expect(result.broadcast).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects an agent that conflicts with the source session", async () => {
     const result = await call("taskSuggestions.create", {
       title: "Add coverage",
       prompt: "Add the missing regression test.",
       tldr: "The edge case is untested.",
-      cwd: "/repo",
+      cwd: GIT_CWD,
       sessionKey: "agent:main:main",
       agentId: "work",
     });
@@ -393,7 +491,7 @@ describe("task suggestion gateway methods", () => {
       title: "Add coverage",
       prompt: "x".repeat(32_769),
       tldr: "The edge case is untested.",
-      cwd: "/repo",
+      cwd: GIT_CWD,
       sessionKey: "agent:main:main",
     });
 
@@ -409,7 +507,7 @@ describe("task suggestion gateway methods", () => {
         title: `Follow up ${index}`,
         prompt: `${index}: ${"x".repeat(32_760)}`,
         tldr: "The follow-up remains useful.",
-        cwd: "/repo",
+        cwd: GIT_CWD,
         sessionKey: "agent:main:main",
       });
       taskIds.push((requirePayload(created) as { taskId: string }).taskId);
@@ -430,7 +528,7 @@ describe("task suggestion gateway methods", () => {
         title: `Follow up ${index}`,
         prompt: `Complete follow-up task ${index}.`,
         tldr: `Follow-up task ${index} remains useful.`,
-        cwd: "/repo",
+        cwd: GIT_CWD,
         sessionKey: "agent:main:main",
       });
       requirePayload(created);
@@ -445,7 +543,7 @@ describe("task suggestion gateway methods", () => {
       title: "Latest follow up",
       prompt: "Complete the latest follow-up task.",
       tldr: "The latest follow-up remains useful.",
-      cwd: "/repo",
+      cwd: GIT_CWD,
       sessionKey: "agent:main:main",
     });
 
@@ -472,7 +570,7 @@ describe("task suggestion gateway methods", () => {
           title: `Running follow up ${index}`,
           prompt: largePrompt,
           tldr: "This accepted task is still starting.",
-          cwd: "/repo",
+          cwd: GIT_CWD,
           sessionKey: "agent:main:main",
         });
         const taskId = (requirePayload(created) as { taskId: string }).taskId;
@@ -484,7 +582,7 @@ describe("task suggestion gateway methods", () => {
         title: "Preserve accepted task",
         prompt: "Keep its accepted result available for retries.",
         tldr: "A rejected admission must not discard completed results.",
-        cwd: "/repo",
+        cwd: GIT_CWD,
         sessionKey: "agent:main:main",
       });
       const acceptedTaskId = (requirePayload(accepted) as { taskId: string }).taskId;
@@ -495,7 +593,7 @@ describe("task suggestion gateway methods", () => {
         title: "Keep this follow up",
         prompt: "Do not discard this pending task.",
         tldr: "The operator has not accepted it yet.",
-        cwd: "/repo",
+        cwd: GIT_CWD,
         sessionKey: "agent:main:main",
       });
       const pendingTaskId = (requirePayload(pending) as { taskId: string }).taskId;
@@ -503,7 +601,7 @@ describe("task suggestion gateway methods", () => {
         title: "One oversized follow up",
         prompt: largePrompt,
         tldr: "This valid task cannot fit beside protected tasks.",
-        cwd: "/repo",
+        cwd: GIT_CWD,
         sessionKey: "agent:main:main",
       });
 
@@ -536,7 +634,7 @@ describe("task suggestion gateway methods", () => {
         title: `Follow up ${index}`,
         prompt: `Complete follow-up task ${index}.`,
         tldr: `Follow-up task ${index} remains useful.`,
-        cwd: "/repo",
+        cwd: GIT_CWD,
         sessionKey: "agent:main:main",
       });
       const taskId = (requirePayload(created) as { taskId: string }).taskId;
@@ -548,7 +646,7 @@ describe("task suggestion gateway methods", () => {
       title: "One too many",
       prompt: "Complete one more follow-up task.",
       tldr: "This follow-up can wait until capacity returns.",
-      cwd: "/repo",
+      cwd: GIT_CWD,
       sessionKey: "agent:main:main",
     });
 

@@ -315,7 +315,7 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
       args: string[],
       checkout: string,
       options?: Record<string, unknown>,
-    ) => unknown | Promise<unknown>,
+    ) => unknown,
     checkout: string,
     expectedSha: string,
     sleep?: (ms: number) => void | Promise<void>,

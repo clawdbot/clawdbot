@@ -17,6 +17,7 @@ import {
   patchSessionEntry,
 } from "./session-accessor.entry.js";
 import {
+  applySqliteSessionEntryBatchProjection as applySessionEntryBatchProjection,
   applySqliteSessionEntryLifecycleMutation as applySessionEntryLifecycleMutation,
   applySqliteSessionEntryReplacements as applySessionEntryReplacements,
   applySqliteSessionStoreProjection as applySessionStoreProjection,
@@ -39,6 +40,7 @@ import type {
   SessionPatchProjectionTarget,
   SessionPatchProjectionContext,
   SessionPatchProjectionFailure,
+  SessionPatchProjectionOperation,
   SessionPatchProjectionResult,
 } from "./session-accessor.types.js";
 import { resolveProjectionExistingEntry } from "./session-entry-selection.js";
@@ -196,11 +198,117 @@ export async function restoreSessionFromCompactionCheckpoint(
   });
 }
 
-/**
- * Applies a session patch projection through the accessor boundary.
- * The resolver sees a read-only snapshot and names the persisted key set; the
- * projector returns one replacement entry without receiving the mutable store.
- */
+/** Projects ordered session patches against one store snapshot and commits once. */
+export async function applySessionPatchProjections<
+  TFailure extends SessionPatchProjectionFailure,
+>(params: {
+  agentId?: string;
+  operations: readonly SessionPatchProjectionOperation<TFailure>[];
+  storePath: string;
+}): Promise<SessionPatchProjectionResult<TFailure>[]> {
+  return await applySessionEntryBatchProjection({
+    agentId: params.agentId,
+    storePath: params.storePath,
+    skipMaintenance: true,
+    update: async (workingStore) => {
+      const labelOwners = new Map<string, Set<string>>();
+      const addLabelOwner = (sessionKey: string, entry: SessionEntry) => {
+        if (!entry.label) {
+          return;
+        }
+        const owners = labelOwners.get(entry.label) ?? new Set<string>();
+        owners.add(sessionKey);
+        labelOwners.set(entry.label, owners);
+      };
+      const removeSnapshotEntry = (sessionKey: string) => {
+        const entry = workingStore[sessionKey];
+        if (entry?.label) {
+          const owners = labelOwners.get(entry.label);
+          owners?.delete(sessionKey);
+          if (owners?.size === 0) {
+            labelOwners.delete(entry.label);
+          }
+        }
+        delete workingStore[sessionKey];
+      };
+      const setSnapshotEntry = (sessionKey: string, entry: SessionEntry) => {
+        removeSnapshotEntry(sessionKey);
+        const cloned = structuredClone(entry);
+        workingStore[sessionKey] = cloned;
+        addLabelOwner(sessionKey, cloned);
+      };
+      for (const [sessionKey, entry] of Object.entries(workingStore)) {
+        addLabelOwner(sessionKey, entry);
+      }
+      const snapshot = { store: workingStore };
+      const mutations: Array<{
+        entry: SessionEntry;
+        previousSessionKeys?: readonly string[];
+        sessionKey: string;
+      }> = [];
+      const results: SessionPatchProjectionResult<TFailure>[] = [];
+      for (const operation of params.operations) {
+        try {
+          const target = operation.resolveTarget(snapshot);
+          const existingEntry = resolveProjectionExistingEntry(snapshot, target);
+          const candidateKeys = uniqueStrings(
+            (target.candidateKeys ?? [target.primaryKey]).map((key) => key.trim()).filter(Boolean),
+          );
+          const candidateKeySet = new Set(candidateKeys);
+          const projected = await operation.project({
+            ...target,
+            ...snapshot,
+            ...(existingEntry ? { existingEntry } : {}),
+            isLabelInUse: (label) => {
+              const owners = labelOwners.get(label);
+              if (!owners) {
+                return false;
+              }
+              for (const owner of owners) {
+                if (!candidateKeySet.has(owner)) {
+                  return true;
+                }
+              }
+              return false;
+            },
+          });
+          if (!projected.ok) {
+            results.push(projected);
+            continue;
+          }
+          const authorizationFailure = operation.authorize?.();
+          if (authorizationFailure) {
+            results.push(authorizationFailure);
+            continue;
+          }
+          const previousSessionKeys = candidateKeys.filter(
+            (sessionKey) => sessionKey !== target.primaryKey && workingStore[sessionKey],
+          );
+          mutations.push({
+            entry: projected.entry,
+            ...(previousSessionKeys.length > 0 ? { previousSessionKeys } : {}),
+            sessionKey: target.primaryKey,
+          });
+          for (const candidateKey of candidateKeys) {
+            if (candidateKey !== target.primaryKey) {
+              removeSnapshotEntry(candidateKey);
+            }
+          }
+          setSnapshotEntry(target.primaryKey, projected.entry);
+          results.push({ ok: true, entry: structuredClone(projected.entry) });
+        } catch (error) {
+          if (!operation.onError) {
+            throw error;
+          }
+          results.push(operation.onError(error));
+        }
+      }
+      return { mutations, result: results };
+    },
+  });
+}
+
+/** Applies one patch through the canonical ordered batch projection owner. */
 export async function applySessionPatchProjection<
   TFailure extends SessionPatchProjectionFailure,
 >(params: {
@@ -213,43 +321,28 @@ export async function applySessionPatchProjection<
     context: SessionPatchProjectionContext,
   ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
 }): Promise<SessionPatchProjectionResult<TFailure>> {
-  const entries = listSessionEntries({ agentId: params.agentId, storePath: params.storePath }).map(
-    ({ sessionKey, entry }) => ({
-      entry: structuredClone(entry),
-      sessionKey,
-    }),
-  );
-  const target = params.resolveTarget({ entries });
-  const existingEntry = resolveProjectionExistingEntry(entries, target);
-  const projected = await params.project({
-    ...target,
-    entries,
-    ...(existingEntry ? { existingEntry } : {}),
-  });
-  if (!projected.ok) {
-    return projected;
-  }
-  const candidateKeys = uniqueStrings(
-    (target.candidateKeys ?? [target.primaryKey]).map((key) => key.trim()).filter(Boolean),
-  );
-  await applySessionEntryLifecycleMutation({
+  const [result] = await applySessionPatchProjections({
     agentId: params.agentId,
     storePath: params.storePath,
-    removals: candidateKeys
-      .filter((sessionKey) => sessionKey !== target.primaryKey)
-      .map((sessionKey) => ({ sessionKey })),
-    upserts: [
+    operations: [
       {
-        sessionKey: target.primaryKey,
-        buildEntry: () => {
-          params.assertCurrent?.();
-          return projected.entry;
-        },
+        resolveTarget: params.resolveTarget,
+        project: params.project,
+        ...(params.assertCurrent
+          ? {
+              authorize: () => {
+                params.assertCurrent?.();
+                return undefined;
+              },
+            }
+          : {}),
       },
     ],
-    skipMaintenance: true,
   });
-  return { ...projected, entry: structuredClone(projected.entry) };
+  if (!result) {
+    throw new Error("Session patch projection produced no result");
+  }
+  return result;
 }
 
 /**

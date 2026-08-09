@@ -421,8 +421,12 @@ The Control UI ships a dockable browser panel that renders the Gateway-controlle
 
 Two capture modes package page context for the agent:
 
-- **Annotate (pencil)**: draw freehand markup over the page. **Send to chat** composites the strokes into the screenshot, attaches the image to the active chat composer, and prefills a prompt describing the page URL, title, and each marked region so the agent knows exactly what you circled.
-- **Inspect (pointer)**: hover to see the element under the cursor (selector, accessible name, role, size); click to send that element's details plus a highlighted screenshot through the same composer flow. Inspect, wheel scrolling, and back/forward need `browser.evaluateEnabled` (on by default).
+- **Annotate (pencil)**: draw freehand markup over the page. **Send to chat** composites the strokes into the screenshot and adds one structured annotation card to the active chat composer. The card keeps its generated page and region context with the image instead of inserting it into your editable draft.
+- **Inspect (pointer)**: hover to see the element under the cursor (selector, accessible name, role, size); click to add those details and a highlighted screenshot through the same card flow. Removing an annotation card removes only that image and its generated context, preserves your draft and other attachments, and offers a short-lived **Undo**. Inspect, wheel scrolling, and back/forward need `browser.evaluateEnabled` (on by default).
+
+One composer accepts up to four browser annotation cards and 8,000 total characters of generated annotation context. When it reaches either limit, the browser panel keeps the current capture so you can remove a card and retry; Undo also preserves the limit instead of evicting another card.
+
+Within the same Control UI tab, staged annotation cards stay with their pane and session across ordinary route changes and narrow split-pane remounts. Switching sessions keeps them scoped to the original session and restores them only when that session is revisited. A hard reload, pane close, Gateway-owner change, or application shutdown discards them; ordinary attachments keep their existing lifecycle.
 
 The macOS app keeps its native link-browser sidebar for links clicked in the dashboard; the browser panel works there too, and is the way to annotate pages on every other platform.
 

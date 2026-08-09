@@ -107,7 +107,7 @@ The general procedure is:
 
 ### Example: agent schema 11 to 9
 
-Schema 10 added the active transcript projection. Schema 11 added leases, durable delivery, conversation-address state, and heartbeat outcomes. QMD coordination uses rows in `state_leases`; there is no separate QMD table to preserve.
+Schema 10 added the active transcript projection. Schema 11 added leases, durable delivery, conversation-address state, and heartbeat outcomes.
 
 Run equivalent SQL against each affected per-agent database after inspecting the exact schema that wrote it:
 

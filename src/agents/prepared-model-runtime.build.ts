@@ -12,13 +12,16 @@ import {
   prepareAgentCatalogSource,
   prepareConfiguredRuntimeFactsBatch,
   prepareFullCatalogFacts,
-  preparedModelRuntimeWorkspaceFactsKey,
   prepareWorkspaceBuildGroup,
   type PreparedModelRuntimeAgentFacts,
   type PreparedModelRuntimeCatalogFacts,
   type PreparedModelRuntimeCatalogSource,
   type PreparedModelRuntimeWorkspaceFacts,
 } from "./prepared-model-runtime.facts.js";
+import {
+  createPreparedInboundRegistryLoader,
+  preparedModelRuntimeWorkspaceFactsKey,
+} from "./prepared-model-runtime.inbound-registry.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -160,6 +163,7 @@ function createSnapshot(
   workspaceFacts: PreparedModelRuntimeWorkspaceFacts,
   catalogFacts: PreparedModelRuntimeCatalogFacts,
   catalogAccess: PreparedModelRuntimeCatalogAccess,
+  inboundPluginRegistry?: PreparedModelRuntimeWorkspaceFacts["inboundPluginRegistry"],
 ): PreparedModelRuntimeSnapshot {
   const { credentials, input } = agentFacts;
   const { mediaCapabilityProviders, messageToolCatalog, pluginMetadataSnapshot, pluginRegistry } =
@@ -182,6 +186,7 @@ function createSnapshot(
     metadataSnapshot: pluginMetadataSnapshot,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     ...(pluginRegistry ? { pluginRegistry } : {}),
+    ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
     ...(messageToolCatalog ? { messageToolCatalog } : {}),
     ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
     modelCatalog,
@@ -198,6 +203,7 @@ async function buildSnapshotBatch(
   agentBuildCompletions: Map<string, Promise<void>>,
   generationGuards: ReadonlyMap<PreparedModelRuntimeInput, () => boolean>,
   buildGuards: PreparedModelRuntimeBuildGuards,
+  inboundPluginRegistryInputs: ReadonlySet<PreparedModelRuntimeInput>,
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
 ): Promise<PreparedModelRuntimeSnapshot[]> {
   const groups = new Map<string, PreparedModelRuntimeInput[]>();
@@ -212,6 +218,7 @@ async function buildSnapshotBatch(
   }
   const preparedInputs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeAgentFacts>();
   const workspaceFacts = new Map<string, PreparedModelRuntimeWorkspaceFacts>();
+  const loadInboundPluginRegistry = createPreparedInboundRegistryLoader();
   const workspaceKeys = new Map<PreparedModelRuntimeInput, string>();
   let runtimePluginMs = 0;
   let pluginMetadataMs = 0;
@@ -226,7 +233,17 @@ async function buildSnapshotBatch(
     if (typeof buildGuards === "function") {
       assertPreparedModelRuntimeInputsCurrent(group, buildGuards);
     }
-    const prepared = await prepareWorkspaceBuildGroup(group, catalogMode);
+    // Auth refresh can batch configured and retained run owners. Share their expensive workspace
+    // facts, but prepare the generic inbound handle only when this exact group has an owner for it.
+    const prepareInboundPluginRegistry = group.some((input) =>
+      inboundPluginRegistryInputs.has(input),
+    );
+    const prepared = await prepareWorkspaceBuildGroup(
+      group,
+      catalogMode,
+      {},
+      prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
+    );
     assertPreparedModelRuntimeInputsCurrent(group, buildGuards);
     workspaceFacts.set(key, prepared.workspaceFacts);
     runtimePluginMs += prepared.buildStats.runtimePluginMs;
@@ -405,6 +422,7 @@ async function buildSnapshotBatch(
         isCurrent: generationGuards.get(input) ?? (() => false),
         ...(catalogMode === "live" ? { eagerCatalog: catalogFacts.modelCatalog } : {}),
       }),
+      inboundPluginRegistryInputs.has(input) ? facts.inboundPluginRegistry : undefined,
     );
   });
 }
@@ -417,6 +435,7 @@ export function startSerializedSnapshotBuildBatch(
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void,
   generationGuards: ReadonlyMap<PreparedModelRuntimeInput, () => boolean> = new Map(),
   buildGuards: PreparedModelRuntimeBuildGuards = generationGuards,
+  inboundPluginRegistryInputs: ReadonlySet<PreparedModelRuntimeInput> = new Set(),
 ): {
   pending: Promise<PreparedModelRuntimeSnapshot[]>;
   completion: Promise<void>;
@@ -442,6 +461,7 @@ export function startSerializedSnapshotBuildBatch(
         agentBuildCompletions,
         generationGuards,
         buildGuards,
+        inboundPluginRegistryInputs,
         onBuildStats,
       ),
     };
@@ -479,6 +499,7 @@ export function startSerializedSnapshotBuild(
   buildTimeoutMs: number,
   catalogMode: PreparedModelRuntimeCatalogMode = "live",
   generationGuard: () => boolean = () => true,
+  prepareInboundPluginRegistry = false,
 ): {
   pending: Promise<PreparedModelRuntimeSnapshot>;
   completion: Promise<void>;
@@ -490,6 +511,8 @@ export function startSerializedSnapshotBuild(
     catalogMode,
     undefined,
     new Map([[input, generationGuard]]),
+    undefined,
+    prepareInboundPluginRegistry ? new Set([input]) : undefined,
   );
   return {
     pending: build.pending.then((snapshots) => snapshots[0]!),

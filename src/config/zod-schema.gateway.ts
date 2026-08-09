@@ -38,6 +38,11 @@ export const GatewayConfigSchema = z
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
       })
       .optional(),
+    cliAgents: z
+      .strictObject({
+        enabled: z.boolean().optional(),
+      })
+      .optional(),
     terminal: z
       .strictObject({
         enabled: z.boolean().optional(),

@@ -40,7 +40,7 @@ export const TeamsMeetingsRuntime = MeetingPlatformAdapter.createRuntimeFacade<
     durableTranscripts: { providerId: "teams", providerName: "Microsoft Teams" },
     joined: {
       local:
-        "Teams guest joined in local Chrome with realtime audio through BlackHole 2ch and SoX.",
+        "Teams guest joined in local Chrome with realtime audio through the native virtual-audio backend.",
       node: "Teams guest joined in Chrome on the selected node with realtime audio through the node bridge.",
       transcribe: "Teams guest joined observe-only with live-caption transcript capture.",
       waiting:
