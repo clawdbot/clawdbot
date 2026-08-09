@@ -151,6 +151,11 @@ function shouldPreserveTerminalSnapshot(
 ): boolean {
   const existingOutcome = terminalOutcomeFromSnapshot(existing);
   const incomingOutcome = terminalOutcomeFromSnapshot(incoming);
+  // A provisional retryable error cannot replace a sticky terminal outcome:
+  // cancellation and hard timeouts stay fail-closed terminal.
+  if (incoming.pendingError === true) {
+    return Boolean(existingOutcome && isStickyAgentRunTerminalOutcome(existingOutcome));
+  }
   if (!existingOutcome || !incomingOutcome) {
     return false;
   }
@@ -260,6 +265,16 @@ function schedulePendingAgentRunTerminal(
       return;
     }
     pendingRuns.delete(snapshot.runId);
+    const outcome = terminalOutcomeFromSnapshot(pending.snapshot);
+    if (outcome && !isStickyAgentRunTerminalOutcome(outcome)) {
+      // A retryable terminal observation stays provisional past the grace
+      // boundary: the same run may still emit an authoritative successful
+      // `end` (without a new `start`), which must supersede this error
+      // instead of being masked by it. Sticky cancellations and hard
+      // timeouts below remain fail-closed terminal snapshots.
+      recordAgentRunSnapshot({ ...pending.snapshot, pendingError: true }, pending.snapshot.version);
+      return;
+    }
     recordAgentRunSnapshot(pending.snapshot, pending.snapshot.version);
   }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
   timer.unref?.();
@@ -577,7 +592,10 @@ export async function waitForAgentJob(params: {
     source: params.source,
     afterVersion,
   });
-  if (cached) {
+  // A provisional retryable error can still be superseded by a later
+  // successful `end` for the same run; only authoritative terminal
+  // snapshots settle a wait.
+  if (cached && cached.pendingError !== true) {
     return publicSnapshot(cached);
   }
   if (params.timeoutMs <= 0) {
@@ -606,7 +624,10 @@ export async function waitForAgentJob(params: {
         source: params.source,
         afterVersion,
       });
-      if (snapshot) {
+      // Ignore provisional retryable errors: a later authoritative
+      // successful `end` for the same run must still be able to supersede
+      // them instead of being masked by an already-settled wait.
+      if (snapshot && snapshot.pendingError !== true) {
         finish(publicSnapshot(snapshot));
       }
     };
@@ -629,6 +650,17 @@ export async function waitForAgentJob(params: {
           terminalOutcomeFromSnapshot(pendingTimeout)?.reason === "hard_timeout"
         ) {
           finish(publicSnapshot(pendingTimeout));
+          return;
+        }
+        // The retry grace may already have published the retryable error as a
+        // provisional snapshot; surface it as a pending-error timeout instead
+        // of a bare null so consumers can distinguish it from a queue wait.
+        const publishedPendingError = getAgentRunSnapshot({
+          runId: params.runId,
+          afterVersion,
+        });
+        if (publishedPendingError?.pendingError === true) {
+          finish(createPendingErrorTimeoutSnapshot(publishedPendingError));
           return;
         }
       }

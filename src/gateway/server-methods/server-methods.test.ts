@@ -497,37 +497,83 @@ describe("waitForAgentJob", () => {
   });
 
   it("lets a later aborted timeout replace a pending lifecycle error", async () => {
-    await runGracePeriodLifecycleScenario({
-      runIdPrefix: "run-error-then-timeout",
-      startedAt: 800,
-      events: [
-        { phase: "error", startedAt: 800, endedAt: 900, error: "transient error" },
-        { phase: "end", startedAt: 800, endedAt: 1_000, aborted: true },
-      ],
-      expected: {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-error-then-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 800 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", startedAt: 800, endedAt: 900, error: "transient error" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 800, endedAt: 1_000, aborted: true },
+      });
+
+      // Grace expires: the retryable error and the bare-abort timeout stay
+      // provisional (the later timeout owns the provisional canonical state),
+      // so no terminal error settles the active wait.
+      await vi.advanceTimersByTimeAsync(16_000);
+      await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toBeNull();
+
+      // The wait's own budget eventually surfaces the pending timeout, not a
+      // terminal error.
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(waitPromise).resolves.toMatchObject({
         status: "timeout",
         startedAt: 800,
-        endedAt: 1_000,
-      },
-      verifyNoError: true,
-    });
+        pendingError: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("lets a later lifecycle error replace a pending aborted timeout", async () => {
-    await runGracePeriodLifecycleScenario({
-      runIdPrefix: "run-timeout-then-error",
-      startedAt: 1_100,
-      events: [
-        { phase: "end", startedAt: 1_100, endedAt: 1_200, aborted: true },
-        { phase: "error", startedAt: 1_100, endedAt: 1_300, error: "final error" },
-      ],
-      expected: {
-        status: "error",
+    vi.useFakeTimers();
+    try {
+      const runId = `run-timeout-then-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1_100, endedAt: 1_200, aborted: true },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", startedAt: 1_100, endedAt: 1_300, error: "final error" },
+      });
+
+      // Grace expires: both observations stay provisional and the later
+      // retryable error owns the provisional canonical state.
+      await vi.advanceTimersByTimeAsync(16_000);
+      await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toBeNull();
+
+      // The wait's own budget surfaces the provisional error, preserving its
+      // message instead of a bare null timeout.
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(waitPromise).resolves.toMatchObject({
+        status: "timeout",
         startedAt: 1_100,
-        endedAt: 1_300,
         error: "final error",
-      },
-    });
+        pendingError: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("can ignore cached snapshots and wait for fresh lifecycle events", async () => {

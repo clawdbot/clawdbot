@@ -185,11 +185,166 @@ describe("waitForAgentJob timeout fallback", () => {
       pendingError: true,
     });
 
+    // After the grace boundary the retryable error is still provisional: a
+    // zero-budget wait cannot settle on it as a terminal error.
     await vi.advanceTimersByTimeAsync(10_000);
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toBeNull();
+  });
+
+  it("supersedes a retryable error with a same-run success after the grace boundary", async () => {
+    const runId = `run-grace-supersede-${runSequence++}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 30_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        error: "Retryable provider failure",
+      },
+    });
+
+    // Retry grace expires without a new lifecycle start.
+    await vi.advanceTimersByTimeAsync(16_000);
+
+    // The same run later ends successfully without a new start.
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 20_000 },
+    });
+
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "ok",
+      startedAt: 1_000,
+      endedAt: 20_000,
+    });
+  });
+
+  it("lets a fresh wait after the grace boundary observe a later same-run success", async () => {
+    const runId = `run-grace-fresh-supersede-${runSequence++}`;
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        error: "Retryable provider failure",
+      },
+    });
+
+    // Retry grace expires and publishes the provisional error snapshot.
+    await vi.advanceTimersByTimeAsync(16_000);
+
+    const freshWaitPromise = waitForAgentJob({ runId, timeoutMs: 30_000 });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 20_000 },
+    });
+
+    await expect(freshWaitPromise).resolves.toMatchObject({
+      status: "ok",
+      endedAt: 20_000,
+    });
+  });
+
+  it("keeps an exhausted failure terminal when it arrives after a retryable error past grace", async () => {
+    const runId = `run-grace-exhausted-${runSequence++}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 30_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        error: "Retryable provider failure",
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(16_000);
+
+    // A genuine exhausted failure arrives after the provisional error was
+    // published; it must supersede the provisional state and stay terminal.
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 20_000,
+        error: "All model fallback candidates failed",
+        fallbackExhaustedFailure: true,
+      },
+    });
+
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "error",
+      endedAt: 20_000,
+      error: "All model fallback candidates failed",
+    });
+  });
+
+  it("keeps a sticky cancellation terminal past grace and rejects a later same-run success", async () => {
+    const runId = `run-grace-sticky-${runSequence++}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 30_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        aborted: true,
+        stopReason: "rpc",
+        error: "RPC cancelled the run",
+      },
+    });
+
+    // Sticky cancellation stays pending during grace, then publishes terminal.
+    await vi.advanceTimersByTimeAsync(16_000);
+    await expect(waitPromise).resolves.toMatchObject({
+      status: "error",
+      stopReason: "rpc",
+    });
+
+    // A later successful end cannot overwrite the terminal cancellation.
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1_000, endedAt: 20_000 },
+    });
     await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
       status: "error",
+      stopReason: "rpc",
       endedAt: 1_100,
-      error: "Retryable provider failure",
     });
   });
 
