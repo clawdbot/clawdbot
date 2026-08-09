@@ -8,6 +8,7 @@ import {
   hasFlag,
 } from "../argv.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
+import { MODELS_PARENT_BOOLEAN_FLAGS, MODELS_PARENT_VALUE_FLAGS } from "../parent-command-path.js";
 import { parseStrictPositiveIntOrUndefined } from "./helpers.js";
 
 type OptionalFlagParse = {
@@ -350,8 +351,8 @@ export function parseModelsListRouteArgs(argv: string[]) {
 function parseModelsRootStatusRouteArgs(argv: string[]) {
   const positionals = getRoutedCommandPositionals(argv, {
     commandPath: ["models"],
-    booleanFlags: ["--json", "--status-json", "--status-plain"],
-    valueFlags: ["--agent"],
+    booleanFlags: MODELS_PARENT_BOOLEAN_FLAGS,
+    valueFlags: MODELS_PARENT_VALUE_FLAGS,
   });
   if (!positionals || positionals.length !== 0) {
     return null;
