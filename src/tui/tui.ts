@@ -91,6 +91,8 @@ const SESSION_SUBSCRIPTION_MAX_ATTEMPTS = 5;
 const SESSION_SUBSCRIPTION_RETRY_DELAY_MS = 25;
 
 type RunTuiOptions = TuiOptions & {
+  /** Explicit owner for a global session key, which cannot carry an agent prefix itself. */
+  agentId?: string;
   backend?: TuiBackend;
   submitBurstWindowMs?: number;
   ctrlCExitWindowMs?: number;

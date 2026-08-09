@@ -12,8 +12,6 @@ export type TuiOptions = {
   password?: string;
   tlsFingerprint?: string;
   session?: string;
-  /** Explicit owner for a global session key, which cannot carry an agent prefix itself. */
-  agentId?: string;
   deliver?: boolean;
   thinking?: string;
   timeoutMs?: number;
