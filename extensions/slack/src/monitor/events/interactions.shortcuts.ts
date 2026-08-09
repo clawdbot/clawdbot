@@ -1,15 +1,18 @@
 // Slack plugin module implements shortcut interaction behavior.
-import type { GlobalShortcut, MessageShortcut, SlackShortcutMiddlewareArgs } from "@slack/bolt";
+import type {
+  AllMiddlewareArgs,
+  GlobalShortcut,
+  MessageShortcut,
+  SlackShortcutMiddlewareArgs,
+} from "@slack/bolt";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
-import {
-  readSlackMiddlewareTeamId,
-  resolveSlackDeferredActionTarget,
-} from "../deferred-action-routing.js";
+import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
 
 type SlackShortcutBody = GlobalShortcut | MessageShortcut;
+type SlackShortcutHandlerArgs = SlackShortcutMiddlewareArgs & Pick<AllMiddlewareArgs, "context">;
 
 function resolveMessageThreadTs(body: MessageShortcut): string | undefined {
   const threadTs = body.message.thread_ts;
@@ -19,7 +22,7 @@ function resolveMessageThreadTs(body: MessageShortcut): string | undefined {
 async function handleSlackShortcut(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
-  args: SlackShortcutMiddlewareArgs;
+  args: SlackShortcutHandlerArgs;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): Promise<void> {
   const { ack, body } = params.args;
@@ -64,7 +67,7 @@ async function handleSlackShortcut(params: {
 
   const interactionType = isMessageShortcut ? "message_shortcut" : "global_shortcut";
   const messageTs = messageBody?.message.ts || messageBody?.message_ts;
-  const teamId = readSlackMiddlewareTeamId(params.args) ?? body.team?.id ?? body.user.team_id;
+  const teamId = params.args.context?.teamId ?? body.team?.id ?? body.user.team_id;
   const deferredTarget = resolveSlackDeferredActionTarget({
     installationIdentity: params.ctx.installationIdentity,
     teamId,
@@ -137,12 +140,17 @@ export function registerSlackShortcutHandler(params: {
   if (typeof params.ctx.app.shortcut !== "function") {
     return;
   }
-  params.ctx.app.shortcut(/.+/, async (args: SlackShortcutMiddlewareArgs<SlackShortcutBody>) => {
-    await handleSlackShortcut({
-      ctx: params.ctx,
-      trackEvent: params.trackEvent,
-      args,
-      formatSystemEvent: params.formatSystemEvent,
-    });
-  });
+  params.ctx.app.shortcut(
+    /.+/,
+    async (
+      args: SlackShortcutMiddlewareArgs<SlackShortcutBody> & Pick<AllMiddlewareArgs, "context">,
+    ) => {
+      await handleSlackShortcut({
+        ctx: params.ctx,
+        trackEvent: params.trackEvent,
+        args,
+        formatSystemEvent: params.formatSystemEvent,
+      });
+    },
+  );
 }

@@ -95,10 +95,3 @@ export function resolveSlackDeferredActionTeamId(params: {
   }
   return teamId;
 }
-
-export function readSlackMiddlewareTeamId(args: unknown): string | undefined {
-  if (!args || typeof args !== "object") {
-    return undefined;
-  }
-  return normalizeOptionalString((args as { context?: { teamId?: unknown } }).context?.teamId);
-}

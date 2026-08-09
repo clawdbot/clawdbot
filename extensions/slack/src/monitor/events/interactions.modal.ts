@@ -1,14 +1,12 @@
 // Slack plugin module implements interactions.modal behavior.
+import type { AllMiddlewareArgs } from "@slack/bolt";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
-import {
-  readSlackMiddlewareTeamId,
-  resolveSlackDeferredActionTarget,
-} from "../deferred-action-routing.js";
+import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
 import type { ModalInputSummary } from "./modal-input-summary.js";
 
 type SlackModalBody = {
@@ -55,7 +53,10 @@ type SlackModalEventBase = {
 };
 
 type SlackModalInteractionKind = "view_submission" | "view_closed";
-type SlackModalEventHandlerArgs = { ack: () => Promise<void>; body: unknown };
+type SlackModalEventHandlerArgs = { ack: () => Promise<void>; body: unknown } & Pick<
+  AllMiddlewareArgs,
+  "context"
+>;
 type RegisterSlackModalHandler = (
   matcher: RegExp,
   handler: (args: SlackModalEventHandlerArgs) => Promise<void>,
@@ -477,7 +478,7 @@ export function registerModalLifecycleHandler(params: {
       ctx: params.ctx,
       body: typedBody,
       teamId:
-        readSlackMiddlewareTeamId(args) ??
+        args.context?.teamId ??
         typedBody.view?.app_installed_team_id ??
         typedBody.team?.id ??
         typedBody.user?.team_id,

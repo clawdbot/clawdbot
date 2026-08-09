@@ -1,5 +1,5 @@
 // Slack plugin module implements interactions.block actions behavior.
-import type { SlackActionMiddlewareArgs } from "@slack/bolt";
+import type { AllMiddlewareArgs, SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
@@ -41,10 +41,7 @@ import {
   parsePluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "../conversation.runtime.js";
-import {
-  readSlackMiddlewareTeamId,
-  resolveSlackDeferredActionTarget,
-} from "../deferred-action-routing.js";
+import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 
 type InteractionMessageBlock = {
@@ -114,6 +111,7 @@ type SlackBlockActionBody = {
 };
 
 type SlackBlockActionRespond = NonNullable<SlackActionMiddlewareArgs["respond"]>;
+type SlackBlockActionHandlerArgs = SlackActionMiddlewareArgs & Pick<AllMiddlewareArgs, "context">;
 
 type ParsedSlackBlockAction = {
   typedBody: SlackBlockActionBody;
@@ -1051,7 +1049,7 @@ async function updateSlackLegacyBlockAction(params: {
 async function handleSlackBlockAction(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
-  args: SlackActionMiddlewareArgs;
+  args: SlackBlockActionHandlerArgs;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): Promise<void> {
   const { ack, body, action, respond } = params.args;
@@ -1167,9 +1165,7 @@ async function handleSlackBlockAction(params: {
     parsed,
     auth,
     teamId:
-      readSlackMiddlewareTeamId(params.args) ??
-      parsed.typedBody.team?.id ??
-      parsed.typedBody.user?.team_id,
+      params.args.context?.teamId ?? parsed.typedBody.team?.id ?? parsed.typedBody.user?.team_id,
     formatSystemEvent: params.formatSystemEvent,
   });
   await updateSlackLegacyBlockAction({
@@ -1187,7 +1183,7 @@ export function registerSlackBlockActionHandler(params: {
   if (typeof params.ctx.app.action !== "function") {
     return;
   }
-  params.ctx.app.action(/.+/, async (args: SlackActionMiddlewareArgs) => {
+  params.ctx.app.action(/.+/, async (args: SlackBlockActionHandlerArgs) => {
     await handleSlackBlockAction({
       ctx: params.ctx,
       trackEvent: params.trackEvent,
