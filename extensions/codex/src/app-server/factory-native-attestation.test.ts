@@ -128,7 +128,7 @@ describe("Codex native factory authority", () => {
     ).toEqual({ permissions: authority.permissionProfile.id });
   });
 
-  it("forces the complete authority on thread start, resume, and turn requests", () => {
+  it("forces thread authority and omits redundant turn permission selection", () => {
     const params = attemptParams();
     const appServer = {
       approvalPolicy: "on-request",
@@ -176,15 +176,22 @@ describe("Codex native factory authority", () => {
       cwd: authority.cwd,
       approvalPolicy: "never",
       approvalsReviewer: "auto_review",
-      permissions: authority.permissionProfile.id,
     });
+    expect(turn).not.toHaveProperty("permissions");
     expect(turn).not.toHaveProperty("sandboxPolicy");
     expect(turn).not.toHaveProperty("environments");
     expect(turn).not.toHaveProperty("runtimeWorkspaceRoots");
+    expect(() => assertCodexFactoryNativeTurnRequestAuthority(authority, turn)).not.toThrow();
     expect(() =>
       assertCodexFactoryNativeTurnRequestAuthority(authority, {
         ...turn,
         runtimeWorkspaceRoots: ["/tmp/untrusted"],
+      }),
+    ).toThrow("drifted from its launch authority");
+    expect(() =>
+      assertCodexFactoryNativeTurnRequestAuthority(authority, {
+        ...turn,
+        permissions: authority.permissionProfile.id,
       }),
     ).toThrow("drifted from its launch authority");
   });

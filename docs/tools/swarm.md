@@ -443,12 +443,13 @@ return `status: "ok"` when its structured payload was retrieved, with
 
 The Gateway constructs a complete named Codex permissions profile and fails
 closed unless the app-server reports that exact profile as active, without an
-`extends` parent, before the first model turn. Thread and turn requests use
-`permissions: "factory_native_build_v1"`; they never mix this with `sandbox` or
-`sandboxPolicy`, and approval policy is always `never`. The returned effective
-sandbox must be `workspaceWrite` with exactly the authority's writable roots,
-network disabled, and both `excludeTmpdirEnvVar` and `excludeSlashTmp` reported
-as true.
+`extends` parent, before the first model turn. Thread start and resume requests
+select `permissions: "factory_native_build_v1"` and attest the effective profile.
+Turn requests omit both `permissions` and `sandboxPolicy` so they inherit that
+attested thread profile; approval policy is always `never`. The returned
+effective sandbox must be `workspaceWrite` with exactly the authority's writable
+roots, network disabled, and both `excludeTmpdirEnvVar` and `excludeSlashTmp`
+reported as true.
 Effective cwd, runtime workspace roots, those observed sandbox fields,
 profile/config hashes, app-server identity, runtime artifact, and dynamic tool
 names are frozen in the terminal authority proof.

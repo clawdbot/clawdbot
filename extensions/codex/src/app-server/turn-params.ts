@@ -50,7 +50,9 @@ export function buildTurnStartParams(
   const factoryAuthority = params.factoryNativeAuthority
     ? assertFactoryNativeLaunchAuthority(params.factoryNativeAuthority.authority)
     : undefined;
-  const useThreadPermissionProfile =
+  // Codex turn-level permission selection reloads config without the thread request's
+  // custom profile catalog, so attested profiles must be inherited from the thread.
+  const preserveThreadPermissionProfile =
     Boolean(factoryAuthority) || (options.appServer.networkProxy && !options.sandboxPolicy);
   return {
     threadId: options.threadId,
@@ -60,10 +62,8 @@ export function buildTurnStartParams(
     approvalsReviewer: factoryAuthority
       ? factoryAuthority.approvalsReviewer
       : options.appServer.approvalsReviewer,
-    ...(useThreadPermissionProfile
-      ? factoryAuthority
-        ? { permissions: factoryAuthority.permissionProfile.id }
-        : {}
+    ...(preserveThreadPermissionProfile
+      ? {}
       : {
           sandboxPolicy:
             options.sandboxPolicy ??
@@ -115,7 +115,7 @@ export function assertCodexFactoryNativeTurnRequestAuthority(
   if (
     request.approvalPolicy !== checked.approvalPolicy ||
     request.approvalsReviewer !== checked.approvalsReviewer ||
-    request.permissions !== checked.permissionProfile.id ||
+    Object.hasOwn(request, "permissions") ||
     request.cwd !== checked.cwd ||
     Object.hasOwn(request, "sandboxPolicy") ||
     Object.hasOwn(request, "environments") ||

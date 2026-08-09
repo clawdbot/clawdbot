@@ -1617,7 +1617,7 @@ describe("Codex app-server turn input image sanitizing", () => {
     });
   });
 
-  it("uses Codex permissions for network-proxy turn/start requests", () => {
+  it("inherits the Codex permission profile for network-proxy turn/start requests", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
