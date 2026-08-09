@@ -10,8 +10,8 @@ export type AgentTurnFrame = readonly [
   error: Parameters<RespondFn>[2],
 ];
 
-export type AgentTurnAcceptance = AgentTurnFrame;
-export type AgentTurnFinal = AgentTurnFrame;
+type AgentTurnAcceptance = AgentTurnFrame;
+type AgentTurnFinal = AgentTurnFrame;
 
 export type AgentTurnIo = {
   emitAcceptance: (acceptance: AgentTurnAcceptance, meta?: Parameters<RespondFn>[3]) => void;
