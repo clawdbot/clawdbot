@@ -13,8 +13,8 @@ import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { runWorkerProviderReplayRoundTrip } from "../../test/helpers/worker-provider-replay-roundtrip.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { runWorkerProviderReplayRoundTrip } from "../../test/helpers/worker-provider-replay-roundtrip.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   resolveSessionTranscriptRuntimeTarget,
