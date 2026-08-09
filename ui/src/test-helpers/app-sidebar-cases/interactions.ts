@@ -20,6 +20,7 @@ import {
   type SidebarLifecycleState,
   type TestSessionMenu,
 } from "../app-sidebar.ts";
+import { installDialogPolyfill, submitPromptDialog, waitForPromptDialog } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
@@ -236,7 +237,7 @@ describe("AppSidebar multi-select", () => {
   });
 
   it("writes a new group catalog before assigning the selection through patchMany", async () => {
-    const prompt = vi.spyOn(window, "prompt").mockReturnValue("Projects");
+    const restoreDialogPolyfill = installDialogPolyfill();
     try {
       const { sidebar, harness } = await mountMultiSelect([
         "sessions.groups.put",
@@ -249,6 +250,13 @@ describe("AppSidebar multi-select", () => {
       await sidebar.updateComplete;
       const menu = await sessionMenu(sidebar);
       menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
+
+      // Opening the owned dialog is inert: nothing reaches the Gateway until a
+      // name is submitted, and the submitted name is trimmed.
+      await waitForPromptDialog();
+      expect(harness.groupsPut).not.toHaveBeenCalled();
+      expect(harness.patchMany).not.toHaveBeenCalled();
+      await submitPromptDialog("  Projects  ");
 
       await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
       expect(harness.groupsPut).toHaveBeenCalledWith(["Projects"]);
@@ -265,7 +273,7 @@ describe("AppSidebar multi-select", () => {
       expect(harness.patch).not.toHaveBeenCalled();
       await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
     } finally {
-      prompt.mockRestore();
+      restoreDialogPolyfill();
     }
   });
 

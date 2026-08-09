@@ -390,18 +390,23 @@ export async function createSessionGroup(
   name: string,
   sessions: readonly SidebarRecentSession[],
   scope: SidebarSessionMutationScope,
-): Promise<void> {
-  if ((await rememberSessionGroup(host, name, scope)) !== "completed") {
-    return;
+): Promise<SidebarSessionMutationResult> {
+  const remembered = await rememberSessionGroup(host, name, scope);
+  if (remembered !== "completed") {
+    return remembered;
   }
   if (sessions.length === 1) {
-    await patchSession(host, sessions[0]!, { category: name }, scope);
-  } else if (sessions.length > 1) {
-    await patchSessions(host, sessions, { category: name }, scope);
-  } else if (host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    // Header-created groups start empty; re-render so the section shows up.
-    host.requestUpdate();
+    return patchSession(host, sessions[0]!, { category: name }, scope);
   }
+  if (sessions.length > 1) {
+    return patchSessions(host, sessions, { category: name }, scope);
+  }
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    return "stale";
+  }
+  // Header-created groups start empty; re-render so the section shows up.
+  host.requestUpdate();
+  return "completed";
 }
 
 export async function renameSessionGroup(

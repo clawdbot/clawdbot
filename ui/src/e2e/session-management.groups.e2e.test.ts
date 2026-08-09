@@ -9,9 +9,11 @@ import {
   controlUiSessionPath,
   createSessionManagementE2eSuite,
   installMockGateway,
+  openSessionMenuSubmenu,
   requireRecord,
   sessionRow,
   sessionsListResponse,
+  submitPromptDialog,
   uiProofArtifactDir,
   waitForPatch,
 } from "./session-management.test-support.ts";
@@ -19,6 +21,107 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it("names a new group in the owned dialog instead of a browser prompt", async () => {
+    const context = await suite.browser.newContext({
+      colorScheme: "dark",
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const nativeDialogs: string[] = [];
+    page.on("dialog", (dialog) => {
+      nativeDialogs.push(dialog.type());
+      void dialog.dismiss();
+    });
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+        "sessions.patch",
+      ],
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:move-me", "Move me", Date.parse("2026-07-01T16:00:00.000Z")),
+        ]),
+      },
+      sessionKey: "agent:main:move-me",
+    });
+
+    async function openNewGroupDialog() {
+      const row = page.locator('.sidebar-recent-session[data-session-key="agent:main:move-me"]');
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await row.hover();
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      await openSessionMenuSubmenu(page, "Move to group");
+      await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
+      const field = page.getByLabel("New group name");
+      await field.waitFor({ state: "visible" });
+      return field;
+    }
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const field = await openNewGroupDialog();
+      const create = page.getByRole("button", { name: "Create group" });
+      await captureUiProof(page, "new-group-dialog-dark.png");
+
+      // Opening the dialog writes nothing, hands focus to the field, and holds
+      // the create action closed until a non-blank name exists.
+      expect(await gateway.getRequests("sessions.groups.put")).toHaveLength(0);
+      await expect
+        .poll(() => field.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      expect(await create.isDisabled()).toBe(true);
+      await field.fill("   ");
+      expect(await create.isDisabled()).toBe(true);
+
+      await page.emulateMedia({ colorScheme: "light" });
+      await captureUiProof(page, "new-group-dialog-light.png");
+      await page.emulateMedia({ colorScheme: "dark" });
+
+      // Compact viewports keep the whole dialog on screen.
+      await page.setViewportSize({ height: 720, width: 420 });
+      const card = page.locator("openclaw-modal-dialog .exec-approval-card");
+      const bounds = await card.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(420);
+      await captureUiProof(page, "new-group-dialog-compact.png");
+      await page.setViewportSize({ height: 900, width: 1280 });
+
+      // Escape leaves the session untouched.
+      await page.keyboard.press("Escape");
+      await field.waitFor({ state: "detached" });
+      expect(await gateway.getRequests("sessions.groups.put")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+
+      await openNewGroupDialog();
+      await submitPromptDialog(page, "  Client work  ");
+
+      await page
+        .locator('[data-session-section="category:Client work"]')
+        .waitFor({ state: "visible" });
+      const putRequest = await gateway.waitForRequest("sessions.groups.put");
+      expect(requireRecord(putRequest.params)).toMatchObject({ names: ["Client work"] });
+      const patched = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:move-me" && params.category === "Client work",
+      );
+      expect(requireRecord(patched.params)).toMatchObject({ category: "Client work" });
+      const categoryPatches = (await gateway.getRequests("sessions.patch")).filter(
+        (request) => requireRecord(request.params).category === "Client work",
+      );
+      expect(categoryPatches).toHaveLength(1);
+      expect(nativeDialogs).toEqual([]);
+      await captureUiProof(page, "new-group-created.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("recovers an empty group catalog after a transient load failure", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -479,17 +582,21 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       await page.locator(".session-groupby__select").selectOption("category");
-      page.once("dialog", (dialog) => void dialog.accept("X".repeat(513)));
       await page.getByRole("button", { name: "New group…" }).click();
+      const field = page.locator("openclaw-modal-dialog input");
+      await field.waitFor({ state: "visible" });
+      await field.fill("X".repeat(513));
+      await field.press("Enter");
       await gateway.waitForRequest("sessions.groups.put");
       await gateway.rejectDeferred("sessions.groups.put", {
         code: "INVALID_REQUEST",
         message: "group name exceeds 512 characters",
       });
 
-      const error = page.getByRole("alert");
+      const error = page.locator('openclaw-modal-dialog [role="alert"]');
       await error.waitFor({ state: "visible" });
       await expect.poll(() => error.textContent()).toContain("group name exceeds 512 characters");
+      expect(await field.inputValue()).toBe("X".repeat(513));
       expect(pageErrors).toEqual([]);
     } finally {
       await context.close();
@@ -794,37 +901,9 @@ suite.define(() => {
       );
       await sessionTen.hover();
       await sessionTen.getByRole("button", { name: "Open session menu" }).click();
-      const moveToGroup = page.getByRole("menuitem", { name: "Move to group" });
-      await expect.poll(() => moveToGroup.getAttribute("aria-haspopup")).toBe("menu");
-      const moveToGroupIndex = await moveToGroup.evaluate((element) =>
-        [...(element.parentElement?.children ?? [])]
-          .filter(
-            (item) =>
-              item.localName === "wa-dropdown-item" &&
-              item.getAttribute("slot") !== "submenu" &&
-              !(item as HTMLElement & { disabled?: boolean }).disabled,
-          )
-          .indexOf(element),
-      );
-      expect(moveToGroupIndex).toBeGreaterThanOrEqual(0);
-      // Submenu ARIA is ready before Web Awesome finishes opening the dropdown.
-      // Wait for its focus contract so navigation keys cannot outrun the menu.
-      await expect
-        .poll(() =>
-          page.locator("openclaw-session-menu > wa-dropdown > wa-dropdown-item:focus").count(),
-        )
-        .toBe(1);
-      await page.keyboard.press("Home");
-      for (let index = 0; index < moveToGroupIndex; index += 1) {
-        await page.keyboard.press("ArrowDown");
-      }
-      await expect
-        .poll(() => moveToGroup.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("ArrowRight");
-      await expect.poll(() => moveToGroup.getAttribute("aria-expanded")).toBe("true");
-      page.once("dialog", (dialog) => void dialog.accept("Gamma"));
+      await openSessionMenuSubmenu(page, "Move to group");
       await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
+      await submitPromptDialog(page, "Gamma");
       const gamma = page.locator('[data-session-section="category:Gamma"]');
       await gamma.waitFor({ state: "visible" });
       const createdPatch = await waitForPatch(
@@ -953,8 +1032,8 @@ suite.define(() => {
       // A header-menu-created group starts empty and still gets a section.
       await firstGroup.locator(".sidebar-recent-sessions__head").hover();
       await firstGroup.getByRole("button", { name: "Group options for First group" }).click();
-      page.once("dialog", (dialog) => void dialog.accept("Second group"));
       await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
+      await submitPromptDialog(page, "Second group");
       await page.locator('[data-session-section="category:Second group"]').waitFor({
         state: "visible",
       });

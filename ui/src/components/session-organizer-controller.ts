@@ -29,6 +29,7 @@ import {
   type SidebarSessionPatch,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
+import { showPromptDialog } from "./prompt-dialog.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 
@@ -42,6 +43,7 @@ export interface SessionOrganizerControllerHost extends ReactiveControllerHost {
     | "publishSessionMutationError"
     | "refreshSidebarSessions"
     | "resetForStatusFilter"
+    | "sessionMutationError"
   >;
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   sessionsGrouping: SidebarSessionsGrouping;
@@ -409,16 +411,39 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
-    const name = window.prompt(t("sessionsView.newGroupPrompt"))?.trim();
-    if (!name) {
-      return;
-    }
+    await showPromptDialog({
+      title: t("sessionsView.newGroupTitle"),
+      fieldLabel: t("sessionsView.newGroupPrompt"),
+      confirmLabel: t("sessionsView.newGroupCreate"),
+      submit: (name) => this.writeSessionGroup(name, sessions),
+    });
+  }
+
+  /**
+   * Replays the failure the mutation already recorded so the dialog can keep the
+   * typed name for a retry; a replaced connection resolves to no message because
+   * its outcome belongs to a scope the operator can no longer act on.
+   */
+  private async writeSessionGroup(
+    name: string,
+    sessions: readonly SidebarRecentSession[],
+  ): Promise<string | null> {
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
-      return;
+      return t("sessionsView.newGroupFailed");
     }
     const operations = await this.loadOperations(scope);
-    await operations?.createSessionGroup(this.host, name, sessions, scope);
+    if (!operations) {
+      return this.host.sessionData.isSessionMutationScopeCurrent(scope)
+        ? this.sessionGroupFailure()
+        : null;
+    }
+    const result = await operations.createSessionGroup(this.host, name, sessions, scope);
+    return result === "failed" ? this.sessionGroupFailure() : null;
+  }
+
+  private sessionGroupFailure(): string {
+    return this.host.sessionData.sessionMutationError ?? t("sessionsView.newGroupFailed");
   }
 
   async renameSessionGroupFromMenu(group: string): Promise<void> {

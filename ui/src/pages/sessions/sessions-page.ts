@@ -19,6 +19,7 @@ import {
 } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.ts";
+import { showPromptDialog } from "../../components/prompt-dialog.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
@@ -1023,16 +1024,26 @@ class SessionsPage extends OpenClawLightDomElement {
     void this.patchSession(key, { category });
   }
 
-  private requestNewCategory(sessionKey?: string) {
-    const raw = window.prompt(t("sessionsView.newGroupPrompt"));
-    const name = raw?.trim();
-    if (!name) {
-      return;
+  private async requestNewCategory(sessionKey?: string) {
+    await showPromptDialog({
+      title: t("sessionsView.newGroupTitle"),
+      fieldLabel: t("sessionsView.newGroupPrompt"),
+      confirmLabel: t("sessionsView.newGroupCreate"),
+      submit: (name) => this.writeNewCategory(name, sessionKey),
+    });
+  }
+
+  /** The catalog write lands before the assignment so the group exists when the row moves. */
+  private async writeNewCategory(name: string, sessionKey?: string): Promise<string | null> {
+    this.error = null;
+    await this.rememberCustomGroup(name);
+    if (this.error) {
+      return this.error;
     }
-    void this.rememberCustomGroup(name);
-    if (sessionKey) {
-      void this.patchSession(sessionKey, { category: name });
+    if (sessionKey && (await this.patchSession(sessionKey, { category: name })) === "failed") {
+      return this.error ?? t("sessionsView.newGroupFailed");
     }
+    return null;
   }
 
   private async renameSession(row: GatewaySessionRow) {
@@ -1429,7 +1440,7 @@ class SessionsPage extends OpenClawLightDomElement {
               this.assignCategory(row.key, action.category);
               break;
             case "new-group":
-              this.requestNewCategory(row.key);
+              void this.requestNewCategory(row.key);
               break;
             case "toggle-archived":
               if (row.archived === true) {
@@ -1564,7 +1575,7 @@ class SessionsPage extends OpenClawLightDomElement {
           },
           onGroupByChange: (mode) => this.setGroupBy(mode),
           onAssignCategory: (key, category) => this.assignCategory(key, category),
-          onRequestNewCategory: (sessionKey) => this.requestNewCategory(sessionKey),
+          onRequestNewCategory: (sessionKey) => void this.requestNewCategory(sessionKey),
           onPageChange: (page) => {
             this.page = page;
           },
