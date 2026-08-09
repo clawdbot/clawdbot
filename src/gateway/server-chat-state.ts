@@ -120,6 +120,8 @@ type ChatRunRecord = {
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
+  /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
+  deltaLastBroadcastLen?: number;
   deltaLastBroadcastText?: string;
   /** Fixed-deadline trailing wake-up owned by this run's buffered state. */
   pendingDeltaFlush?: PendingChatDeltaFlush;
@@ -285,6 +287,7 @@ export function createChatRunState(): ChatRunState {
     delete record.progressSnapshot;
     delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
+    delete record.deltaLastBroadcastLen;
     delete record.deltaLastBroadcastText;
     clearPendingChatDeltaFlush(record);
     delete record.agentText;
