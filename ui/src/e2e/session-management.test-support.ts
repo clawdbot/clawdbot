@@ -173,8 +173,8 @@ export async function openSessionMenuSubmenu(page: Page, name: string): Promise<
   await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("true");
 }
 
-/** Fills the owned prompt dialog and submits it the way Enter does. */
-export async function submitPromptDialog(page: Page, value: string): Promise<void> {
+/** Fills the owned input dialog and submits it the way Enter does. */
+export async function submitInputDialog(page: Page, value: string): Promise<void> {
   const field = page.locator("openclaw-modal-dialog input");
   await field.waitFor({ state: "visible" });
   await field.fill(value);

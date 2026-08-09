@@ -26,10 +26,15 @@ export async function rememberSessionCustomGroup(options: {
     return "completed";
   }
   try {
-    await options.sessions.groupsPut([...(options.sessions.state.groups ?? []), options.name]);
+    const written = await options.sessions.groupsPut([
+      ...(options.sessions.state.groups ?? []),
+      options.name,
+    ]);
     // A replaced connection owns neither this catalog entry nor anything a
-    // caller would key off it, so the write is reported as stale, not done.
-    return options.isCurrent() ? "completed" : "stale";
+    // caller would key off it, so the write is reported as stale, not done. The
+    // catalog owns the authoritative signal; the caller's scope adds its own, so
+    // either one retiring means there is no confirmed entry to assign against.
+    return written === "completed" && options.isCurrent() ? "completed" : "stale";
   } catch (error) {
     if (!options.isCurrent()) {
       return "stale";

@@ -20,7 +20,7 @@ import {
   type SidebarLifecycleState,
   type TestSessionMenu,
 } from "../app-sidebar.ts";
-import { installDialogPolyfill, submitPromptDialog, waitForPromptDialog } from "../modal-dialog.ts";
+import { installDialogPolyfill, submitInputDialog, waitForInputDialog } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
@@ -253,10 +253,10 @@ describe("AppSidebar multi-select", () => {
 
       // Opening the owned dialog is inert: nothing reaches the Gateway until a
       // name is submitted, and the submitted name is trimmed.
-      await waitForPromptDialog();
+      await waitForInputDialog();
       expect(harness.groupsPut).not.toHaveBeenCalled();
       expect(harness.patchMany).not.toHaveBeenCalled();
-      await submitPromptDialog("  Projects  ");
+      await submitInputDialog("  Projects  ");
 
       await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
       expect(harness.groupsPut).toHaveBeenCalledWith(["Projects"]);

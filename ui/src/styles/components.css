@@ -3161,7 +3161,7 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
-.prompt-dialog__field {
+.input-dialog__field {
   margin-top: 14px;
 }
 

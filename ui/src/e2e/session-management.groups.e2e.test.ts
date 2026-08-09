@@ -13,7 +13,7 @@ import {
   requireRecord,
   sessionRow,
   sessionsListResponse,
-  submitPromptDialog,
+  submitInputDialog,
   uiProofArtifactDir,
   waitForPatch,
 } from "./session-management.test-support.ts";
@@ -99,7 +99,7 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       await openNewGroupDialog();
-      await submitPromptDialog(page, "  Client work  ");
+      await submitInputDialog(page, "  Client work  ");
 
       await page
         .locator('[data-session-section="category:Client work"]')
@@ -903,7 +903,7 @@ suite.define(() => {
       await sessionTen.getByRole("button", { name: "Open session menu" }).click();
       await openSessionMenuSubmenu(page, "Move to group");
       await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
-      await submitPromptDialog(page, "Gamma");
+      await submitInputDialog(page, "Gamma");
       const gamma = page.locator('[data-session-section="category:Gamma"]');
       await gamma.waitFor({ state: "visible" });
       const createdPatch = await waitForPatch(
@@ -1033,7 +1033,7 @@ suite.define(() => {
       await firstGroup.locator(".sidebar-recent-sessions__head").hover();
       await firstGroup.getByRole("button", { name: "Group options for First group" }).click();
       await activateMenuItem(page.getByRole("menuitem", { name: "New group…" }));
-      await submitPromptDialog(page, "Second group");
+      await submitInputDialog(page, "Second group");
       await page.locator('[data-session-section="category:Second group"]').waitFor({
         state: "visible",
       });

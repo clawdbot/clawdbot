@@ -365,8 +365,12 @@ async function rememberSessionGroup(
     return "failed";
   }
   try {
-    await scope.sessions.groupsPut([...groups, name]);
-    return host.sessionData.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
+    const written = await scope.sessions.groupsPut([...groups, name]);
+    // The catalog owns the authoritative stale signal; the mutation scope adds
+    // its own. Either one retiring means no confirmed entry to assign against.
+    return written === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope)
+      ? "completed"
+      : "stale";
   } catch (error) {
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return "stale";

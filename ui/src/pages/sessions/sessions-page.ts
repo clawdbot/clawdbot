@@ -19,7 +19,6 @@ import {
 } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.ts";
-import { showPromptDialog } from "../../components/prompt-dialog.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
@@ -1029,10 +1028,11 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private async requestNewCategory(sessionKey?: string) {
-    await showPromptDialog({
+    await showInputDialog({
       title: t("sessionsView.newGroupTitle"),
-      fieldLabel: t("sessionsView.newGroupPrompt"),
-      confirmLabel: t("sessionsView.newGroupCreate"),
+      label: t("sessionsView.newGroupPrompt"),
+      submitLabel: t("sessionsView.newGroupCreate"),
+      requireValue: true,
       submit: (name) => this.writeNewCategory(name, sessionKey),
     });
   }

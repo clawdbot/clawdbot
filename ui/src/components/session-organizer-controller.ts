@@ -29,7 +29,6 @@ import {
   type SidebarSessionPatch,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import { showPromptDialog } from "./prompt-dialog.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 
@@ -411,10 +410,12 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
-    await showPromptDialog({
+    const { showInputDialog } = await import("./input-dialog.ts");
+    await showInputDialog({
       title: t("sessionsView.newGroupTitle"),
-      fieldLabel: t("sessionsView.newGroupPrompt"),
-      confirmLabel: t("sessionsView.newGroupCreate"),
+      label: t("sessionsView.newGroupPrompt"),
+      submitLabel: t("sessionsView.newGroupCreate"),
+      requireValue: true,
       submit: (name) => this.writeSessionGroup(name, sessions),
     });
   }

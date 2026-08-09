@@ -53,7 +53,7 @@ export async function waitForRenderedModalDialog(container: HTMLElement) {
   return getRenderedModalDialog(container);
 }
 
-export async function waitForPromptDialog(): Promise<HTMLInputElement> {
+export async function waitForInputDialog(): Promise<HTMLInputElement> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const input = document.body.querySelector("openclaw-modal-dialog input");
     if (input instanceof HTMLInputElement) {
@@ -61,11 +61,11 @@ export async function waitForPromptDialog(): Promise<HTMLInputElement> {
     }
     await nextFrame();
   }
-  throw new Error("Expected an open prompt dialog");
+  throw new Error("Expected an open input dialog");
 }
 
-export async function submitPromptDialog(value: string): Promise<void> {
-  const input = await waitForPromptDialog();
+export async function submitInputDialog(value: string): Promise<void> {
+  const input = await waitForInputDialog();
   input.value = value;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   await nextFrame();
