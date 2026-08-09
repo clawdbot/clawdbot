@@ -23,6 +23,11 @@ type BuiltPluginControlPlaneModuleFailure = BuiltPluginControlPlaneModule & {
   error: string;
 };
 
+type BuiltDoctorContractClosureViolation = BuiltPluginControlPlaneModule & {
+  dependency: string;
+  importerPath: string;
+};
+
 type ProbeParams = {
   rootDir?: string;
   timeoutMs?: number;
@@ -186,9 +191,9 @@ export function probeBuiltPluginControlPlaneModules(
 // Built chunks are plain ESM, so static edges are exactly the import/export
 // declarations. Dynamic `import()` is excluded by construction: a lazy edge is
 // never paid at enumeration time.
-function parseStaticModuleSpecifiers(source, filePath) {
+function parseStaticModuleSpecifiers(source: string, filePath: string): string[] {
   const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
-  const specifiers = [];
+  const specifiers: string[] = [];
   for (const statement of sourceFile.statements) {
     const moduleSpecifier =
       ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)
@@ -201,7 +206,7 @@ function parseStaticModuleSpecifiers(source, filePath) {
   return specifiers;
 }
 
-function resolveBuiltChunkPath(importerPath, specifier) {
+function resolveBuiltChunkPath(importerPath: string, specifier: string): string | undefined {
   const target = path.resolve(path.dirname(importerPath), specifier);
   const candidates = [target, `${target}.js`, `${target}.mjs`, path.join(target, "index.js")];
   return candidates.find(
@@ -210,17 +215,17 @@ function resolveBuiltChunkPath(importerPath, specifier) {
 }
 
 /** Collects the bare dependencies a built artifact reaches through static imports. */
-function collectBuiltModuleStaticDependencies(entryPath) {
-  const dependencies = new Map();
-  const visited = new Set();
-  const pending = [entryPath];
+function collectBuiltModuleStaticDependencies(entryPath: string): Map<string, string> {
+  const dependencies = new Map<string, string>();
+  const visited = new Set<string>();
+  const pending: string[] = [entryPath];
   while (pending.length > 0) {
     const filePath = pending.pop();
     if (!filePath || visited.has(filePath)) {
       continue;
     }
     visited.add(filePath);
-    let source;
+    let source: string;
     try {
       source = fs.readFileSync(filePath, "utf8");
     } catch {
@@ -243,9 +248,12 @@ function collectBuiltModuleStaticDependencies(entryPath) {
 }
 
 /** Fails when a built doctor artifact statically reaches a forbidden runtime dependency. */
-export function collectBuiltDoctorContractClosureViolations(modules, params = {}) {
+export function collectBuiltDoctorContractClosureViolations(
+  modules: BuiltPluginControlPlaneModule[],
+  params: { rootDir?: string } = {},
+): BuiltDoctorContractClosureViolation[] {
   const rootDir = path.resolve(params.rootDir ?? ROOT);
-  const violations = [];
+  const violations: BuiltDoctorContractClosureViolation[] = [];
   for (const module of modules.filter((candidate) => candidate.kind === "doctor-contract")) {
     const dependencies = collectBuiltModuleStaticDependencies(
       path.join(rootDir, module.relativePath),
