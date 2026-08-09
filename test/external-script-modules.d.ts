@@ -143,7 +143,12 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
   ): Array<{ commit: string; pullRequests: number[] }>;
   export function collectReleaseProvenanceOverrides(
     activeCommits: Array<{ body: string; hash: string }>,
+    releaseProvenance?: string[],
   ): Map<string, number[]>;
+  export function parseArgs(argv: string[]): {
+    releaseProvenance: string[];
+    [key: string]: unknown;
+  };
   export function resolvedReleasePullRequests(
     currentPullRequests: number[],
     mainPullRequests: number[],
