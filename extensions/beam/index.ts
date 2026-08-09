@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createBeamRequestHandler } from "./src/http.js";
 import { createBeamMirrorService } from "./src/mirror.js";
@@ -17,7 +18,13 @@ export default definePluginEntry({
       match: "exact",
       handler: createBeamRequestHandler({
         store,
-        resolveControlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
+        resolveControlUiTarget: () => {
+          const config = api.runtime.config.current();
+          return {
+            agentId: resolveDefaultAgentId(config),
+            basePath: config.gateway?.controlUi?.basePath,
+          };
+        },
       }),
     });
     api.registerService(createBeamMirrorService({ runtime: api.runtime }));
