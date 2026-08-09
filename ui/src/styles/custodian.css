@@ -296,6 +296,13 @@ openclaw-custodian-page {
   box-shadow: 0 1px 3px var(--accent-subtle);
 }
 
+.custodian__wizard-step .custodian__wizard-cancel:disabled:hover {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
 .custodian__wizard-cancel:not(:disabled) {
   color: var(--text);
 }

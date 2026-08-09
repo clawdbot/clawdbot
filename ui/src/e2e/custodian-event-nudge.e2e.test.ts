@@ -521,7 +521,8 @@ suite.define(() => {
         await yesButton.click();
         await expect.poll(() => noButton.isDisabled()).toBe(true);
         await expect.poll(() => yesButton.isDisabled()).toBe(true);
-        for (const button of [noButton, yesButton]) {
+        await expect.poll(() => cancelButton.isDisabled()).toBe(true);
+        for (const button of [noButton, yesButton, cancelButton]) {
           const restingStyle = await button.evaluate(readInteractionStyle);
           await button.hover();
           expect(await button.evaluate(readInteractionStyle)).toEqual(restingStyle);
