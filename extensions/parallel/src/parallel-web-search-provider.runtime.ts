@@ -19,6 +19,7 @@ import {
   withTrustedWebSearchEndpoint,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildParallelCacheKey,
@@ -163,13 +164,14 @@ async function runParallelSearch(params: {
         );
         // Provider/proxy error pages can reflect request headers (including the
         // x-api-key), and the empty-body statusText fallback is server-controlled
-        // too. Run the composed detail through the canonical tool-payload
-        // redactor before it lands in user-facing error text: tools mode keeps
-        // redaction on regardless of log config, and configured
-        // logging.redactPatterns are merged with the built-in credential
-        // patterns so organization-specific secrets are stripped as well.
+        // too. Redact in two passes before the detail lands in user-facing error
+        // text: the tools-mode pass masks header-shaped reflections while the
+        // header name is intact (a configured pattern like api[_-]?key would
+        // otherwise rewrite the name first and hide the shape from the
+        // structured matcher), then the canonical tool-payload redactor applies
+        // the operator's logging.redactPatterns on top of the built-in defaults.
         throw new Error(
-          `Parallel API error (${res.status}): ${redactToolPayloadText(detail || res.statusText)}`,
+          `Parallel API error (${res.status}): ${redactToolPayloadText(redactSensitiveText(detail || res.statusText, { mode: "tools" }))}`,
         );
       }
       return await readProviderJsonResponse<ParallelSearchResponse>(res, "Parallel API", {
