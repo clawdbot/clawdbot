@@ -2408,9 +2408,7 @@ describe("package artifact reuse", () => {
 
   it("lets reusable Docker E2E consume an already resolved package artifact", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
-    const parsedWorkflow = parse(workflow) as {
-      on?: { workflow_call?: { inputs?: Record<string, unknown> } };
-    };
+    const parsedWorkflow = parse(workflow) as Workflow;
     const packageJson = readFileSync(PACKAGE_JSON, "utf8");
     const scheduler = readFileSync("scripts/test-docker-all.mts", "utf8");
     const publishedUpgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
@@ -2496,47 +2494,95 @@ describe("package artifact reuse", () => {
         ?.prepublish_plugin_registry_artifact_id,
     ).toContain("inputs.enable_prepublish_plugin_registry");
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
-    const prepareDockerImage = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
-    const prepareDockerImageStepNames = (prepareDockerImage.steps ?? []).map((step) => step.name);
     const setupHarnessStepName = "Setup trusted release harness package manager";
     const installHarnessStepName = "Install trusted release harness dependencies";
-    const planStepName = "Plan Docker E2E images";
     const setupCandidateStepName = "Setup Node environment";
-    expect(
-      prepareDockerImageStepNames.filter((name) => name === setupHarnessStepName),
-    ).toHaveLength(1);
-    expect(
-      prepareDockerImageStepNames.filter((name) => name === installHarnessStepName),
-    ).toHaveLength(1);
-    expect(
-      prepareDockerImageStepNames.filter((name) => name === setupCandidateStepName),
-    ).toHaveLength(1);
-    expect(prepareDockerImageStepNames.indexOf(setupHarnessStepName)).toBeLessThan(
-      prepareDockerImageStepNames.indexOf(planStepName),
-    );
-    expect(prepareDockerImageStepNames.indexOf(installHarnessStepName)).toBeLessThan(
-      prepareDockerImageStepNames.indexOf(planStepName),
-    );
-    expect(prepareDockerImageStepNames.indexOf(setupCandidateStepName)).toBeGreaterThan(
-      prepareDockerImageStepNames.indexOf(planStepName),
-    );
-    expect(workflowStep(prepareDockerImage, setupHarnessStepName)).toMatchObject({
-      uses: "./.release-harness/.github/actions/setup-pnpm-store-cache",
-      with: {
-        "package-manager-file": ".release-harness/package.json",
-        "use-actions-cache": "false",
+    const releaseChunkCondition = "contains(matrix.profiles, inputs.release_test_profile)";
+    const plannerConsumers = [
+      {
+        candidatePosition: "before",
+        condition: releaseChunkCondition,
+        jobName: "validate_docker_e2e",
+        planStepName: "Plan Docker E2E chunk",
       },
-    });
-    expect(workflowStep(prepareDockerImage, setupHarnessStepName).if).toBeUndefined();
-    expect(workflowStep(prepareDockerImage, installHarnessStepName)).toMatchObject({
-      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
-      "working-directory": ".release-harness",
-    });
-    expect(workflowStep(prepareDockerImage, installHarnessStepName).if).toBeUndefined();
-    expect(workflowStep(prepareDockerImage, setupCandidateStepName)).toMatchObject({
-      if: "(steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == '') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')",
-      uses: "./.github/actions/setup-node-env",
-    });
+      {
+        candidatePosition: "before",
+        condition: undefined,
+        jobName: "validate_docker_lanes",
+        planStepName: "Plan targeted Docker E2E lanes",
+      },
+      {
+        candidatePosition: "before",
+        condition: undefined,
+        jobName: "validate_docker_openwebui",
+        planStepName: "Plan Open WebUI Docker E2E chunk",
+      },
+      {
+        candidatePosition: "after",
+        condition: undefined,
+        jobName: "prepare_docker_e2e_image",
+        planStepName: "Plan Docker E2E images",
+      },
+    ] as const;
+    const discoveredPlannerConsumers = Object.entries(parsedWorkflow.jobs ?? {})
+      .filter(([, job]) =>
+        job.steps?.some((step) =>
+          step.run?.includes("node .release-harness/scripts/test-docker-all.mjs --plan-json"),
+        ),
+      )
+      .map(([jobName]) => jobName)
+      .sort();
+    expect(discoveredPlannerConsumers).toEqual(
+      plannerConsumers.map(({ jobName }) => jobName).sort(),
+    );
+
+    for (const consumer of plannerConsumers) {
+      const job = workflowJob(LIVE_E2E_WORKFLOW, consumer.jobName);
+      const stepNames = (job.steps ?? []).map((step) => step.name);
+      const planStep = workflowStep(job, consumer.planStepName);
+      const setupHarnessStep = workflowStep(job, setupHarnessStepName);
+      const installHarnessStep = workflowStep(job, installHarnessStepName);
+      const setupCandidateStep = workflowStep(job, setupCandidateStepName);
+      const planIndex = stepNames.indexOf(consumer.planStepName);
+
+      expect(stepNames.filter((name) => name === setupHarnessStepName)).toHaveLength(1);
+      expect(stepNames.filter((name) => name === installHarnessStepName)).toHaveLength(1);
+      expect(stepNames.filter((name) => name === setupCandidateStepName)).toHaveLength(1);
+      expect(stepNames.indexOf(setupHarnessStepName)).toBeLessThan(planIndex);
+      expect(stepNames.indexOf(installHarnessStepName)).toBeLessThan(planIndex);
+      expect(
+        consumer.candidatePosition === "before"
+          ? stepNames.indexOf(setupCandidateStepName) < planIndex
+          : stepNames.indexOf(setupCandidateStepName) > planIndex,
+      ).toBe(true);
+      expect(setupHarnessStep).toMatchObject({
+        uses: "./.release-harness/.github/actions/setup-pnpm-store-cache",
+        with: {
+          "package-manager-file": ".release-harness/package.json",
+          "use-actions-cache": "false",
+        },
+      });
+      expect(setupHarnessStep.if).toBe(consumer.condition);
+      expect(installHarnessStep).toMatchObject({
+        env: { CI: "true" },
+        run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+        "working-directory": ".release-harness",
+      });
+      expect(installHarnessStep.if).toBe(consumer.condition);
+      expect(planStep.if).toBe(consumer.condition);
+      expect(planStep.run).toContain(
+        "node .release-harness/scripts/test-docker-all.mjs --plan-json",
+      );
+      expect(setupCandidateStep.uses).toBe("./.github/actions/setup-node-env");
+      expect(setupCandidateStep.if).toBe(
+        consumer.jobName === "prepare_docker_e2e_image"
+          ? "(steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == '') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')"
+          : consumer.condition,
+      );
+    }
+
+    const prepareDockerImage = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
+    const planStepName = "Plan Docker E2E images";
     expect(workflowStep(prepareDockerImage, planStepName).env).toEqual({
       INCLUDE_OPENWEBUI: "${{ inputs.include_openwebui }}",
       INCLUDE_RELEASE_PATH_SUITES: "${{ inputs.include_release_path_suites }}",
