@@ -49,7 +49,11 @@ describe.skipIf(process.platform === "win32")("workspace rsync receiver path", (
       `import { tsImport } from ${JSON.stringify(tsxApi)};\nawait tsImport(${JSON.stringify(sourceEntry)}, import.meta.url);\n`,
     );
 
-    const rsync = process.platform === "darwin" ? "/usr/bin/rsync" : "rsync";
+    const resolvedRsync = await runCommandWithTimeout(["sh", "-c", "command -v rsync"], {
+      timeoutMs: 10_000,
+    });
+    expect(resolvedRsync).toMatchObject({ termination: "exit", code: 0 });
+    const rsync = resolvedRsync.stdout.trim();
     await fs.writeFile(
       path.join(tools, "rsync"),
       '#!/bin/sh\nset -eu\nprintf "%s\\0" "$@" > "$OPENCLAW_TEST_RECEIVER_ARGV"\nexec "$OPENCLAW_TEST_REAL_RSYNC" "$@"\n',
