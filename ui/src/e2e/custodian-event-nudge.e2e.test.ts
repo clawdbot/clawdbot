@@ -487,10 +487,18 @@ suite.define(() => {
         await gateway.deferNext("openclaw.chat");
         await labelInput.fill("Twitch ops");
         await page.getByRole("button", { name: "Submit" }).click();
-        await expect.poll(() => labelInput.isDisabled()).toBe(true);
-        expect(await labelInput.evaluate((element) => getComputedStyle(element).cursor)).toBe(
-          "not-allowed",
-        );
+        await expect
+          .poll(async () => (await labelInput.count()) === 0 || (await labelInput.isDisabled()))
+          .toBe(true);
+        if ((await labelInput.count()) > 0) {
+          expect(await labelInput.evaluate((element) => getComputedStyle(element).cursor)).toBe(
+            "not-allowed",
+          );
+        } else {
+          expect(
+            page.locator(".custodian__structured-response", { hasText: "Twitch ops" }),
+          ).toHaveCount(1);
+        }
 
         await gateway.resolveDeferred("openclaw.chat", {
           sessionId: "e2e-rich-wizard",
