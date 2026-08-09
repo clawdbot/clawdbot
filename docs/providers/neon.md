@@ -20,7 +20,7 @@ same isolation your Neon database already has.
 | Provider id | `neon` (custom; configure under `models.providers.neon`)                   |
 | Plugin      | none; not a bundled OpenClaw provider plugin                               |
 | Auth        | Neon credential with the `ai_gateway:invoke` scope, sent as a bearer token |
-| API         | `openai-completions`, plus `openai-responses` for the Codex models         |
+| API         | `openai-completions`, plus `openai-responses` for two OpenAI models        |
 | Base URL    | `$NEON_AI_GATEWAY_BASE_URL/v1`, or `/openai/v1` for the Responses API      |
 
 <Note>
@@ -102,7 +102,6 @@ same isolation your Neon database already has.
             input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 1000000,
-            compat: { supportsUsageInStreaming: false },
           },
           {
             id: "qwen3-next-80b-a3b-instruct",
@@ -147,18 +146,19 @@ you want longer completions. The 20,000 output tokens per minute that Neon docum
 not a per-request cap.
 
 The `input` array accepts `text`, `image`, `video`, and `audio`. Neon's catalog lists more input
-types than that for some models, including PDF for the Codex models and video and audio for Gemini,
+types than that for some models, including PDF for `gpt-5-3-codex` and video and audio for Gemini,
 but only the four values above are valid in an OpenClaw model entry.
 
-### Gemini models need `supportsUsageInStreaming: false`
+### Streaming responses report no token usage
 
-OpenClaw asks for token usage in the stream unless a model turns it off, which is why the
-`gemini-3-flash` entry above sets `compat: { supportsUsageInStreaming: false }`. Neon translates
-its `gemini-` models into a Gemini request, and that request shape has no `stream_options` field,
-so leaving the default in place makes every call fail with
-`400 Unknown name "stream_options" at 'generation_config'`. The cost is that OpenClaw reports no
-token usage for those models. The other Neon families take `stream_options` and need no `compat`
-block.
+OpenClaw resolves `supportsUsageInStreaming` to `false` for any provider configured with its own
+`baseUrl`, so it never sends `stream_options` to Neon and reports no token usage on streamed
+replies. That applies to every model above, and no `compat` block is needed to get it.
+
+If you set `compat: { supportsUsageInStreaming: true }` to recover token counts, leave it off the
+`gemini-` models. Neon serves those through the native Gemini dialect rather than a chat-completions
+translation, and the request then fails with
+`400 Unknown name "stream_options" at 'generation_config'`.
 
 ## Models
 
@@ -192,9 +192,10 @@ Google roll out gradually, so a catalog model may not be enabled for your projec
 
   </Accordion>
 
-  <Accordion title="Codex models and the Responses API">
-    `gpt-5-3-codex`, `gpt-5-2-codex`, `gpt-5-1-codex-max`, and `gpt-5-1-codex-mini` are served only
-    through the OpenAI Responses API, which Neon exposes under `/openai/v1` rather than `/v1`. Reach
+  <Accordion title="Models that require the Responses API">
+    Neon exposes the [OpenAI Responses API](https://neon.com/docs/ai-gateway/openai-responses) under
+    `/openai/v1` rather than `/v1`. Most OpenAI models answer on both endpoints, but `gpt-5-3-codex`
+    and `gpt-5-5-pro` are served only through Responses and are rejected by chat completions. Reach
     them with a second provider entry using the `openai-responses` API and that base URL, which is the
     same branch host you substituted above with `/openai/v1` on the end:
 
@@ -208,8 +209,8 @@ Google roll out gradually, so a catalog model may not be enabled for your projec
             api: "openai-responses",
             models: [
               {
-                id: "gpt-5-2-codex",
-                name: "GPT-5.2 Codex",
+                id: "gpt-5-3-codex",
+                name: "GPT-5.3 Codex",
                 reasoning: true,
                 input: ["text", "image"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -222,8 +223,8 @@ Google roll out gradually, so a catalog model may not be enabled for your projec
     }
     ```
 
-    Keep the two entries separate. The chat-completions models do not answer on `/openai/v1`, and the
-    Codex models do not answer on `/v1`.
+    This endpoint takes OpenAI model IDs only. Sending a Gemini, Llama, or Qwen ID returns
+    `400 model "<model-id>" is not available on the openai_responses endpoint`.
 
   </Accordion>
 
