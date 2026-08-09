@@ -185,7 +185,9 @@
     "!dist/plugin-sdk/runtime-doctor-migrations.d.ts",
     "!dist/plugin-sdk/doctor-repair-runtime.d.ts",
     "!dist/plugin-sdk/model-ref-parse.d.ts",
+    "!dist/plugin-sdk/outbound-echo-runtime.d.ts",
     "!dist/plugin-sdk/plugin-state-store-runtime.d.ts",
+    "!dist/plugin-sdk/session-store-paths.d.ts",
     "!dist/plugin-sdk/runtime-doctor.d.ts",
     "!dist/plugin-sdk/runtime-fetch.d.ts",
     "!dist/plugin-sdk/sandbox.d.ts",
@@ -410,6 +412,12 @@
     },
     "./plugin-sdk/model-ref-parse": {
       "default": "./dist/plugin-sdk/model-ref-parse.js"
+    },
+    "./plugin-sdk/outbound-echo-runtime": {
+      "default": "./dist/plugin-sdk/outbound-echo-runtime.js"
+    },
+    "./plugin-sdk/session-store-paths": {
+      "default": "./dist/plugin-sdk/session-store-paths.js"
     },
     "./plugin-sdk/plugin-state-store-runtime": {
       "default": "./dist/plugin-sdk/plugin-state-store-runtime.js"

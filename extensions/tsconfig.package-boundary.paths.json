@@ -885,6 +885,12 @@
       ],
       "openclaw/plugin-sdk/model-ref-parse": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/model-ref-parse.d.ts"
+      ],
+      "openclaw/plugin-sdk/outbound-echo-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/outbound-echo-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/session-store-paths": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/session-store-paths.d.ts"
       ]
     }
   }

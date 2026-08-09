@@ -257,7 +257,13 @@ function collectClosureEntries(): ClosureEntry[] {
   for (const record of loadBundledPluginManifestRegistry({ env }).plugins) {
     const pluginRoot = path.resolve(record.rootDir);
     const doctorContractPath = resolvePluginDoctorContractArtifactPath(pluginRoot);
-    if (doctorContractPath) {
+    // A declaration listing no surface gates the artifact off every enumeration
+    // path, exactly as `resolvePluginDoctorContracts` does, so its closure cost
+    // is never paid. Absent declarations still load eagerly and are enforced.
+    const declaresAnyDoctorSurface =
+      !record.doctorContract ||
+      Object.values(record.doctorContract).some((value) => value ?? false);
+    if (doctorContractPath && declaresAnyDoctorSurface) {
       entries.push({
         pluginId: record.id,
         pluginRoot,

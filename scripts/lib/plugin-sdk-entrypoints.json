@@ -7,6 +7,8 @@
   "health",
   "doctor-repair-runtime",
   "model-ref-parse",
+  "outbound-echo-runtime",
+  "session-store-paths",
   "plugin-state-store-runtime",
   "runtime-doctor-migrations",
   "runtime-env",
