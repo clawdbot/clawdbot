@@ -31,7 +31,11 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
   })),
 );
 
-const sendFailureNotificationAnnounceMock = vi.hoisted(() => vi.fn(async () => undefined));
+const sendFailureNotificationAnnounceMock = vi.hoisted(() =>
+  vi.fn<typeof import("../cron/delivery.js").sendFailureNotificationAnnounce>(
+    async () => undefined,
+  ),
+);
 const closeTrackedBrowserTabsForSessionsMock = vi.hoisted(() => vi.fn(async () => 0));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -49,10 +53,7 @@ vi.mock("../cron/delivery.js", async () => {
   const actual = await vi.importActual<typeof import("../cron/delivery.js")>("../cron/delivery.js");
   return {
     ...actual,
-    sendFailureNotificationAnnounce: (...args: unknown[]) =>
-      (
-        sendFailureNotificationAnnounceMock as unknown as (...innerArgs: unknown[]) => Promise<void>
-      )(...args),
+    sendFailureNotificationAnnounce: sendFailureNotificationAnnounceMock,
   };
 });
 
@@ -390,7 +391,7 @@ function expectFailureAnnounceCall(params: {
   if (!call) {
     throw new Error("expected failure announcement call");
   }
-  const args = call as unknown as [unknown, unknown, string, string, unknown, string];
+  const args = call;
   expect(typeof args[2]).toBe("string");
   expect(args[3]).toBe(params.jobId);
   expect(args[4]).toEqual({
@@ -401,13 +402,13 @@ function expectFailureAnnounceCall(params: {
     ...(params.inheritSessionThread === false ? { inheritSessionThread: false } : {}),
   });
   if (params.includeRunStarted) {
-    const lines = args[5].split("\n");
+    const lines = args[5].text.split("\n");
     expect(lines).toEqual([
       params.message,
       expect.stringMatching(/^Run started: \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? \S+$/),
     ]);
   } else {
-    expect(args[5]).toBe(params.message);
+    expect(args[5]).toEqual({ text: params.message });
   }
 }
 
