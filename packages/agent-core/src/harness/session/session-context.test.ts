@@ -2,7 +2,7 @@ import type { AssistantMessage, ProviderReplayState } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { convertToLlm } from "../messages.js";
 import type { SessionTreeEntry } from "../types.js";
-import { buildSessionContext } from "./session.js";
+import { buildSessionContext, projectSessionEntryMessage } from "./session.js";
 
 const timestamp = "2026-07-17T00:00:00.000Z";
 
@@ -13,6 +13,30 @@ function userEntry(id: string, parentId: string | null, content: string): Sessio
     parentId,
     timestamp,
     message: { role: "user", content, timestamp: Date.parse(timestamp) },
+  };
+}
+
+function bashEntry(
+  id: string,
+  parentId: string,
+  output: string,
+  excludeFromContext: boolean,
+): SessionTreeEntry {
+  return {
+    type: "message",
+    id,
+    parentId,
+    timestamp,
+    message: {
+      role: "bashExecution",
+      command: `print ${output}`,
+      output,
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: Date.parse(timestamp),
+      excludeFromContext,
+    },
   };
 }
 
@@ -109,6 +133,28 @@ function toolResultEntry(
 }
 
 describe("buildSessionContext", () => {
+  it("keeps private shell executions in history without projecting them into context", () => {
+    const hiddenEntry = bashEntry("hidden", "initial", "private shell output", true);
+    const visibleEntry = bashEntry("visible", "hidden", "visible shell output", false);
+    const entries = [
+      userEntry("initial", null, "original request"),
+      hiddenEntry,
+      visibleEntry,
+      userEntry("latest", "visible", "continue"),
+    ];
+
+    const messages = buildSessionContext(entries).messages;
+
+    expect(projectSessionEntryMessage(hiddenEntry)).toBeUndefined();
+    expect(projectSessionEntryMessage(visibleEntry)).toBe(
+      visibleEntry.type === "message" ? visibleEntry.message : undefined,
+    );
+    expect(messages.map((message) => message.role)).toEqual(["user", "bashExecution", "user"]);
+    expect(JSON.stringify(messages)).toContain("visible shell output");
+    expect(JSON.stringify(messages)).not.toContain("private shell output");
+    expect(JSON.stringify(entries)).toContain("private shell output");
+  });
+
   it("replays only the retained tail and newer entries after compaction", () => {
     const retainedCheckpoint = replayState("openai-responses-compaction", "retained-checkpoint");
     const retainedSuppression = replayState("openai-responses-compaction-suppression", "rejected");
