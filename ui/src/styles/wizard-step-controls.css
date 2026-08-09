@@ -68,6 +68,11 @@
   gap: 8px;
 }
 
+.wizard-step__actions--split {
+  align-items: center;
+  justify-content: flex-end;
+}
+
 .wizard-step__progress {
   display: flex;
   align-items: center;

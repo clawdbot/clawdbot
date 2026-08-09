@@ -319,6 +319,9 @@ suite.define(() => {
   });
 
   it("renders rich wizard controls and sends typed answers", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(uiProofArtifactDir, { recursive: true });
+    }
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -388,6 +391,33 @@ suite.define(() => {
             ),
           ),
         ).toEqual([44, 44]);
+        for (const viewport of [
+          { width: 390, height: 844, name: "phone" },
+          { width: 768, height: 1024, name: "tablet" },
+          { width: 1440, height: 900, name: "desktop" },
+        ]) {
+          await page.setViewportSize(viewport);
+          const [continueBox, cancelBox] = await Promise.all([
+            continueButton.boundingBox(),
+            cancelButton.boundingBox(),
+          ]);
+          expect(cancelBox).not.toBeNull();
+          expect(continueBox).not.toBeNull();
+          expect(cancelBox!.x).toBeLessThan(continueBox!.x);
+          expect(Math.abs(cancelBox!.y - continueBox!.y)).toBeLessThan(1);
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+            ),
+          ).toBe(true);
+          if (captureUiProofEnabled) {
+            await page.screenshot({
+              animations: "disabled",
+              fullPage: true,
+              path: path.join(uiProofArtifactDir, `05-rich-wizard-actions-${viewport.name}.png`),
+            });
+          }
+        }
 
         await gateway.setMethodResponse("openclaw.chat", {
           sessionId: "e2e-rich-wizard",
