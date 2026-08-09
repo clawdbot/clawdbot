@@ -94,9 +94,14 @@ export async function createContextEngineLogicalTurnLease(params: {
       return;
     }
     warned = true;
+    // Quarantine persists for the process; only transient per-turn degradation is retried next turn.
+    const isQuarantined = resolution.configuredQuarantined === true;
+    const persistence = isQuarantined
+      ? `"${sanitizeForLog(resolution.configuredId)}" is quarantined and stays disabled until restart or re-registration.`
+      : `"${sanitizeForLog(resolution.configuredId)}" will be retried next turn.`;
     (params.warn ?? console.warn)(
       `[context-engine] Context engine "${sanitizeForLog(resolution.configuredId)}" degraded to "${sanitizeForLog(resolution.fallback.registeredId)}" for this logical turn: ${sanitizeForLog(reason)}. ` +
-        `The "${sanitizeForLog(resolution.fallback.registeredId)}" engine will handle only this turn; configuration is unchanged, and "${sanitizeForLog(resolution.configuredId)}" will be retried next turn.`,
+        `The "${sanitizeForLog(resolution.fallback.registeredId)}" engine will handle only this turn; configuration is unchanged, and ${persistence}`,
     );
   };
 

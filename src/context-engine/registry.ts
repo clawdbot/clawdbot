@@ -613,6 +613,9 @@ export type LogicalTurnContextEngineResolution = {
   configured: ResolvedContextEngineRef;
   configuredId: string;
   configuredFailure?: string;
+  // Set only when the configured slot was skipped because it is process-quarantined,
+  // so consumers pick the persistence wording without re-parsing configuredFailure.
+  configuredQuarantined?: boolean;
   fallback: ResolvedContextEngineRef;
 };
 
@@ -632,6 +635,7 @@ function resolvedContextEngineRef(params: {
 async function resolveRawContextEngineRef(
   engineId: string,
   factoryCtx: ContextEngineFactoryContext,
+  defaultEngineId?: string,
 ): Promise<ResolvedContextEngineRef> {
   const entry = getContextEngines().get(engineId);
   if (!entry) {
@@ -651,6 +655,9 @@ async function resolveRawContextEngineRef(
   const projectedEngine = wrapContextEngineHostParamProjection(engine, {
     engineId,
     owner: entry.owner,
+    // Non-default engines carry the fallback id so a wedged/timed-out maintenance
+    // run can quarantine this slot; the default engine must never self-quarantine.
+    ...(defaultEngineId && defaultEngineId !== engineId ? { defaultEngineId } : {}),
   });
   return resolvedContextEngineRef({
     engine: projectedEngine,
@@ -660,8 +667,12 @@ async function resolveRawContextEngineRef(
 }
 
 /**
- * Resolve fresh engines for one logical turn without consulting or mutating
- * process quarantine. A failed configured engine is retried by the next turn.
+ * Resolve fresh engines for one logical turn. Transient per-turn host-support
+ * degradation (missing capability, absent fence/commit) is not recorded and is
+ * retried by the next turn. Genuine process-level quarantine — a wedged or
+ * timed-out maintenance run or lifecycle failure recorded against this slot — is
+ * honored here: the configured engine is skipped in favor of the fallback and
+ * stays skipped until process restart or re-registration.
  */
 export async function resolveLogicalTurnContextEngines(
   config?: OpenClawConfig,
@@ -679,6 +690,16 @@ export async function resolveLogicalTurnContextEngines(
   const fallback = await resolveRawContextEngineRef(defaultEngineId, factoryCtx);
   if (configuredEngineId === defaultEngineId) {
     return { configured: fallback, configuredId: configuredEngineId, fallback };
+  }
+  const quarantine = getContextEngineQuarantine(configuredEngineId);
+  if (quarantine) {
+    return {
+      configured: fallback,
+      configuredId: configuredEngineId,
+      configuredFailure: `context engine "${configuredEngineId}" is quarantined: ${quarantine.reason}`,
+      configuredQuarantined: true,
+      fallback,
+    };
   }
   const entry = getContextEngines().get(configuredEngineId);
   if (!entry) {
@@ -698,7 +719,11 @@ export async function resolveLogicalTurnContextEngines(
     };
   }
   try {
-    const configured = await resolveRawContextEngineRef(configuredEngineId, factoryCtx);
+    const configured = await resolveRawContextEngineRef(
+      configuredEngineId,
+      factoryCtx,
+      defaultEngineId,
+    );
     return {
       configured,
       configuredId: configuredEngineId,

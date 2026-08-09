@@ -3,6 +3,7 @@ import type { AgentMessage } from "../agents/runtime/index.js";
 import { registerLegacyContextEngine } from "./legacy.registration.js";
 import {
   listContextEngineQuarantines,
+  quarantineResolvedContextEngine,
   registerContextEngineForOwner,
   resolveContextEngine,
   resolveLogicalTurnContextEngines,
@@ -23,13 +24,17 @@ function registerProbeEngine(params: {
   compactCalls: Array<Record<string, unknown>>;
   commitTurnCalls?: Array<Record<string, unknown>>;
   maintainCalls?: Array<Record<string, unknown>>;
+  factoryCalls?: unknown[];
   rejectAssemble?: boolean;
 }): string {
   const engineId = `host-param-probe-${++engineCounter}`;
   registerContextEngineForOwner(
     engineId,
-    () =>
-      ({
+    () => {
+      // Record each factory invocation so tests can prove a quarantined slot is
+      // served from the fallback without re-running the wedged custom factory.
+      params.factoryCalls?.push(engineId);
+      return {
         info: {
           id: engineId,
           name: "Host Param Probe",
@@ -57,7 +62,8 @@ function registerProbeEngine(params: {
           params.maintainCalls?.push({ ...callParams });
           return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
         },
-      }) satisfies ContextEngine,
+      } satisfies ContextEngine;
+    },
     `test:${engineId}`,
   );
   return engineId;
@@ -344,5 +350,53 @@ describe("context-engine host parameter projection", () => {
       { sessionId: "session-1", messages: [message] },
       { sessionId: "session-2", messages: [message] },
     ]);
+  });
+
+  it("quarantines a logical-turn engine and honors it on the next turn", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const factoryCalls: unknown[] = [];
+    const engineId = registerProbeEngine({ assembleCalls: [], compactCalls: [], factoryCalls });
+
+    const first = await resolveLogicalTurnContextEngines({
+      plugins: { slots: { contextEngine: engineId } },
+    });
+    // Gap A: logical-turn refs carry defaultEngineId, so a wedged maintenance run can quarantine.
+    expect(first.configuredFailure).toBeUndefined();
+    expect(first.configured.registeredId).toBe(engineId);
+    expect(factoryCalls).toHaveLength(1);
+    const recorded = quarantineResolvedContextEngine({
+      contextEngine: first.configured.engine,
+      operation: "maintain",
+      error: new Error("deferred maintenance timed out"),
+    });
+    expect(recorded).toBe(true);
+
+    // Gap B: the quarantined engine is skipped for the fallback until restart, not re-resolved.
+    const second = await resolveLogicalTurnContextEngines({
+      plugins: { slots: { contextEngine: engineId } },
+    });
+    expect(second.configured.registeredId).toBe(second.fallback.registeredId);
+    expect(second.configuredFailure).toContain("is quarantined");
+    expect(second.configuredFailure).toContain("deferred maintenance timed out");
+    // The wedged custom factory must not run again while quarantined; the fallback serves the turn.
+    expect(factoryCalls).toHaveLength(1);
+    await Promise.allSettled([
+      first.configured.engine.dispose?.(),
+      first.fallback.engine.dispose?.(),
+      second.fallback.engine.dispose?.(),
+    ]);
+  });
+
+  it("never quarantines the default logical-turn engine", async () => {
+    const resolution = await resolveLogicalTurnContextEngines();
+    // The fallback/default ref must not carry self-quarantine metadata.
+    const recorded = quarantineResolvedContextEngine({
+      contextEngine: resolution.fallback.engine,
+      operation: "maintain",
+      error: new Error("default engine wedged"),
+    });
+    expect(recorded).toBe(false);
+    expect(listContextEngineQuarantines()).toEqual([]);
+    await resolution.fallback.engine.dispose?.();
   });
 });
