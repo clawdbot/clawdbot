@@ -73,8 +73,8 @@ export function resolveSlackEventScope(params: {
   if (enterpriseId !== params.identity.enterpriseId) {
     return { ok: false, reason: "wrong_enterprise" };
   }
-  const teamId = context.teamId;
-  if (typeof teamId !== "string" || teamId.length === 0) {
+  const teamId = normalizeOptionalString(context.teamId);
+  if (!teamId) {
     return { ok: false, reason: "missing_team_id" };
   }
   if (!params.client) {
