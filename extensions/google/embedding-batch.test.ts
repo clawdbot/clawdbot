@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
 import type { GeminiEmbeddingClient } from "./embedding-provider.js";
 
+const debugEmbeddingsLogMock = vi.hoisted(() => vi.fn());
+
 // Pass-through so onResponse receives real Response objects (required by
 // readProviderJsonResponse which needs a real .body ReadableStream).
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => {
@@ -11,6 +13,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
     await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")>();
   return {
     ...actual,
+    debugEmbeddingsLog: debugEmbeddingsLogMock,
     withRemoteHttpResponse: async <T>(params: {
       url: string;
       ssrfPolicy?: unknown;
@@ -26,6 +29,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.clearAllMocks();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -499,7 +503,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
     expect(stages.filter((stage) => stage === "create")).toHaveLength(1);
   });
 
-  it("uses a deterministic request fingerprint for upload and job correlation", async () => {
+  it("uses a deterministic request fingerprint for provider correlation without logging it", async () => {
     const uploadBodies: string[] = [];
     const createBodies: string[] = [];
     stubBatchFetch(async (stage, _url, init) => {
@@ -520,6 +524,10 @@ describe("Google embedding-batch bounded JSON reads", () => {
     expect(JSON.parse(createBodies[0] ?? "{}").batch.displayName).toBe(
       JSON.parse(createBodies[1] ?? "{}").batch.displayName,
     );
+    for (const [, metadata] of debugEmbeddingsLogMock.mock.calls) {
+      expect(metadata).not.toHaveProperty("requestFingerprint");
+    }
+    expect(JSON.stringify(debugEmbeddingsLogMock.mock.calls)).not.toContain("hello");
   });
 
   it("cancels pending work without polling or resubmitting", async () => {

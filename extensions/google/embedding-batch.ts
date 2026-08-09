@@ -263,7 +263,6 @@ async function submitGeminiBatch(params: {
     uploadUrl,
     baseUrl,
     requests: params.requests.length,
-    requestFingerprint,
   });
   const uploadSignal = createGeminiBatchStageSignal(params);
   const filePayload = await executeProviderOperationWithRetry({
@@ -309,7 +308,6 @@ async function submitGeminiBatch(params: {
   debugEmbeddingsLog("memory embeddings: gemini batch create", {
     batchEndpoint,
     fileId,
-    requestFingerprint,
   });
   const createSignal = createGeminiBatchStageSignal(params);
   return await executeProviderOperationWithRetry({
