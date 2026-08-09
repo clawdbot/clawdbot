@@ -328,12 +328,9 @@ describe("Docker channel promotion", () => {
   });
 
   it("does not expose an attestation bypass", () => {
-    expect(readFileSync("scripts/docker-channel-promote.mjs", "utf8")).not.toContain(
-      "attestation-policy",
-    );
-    expect(readFileSync("scripts/docker-channel-promote.d.mts", "utf8")).not.toContain(
-      "attestationPolicy",
-    );
+    const source = readFileSync("scripts/docker-channel-promote.mjs", "utf8");
+    expect(source).not.toContain("attestation-policy");
+    expect(source).not.toContain("attestationPolicy");
   });
 
   it("rejects a source whose version label does not match the requested release", () => {
