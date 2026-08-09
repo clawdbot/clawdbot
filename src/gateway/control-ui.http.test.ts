@@ -2045,7 +2045,7 @@ describe("handleControlUiHttpRequest", () => {
           const { res, handled, end, setHeader } = await runBootstrapConfigRequest({
             rootPath: tmp,
             auth,
-            headers: { authorization: "Bearer shared-token" },
+            headers: { authorization: "Bearer invalid-token" },
             rateLimiter,
           });
 
@@ -2069,9 +2069,66 @@ describe("handleControlUiHttpRequest", () => {
             AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
           );
           expect(rateLimiter.reset).not.toHaveBeenCalled();
-          expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalled();
+          expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledTimes(1);
+          expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledWith(
+            "127.0.0.1",
+            AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+          );
+          expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalledWith(
+            "127.0.0.1",
+            AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+          );
         },
       });
+    });
+  });
+
+  it("records a shared mismatch when the device-token scope is locked", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const rateLimiter = createAuthRateLimiterSpy();
+        rateLimiter.check.mockImplementation((_ip, scope) =>
+          scope === AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN
+            ? { allowed: false, remaining: 0, retryAfterMs: 2_500 }
+            : { allowed: true, remaining: 10, retryAfterMs: 0 },
+        );
+        const { res, handled, end, setHeader } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "shared-token", allowTailscale: false },
+          headers: { authorization: "Bearer invalid-token" },
+          rateLimiter,
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(429);
+        expect(responseJson(end)).toEqual({
+          error: {
+            message: "Too many failed authentication attempts. Please try again later.",
+            type: "rate_limited",
+          },
+        });
+        expect(setHeader).toHaveBeenCalledWith("Retry-After", "3");
+        expect(rateLimiter.check).toHaveBeenNthCalledWith(
+          1,
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        );
+        expect(rateLimiter.check).toHaveBeenNthCalledWith(
+          2,
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+        );
+        expect(rateLimiter.reset).not.toHaveBeenCalled();
+        expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledTimes(1);
+        expect(rateLimiter.recordFailureAndDelay).toHaveBeenCalledWith(
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        );
+        expect(rateLimiter.recordFailureAndDelay).not.toHaveBeenCalledWith(
+          "127.0.0.1",
+          AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+        );
+      },
     });
   });
 

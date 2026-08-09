@@ -344,6 +344,8 @@ async function authorizeControlUiReadRequest(
           clientIp,
           rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
         });
+  const sharedSecretMismatch =
+    authResult.reason === "token_mismatch" || authResult.reason === "password_mismatch";
   if (
     authResult.ok &&
     supportsDeviceTokenFallback &&
@@ -383,20 +385,11 @@ async function authorizeControlUiReadRequest(
     }
   }
   if (!resolvedAuthResult.ok) {
-    if (resolvedAuthResult.reason !== "rate_limited") {
-      if (
-        supportsDeviceTokenFallback &&
-        (resolvedAuthResult.reason === "token_mismatch" ||
-          resolvedAuthResult.reason === "password_mismatch")
-      ) {
-        await opts.rateLimiter?.recordFailureAndDelay(
-          clientIp,
-          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-        );
-      }
-      if (deviceTokenValidationFailed) {
-        await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
-      }
+    if (supportsDeviceTokenFallback && sharedSecretMismatch) {
+      await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+    }
+    if (deviceTokenValidationFailed) {
+      await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
     }
     sendGatewayAuthFailure(res, resolvedAuthResult);
     return false;
