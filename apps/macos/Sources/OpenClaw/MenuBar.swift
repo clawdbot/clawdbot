@@ -509,33 +509,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
-        // The authenticated replacement has already signalled READY, so its parent can
-        // terminate while this child waits for the same profile lock to transfer.
-        let lockResult = AppInstanceLock.acquire(
-            url: AppProfile.current.instanceLockURL(),
-            waitMilliseconds: isReplacementHandoff ? 5000 : 0)
-        if case let .acquired(lock) = lockResult {
-            self.profileInstanceLock = lock
-        } else {
-            if launchPolicy.allowsAutomaticPresentation {
-                if case let .failed(message) = lockResult {
-                    let alert = NSAlert()
-                    alert.alertStyle = .critical
-                    alert.messageText = "OpenClaw could not claim its instance lock"
-                    alert.informativeText = message
-                    alert.runModal()
-                } else if AppProfile.current.isActive {
-                    let alert = NSAlert()
-                    alert.messageText = "This OpenClaw profile is already running"
-                    alert.informativeText = "Quit the existing \(AppProfile.current.name ?? "named") profile first."
-                    alert.runModal()
-                } else {
-                    NSWorkspace.shared.open(Self.dashboardURL)
-                }
-            }
-            NSApp.terminate(nil)
-            return
-        }
+        guard self.acquireInstanceOwnership(
+            isReplacementHandoff: isReplacementHandoff,
+            allowsAutomaticPresentation: launchPolicy.allowsAutomaticPresentation)
+        else { return }
         if !AppProfile.current.isActive {
             switch ApplicationRelocator.handleLaunch() {
             case .terminating:
@@ -626,6 +603,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if launchPolicy.shouldAutoOpenDashboard(arguments: CommandLine.arguments) {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
             self.openDashboardAction()
+        }
+    }
+
+    private func acquireInstanceOwnership(
+        isReplacementHandoff: Bool,
+        allowsAutomaticPresentation: Bool) -> Bool
+    {
+        // The authenticated replacement has already signalled READY, so its parent can
+        // terminate while this child waits for the same profile lock to transfer.
+        let result = AppInstanceLock.acquire(
+            url: AppProfile.current.instanceLockURL(),
+            waitMilliseconds: isReplacementHandoff ? 5000 : 0)
+        if case let .acquired(lock) = result {
+            self.profileInstanceLock = lock
+            return true
+        }
+        if allowsAutomaticPresentation {
+            self.presentInstanceOwnershipFailure(result)
+        }
+        NSApp.terminate(nil)
+        return false
+    }
+
+    private func presentInstanceOwnershipFailure(_ result: AppInstanceLockAcquisition) {
+        if case let .failed(message) = result {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "OpenClaw could not claim its instance lock"
+            alert.informativeText = message
+            alert.runModal()
+        } else if AppProfile.current.isActive {
+            let alert = NSAlert()
+            alert.messageText = "This OpenClaw profile is already running"
+            alert.informativeText = "Quit the existing \(AppProfile.current.name ?? "named") profile first."
+            alert.runModal()
+        } else {
+            NSWorkspace.shared.open(Self.dashboardURL)
         }
     }
 
