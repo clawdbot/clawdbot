@@ -18,6 +18,7 @@ import type {
   MemoryPromptSupplementRegistration,
   PreparedMemoryPromptSection,
 } from "./registry-contribution-types.js";
+import type { PluginRegistry } from "./registry-types.js";
 import { requireActivePluginRegistry, resolveDirectPluginRegistrationOwner } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/memory-state");
@@ -39,6 +40,7 @@ export type {
 
 export function resolveMemoryCapabilityRegistration(
   registrations: readonly MemoryPluginCapabilityRegistration[],
+  selectedPluginId?: string,
 ): MemoryPluginCapabilityRegistration | undefined {
   let effective: MemoryPluginCapabilityRegistration | undefined;
   for (const registration of registrations) {
@@ -50,19 +52,60 @@ export function resolveMemoryCapabilityRegistration(
       !registration.capability.promptBuilder &&
       !registration.capability.flushPlanResolver &&
       !registration.capability.runtime;
+    const bridgeCapability = { ...registration.capability };
+    if (preserveExisting) {
+      // An artifacts-only registration augments the effective runtime without replacing it.
+      // Selection provenance below restores authorization from the selected capability only.
+      delete bridgeCapability.authorization;
+    }
     effective = {
       pluginId: registration.pluginId,
       capability: {
         ...(preserveExisting ? existing : {}),
-        ...registration.capability,
+        ...bridgeCapability,
       },
     };
   }
-  return effective;
+  if (!effective || !selectedPluginId) {
+    return effective;
+  }
+
+  let selectedAuthorization: MemoryPluginCapability["authorization"];
+  for (let index = registrations.length - 1; index >= 0; index -= 1) {
+    const registration = registrations[index];
+    if (
+      registration?.pluginId === selectedPluginId &&
+      registration.capability.authorization !== undefined
+    ) {
+      selectedAuthorization = registration.capability.authorization;
+      break;
+    }
+  }
+
+  const capability = { ...effective.capability };
+  delete capability.authorization;
+  return {
+    // The selected backend owns authorization even when its registration borrows a sidecar runtime.
+    pluginId: selectedPluginId,
+    capability: {
+      ...capability,
+      ...(selectedAuthorization !== undefined ? { authorization: selectedAuthorization } : {}),
+    },
+  };
+}
+
+/** Resolves the effective memory capability using loader-recorded slot selection. */
+export function resolveSelectedMemoryCapabilityRegistration(
+  registry: Pick<PluginRegistry, "memoryCapabilities" | "plugins">,
+): MemoryPluginCapabilityRegistration | undefined {
+  const selectedPluginId = registry.plugins.find(
+    (plugin) => plugin.memorySlotSelected === true,
+  )?.id;
+  return resolveMemoryCapabilityRegistration(registry.memoryCapabilities, selectedPluginId);
 }
 
 const getMemoryCapability = () =>
-  resolveMemoryCapabilityRegistration(requireActivePluginRegistry().memoryCapabilities);
+  resolveSelectedMemoryCapabilityRegistration(requireActivePluginRegistry());
 
 const preparedMemoryPromptSections = new WeakSet<PreparedMemoryPromptSection>();
 const activePreparedMemoryPromptSection = new AsyncLocalStorage<PreparedMemoryPromptSection>();
@@ -128,9 +171,7 @@ function buildSynchronousMemoryPromptSection(params: MemoryPromptSectionParams):
 } {
   const registry = requireActivePluginRegistry();
   const primary = filterStringEntries(
-    resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.capability.promptBuilder?.(
-      params,
-    ) ?? [],
+    resolveSelectedMemoryCapabilityRegistration(registry)?.capability.promptBuilder?.(params) ?? [],
   );
   const supplements = registry.memoryPromptSupplements
     // Keep supplement order stable even if plugin registration order changes.

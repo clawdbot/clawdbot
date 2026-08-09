@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { TSchema } from "typebox";
+import { MEMORY_CORE_AUTHORIZATION_CAPABILITIES } from "./src/authorization.js";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
@@ -283,6 +284,7 @@ export default definePluginEntry({
     registerShortTermPromotionDreaming(api);
     registerSessionBackfillGatewayMethods(api);
     api.registerMemoryCapability({
+      authorization: MEMORY_CORE_AUTHORIZATION_CAPABILITIES,
       promptBuilder: buildPromptSection,
       flushPlanResolver: buildMemoryFlushPlan,
       runtime: memoryRuntime,

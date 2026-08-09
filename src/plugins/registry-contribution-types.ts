@@ -3,6 +3,10 @@ import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-e
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
+import type {
+  AuthorizedMemoryRuntime,
+  MemoryAuthorizationCapabilities,
+} from "../memory-host-sdk/host/authorization.js";
 import type { MemorySearchManager, MemorySearchResult } from "../memory-host-sdk/host/types.js";
 import type {
   EmbeddingProvider,
@@ -257,6 +261,14 @@ export type RegisteredMemorySearchManager = MemorySearchManager;
 type MemoryRuntimeBackendConfig = { backend: "builtin" };
 
 export type MemoryPluginRuntime = {
+  authorize?: AuthorizedMemoryRuntime["authorize"];
+  searchAuthorized?: AuthorizedMemoryRuntime["searchAuthorized"];
+  readAuthorized?: AuthorizedMemoryRuntime["readAuthorized"];
+  writeAuthorized?: AuthorizedMemoryRuntime["writeAuthorized"];
+  importAuthorized?: AuthorizedMemoryRuntime["importAuthorized"];
+  syncAuthorized?: AuthorizedMemoryRuntime["syncAuthorized"];
+  exportAuthorized?: AuthorizedMemoryRuntime["exportAuthorized"];
+  statusAuthorized?: AuthorizedMemoryRuntime["statusAuthorized"];
   getMemorySearchManager(params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -302,6 +314,8 @@ export type MemoryPluginPublicArtifactsProvider = {
 };
 
 export type MemoryPluginCapability = {
+  /** Declares the selected backend's authorization support even when it has no runtime. */
+  authorization?: MemoryAuthorizationCapabilities;
   promptBuilder?: MemoryPromptSectionBuilder;
   flushPlanResolver?: MemoryFlushPlanResolver;
   runtime?: MemoryPluginRuntime;

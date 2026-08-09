@@ -36,6 +36,10 @@ vi.mock("./dreaming-state.js", () => ({
 import { createMemoryRuntime, memoryRuntime } from "./runtime-provider.js";
 
 describe("memoryRuntime", () => {
+  it("keeps the context-free runtime free of capability declarations", () => {
+    expect("authorization" in memoryRuntime).toBe(false);
+  });
+
   it("preserves manager debug metadata", async () => {
     const cfg = {} as OpenClawConfig;
 
