@@ -461,7 +461,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       const isGroupDm = channelType === "mpim";
       const isRoom = channelType === "channel" || channelType === "group";
       const isRoomish = isRoom || isGroupDm;
-      const eventTeamId = p.teamId?.trim() || command.team_id?.trim() || undefined;
+      const eventTeamId = p.teamId || command.team_id || undefined;
       const routeTarget = resolveSlackDeferredActionTarget({
         installationIdentity: ctx.installationIdentity,
         teamId: eventTeamId,

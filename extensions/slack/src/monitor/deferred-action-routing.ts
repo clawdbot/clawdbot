@@ -1,5 +1,4 @@
 // Slack plugin module owns workspace-qualified routing for deferred actions.
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackTarget, type SlackTargetKind } from "../target-parsing.js";
 import type { SlackInstallationIdentity } from "./enterprise-install.js";
 
@@ -21,7 +20,7 @@ export function resolveSlackDeferredActionTarget(params: {
   kind: SlackTargetKind;
   id: string;
 }): SlackDeferredActionTarget {
-  const id = params.id.trim();
+  const id = params.id;
   if (!id) {
     throw new Error("Slack deferred action is missing a target ID");
   }
@@ -86,7 +85,7 @@ export function resolveSlackDeferredActionTeamId(params: {
   if (params.installationIdentity?.kind !== "enterprise") {
     return undefined;
   }
-  const teamId = normalizeOptionalString(params.teamId);
+  const teamId = params.teamId;
   if (!teamId) {
     throw new Error("Slack Enterprise Grid deferred action is missing a workspace team ID");
   }
