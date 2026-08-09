@@ -10,10 +10,7 @@ import { getPairedDevice } from "../../../infra/device-pairing.js";
 import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING } from "../../auth-rate-limit.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../../method-scopes.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
-import {
-  filterLegacyNodeProtocolFeatures,
-  normalizeNodeHostCompatibilityMetadata,
-} from "../../node-legacy-protocol-filter.js";
+import { filterLegacyNodeProtocolFeatures } from "../../node-legacy-protocol-filter.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
 import type {
   DeviceAuthorizedGatewayConnect,
@@ -86,10 +83,6 @@ export async function prepareGatewayNodeConnect(
     broadcastNodePairingResult,
   } = context;
   const { device, devicePublicKey, usesLegacyNodeProtocol, rejectUnauthorized } = state;
-  // v3-compatible current clients emit shipped desktop aliases up front so old
-  // Gateways do not persist metadata repairs. Canonicalize before pairing and
-  // policy reconciliation on every current Gateway session.
-  connectParams.client = normalizeNodeHostCompatibilityMetadata(connectParams.client);
   const nodeId = connectParams.device?.id ?? connectParams.client.id;
   const nodePairingSnapshot = await beginNodePairingConnect(nodeId);
   const pairedNode = nodePairingSnapshot.pairedNode;

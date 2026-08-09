@@ -722,6 +722,38 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("paired node reconnects", (getStarted) => {
+    test("normalizes signed blank desktop family before device metadata reapproval", async () => {
+      const pairedNode = await pairDeviceIdentity({
+        name: "node-blank-family-reconnect",
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        platform: "macos",
+        deviceFamily: "Mac",
+      });
+      const nodeClient = await connectNodeClient({
+        port: getStarted().port,
+        deviceIdentity: pairedNode.identity,
+        commands: [],
+        platform: "darwin",
+        deviceFamily: "   ",
+      });
+      try {
+        expect(await getPairedDevice(pairedNode.identity.deviceId)).toMatchObject({
+          platform: "macos",
+          deviceFamily: "Mac",
+        });
+        expect(
+          (await listDevicePairing()).pending.filter(
+            (entry) => entry.deviceId === pairedNode.identity.deviceId,
+          ),
+        ).toEqual([]);
+      } finally {
+        await nodeClient.stopAndWait();
+      }
+    });
+
     test("withholds plugin surface URLs until the node capability is approved", async () => {
       // The shared Gateway harness disables Canvas startup; expose its descriptor
       // so this handshake test exercises production capability issuance.
