@@ -1,8 +1,8 @@
 // Setup migration import tests cover importing existing config into onboarding.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSetupMigrationOptions } from "./setup.migration-import.js";
 import {
   assertFreshSetupMigrationTarget,
@@ -10,29 +10,16 @@ import {
   preserveSetupMigrationSecurityAcknowledgement,
 } from "./setup.migration-snapshot.js";
 
-const tempRoots = new Set<string>();
-
-async function makeTempRoot() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-migration-"));
-  tempRoots.add(root);
-  return root;
-}
-
 async function writeFile(filePath: string, content: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, "utf8");
 }
 
 describe("setup migration import freshness", () => {
-  afterEach(async () => {
-    for (const root of tempRoots) {
-      await fs.rm(root, { force: true, recursive: true });
-    }
-    tempRoots.clear();
-  });
+  const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
   it("allows empty config and empty target directories", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-setup-migration-");
     const result = await inspectSetupMigrationFreshness({
       baseConfig: {},
       stateDir: path.join(root, "state"),
@@ -43,7 +30,7 @@ describe("setup migration import freshness", () => {
   });
 
   it("allows the first-launch security acknowledgement before import", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-setup-migration-");
     const result = await inspectSetupMigrationFreshness({
       baseConfig: {
         wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
@@ -65,7 +52,7 @@ describe("setup migration import freshness", () => {
   });
 
   it("rejects other wizard config during import freshness checks", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-setup-migration-");
     const result = await inspectSetupMigrationFreshness({
       baseConfig: {
         wizard: {
@@ -82,7 +69,7 @@ describe("setup migration import freshness", () => {
   });
 
   it("rejects existing config, workspace files, and state", async () => {
-    const root = await makeTempRoot();
+    const root = tempRoots.make("openclaw-setup-migration-");
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     await writeFile(path.join(workspaceDir, "MEMORY.md"), "existing memory\n");

@@ -1,4 +1,5 @@
 // Google tests cover realtime voice provider plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   resamplePcm,
@@ -132,20 +133,6 @@ function createMockGoogleLiveSession(): MockGoogleLiveSession {
     sendRealtimeInput: vi.fn(),
     sendToolResponse: vi.fn(),
   };
-}
-
-function createDeferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (error: unknown) => void;
-} {
-  let resolve = (_value: T) => {};
-  let reject = (_error: unknown) => {};
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 describe("buildGoogleRealtimeVoiceProvider", () => {

@@ -1,7 +1,11 @@
 // Qqbot tests cover session store plugin behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspaceSync,
+  type TempWorkspaceSync,
+} from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   installQQBotRuntimeForStateTests,
@@ -9,13 +13,7 @@ import {
 } from "../../test-support/runtime.js";
 type SessionState = Parameters<(typeof import("./session-store.js"))["saveSession"]>[0];
 
-const createdDirs: string[] = [];
-
-function createTempDir(prefix: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  createdDirs.push(dir);
-  return dir;
-}
+const tempWorkspaces: TempWorkspaceSync[] = [];
 
 async function useMockHome(homeDir: string): Promise<void> {
   vi.doMock("node:os", async (importOriginal) => {
@@ -29,8 +27,17 @@ async function useMockHome(homeDir: string): Promise<void> {
 }
 
 async function useStateAndHome(): Promise<{ stateDir: string; homeDir: string }> {
-  const stateDir = createTempDir("qqbot-state-");
-  const homeDir = createTempDir("qqbot-home-");
+  const stateWorkspace = tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "qqbot-state-",
+  });
+  const homeWorkspace = tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "qqbot-home-",
+  });
+  tempWorkspaces.push(stateWorkspace, homeWorkspace);
+  const stateDir = stateWorkspace.dir;
+  const homeDir = homeWorkspace.dir;
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("HOME", homeDir);
   await useMockHome(homeDir);
@@ -76,8 +83,8 @@ describe("engine/session/session-store", () => {
     vi.doUnmock("node:os");
     vi.resetModules();
     vi.unstubAllEnvs();
-    for (const dir of createdDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
+    for (const workspace of tempWorkspaces.splice(0)) {
+      workspace.cleanup();
     }
   });
 

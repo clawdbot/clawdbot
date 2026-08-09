@@ -1,8 +1,8 @@
 // Session manager tests cover SQLite persistence and in-memory tree behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -22,7 +22,7 @@ import {
   type SessionMessageEntry,
 } from "./session-manager.js";
 
-const tempPaths: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function openMarker(marker: string, sessionKey: string, cwd: string): SessionManager {
   const target = parseSqliteSessionFileMarker(marker);
@@ -32,21 +32,9 @@ function openMarker(marker: string, sessionKey: string, cwd: string): SessionMan
   return SessionManager.open({ ...target, sessionKey }, cwd);
 }
 
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-manager-"));
-  tempPaths.push(dir);
-  return dir;
-}
-
 describe("SessionManager.open", () => {
-  afterEach(async () => {
-    await Promise.all(
-      tempPaths.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
-  });
-
   it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-session";
     const sessionKey = "agent:main:dashboard:sqlite";
@@ -161,7 +149,7 @@ describe("SessionManager.open", () => {
   });
 
   it("rejects persisted legacy transcripts until doctor or import migrates them", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "legacy-persisted-session";
     const sessionKey = "agent:main:legacy-persisted-session";
@@ -213,7 +201,7 @@ describe("SessionManager.open", () => {
   });
 
   it("skips malformed null rows while opening a persisted transcript", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-malformed-row",
@@ -237,7 +225,7 @@ describe("SessionManager.open", () => {
   });
 
   it("persists explicit leaf controls across SQLite reopen", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-leaf-control",
@@ -275,7 +263,7 @@ describe("SessionManager.open", () => {
   });
 
   it("persists the current header before a first non-message entry", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-model-change-first",
@@ -307,7 +295,7 @@ describe("SessionManager.open", () => {
   });
 
   it("persists a fresh SQLite session header and first message", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-fresh-session",
@@ -340,7 +328,7 @@ describe("SessionManager.open", () => {
   });
 
   it("does not rewrite an existing session row when opening an empty transcript", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-empty-existing-row-target",
@@ -360,7 +348,7 @@ describe("SessionManager.open", () => {
   });
 
   it("does not overwrite a rebound session row when the first append seeds its header", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-stale-appender",
@@ -415,7 +403,7 @@ describe("SessionManager.open", () => {
   });
 
   it("refreshes cwd when switching persisted targets and rejects identity reset", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const firstTarget = {
       agentId: "main",
@@ -450,7 +438,7 @@ describe("SessionManager.open", () => {
   });
 
   it("reloads prompt-time SQLite appends before the attempt resumes", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const target = {
       agentId: "main",
       sessionId: "prompt-reload",
@@ -473,7 +461,7 @@ describe("SessionManager.open", () => {
   });
 
   it("clears side-append mode when switching to a header-only target", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const firstTarget = {
       agentId: "main",
@@ -563,7 +551,7 @@ describe("SessionManager.open", () => {
   });
 
   it("keeps stale appenders valid across a reset while snapshot replacement rotates generation", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const scope = {
       agentId: "main",
       sessionId: "sqlite-reset-stale-appender",
@@ -626,7 +614,7 @@ describe("SessionManager.open", () => {
   });
 
   it("reuses a pre-persisted user as the canonical SQLite parent", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-runtime-user-parent";
     const sessionKey = "agent:main:dashboard:sqlite-runtime-user-parent";
@@ -739,7 +727,7 @@ describe("SessionManager.open", () => {
   });
 
   it("ignores opaque SQLite rows while resolving the session cwd", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-opaque-header";
     const sessionKey = "agent:main:dashboard:sqlite-opaque-header";
@@ -764,7 +752,7 @@ describe("SessionManager.open", () => {
   });
 
   it("rejects persistence after the session target rebounds", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-prompt-release-rebound";
     const sessionKey = "agent:main:dashboard:sqlite-prompt-release-rebound";
@@ -820,7 +808,7 @@ describe("SessionManager.open", () => {
   });
 
   it("reloads SQLite markers through setSessionFile without switching to file paths", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "legacy-sqlite-marker-reload";
     const sessionKey = "agent:main:dashboard:legacy-sqlite-marker-reload";
@@ -871,7 +859,7 @@ describe("SessionManager.open", () => {
   });
 
   it("creates SQLite-backed branch sessions without rewriting the source transcript", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-branch-source";
     const sessionKey = "agent:main:dashboard:sqlite-branch-source";
@@ -936,7 +924,7 @@ describe("SessionManager.open", () => {
   });
 
   it("persists user turns when a SQLite marker has no external recorder", async () => {
-    const dir = await makeTempDir();
+    const dir = tempDirs.make("openclaw-session-manager-");
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-direct-user-session";
     const sessionKey = "agent:main:voice:direct-user";

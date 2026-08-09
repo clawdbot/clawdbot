@@ -6,6 +6,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -84,16 +85,6 @@ beforeEach(() => {
 afterEach(() => {
   resetProcessRegistryForTests();
 });
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 async function runExecWithExit(params: {
   exit: RunExit;
@@ -654,7 +645,7 @@ describe("sandbox exec finalization suspension", () => {
     "keeps suspension busy until asynchronous finalization settles after $scenario",
     async ({ finalizeRejects, processTimesOut, expectedFailureKind, expectedStatus }) => {
       const exit = createDeferred<RunExit>();
-      const finalization = createDeferred<void>();
+      const finalization = createDeferred();
       const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(
         async () => await finalization.promise,
       );

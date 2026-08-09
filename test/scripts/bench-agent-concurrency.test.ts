@@ -11,7 +11,7 @@ import {
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../src/process/gateway-work-admission.js";
-import { createDeferred } from "../../src/test-utils/deferred.js";
+import { createDeferred } from "../helpers/promise.js";
 
 function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2, 3]): WorkerResult {
   const invariant: Record<string, number | boolean> =

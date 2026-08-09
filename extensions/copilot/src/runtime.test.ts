@@ -1,6 +1,7 @@
 // Copilot tests cover runtime plugin behavior.
 import { normalize, resolve, sep } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientCreateOptions, PoolKey } from "./runtime.js";
 import { createCopilotClientPool } from "./runtime.js";
@@ -20,24 +21,6 @@ interface FakeFactoryOptions {
     id: number,
   ) => CopilotClient | Promise<CopilotClient>;
   readonly stop?: (client: FakeClient) => Promise<Error[]> | Error[];
-}
-
-function createDeferred<T>() {
-  let resolveValue: ((value: T | PromiseLike<T>) => void) | undefined;
-  let rejectValue: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolveValue = resolvePromise;
-    rejectValue = rejectPromise;
-  });
-  return {
-    promise,
-    resolve(value: T) {
-      resolveValue?.(value);
-    },
-    reject(reason: unknown) {
-      rejectValue?.(reason);
-    },
-  };
 }
 
 function normalizeHomeForTest(copilotHome: string): string {

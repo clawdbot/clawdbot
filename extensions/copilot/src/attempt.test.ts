@@ -13,6 +13,7 @@ import {
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -271,24 +272,6 @@ function expectTranscriptCredentialSafety(instructions: string): void {
 
 function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {
   return expectDefined(sdk.resumeSession.mock.calls[0]?.[1], "Copilot resumeSession config");
-}
-
-function createDeferred<T>() {
-  let rejectPromise: ((reason?: unknown) => void) | undefined;
-  let resolvePromise: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
-  return {
-    promise,
-    reject(reason?: unknown) {
-      rejectPromise?.(reason);
-    },
-    resolve(value: T) {
-      resolvePromise?.(value);
-    },
-  };
 }
 
 function flushAsync() {

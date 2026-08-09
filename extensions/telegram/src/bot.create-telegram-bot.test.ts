@@ -9,6 +9,7 @@ import {
   buildPluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
@@ -375,16 +376,6 @@ function makeGenericCallbackContext(params: { id: string; updateId?: number }) {
       reply_markup: { inline_keyboard: [[{ text: "Skip tonight", callback_data: data }]] },
     },
   });
-}
-
-function createDeferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
@@ -3062,8 +3053,8 @@ describe("createTelegramBot", () => {
   it("dedupes a replayed Telegram message after handler recreation while dispatch is pending", async () => {
     configureOpenDm();
 
-    const firstDispatchStarted = createDeferred();
-    const finishFirstDispatch = createDeferred();
+    const firstDispatchStarted = createDeferred<void>();
+    const finishFirstDispatch = createDeferred<void>();
     replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onReplyStart?.();
       firstDispatchStarted.resolve();

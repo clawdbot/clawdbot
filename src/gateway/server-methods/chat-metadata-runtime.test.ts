@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import { describe, expect, test, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";
 import type { GatewayRequestContext } from "./types.js";

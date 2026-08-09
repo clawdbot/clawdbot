@@ -1,9 +1,9 @@
 // Post-core plugin convergence tests cover update convergence checks after core updates.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
   listManagedPluginNpmRoots: vi.fn(),
@@ -43,7 +43,7 @@ import {
 } from "./post-core-plugin-convergence.js";
 
 describe("runPostCorePluginConvergence", () => {
-  const tempDirs: string[] = [];
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -63,18 +63,6 @@ describe("runPostCorePluginConvergence", () => {
     });
     mocks.runPluginPayloadSmokeCheck.mockResolvedValue({ checked: [], failures: [] });
   });
-
-  afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  function makeTempDir(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-post-core-convergence-"));
-    tempDirs.push(dir);
-    return dir;
-  }
 
   function writeBundledPlugin(rootDir: string, pluginId: string): string {
     const pluginDir = path.join(rootDir, pluginId);
@@ -258,7 +246,7 @@ describe("runPostCorePluginConvergence", () => {
   it.each(["peerDependencies", "dependencies"] as const)(
     "repairs a registered extensions-root %s stale host before the real payload smoke check",
     async (dependencyField) => {
-      const stateDir = makeTempDir();
+      const stateDir = tempDirs.make("openclaw-post-core-convergence-");
       const packageDir = path.join(stateDir, "extensions", "email");
       const staleHostDir = path.join(packageDir, "node_modules", "openclaw");
       fs.mkdirSync(staleHostDir, { recursive: true });
@@ -331,12 +319,17 @@ describe("runPostCorePluginConvergence", () => {
   });
 
   it("prunes stale local bundled plugin shadows from baseline records before repair", async () => {
-    const bundledRoot = makeTempDir();
+    const bundledRoot = tempDirs.make("openclaw-post-core-convergence-");
     writeBundledPlugin(bundledRoot, "discord");
     const baseline = {
       discord: {
         source: "path" as const,
-        installPath: path.join(makeTempDir(), "dist", "extensions", "discord"),
+        installPath: path.join(
+          tempDirs.make("openclaw-post-core-convergence-"),
+          "dist",
+          "extensions",
+          "discord",
+        ),
         version: "2026.5.4-beta.3",
       },
       brave: { source: "npm" as const, installPath: "/p/brave" },
