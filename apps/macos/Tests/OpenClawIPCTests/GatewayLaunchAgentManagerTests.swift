@@ -51,7 +51,17 @@ struct GatewayLaunchAgentManagerTests {
         defer { try? FileManager.default.removeItem(at: home) }
         let agents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
         try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
-        try Data("not a plist".utf8).write(to: agents.appendingPathComponent("ai.openclaw.p1402.plist"))
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "ProgramArguments": ["node", "openclaw.mjs", "gateway"],
+                "EnvironmentVariables": [
+                    "OPENCLAW_SERVICE_MARKER": "openclaw",
+                    "OPENCLAW_SERVICE_KIND": "gateway",
+                ],
+            ],
+            format: .xml,
+            options: 0)
+        try data.write(to: agents.appendingPathComponent("ai.openclaw.p1402.plist"))
 
         let claim = GatewayLaunchAgentManager.conflictingProfileClaimOwner(
             port: 55636,
@@ -59,6 +69,49 @@ struct GatewayLaunchAgentManagerTests {
             homeDirectory: home)
 
         #expect(claim?.contains("p1402") == true)
+    }
+
+    @Test func `same prefix ssh tunnel is not a profile Gateway claim`() throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let agents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "ProgramArguments": ["/usr/bin/ssh", "-N", "-L", "55636:127.0.0.1:18789"],
+            ],
+            format: .xml,
+            options: 0)
+        try data.write(to: agents.appendingPathComponent("ai.openclaw.gateway-tunnel.plist"))
+        try Data("not a plist".utf8).write(to: agents.appendingPathComponent("ai.openclaw.unrelated.plist"))
+
+        #expect(GatewayLaunchAgentManager.conflictingProfileClaimOwner(
+            port: 55636,
+            excludingLabel: "ai.openclaw.qa",
+            homeDirectory: home) == nil)
+    }
+
+    @Test func `default generated Gateway claim is recognized`() throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let agents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "ProgramArguments": ["node", "openclaw.mjs", "gateway", "--port", "18789"],
+                "EnvironmentVariables": [
+                    "OPENCLAW_SERVICE_MARKER": "openclaw",
+                    "OPENCLAW_SERVICE_KIND": "gateway",
+                ],
+            ],
+            format: .xml,
+            options: 0)
+        try data.write(to: agents.appendingPathComponent("ai.openclaw.gateway.plist"))
+
+        #expect(GatewayLaunchAgentManager.conflictingProfileClaimOwner(
+            port: 18789,
+            excludingLabel: "ai.openclaw.qa",
+            homeDirectory: home)?.contains("default") == true)
     }
 
     @Test func `reads Gateway service ownership command directly from launchd`() throws {

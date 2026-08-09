@@ -52,23 +52,41 @@ enum GatewayLaunchAgentManager {
             guard url.pathExtension == "plist" else { continue }
             let label = url.deletingPathExtension().lastPathComponent
             guard label != excludingLabel,
-                  let owner = self.profileOwner(forLaunchAgentLabel: label)
+                  let profile = self.profile(forLaunchAgentLabel: label)
             else { continue }
-            guard let snapshot = LaunchAgentPlist.snapshot(url: url), let claimedPort = snapshot.port else {
+            let owner = profile.name ?? "default"
+            let artifacts = self.generatedEnvironmentArtifacts(
+                directory: profile.stateDirectoryURL(homeDirectory: homeDirectory)
+                    .appendingPathComponent("service-env", isDirectory: true),
+                profile: profile)
+            guard let snapshot = LaunchAgentPlist.snapshot(
+                url: url,
+                generatedEnvironmentFileURL: artifacts.environment,
+                generatedEnvironmentWrapperURL: artifacts.wrapper),
+                self.isCanonicalGatewayClaim(snapshot)
+            else { continue }
+            guard let claimedPort = snapshot.port else {
                 return "profile \"\(owner)\" has an unreadable Gateway reservation"
             }
-            if claimedPort == port { return "profile \"\(owner)\"" }
+            if claimedPort == port { return "profile \"\(owner)\" already reserves it" }
         }
         return nil
     }
 
-    private static func profileOwner(forLaunchAgentLabel label: String) -> String? {
-        if label == AppProfile(environment: [:]).gatewayLaunchAgentLabel { return "default" }
+    private static func profile(forLaunchAgentLabel label: String) -> AppProfile? {
+        let base = AppProfile(environment: [:])
+        if label == base.gatewayLaunchAgentLabel { return base }
         let prefix = "ai.openclaw."
         guard label.hasPrefix(prefix) else { return nil }
         let name = String(label.dropFirst(prefix.count))
         let profile = AppProfile(environment: ["OPENCLAW_PROFILE": name])
-        return profile.name == name && profile.gatewayLaunchAgentLabel == label ? name : nil
+        return profile.name == name && profile.gatewayLaunchAgentLabel == label ? profile : nil
+    }
+
+    private static func isCanonicalGatewayClaim(_ snapshot: LaunchAgentPlistSnapshot) -> Bool {
+        snapshot.environment["OPENCLAW_SERVICE_MARKER"] == "openclaw" &&
+            snapshot.environment["OPENCLAW_SERVICE_KIND"] == "gateway" &&
+            snapshot.programArguments.contains("gateway")
     }
 
     private static var generatedEnvironmentDirectoryURL: URL {

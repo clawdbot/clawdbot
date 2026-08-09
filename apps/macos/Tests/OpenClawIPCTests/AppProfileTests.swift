@@ -100,6 +100,7 @@ struct AppProfileTests {
 
         #expect(first.conflict == nil)
         #expect(second.conflict?.contains("p2380") == true)
+        #expect(second.conflict?.contains("reservation reserves") == false)
     }
 
     @Test func `persisted other profile gateway reserves its exact port`() throws {
@@ -108,9 +109,22 @@ struct AppProfileTests {
         let home = root.appendingPathComponent("home", isDirectory: true)
         let agents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
         try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let serviceEnv = home.appendingPathComponent(".openclaw-p1402/service-env", isDirectory: true)
+        try FileManager.default.createDirectory(at: serviceEnv, withIntermediateDirectories: true)
+        let wrapper = serviceEnv.appendingPathComponent("ai.openclaw.p1402-env-wrapper.sh")
+        let environment = serviceEnv.appendingPathComponent("ai.openclaw.p1402.env")
+        try Data("#!/bin/sh\n".utf8).write(to: wrapper)
+        try Data("""
+        export OPENCLAW_SERVICE_MARKER='openclaw'
+        export OPENCLAW_SERVICE_KIND='gateway'
+
+        """.utf8).write(to: environment)
         let data = try PropertyListSerialization.data(
             fromPropertyList: [
-                "ProgramArguments": ["node", "openclaw.mjs", "gateway", "--port", "55636"],
+                "ProgramArguments": [
+                    "/bin/sh", wrapper.path, environment.path,
+                    "node", "openclaw.mjs", "gateway", "--port", "55636",
+                ],
             ],
             format: .xml,
             options: 0)

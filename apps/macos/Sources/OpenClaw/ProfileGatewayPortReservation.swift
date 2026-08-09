@@ -29,26 +29,26 @@ final class ProfileGatewayPortReservation: @unchecked Sendable {
             return self.conflict(
                 profile: profileName,
                 port: port,
-                owner: "another running OpenClaw profile")
+                reason: "another running OpenClaw profile already reserves it")
         case let .failed(reason):
             return self.conflict(
                 profile: profileName,
                 port: port,
-                owner: "an unverifiable profile reservation (\(reason))")
+                reason: "the profile reservation could not be verified (\(reason))")
         }
 
-        if let owner = GatewayLaunchAgentManager.conflictingProfileClaimOwner(
+        if let reason = GatewayLaunchAgentManager.conflictingProfileClaimOwner(
             port: port,
             excludingLabel: profile.gatewayLaunchAgentLabel,
             homeDirectory: homeDirectory)
         {
-            return self.conflict(profile: profileName, port: port, owner: owner)
+            return self.conflict(profile: profileName, port: port, reason: reason)
         }
         return Self(port: port, conflict: nil, lock: lock)
     }
 
-    private static func conflict(profile: String, port: Int, owner: String) -> Self {
-        let message = "Profile \"\(profile)\" cannot use Gateway port \(port) because \(owner) reserves it. " +
+    private static func conflict(profile: String, port: Int, reason: String) -> Self {
+        let message = "Profile \"\(profile)\" cannot use Gateway port \(port) because \(reason). " +
             "Set gateway.port to a free port for this profile, or stop/uninstall the other Gateway."
         return Self(
             port: port,
