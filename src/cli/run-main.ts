@@ -8,11 +8,8 @@ import type { Command as CommanderCommand, Option as CommanderOption } from "com
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  isLoopbackAddress,
-  isSecureWebSocketUrl,
-  normalizeWebSocketProtocol,
-} from "../gateway/net.js";
+import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
+import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import {
   consumeRootOptionToken,
   FLAG_TERMINATOR,

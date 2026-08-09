@@ -468,11 +468,6 @@ export function isPrivateOrLoopbackHost(host: string): boolean {
   return true;
 }
 
-/** Normalize HTTP aliases accepted by WebSocket clients to their WebSocket protocol. */
-export function normalizeWebSocketProtocol(protocol: string): string {
-  return protocol === "https:" ? "wss:" : protocol === "http:" ? "ws:" : protocol;
-}
-
 function parseHostForAddressChecks(
   host: string,
 ): { isLocalhost: boolean; unbracketedHost: string } | null {
