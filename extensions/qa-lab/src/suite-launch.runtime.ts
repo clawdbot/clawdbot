@@ -12,7 +12,7 @@ import {
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-import { isQaFastModeEnabled } from "./model-selection.js";
+import { isQaFastModeEnabled, type QaProviderMode } from "./model-selection.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import {
   defaultQaSuiteConcurrencyForTransport,
@@ -26,7 +26,11 @@ import {
   resolveQaScenarioRequiredProviderMode,
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
-import { expandQaScenarioExecutionCells, type QaScenarioExecutionCell } from "./scenario-lane.js";
+import {
+  describeQaProviderLaneMismatches,
+  expandQaScenarioExecutionCells,
+  type QaScenarioExecutionCell,
+} from "./scenario-lane.js";
 import {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -745,6 +749,21 @@ async function runUnifiedQaSuite(params: {
   const startedAt = new Date();
   const repoRoot = path.resolve(params.runParams?.repoRoot ?? process.cwd());
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params.runParams?.outputDir);
+  const nativeModeScenarios = new Map<QaProviderMode, string[]>();
+  for (const scenario of [...params.plan.testFileScenariosByKind.values()].flat()) {
+    const mode = resolveQaScenarioRequiredProviderMode(scenario);
+    if (mode) {
+      nativeModeScenarios.set(mode, [...(nativeModeScenarios.get(mode) ?? []), scenario.id]);
+    }
+  }
+  const nativeProviderModes = [...nativeModeScenarios.keys()].toSorted();
+  if (nativeProviderModes.length > 1) {
+    throw new Error(
+      `selected native QA scenarios require conflicting provider modes: ${nativeProviderModes
+        .map((mode) => `${mode} (${nativeModeScenarios.get(mode)?.toSorted().join(", ")})`)
+        .join(", ")}`,
+    );
+  }
   // Only an explicitly selected single flow may replace the unified suite's mock default.
   const [selectedScenario] = params.plan.scenarios;
   const selectedProviderMode =
@@ -755,8 +774,26 @@ async function runUnifiedQaSuite(params: {
       ? resolveQaScenarioRequiredProviderMode(selectedScenario)
       : undefined;
   const providerMode = normalizeQaProviderMode(
-    params.runParams?.providerMode ?? selectedProviderMode ?? DEFAULT_QA_PROVIDER_MODE,
+    params.runParams?.providerMode ??
+      nativeProviderModes[0] ??
+      selectedProviderMode ??
+      DEFAULT_QA_PROVIDER_MODE,
   );
+  const primaryModel =
+    params.runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
+  const providerModeMismatches =
+    params.plan.testFileScenariosByKind.size === 0
+      ? []
+      : params.plan.scenarios.flatMap((scenario) =>
+          describeQaProviderLaneMismatches({ scenario, providerMode, primaryModel })
+            .filter((reason) => reason.startsWith("providerMode="))
+            .map((reason) => `${scenario.id} (${reason})`),
+        );
+  if (providerModeMismatches.length > 0) {
+    throw new Error(
+      `selected QA scenario(s) do not match the current QA lane: ${providerModeMismatches.join(", ")}`,
+    );
+  }
   const progress = params.runParams?.lab
     ? createQaSuiteProgressController({
         lab: params.runParams.lab,
@@ -765,8 +802,6 @@ async function runUnifiedQaSuite(params: {
       })
     : undefined;
   progress?.start();
-  const primaryModel =
-    params.runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   const alternateModel =
     params.runParams?.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
   const fastMode =

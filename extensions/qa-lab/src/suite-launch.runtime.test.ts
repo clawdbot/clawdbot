@@ -57,6 +57,19 @@ async function writeEvidence(pathLocal: string, writeFile = true) {
   return evidence;
 }
 
+function createMockLab() {
+  return {
+    baseUrl: "http://127.0.0.1:43124",
+    listenUrl: "http://127.0.0.1:43124",
+    runSelfCheck: vi.fn(),
+    setControlUi: vi.fn(),
+    setLatestReport: vi.fn(),
+    setScenarioRun: vi.fn(),
+    state: {} as QaLabServerHandle["state"],
+    stop: vi.fn(),
+  } satisfies QaLabServerHandle;
+}
+
 function trackMaxActiveFlowRuns() {
   const run = runQaFlowSuite.getMockImplementation();
   if (!run) {
@@ -1087,6 +1100,118 @@ describe("qa suite runtime launcher", () => {
         ],
       }),
     );
+  });
+
+  it("adopts an implicit native live-frontier requirement", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-native-live-provider-");
+
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/native-live-provider",
+      scenarioIds: ["openai-realtime-talk-live"],
+    });
+
+    expect(runQaFlowSuite).not.toHaveBeenCalled();
+    expect(runQaTestFileScenarios).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerMode: "live-frontier",
+        primaryModel: expect.stringMatching(/^openai\//),
+        scenarios: [expect.objectContaining({ id: "openai-realtime-talk-live" })],
+      }),
+    );
+  });
+
+  it("rejects an incompatible explicit native provider mode before progress or runners", async () => {
+    const lab = createMockLab();
+
+    await expect(
+      runQaSuite({
+        lab,
+        repoRoot: process.cwd(),
+        providerMode: "mock-openai",
+        scenarioIds: ["openai-realtime-talk-live"],
+      }),
+    ).rejects.toThrow(
+      "selected QA scenario(s) do not match the current QA lane: openai-realtime-talk-live (providerMode=live-frontier)",
+    );
+
+    expect(lab.setScenarioRun).not.toHaveBeenCalled();
+    expect(runQaFlowSuite).not.toHaveBeenCalled();
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting native provider requirements before progress or runners", async () => {
+    const lab = createMockLab();
+
+    await expect(
+      runQaSuite({
+        lab,
+        repoRoot: process.cwd(),
+        scenarioIds: ["diagnostic-events-boundary", "openai-realtime-talk-live"],
+      }),
+    ).rejects.toThrow(
+      "selected native QA scenarios require conflicting provider modes: live-frontier (openai-realtime-talk-live), mock-openai (diagnostic-events-boundary)",
+    );
+
+    expect(lab.setScenarioRun).not.toHaveBeenCalled();
+    expect(runQaFlowSuite).not.toHaveBeenCalled();
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+  });
+
+  it("runs a native scenario under a compatible explicit provider override", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-native-live-override-");
+
+    await runQaSuite({
+      repoRoot,
+      providerMode: "live-frontier",
+      scenarioIds: ["openai-realtime-talk-live"],
+    });
+
+    expect(runQaFlowSuite).not.toHaveBeenCalled();
+    expect(runQaTestFileScenarios).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerMode: "live-frontier",
+        scenarios: [expect.objectContaining({ id: "openai-realtime-talk-live" })],
+      }),
+    );
+  });
+
+  it("keeps unconstrained native scenarios lane-agnostic during provider adoption", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-native-lane-agnostic-");
+
+    await runQaSuite({
+      repoRoot,
+      scenarioIds: ["gateway-smoke", "openai-realtime-talk-live"],
+    });
+
+    expect(runQaFlowSuite).not.toHaveBeenCalled();
+    expect(runQaTestFileScenarios).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerMode: "live-frontier",
+        scenarios: [
+          expect.objectContaining({ id: "gateway-smoke" }),
+          expect.objectContaining({ id: "openai-realtime-talk-live" }),
+        ],
+      }),
+    );
+  });
+
+  it("rejects a mixed native and flow provider conflict before progress or runners", async () => {
+    const lab = createMockLab();
+
+    await expect(
+      runQaSuite({
+        lab,
+        repoRoot: process.cwd(),
+        scenarioIds: ["openai-realtime-talk-live", "goal-context-next-turn"],
+      }),
+    ).rejects.toThrow(
+      "selected QA scenario(s) do not match the current QA lane: goal-context-next-turn (providerMode=mock-openai)",
+    );
+
+    expect(lab.setScenarioRun).not.toHaveBeenCalled();
+    expect(runQaFlowSuite).not.toHaveBeenCalled();
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
   it("serializes test-file runner partitions in one checkout", async () => {
