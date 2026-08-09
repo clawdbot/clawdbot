@@ -156,7 +156,8 @@ describe("prepared reply dispatch runtime", () => {
       config,
       workspaceDir: "/tmp/unused-workspace",
     };
-    const configuredSelectedBefore = getPreparedModelRuntimeSnapshot(configuredInput)?.pluginRegistry;
+    const configuredSelectedBefore =
+      getPreparedModelRuntimeSnapshot(configuredInput)?.pluginRegistry;
     const dynamicInput = {
       ...configuredInput,
       workspaceDir: "/tmp/dynamic-auth-workspace",

@@ -169,12 +169,8 @@ function createSnapshot(
   catalogAccess: PreparedModelRuntimeCatalogAccess,
 ): PreparedModelRuntimeSnapshot {
   const { credentials, input } = agentFacts;
-  const {
-    mediaCapabilityProviders,
-    messageToolCatalog,
-    pluginMetadataSnapshot,
-    pluginRegistry,
-  } = pluginGeneration;
+  const { mediaCapabilityProviders, messageToolCatalog, pluginMetadataSnapshot, pluginRegistry } =
+    pluginGeneration;
   const { configuredRuntimeModels, inlineProviderModels, modelCatalog, templateModelRegistry } =
     catalogFacts;
   const createStores = (): PreparedModelRuntimeStores => {

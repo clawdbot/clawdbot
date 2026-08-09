@@ -32,11 +32,11 @@ import {
   type PreparedModelRuntimeReplacementGateId,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.owner.js";
-import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 import {
   notifyPreparedModelRuntimePublication,
   resetPreparedModelRuntimePublicationListenersForTest,
 } from "./prepared-model-runtime.publication-events.js";
+import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 export {
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
