@@ -200,7 +200,7 @@ export type SessionEntryReplacementUpdate<T> = {
   result: T;
 };
 
-export type SessionEntryBatchProjectionMutation = {
+type SessionEntryBatchProjectionMutation = {
   entry: SessionEntry;
   previousSessionKeys?: readonly string[];
   sessionKey: string;

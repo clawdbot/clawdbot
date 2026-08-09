@@ -70,7 +70,7 @@ type PreparedPatchTarget = {
   wasArchivedBeforePatch: boolean;
 };
 
-export type SessionPatchEngineOutcome =
+type SessionPatchEngineOutcome =
   | {
       ok: true;
       agentId?: string;

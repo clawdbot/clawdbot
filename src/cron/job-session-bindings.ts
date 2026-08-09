@@ -126,17 +126,3 @@ export async function disableCronJobsBoundToSessions(params: {
   }
   return disabledBySession;
 }
-
-/** Disables every enabled cron job bound to one archived session. */
-export async function disableCronJobsBoundToSession(params: {
-  cron: Pick<CronServiceContract, "list" | "updateWithPrecondition" | "getDefaultAgentId">;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-}): Promise<string[]> {
-  const disabled = await disableCronJobsBoundToSessions({
-    cron: params.cron,
-    cfg: params.cfg,
-    sessionKeys: [params.sessionKey],
-  });
-  return disabled.get(params.sessionKey.trim()) ?? [];
-}

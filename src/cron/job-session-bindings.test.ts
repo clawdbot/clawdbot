@@ -1,7 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  disableCronJobsBoundToSession,
   disableCronJobsBoundToSessions,
   resolveCronJobBoundSessionKeys,
 } from "./job-session-bindings.js";
@@ -14,6 +13,19 @@ function bindingKeys(
   defaultAgentId?: string,
 ) {
   return resolveCronJobBoundSessionKeys(job, { cfg, defaultAgentId });
+}
+
+async function disableCronJobsBoundToSession(
+  params: Omit<Parameters<typeof disableCronJobsBoundToSessions>[0], "sessionKeys"> & {
+    sessionKey: string;
+  },
+): Promise<string[]> {
+  const disabled = await disableCronJobsBoundToSessions({
+    cron: params.cron,
+    cfg: params.cfg,
+    sessionKeys: [params.sessionKey],
+  });
+  return disabled.get(params.sessionKey.trim()) ?? [];
 }
 
 describe("resolveCronJobBoundSessionKeys", () => {
