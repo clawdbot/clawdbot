@@ -266,13 +266,13 @@ preserved from Phase 0.
 
 ## 6. Phase 0: contracts and shadow surface inspection
 
-### Goal
+### Phase 0 goal
 
 Create the generic core/SDK/plugin contract, inventory all memory paths, and
 evaluate selected-runtime authorization-surface compatibility in shadow mode
 without moving content or changing results.
 
-### Deliverables
+### Phase 0 deliverables
 
 #### 6.1 Serializable contract
 
@@ -410,20 +410,20 @@ Minimum inventory:
 - child agents and completion handoff;
 - cron, heartbeat, webhook, and system runs.
 
-### Data changes
+### Phase 0 data changes
 
 None required for the first contract PR. Shadow traces may use bounded
 structured logs or test-only fixtures. Do not create a permanent audit schema
 until the stable identifiers are decided.
 
-### Suggested PR slices
+### Phase 0 suggested PR slices
 
 1. Serializable types, capability declaration, and SDK conformance harness.
 2. Shadow wiring at selected runtime acquisition and path-inventory tests.
 3. Phase 1A core context factory with durable subject and trusted-ingress
    adapters.
 
-### Tests
+### Phase 0 tests
 
 - SDK export and API baseline checks.
 - `src/plugins/memory-state.test.ts`
@@ -431,7 +431,7 @@ until the stable identifiers are decided.
 - new generated policy evaluator tests;
 - new "no context-free enforced backend" contract test.
 
-### Definition of done
+### Phase 0 definition of done
 
 Phase 0 is complete only when all of the following are demonstrated on the
 current implementation head:
@@ -454,19 +454,19 @@ current implementation head:
 - [ ] Product and security documentation still describes the feature as
       shadow-only, with no public isolation claim or public configuration.
 
-### Rollback
+### Phase 0 rollback
 
 Remove shadow invocation and ignore the new capability when the agent is not
 enforced. No content or schema rollback is required.
 
 ## 7. Phase 1A: identity and write-once session subject
 
-### Goal
+### Phase 1A goal
 
 Resolve one immutable memory subject for every logical session before any
 private store can open.
 
-### Deliverables
+### Phase 1A deliverables
 
 #### 7.1 Principal model
 
@@ -556,7 +556,7 @@ excludes model-authored JSON and extensible message extras, and produces the
 stable context fingerprint. It is not an SDK entrypoint and no plugin can mint
 or modify its output.
 
-### Data changes
+### Phase 1A data changes
 
 Shared state:
 
@@ -570,7 +570,7 @@ Per-agent:
 
 Use additive lazy ensures. Fold into the next natural schema-version bump.
 
-### Likely files
+### Phase 1A likely files
 
 - `src/routing/session-key.ts`
 - `src/routing/resolve-route.ts`
@@ -583,7 +583,7 @@ Use additive lazy ensures. Fold into the next natural schema-version bump.
 - `src/state/openclaw-agent-schema.sql`
 - shared state schema/contract files
 
-### Tests
+### Phase 1A tests
 
 - isolated DM, shared-main DM, group, channel, cron, heartbeat, webhook,
   subagent, system, and incognito subject matrix;
@@ -603,7 +603,7 @@ Reuse and extend:
 - `src/config/sessions/session-accessor.sqlite-cleanup-race.test.ts`
 - Gateway session create/reset tests
 
-### Definition of done
+### Phase 1A definition of done
 
 Phase 1A is complete only when all of the following are demonstrated:
 
@@ -626,19 +626,19 @@ Phase 1A is complete only when all of the following are demonstrated:
 - [ ] Additive schema compatibility and identity/session lifecycle tests pass
       for existing and newly created agent databases.
 
-### Rollback
+### Phase 1A rollback
 
 Keep the new subject rows unused while current memory remains legacy-only.
 Bindings may remain as inert identity metadata.
 
 ## 8. Phase 1B: scoped store, policy, and migration foundation
 
-### Goal
+### Phase 1B goal
 
 Give the builtin selected memory plugin isolated logical stores and immutable
 resource/policy revisions without changing legacy agents.
 
-### Deliverables
+### Phase 1B deliverables
 
 #### 8.1 Root and store registry
 
@@ -728,7 +728,7 @@ Implement dry-run only first:
 
 No runtime cutover in the dry-run PR.
 
-### Data changes
+### Phase 1B data changes
 
 Per-agent plugin tables:
 
@@ -748,7 +748,7 @@ Register every additive per-agent table in
 shadow tables and triggers in the corresponding optional canonical trigger
 groups. Add any lazily ensured columns to `allowedMissingColumns`.
 
-### Likely files
+### Phase 1B likely files
 
 - `packages/memory-host-sdk/src/host/memory-schema*.ts`
 - `src/state/openclaw-agent-schema.sql`
@@ -759,7 +759,7 @@ groups. Add any lazily ensured columns to `allowedMissingColumns`.
 - `src/commands/doctor-agent-memory-schema.ts`
 - new memory-core doctor/migration modules
 
-### Tests
+### Phase 1B tests
 
 - opaque path collision/retry and path traversal;
 - no provider identity in path or locator;
@@ -770,7 +770,7 @@ groups. Add any lazily ensured columns to `allowedMissingColumns`.
 - dry-run migration is deterministic and content-free in logs;
 - existing legacy agent remains byte-for-byte on the old path.
 
-### Definition of done
+### Phase 1B definition of done
 
 Phase 1B is complete only when all of the following are demonstrated:
 
@@ -792,20 +792,20 @@ Phase 1B is complete only when all of the following are demonstrated:
 - [ ] Legacy single-user agents remain on the existing runtime path with no
       user-visible behavior change or runtime cutover.
 
-### Rollback
+### Phase 1B rollback
 
 Drop or ignore empty additive tables and remove dry-run state. Legacy content
 was never moved.
 
 ## 9. Phase 1C: private and channel read isolation
 
-### Goal
+### Phase 1C goal
 
 Convert every content-bearing read lane to the authorized runtime and enable a
 single-subject/shadow read-only pilot. A pilot with two distinct verified
 subjects is gated on Phase 1D filesystem and exec confinement.
 
-### Deliverables
+### Phase 1C deliverables
 
 #### 9.1 Core access host
 
@@ -907,7 +907,7 @@ the transcript transaction. Core writes the policy-set row, run exposure
 reference, and event companion row atomically with the transcript event. There
 is no plugin callback inside the transaction.
 
-### Likely files
+### Phase 1C likely files
 
 - `src/plugins/memory-runtime.ts`
 - `src/plugins/memory-state.ts`
@@ -923,7 +923,7 @@ is no plugin callback inside the transaction.
 - `src/auto-reply/reply/agent-runner-memory.ts`
 - `src/config/sessions/session-accessor.sqlite-transcript-write.ts`
 
-### Tests
+### Phase 1C tests
 
 Read-lane matrix:
 
@@ -959,7 +959,7 @@ Focused existing tests:
 - `src/auto-reply/reply/agent-runner-memory.test.ts`
 - transcript accessor and projection tests
 
-### Definition of done
+### Phase 1C definition of done
 
 Phase 1C is complete only when all of the following are demonstrated:
 
@@ -985,7 +985,7 @@ Phase 1C is complete only when all of the following are demonstrated:
 - [ ] No two-subject pilot or stronger isolation claim is enabled before Phase
       1D closes raw file and exec bypasses.
 
-### Rollback
+### Phase 1C rollback
 
 Disable enforced mode for agents not yet cut over. Migrated agents remain
 read-only until restored through the documented pre-write rollback path; never
@@ -993,12 +993,12 @@ fall back to broad legacy reads.
 
 ## 10. Phase 1D: filesystem and egress confinement
 
-### Goal
+### Phase 1D goal
 
 Prevent model-facing file and delivery surfaces from bypassing an authorized
 memory view.
 
-### Deliverables
+### Phase 1D deliverables
 
 #### 10.1 Virtual filesystem view
 
@@ -1063,7 +1063,7 @@ If approved for this stage:
 If the registry is deferred, document and enforce a narrower pilot profile that
 disables unclassified egress after scoped exposure.
 
-### Likely files
+### Phase 1D likely files
 
 - `src/agents/tool-fs-policy.ts`
 - `src/agents/tool-fs-policy.types.ts`
@@ -1075,7 +1075,7 @@ disables unclassified egress after scoped exposure.
 - message/session-send/browser/webhook/plugin/MCP tool registration surfaces
 - final reply route and outbound delivery paths
 
-### Tests
+### Phase 1D tests
 
 - traversal, symlink, case, Unicode, hard-link where relevant, stale handle, and
   virtual-to-host confusion;
@@ -1095,7 +1095,7 @@ Focused existing tests:
 - `src/agents/requester-tool-policy.test.ts`
 - delivery and message-tool tests
 
-### Definition of done
+### Phase 1D definition of done
 
 Phase 1D is complete only when all of the following are demonstrated:
 
@@ -1118,7 +1118,7 @@ Phase 1D is complete only when all of the following are demonstrated:
 - [ ] Only after all prior items pass may a two-subject read-only pilot begin,
       and its documented isolation claim matches the tested profile.
 
-### Rollback
+### Phase 1D rollback
 
 Withdraw the stronger isolation claim and disable enforced memory for profiles
 that cannot provide the required filesystem/egress boundary. Do not restore raw
@@ -1126,12 +1126,12 @@ path access.
 
 ## 11. Phase 2A: authorized writes and crash-consistent resources
 
-### Goal
+### Phase 2A goal
 
 Route every durable memory mutation through the selected plugin's authorized
 resource lifecycle.
 
-### Deliverables
+### Phase 2A deliverables
 
 #### 11.1 Closed mutation model
 
@@ -1193,7 +1193,7 @@ Commit write/exposure decision records locally with plugin state, then drain
 idempotently to the shared redacted audit table. Audit delivery never becomes
 an allow dependency.
 
-### Data changes
+### Phase 2A data changes
 
 Per-agent:
 
@@ -1205,7 +1205,7 @@ Shared:
 
 - `memory_access_audit`
 
-### Tests
+### Phase 2A tests
 
 - reject model-supplied store, owner, and audience;
 - every interruption boundary in stage/pending/rename/activate/index/outbox;
@@ -1216,7 +1216,7 @@ Shared:
 - LanceDB auto-capture uses session subject and policy;
 - sync/import/export cannot bypass authorization.
 
-### Definition of done
+### Phase 2A definition of done
 
 Phase 2A is complete only when all of the following are demonstrated:
 
@@ -1239,19 +1239,19 @@ Phase 2A is complete only when all of the following are demonstrated:
 - [ ] Focused write, crash-recovery, watcher, import/export, sync, and plugin
       mutation tests pass.
 
-### Rollback
+### Phase 2A rollback
 
 Disable new writes while preserving scoped data. Resume only after repair.
 Never dual-write to legacy files/tables.
 
 ## 12. Phase 2B: complete transcript policy lifecycle
 
-### Goal
+### Phase 2B goal
 
 Make every transcript event and session transition carry durable authorization
 metadata for its full retention lifetime.
 
-### Deliverables
+### Phase 2B deliverables
 
 #### 12.1 Policy companion rows
 
@@ -1304,7 +1304,7 @@ Missing or invalid companion metadata is pending/denied. Never reconstruct
 authorization from event JSON, prompt text, session key shape, or
 `InputProvenance`.
 
-### Data changes
+### Phase 2B data changes
 
 Extend the Phase 1C minimum tables with full lineage-retention and transition
 fields:
@@ -1317,7 +1317,7 @@ Add:
 
 - `memory_compaction_policies`
 
-### Likely files
+### Phase 2B likely files
 
 - `src/config/sessions/session-accessor.sqlite-transcript-write.ts`
 - `src/config/sessions/session-accessor.sqlite-transcript-store.ts`
@@ -1328,7 +1328,7 @@ Add:
 - `src/gateway/server-methods/sessions-rewind.ts`
 - transcript export/import/archive paths
 
-### Tests
+### Phase 2B tests
 
 - atomic event + policy companion write;
 - authorization-pending exclusion;
@@ -1338,7 +1338,7 @@ Add:
 - session-rebound during transcript append;
 - legacy unlabeled transcript remains unavailable unless migration confirms it.
 
-### Definition of done
+### Phase 2B definition of done
 
 Phase 2B is complete only when all of the following are demonstrated:
 
@@ -1359,7 +1359,7 @@ Phase 2B is complete only when all of the following are demonstrated:
 - [ ] Atomic-write, transition, policy-revision, revoke-race, session-rebound,
       and legacy-unlabeled transcript tests pass.
 
-### Rollback
+### Phase 2B rollback
 
 Disable transcript recall, compaction, flush, dreaming, and derivation for the
 affected enforced agent. Keep ordinary conversation available with memory
@@ -1367,12 +1367,12 @@ unavailable.
 
 ## 13. Phase 2C: compaction, flush, dreaming, and delegation
 
-### Goal
+### Phase 2C goal
 
 Prevent durable derived artifacts from laundering scoped content into a broader
 audience.
 
-### Deliverables
+### Phase 2C deliverables
 
 #### 13.1 Derivation requirements
 
@@ -1464,13 +1464,13 @@ raw DB handles, credentials, or an unbounded parent view.
 Cron, heartbeat, webhook, and system runs use explicit service identities and
 cannot acquire private user memory from an old session key.
 
-### Data changes
+### Phase 2C data changes
 
 - `memory_revision_policy_requirements`
 - `memory_lineage_edges`
 - descendant invalidation/repair state as needed
 
-### Tests
+### Phase 2C tests
 
 - mixed private/channel/shared/projected compaction;
 - summary policy intersection;
@@ -1492,7 +1492,7 @@ Focused existing tests:
 - memory-core dreaming consolidation/repair tests
 - subagent requester and completion-handoff tests
 
-### Definition of done
+### Phase 2C definition of done
 
 Phase 2C is complete only when all of the following are demonstrated:
 
@@ -1518,18 +1518,18 @@ Phase 2C is complete only when all of the following are demonstrated:
       interruption tests pass, including any dependency-specific contract
       checks required by the selected harness.
 
-### Rollback
+### Phase 2C rollback
 
 Disable derivation and background memory jobs while preserving scoped resources.
 Do not restore context-free compaction or flush.
 
 ## 14. Phase 3: explicit sharing and postbox
 
-### Goal
+### Phase 3 goal
 
 Add deliberate sharing without introducing direct private-store reads.
 
-### Deliverables
+### Phase 3 deliverables
 
 #### 14.1 Publisher operations
 
@@ -1583,13 +1583,13 @@ Add authenticated CLI/UI/API workflows for:
 
 Do not add direct user-to-user private-store grant APIs.
 
-### Data changes
+### Phase 3 data changes
 
 - `memory_projections`
 - `memory_postbox_items`
 - persisted rate-limit/review state
 
-### Tests
+### Phase 3 tests
 
 - target sees projection copy but never source;
 - unrelated/newly joined channel cannot see projection;
@@ -1600,7 +1600,7 @@ Do not add direct user-to-user private-store grant APIs.
 - postbox never auto-promotes;
 - no direct private grant through tool, SDK, API, CLI, UI, or raw DB helper.
 
-### Definition of done
+### Phase 3 definition of done
 
 Phase 3 is complete only when all of the following are demonstrated:
 
@@ -1626,19 +1626,19 @@ Phase 3 is complete only when all of the following are demonstrated:
 - [ ] Projection, publisher, postbox, expiry, revocation, forged-handle, and
       prior-exposure tests pass.
 
-### Rollback
+### Phase 3 rollback
 
 Disable new projection/deposit operations. Tombstone projection reads and keep
 postbox items quarantined for review or purge.
 
 ## 15. Phase 4: enterprise identity and operations
 
-### Goal
+### Phase 4 goal
 
 Add revisioned enterprise identity evidence and operational access review
 without moving policy authority out of the selected memory plugin.
 
-### Deliverables
+### Phase 4 deliverables
 
 #### 15.1 Generic adapter registry
 
@@ -1685,7 +1685,7 @@ provider evidence.
 If this introduces a new plugin, update `.github/labeler.yml` and create the
 matching GitHub labels as part of the plugin PR.
 
-### Tests
+### Phase 4 tests
 
 - wrong issuer/audience/signature/tenant;
 - expired, revoked, and unbound identity;
@@ -1695,7 +1695,7 @@ matching GitHub labels as part of the plugin PR.
 - audit explanation reveals no unauthorized resource title/existence;
 - collection/mount fan-out benchmarks for builtin and alternate backends.
 
-### Definition of done
+### Phase 4 definition of done
 
 Phase 4 is complete only when all of the following are demonstrated:
 
@@ -1723,7 +1723,7 @@ Phase 4 is complete only when all of the following are demonstrated:
 - [ ] Any new plugin surface has matching labeler paths, GitHub labels, SDK
       contracts, docs, and package ownership metadata.
 
-### Rollback
+### Phase 4 rollback
 
 Disable adapters and allow evidence to expire. Local verified user/channel
 stores continue under Stage 2 rules. Stale role evidence never becomes a local
@@ -1731,12 +1731,12 @@ allow.
 
 ## 16. Phase 5: process-adversarial isolation
 
-### Goal
+### Phase 5 goal
 
 Prevent a compromised non-broker agent/tool process from crossing its issued
 memory view.
 
-### Deliverables
+### Phase 5 deliverables
 
 - move selected memory plugin, content-bearing indexes, and controlled artifact
   roots behind authenticated local IPC;
@@ -1754,7 +1754,7 @@ If at-rest application encryption is added, do it only after process separation
 creates real key isolation. Do not add SQLCipher merely to protect an
 in-process key from the same process.
 
-### Tests
+### Phase 5 tests
 
 - compromised agent opens another store;
 - raw artifact path and DB handle probing;
@@ -1766,7 +1766,7 @@ in-process key from the same process.
 - OS permissions and credential separation;
 - separate-cell hostile-tenant scenario.
 
-### Definition of done
+### Phase 5 definition of done
 
 Phase 5 is complete only when all of the following are demonstrated:
 
@@ -1791,7 +1791,7 @@ Phase 5 is complete only when all of the following are demonstrated:
 - [ ] Hostile tenants continue to require separate
       Gateway/process/credential/storage cells.
 
-### Rollback
+### Phase 5 rollback
 
 Explicitly withdraw the process-adversarial claim. Either return to cooperative
 Stage 2 after a verified export/cutover or split trust domains into separate
@@ -1799,12 +1799,12 @@ cells. Never replace a failed broker with raw filesystem/database access.
 
 ## 17. Phase 6: migration, pilot, and cleanup
 
-### Goal
+### Phase 6 goal
 
 Cut over selected agents safely, prove real behavior, and remove temporary
 shadow/legacy paths.
 
-### Deliverables
+### Phase 6 deliverables
 
 #### 17.1 Migration
 
@@ -1845,7 +1845,7 @@ Minimum end-to-end scenario:
   sandbox, Doctor, CLI, backup, and testing docs;
 - retain only explicit public API compatibility with a removal plan.
 
-### Definition of done
+### Phase 6 definition of done
 
 Phase 6 is complete only when all of the following are demonstrated:
 
