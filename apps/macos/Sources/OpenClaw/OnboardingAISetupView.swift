@@ -3,56 +3,6 @@ import Foundation
 import OpenClawProtocol
 import SwiftUI
 
-enum OnboardingProviderIcon {
-    private static let resourceBundle: Bundle? = locateResourceBundle()
-
-    static func resourceURL(for kind: String) -> URL? {
-        guard let name = resourceName(for: kind) else { return nil }
-        return self.resourceBundle?.url(
-            forResource: name,
-            withExtension: "svg",
-            subdirectory: "ProviderIcons")
-    }
-
-    static func image(for kind: String) -> NSImage? {
-        guard let url = resourceURL(for: kind), let image = NSImage(contentsOf: url) else {
-            return nil
-        }
-        image.isTemplate = true
-        return image
-    }
-
-    private static func resourceName(for kind: String) -> String? {
-        switch kind {
-        case "claude-cli": "ProviderIcon-claude"
-        case "codex-cli": "ProviderIcon-codex"
-        default: nil
-        }
-    }
-
-    private static func locateResourceBundle() -> Bundle? {
-        if self.bundleContainsProviderIcons(Bundle.main) {
-            return Bundle.main
-        }
-        // Packaged apps copy these vectors into Bundle.main. SwiftPM's generated
-        // Bundle.module accessor can fatalError when that sidecar is absent, so
-        // consult it only for development/test executables, never an .app.
-        if Bundle.main.bundleURL.pathExtension != "app",
-           self.bundleContainsProviderIcons(Bundle.module)
-        {
-            return Bundle.module
-        }
-        return nil
-    }
-
-    private static func bundleContainsProviderIcons(_ bundle: Bundle) -> Bool {
-        bundle.url(
-            forResource: "ProviderIcon-claude",
-            withExtension: "svg",
-            subdirectory: "ProviderIcons") != nil
-    }
-}
-
 enum OnboardingProviderAuthLink {
     static func safeURL(_ rawValue: String?) -> URL? {
         guard let rawValue,
@@ -64,66 +14,35 @@ enum OnboardingProviderAuthLink {
         else { return nil }
         return url
     }
-}
 
-private struct OnboardingProviderArtwork: View {
-    let icon: String?
-    let fallbackKind: String
-    let fallbackSymbol: String
-
-    var body: some View {
-        Group {
-            if let url = OnboardingProviderAuthLink.safeURL(self.icon) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFit()
-                    default:
-                        self.fallback
-                    }
-                }
-            } else {
-                self.fallback
-            }
-        }
-        .frame(width: 24, height: 24)
-    }
-
-    @ViewBuilder
-    private var fallback: some View {
-        if let image = OnboardingProviderIcon.image(for: self.fallbackKind) {
-            Image(nsImage: image)
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .foregroundStyle(Color.accentColor)
-        } else {
-            Image(systemName: self.fallbackSymbol)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-        }
+    static func displayHost(_ rawValue: String?) -> String? {
+        guard let host = self.safeURL(rawValue)?.host()?.lowercased() else { return nil }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 }
 
 private struct OnboardingRecommendedInstallCard: View {
     let install: OnboardingAISetupModel.RecommendedInstall
+    @State private var hovered = false
 
     var body: some View {
-        if let website = OnboardingProviderAuthLink.safeURL(self.install.website) {
-            Link(destination: website) { self.content }
-                .buttonStyle(.plain)
-        } else {
-            self.content
+        Group {
+            if let website = OnboardingProviderAuthLink.safeURL(self.install.website) {
+                Link(destination: website) { self.content }
+                    .buttonStyle(.plain)
+            } else {
+                self.content
+            }
         }
+        .onHover { self.hovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: self.hovered)
     }
 
     private var content: some View {
         HStack(alignment: .top, spacing: 10) {
             OnboardingProviderArtwork(
                 icon: self.install.icon,
-                fallbackKind: self.install.id == "claude-code" ? "claude-cli" : self.install.id,
+                brandCandidates: [self.install.brandId, self.install.id],
                 fallbackSymbol: "arrow.down.circle")
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.install.label)
@@ -131,19 +50,40 @@ private struct OnboardingRecommendedInstallCard: View {
                 Text(self.install.hint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(self.install.website)
-                    .font(.caption2)
-                    .foregroundStyle(Color.accentColor)
+                    .lineLimit(2)
+                if let host = OnboardingProviderAuthLink.displayHost(self.install.website) {
+                    Text(host)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
             Spacer(minLength: 0)
-            Image(systemName: "arrow.up.right.square")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Image(systemName: "arrow.up.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .padding(.top, 2)
         }
-        .padding(10)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(NSColor.controlBackgroundColor)))
+                .fill(Color.primary.opacity(self.hovered ? 0.085 : 0.05)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1))
+    }
+}
+
+private struct OnboardingSurface: View {
+    let cornerRadius: CGFloat
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+            .fill(Color.primary.opacity(0.045))
+            .overlay {
+                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            }
     }
 }
 
@@ -363,8 +303,8 @@ struct OnboardingAISetupView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 220), spacing: 8)],
-                    spacing: 8)
+                    columns: [GridItem(.adaptive(minimum: 230), spacing: 10)],
+                    spacing: 10)
                 {
                     ForEach(self.model.recommendedInstalls) { install in
                         OnboardingRecommendedInstallCard(install: install)
@@ -413,9 +353,8 @@ struct OnboardingAISetupView: View {
                 HStack(alignment: .center, spacing: 12) {
                     OnboardingProviderArtwork(
                         icon: presentation?.icon,
-                        fallbackKind: candidate.kind,
+                        brandCandidates: [presentation?.brandId, candidate.kind],
                         fallbackSymbol: Self.symbol(for: candidate.kind))
-                        .frame(width: 26)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(candidate.label)
                             .font(.callout.weight(.semibold))
@@ -539,7 +478,7 @@ struct OnboardingAISetupView: View {
                         HStack(spacing: 10) {
                             OnboardingProviderArtwork(
                                 icon: option.icon,
-                                fallbackKind: option.id,
+                                brandCandidates: [option.brandId, option.id],
                                 fallbackSymbol: "arrow.down.circle")
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(option.label)
@@ -564,9 +503,7 @@ struct OnboardingAISetupView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(NSColor.controlBackgroundColor)))
+            .background(OnboardingSurface(cornerRadius: 12))
         }
     }
 
@@ -604,9 +541,7 @@ struct OnboardingAISetupView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(NSColor.controlBackgroundColor)))
+            .background(OnboardingSurface(cornerRadius: 12))
         }
     }
 
@@ -617,9 +552,10 @@ struct OnboardingAISetupView: View {
             }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "key.fill")
-                    .font(.title3)
-                    .frame(width: 24)
+                OnboardingProviderArtwork(
+                    icon: nil,
+                    brandCandidates: [],
+                    fallbackSymbol: "key.fill")
                 VStack(alignment: .leading, spacing: 2) {
                     Text("API Keys")
                         .font(.callout.weight(.semibold))
@@ -646,7 +582,7 @@ struct OnboardingAISetupView: View {
             HStack(spacing: 10) {
                 OnboardingProviderArtwork(
                     icon: option.icon,
-                    fallbackKind: option.id,
+                    brandCandidates: [option.brandId, option.id],
                     fallbackSymbol: option.kind == "device-code"
                         ? "link.badge.plus"
                         : "person.crop.circle.badge.checkmark")
@@ -779,9 +715,7 @@ struct OnboardingAISetupView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(NSColor.controlBackgroundColor)))
+            .background(OnboardingSurface(cornerRadius: 10))
 
             HStack(spacing: 12) {
                 if let minutes = deviceCode.expiresInMinutes {
@@ -848,7 +782,7 @@ struct OnboardingAISetupView: View {
                 if let provider = self.model.selectedManualProvider {
                     OnboardingProviderArtwork(
                         icon: provider.icon,
-                        fallbackKind: provider.id,
+                        brandCandidates: [provider.brandId, provider.id],
                         fallbackSymbol: "key.fill")
                 }
                 Picker("Provider", selection: self.$model.manualProviderID) {
@@ -897,9 +831,7 @@ struct OnboardingAISetupView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(NSColor.controlBackgroundColor)))
+        .background(OnboardingSurface(cornerRadius: 12))
     }
 
     private var manualProviderHelp: String {
