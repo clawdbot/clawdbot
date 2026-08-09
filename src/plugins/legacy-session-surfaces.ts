@@ -1,15 +1,22 @@
 // Resolves plugin-owned legacy session-key behavior from selected setup entries.
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { shouldIncludeChannelSetupFeatureForConfig } from "../channels/plugins/bundled-setup-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import type { BundledChannelLegacySessionSurface } from "../plugin-sdk/channel-entry-contract.types.js";
 import { resolveConfiguredChannelPluginIds } from "./channel-plugin-ids.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import {
   EMPTY_LEGACY_SESSION_SURFACES,
   type PreparedLegacySessionSurfaces,
 } from "./legacy-session-surfaces.types.js";
+import {
+  hasExplicitManifestOwnerTrust,
+  isActivatedManifestOwner,
+  isBundledManifestOwner,
+} from "./manifest-owner-policy.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import {
   createPluginModuleLoaderCache,
@@ -64,12 +71,40 @@ function resolveLegacySessionSurface(moduleExport: unknown): BundledChannelLegac
   const canonicalizeKey = surface.canonicalizeLegacySessionKey;
   if (
     (isGroupKey !== undefined && typeof isGroupKey !== "function") ||
-    (canonicalizeKey !== undefined && typeof canonicalizeKey !== "function") ||
-    (typeof isGroupKey !== "function" && typeof canonicalizeKey !== "function")
+    typeof canonicalizeKey !== "function"
   ) {
-    throw new Error("legacy session surface must declare a supported session-key callback");
+    throw new Error("legacy session surface must declare canonicalizeLegacySessionKey");
   }
   return surface as BundledChannelLegacySessionSurface;
+}
+
+function isEnabledLegacySurfaceOwner(params: {
+  record: LegacySurfaceManifestRecord;
+  config: OpenClawConfig;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+}): boolean {
+  if (
+    !shouldIncludeChannelSetupFeatureForConfig({
+      plugin: params.record,
+      config: params.config,
+    })
+  ) {
+    return false;
+  }
+  if (isBundledManifestOwner(params.record)) {
+    return true;
+  }
+  if (params.record.origin === "global" || params.record.origin === "config") {
+    return hasExplicitManifestOwnerTrust({
+      plugin: params.record,
+      normalizedConfig: params.normalizedConfig,
+    });
+  }
+  return isActivatedManifestOwner({
+    plugin: params.record,
+    normalizedConfig: params.normalizedConfig,
+    rootConfig: params.config,
+  });
 }
 
 function loadLegacySessionSurface(params: {
@@ -144,6 +179,19 @@ export function prepareLegacySessionSurfaces(params: {
       manifestRecords,
     }),
   );
+  const normalizedConfig = normalizePluginsConfig(context.activationSourceConfig.plugins);
+  for (const record of manifestRecords) {
+    if (
+      record.packageManifest?.setupFeatures?.legacySessionSurfaces === true &&
+      isEnabledLegacySurfaceOwner({
+        record,
+        config: context.activationSourceConfig,
+        normalizedConfig,
+      })
+    ) {
+      selectedPluginIds.add(record.id);
+    }
+  }
   const declaringRecords = manifestRecords.filter(
     (record) =>
       selectedPluginIds.has(record.id) &&

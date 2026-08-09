@@ -222,7 +222,66 @@ describe("installed channel legacy session surfaces", () => {
     expect(fs.existsSync(blocked.marker("full"))).toBe(false);
   });
 
-  it("defers reinterpretation when a selected owner's declared sidecar cannot load", async () => {
+  it("loads an explicitly enabled owner without a channel presence signal", async () => {
+    const rootDir = makeTrackedTempDir("openclaw-session-surface-enabled-only", tempDirs);
+    const stateDir = path.join(rootDir, "state");
+    const bundledDir = path.join(rootDir, "bundled-disabled");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    const fixture = writeSessionSurfacePlugin({
+      stateDir,
+      rootDir,
+      pluginId: "enabled-only-session-owner",
+      channelId: "enabled-only-chat",
+    });
+    const env = {
+      HOME: rootDir,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_VERSION: "2026.8.1",
+      VITEST: "true",
+    } as NodeJS.ProcessEnv;
+    const config = {
+      plugins: {
+        allow: ["enabled-only-session-owner"],
+        entries: { "enabled-only-session-owner": { enabled: true } },
+      },
+    } as OpenClawConfig;
+    writePersistedInstalledPluginIndexInstallRecordsSync(
+      {
+        "enabled-only-session-owner": {
+          source: "npm",
+          spec: "@fixture/enabled-only-session-owner@1.0.0",
+          installPath: fixture.pluginDir,
+        },
+      },
+      { stateDir, env, config },
+    );
+    clearPluginMetadataLifecycleCaches();
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "fixture-group:Enabled-Only": { sessionId: "enabled-only-group", updatedAt: 1 },
+      }),
+      "utf8",
+    );
+
+    const result = await autoMigrateLegacyState({ cfg: config, env, homedir: () => rootDir });
+    const migrated = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, unknown>;
+
+    expect(result.warnings).toEqual([]);
+    expect(migrated["fixture-group:Enabled-Only"]).toBeUndefined();
+    expect(migrated["agent:main:enabled-only-chat:group:enabled-only"]).toMatchObject({
+      sessionId: "enabled-only-group",
+    });
+    expect(fs.existsSync(fixture.marker("sidecar"))).toBe(true);
+    expect(fs.existsSync(fixture.marker("setup-plugin"))).toBe(false);
+    expect(fs.existsSync(fixture.marker("full"))).toBe(false);
+  });
+
+  it("defers reinterpretation when a selected owner's sidecar has no canonicalizer", async () => {
     const rootDir = makeTrackedTempDir("openclaw-session-surface-failure", tempDirs);
     const stateDir = path.join(rootDir, "state");
     const bundledDir = path.join(rootDir, "bundled-disabled");
@@ -237,7 +296,9 @@ describe("installed channel legacy session surfaces", () => {
       path.join(fixture.pluginDir, "dist", "legacy-session-surface.js"),
       `import fs from "node:fs";
 fs.writeFileSync(${JSON.stringify(fixture.marker("sidecar"))}, "loaded\\n");
-export const legacySessionSurface = {};
+export const legacySessionSurface = {
+  isLegacyGroupSessionKey(key) { return key.startsWith("fixture-group:"); },
+};
 `,
       "utf8",
     );
@@ -284,6 +345,9 @@ export const legacySessionSurface = {};
       expect.stringContaining(
         'Deferred legacy session-key migration for channel owner "broken-session-owner"',
       ),
+    );
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("must declare canonicalizeLegacySessionKey"),
     );
     expect(result.warnings).toHaveLength(1);
     expect(preserved["fixture-group:Keep-Raw"]).toMatchObject({
