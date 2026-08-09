@@ -78,6 +78,9 @@ describe("gateway startup import boundaries", () => {
       expect(workerStartup).toContain(`import("./worker-environments/${workerModule}.js")`);
     }
     expect(serverImpl).not.toContain('from "../plugins/worker-provider-registry.js"');
+    expect(readSource("src/gateway/server-restart-readiness.ts")).toContain(
+      'import("../state/openclaw-database-preflight.js")',
+    );
     expect(workerStartup).toContain('import("../plugins/worker-provider-registry.js")');
     expect(serverImpl).not.toContain(
       'from "../../packages/gateway-protocol/src/schema/worker-admission.js"',

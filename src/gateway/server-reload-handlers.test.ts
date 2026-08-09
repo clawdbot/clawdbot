@@ -4330,7 +4330,7 @@ describe("gateway Gmail hot reload handlers", () => {
       await vi.advanceTimersByTimeAsync(500);
       expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
       expect(harness.logReload.warn).toHaveBeenCalledWith(
-        expect.stringContaining("gateway restart secrets preflight failed"),
+        expect.stringContaining("gateway restart preflight failed"),
       );
 
       harness.setSecretAvailable("RESTART_A_TOKEN");

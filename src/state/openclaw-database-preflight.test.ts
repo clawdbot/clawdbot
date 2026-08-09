@@ -7,7 +7,10 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
+import {
+  assertOpenClawDatabasesReadyForRestart,
+  preflightOpenClawDatabaseSchemas,
+} from "./openclaw-database-preflight.js";
 import {
   closeOpenClawStateDatabaseForTest,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -40,12 +43,55 @@ describe("OpenClaw database schema preflight", () => {
     expect(
       preflightOpenClawDatabaseSchemas({
         env,
+        verifyCurrentSchemaShape: true,
         supportedVersions: {
           state: OPENCLAW_STATE_SCHEMA_VERSION,
           agent: OPENCLAW_AGENT_SCHEMA_VERSION,
         },
       }),
     ).toEqual({ incompatible: [], indeterminate: [] });
+    expect(() => assertOpenClawDatabasesReadyForRestart({ env })).not.toThrow();
+  });
+
+  it("reports a current but noncanonical state schema as indeterminate", () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-database-preflight-noncanonical-state-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const statePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const state = new DatabaseSync(statePath);
+    try {
+      state.exec(
+        "ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json; " +
+          "ALTER TABLE worktrees ADD COLUMN run_end_cleanup_json INTEGER;",
+      );
+    } finally {
+      state.close();
+    }
+
+    expect(
+      preflightOpenClawDatabaseSchemas({
+        env,
+        verifyCurrentSchemaShape: true,
+        supportedVersions: {
+          state: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+        },
+      }),
+    ).toEqual({
+      incompatible: [],
+      indeterminate: [
+        {
+          kind: "state",
+          path: statePath,
+          reason: expect.stringContaining("column definitions differ for worktrees"),
+        },
+      ],
+    });
+    expect(() => assertOpenClawDatabasesReadyForRestart({ env })).toThrow(
+      /Gateway refused restart.*column definitions differ for worktrees/u,
+    );
   });
 
   it("collects newer state and registered agent schemas with writer builds", () => {
@@ -103,6 +149,42 @@ describe("OpenClaw database schema preflight", () => {
         },
       ],
       indeterminate: [],
+    });
+  });
+
+  it("reports a current but noncanonical registered agent schema as indeterminate", () => {
+    const stateDir = makeTempDir(tempDirs, "openclaw-database-preflight-noncanonical-agent-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const agent = new DatabaseSync(agentPath);
+    try {
+      agent.exec("ALTER TABLE schema_meta ADD COLUMN unexpected TEXT;");
+    } finally {
+      agent.close();
+    }
+
+    expect(
+      preflightOpenClawDatabaseSchemas({
+        env,
+        verifyCurrentSchemaShape: true,
+        supportedVersions: {
+          state: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+        },
+      }),
+    ).toEqual({
+      incompatible: [],
+      indeterminate: [
+        {
+          kind: "agent",
+          path: agentPath,
+          reason: expect.stringContaining("column definitions differ for schema_meta"),
+        },
+      ],
     });
   });
 
