@@ -11,11 +11,13 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { listRecoveredManagedNpmInstallCandidates } from "./installed-plugin-index-record-reader.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "./managed-npm-retention.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const mocks = vi.hoisted(() => {
   const lease = {
@@ -475,6 +477,49 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       });
 
       expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(true);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes a new retirement marker when the leased config commit rolls back", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const installPath = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/retained-rollback",
+      pluginId: "retained-rollback",
+      version: "1.0.0",
+    });
+    const previousInstallRecords: Record<string, PluginInstallRecord> = {
+      "retained-rollback": {
+        source: "npm",
+        spec: "@openclaw/retained-rollback@1.0.0",
+        installPath,
+      },
+    };
+    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config changed"));
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expect(
+          commitPluginInstallRecordsWithConfig({
+            previousInstallRecords,
+            nextInstallRecords: {},
+            nextConfig: {},
+          }),
+        ).rejects.toThrow("config changed");
+
+        expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(false);
+        expect(
+          listRecoveredManagedNpmInstallCandidates({ stateDir }).map(
+            (candidate) => candidate.pluginId,
+          ),
+        ).toContain("retained-rollback");
+        expect(mocks.restorePersistedInstalledPluginIndexIfCurrent).toHaveBeenCalledWith(null, 1, {
+          filePath: mocks.lease.databasePath,
+          lease: mocks.lease,
+        });
+      });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
