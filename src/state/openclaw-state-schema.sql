@@ -1801,10 +1801,10 @@ CREATE TABLE IF NOT EXISTS worktrees (
   owner_id TEXT,
   snapshot_ref TEXT,
   provisioned_paths_json TEXT,
-  run_end_cleanup_json TEXT,
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
-  removed_at INTEGER
+  removed_at INTEGER,
+  run_end_cleanup_json TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
@@ -1846,7 +1846,6 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   profile_snapshot_json TEXT NOT NULL,
   provision_operation_id TEXT NOT NULL UNIQUE,
   lease_id TEXT,
-  shared_host INTEGER CHECK (shared_host IN (0, 1)),
   ssh_host TEXT,
   ssh_port INTEGER CHECK (ssh_port IS NULL OR (ssh_port >= 1 AND ssh_port <= 65535)),
   ssh_user TEXT,
@@ -1878,7 +1877,8 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   state_changed_at_ms INTEGER NOT NULL,
   idle_since_at_ms INTEGER,
   destroy_requested_at_ms INTEGER,
-  last_error TEXT
+  last_error TEXT,
+  shared_host INTEGER CHECK (shared_host IN (0, 1))
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
