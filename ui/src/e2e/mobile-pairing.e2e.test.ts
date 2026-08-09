@@ -166,7 +166,9 @@ suite.define(() => {
           ts: 3,
         });
         await expect.poll(async () => qr.count()).toBe(0);
-        expect(await page.getByText("Device paired", { exact: true }).isVisible()).toBe(true);
+        expect(
+          await page.getByRole("heading", { name: "Device paired", exact: true }).isVisible(),
+        ).toBe(true);
         expect(await page.getByText("Limited access", { exact: true }).isVisible()).toBe(true);
         await captureUiProof(page, "05-desktop-limited-success.png");
         await page.getByRole("button", { name: "Done" }).click();
@@ -205,7 +207,7 @@ suite.define(() => {
           setupResult("setup-expired", "full", 0),
         );
         await page.getByRole("button", { name: "Create setup code" }).click();
-        await page.getByText("Setup code expired", { exact: true }).waitFor();
+        await page.getByRole("heading", { name: "Setup code expired", exact: true }).waitFor();
         expect(await qr.count()).toBe(0);
         await captureUiProof(page, "07-desktop-expired.png");
 
