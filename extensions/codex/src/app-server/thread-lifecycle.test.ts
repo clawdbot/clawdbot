@@ -751,11 +751,28 @@ describe("Codex app-server native code mode config", () => {
       ],
     });
     const absent = buildDeveloperInstructions(params, { dynamicTools: [] });
+    const nativeParams = createAttemptParams({ provider: "openai" });
+    nativeParams.swarmCollector = true;
+    nativeParams.swarmOutputSchema = { type: "object" };
+    nativeParams.onSwarmStructuredOutputState = vi.fn();
+    const native = buildDeveloperInstructions(nativeParams, {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "structured_output",
+          description: "Record the collector result",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
 
     expect(namespaced).toContain("`openclaw_direct.structured_output`");
     expect(namespaced).toContain("A normal final assistant message does not satisfy");
     expect(root).toContain("`structured_output`");
     expect(absent).not.toContain("collector contract");
+    expect(native).toContain("Codex constrains that message with the native JSON schema");
+    expect(native).toContain("Do not call `structured_output`");
+    expect(native).not.toContain("A normal final assistant message does not satisfy");
   });
 
   it.each([
@@ -1245,6 +1262,35 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.personality).toBe("none");
+  });
+
+  it("sends a collector schema only when the durable native capture owner is present", () => {
+    const schema = {
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+      additionalProperties: false,
+    };
+    const nativeParams = createAttemptParams({ provider: "openai" });
+    nativeParams.swarmCollector = true;
+    nativeParams.swarmOutputSchema = schema;
+    nativeParams.onSwarmStructuredOutputState = vi.fn();
+    const native = buildTurnStartParams(nativeParams, {
+      threadId: "thread-native-collector",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    });
+    const legacyParams = createAttemptParams({ provider: "openai" });
+    legacyParams.swarmCollector = true;
+    legacyParams.swarmOutputSchema = schema;
+    const legacy = buildTurnStartParams(legacyParams, {
+      threadId: "thread-legacy-collector",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    });
+
+    expect(native.outputSchema).toEqual(schema);
+    expect(legacy).not.toHaveProperty("outputSchema");
   });
 
   it("does not overwrite native supervised turn settings", () => {

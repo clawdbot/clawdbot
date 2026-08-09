@@ -25,7 +25,10 @@ import type { FactoryNativeRunAuthority } from "../factory-authority-profile.js"
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagent-announce-handoff.js";
-import type { SwarmEffectiveAuthorityProof } from "../subagent-registry.types.js";
+import type {
+  SwarmEffectiveAuthorityProof,
+  SwarmStructuredOutputState,
+} from "../subagent-registry.types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -168,6 +171,7 @@ export type AgentCommandOpts = {
   /** Host-attested authority for a native macOS factory collector. */
   factoryNativeAuthority?: FactoryNativeRunAuthority;
   onFactoryNativeAuthorityProof?: (proof: SwarmEffectiveAuthorityProof) => Promise<void> | void;
+  onSwarmStructuredOutputState?: (state: SwarmStructuredOutputState) => Promise<void> | void;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   forceCodeModeTools?: boolean;

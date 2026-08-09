@@ -153,6 +153,14 @@ export function createSubagentRegistryPublicApi(config: {
       throw new Error("collector run is unavailable");
     }
     const previous = entry.structuredOutput;
+    if (previous) {
+      if (stableStringify(previous) === stableStringify(state)) {
+        return;
+      }
+      if (previous.structured !== undefined) {
+        throw new Error("collector structured output is already recorded with different content");
+      }
+    }
     entry.structuredOutput = structuredClone(state);
     try {
       persistOrThrow(entry.runId);

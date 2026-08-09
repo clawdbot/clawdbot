@@ -489,6 +489,7 @@ export function buildCodexFactoryNativeThreadConfigPatch(
     ...CODEX_RING_ZERO_THREAD_CONFIG,
     "features.code_mode": true,
     "features.code_mode_only": false,
+    default_permissions: checked.permissionProfile.id,
     permissions: {
       [checked.permissionProfile.id]: checked.permissionProfile.definition,
     },

@@ -110,6 +110,7 @@ describe("Codex native factory authority", () => {
       "orchestrator.mcp.enabled": false,
       "orchestrator.skills.enabled": false,
       web_search: "disabled",
+      default_permissions: authority.permissionProfile.id,
       permissions: {
         [authority.permissionProfile.id]: authority.permissionProfile.definition,
       },
@@ -270,6 +271,13 @@ describe("Codex native factory authority", () => {
       label: "feature drift",
       request: requestWithConfigDrift((config) => {
         config["features.apps"] = true;
+      }),
+      response: response(),
+    },
+    {
+      label: "permission selection drift",
+      request: requestWithConfigDrift((config) => {
+        config.default_permissions = ":workspace";
       }),
       response: response(),
     },

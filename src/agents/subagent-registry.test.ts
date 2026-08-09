@@ -1131,6 +1131,28 @@ describe("subagent registry seam flow", () => {
     });
   });
 
+  it("accepts an identical native collector capture but rejects conflicting content", () => {
+    const runId = "native-collector-idempotent-output";
+    const state = { invalidAttempts: 0, structured: { answer: 42 } };
+    mod.addSubagentRunForTests({
+      runId,
+      task: "capture one canonical native result",
+      createdAt: Date.now(),
+      collect: true,
+      execution: { status: "running" },
+      structuredOutput: state,
+    });
+
+    expect(() => mod.recordSwarmStructuredOutput({ runId }, structuredClone(state))).not.toThrow();
+    expect(() =>
+      mod.recordSwarmStructuredOutput(
+        { runId },
+        { invalidAttempts: 0, structured: { answer: 43 } },
+      ),
+    ).toThrow(/already recorded with different content/);
+    expect(mod.getSubagentRunByRunId(runId)?.structuredOutput).toEqual(state);
+  });
+
   it("lists active and pending-delivery child sessions for maintenance preservation", () => {
     const now = Date.now();
     mod.addSubagentRunForTests({

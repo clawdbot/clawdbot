@@ -17,6 +17,7 @@ import {
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { captureCodexNativeStructuredOutput } from "./native-structured-output.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
@@ -226,8 +227,26 @@ export async function finalizeCodexAttempt(
       rateLimits: readRecentCodexRateLimits(resourceState.client),
     });
   }
+  const completedTurnStatus = activeProjector.getCompletedTurnStatus();
+  let nativeStructuredOutputCaptureFailed = false;
+  if (
+    !finalPromptError &&
+    !effectiveTimedOut &&
+    !isFinalAborted() &&
+    completedTurnStatus === "completed"
+  ) {
+    try {
+      await captureCodexNativeStructuredOutput({
+        attempt: params,
+        terminalAssistantText: collectTerminalAssistantText(result),
+      });
+    } catch (error) {
+      nativeStructuredOutputCaptureFailed = true;
+      finalPromptError = error;
+    }
+  }
   const finalPromptErrorSource =
-    effectiveTimedOut || clientClosedPromptErrorForFinal
+    effectiveTimedOut || clientClosedPromptErrorForFinal || nativeStructuredOutputCaptureFailed
       ? "prompt"
       : projectedTerminal.promptErrorSource;
   const codexAppServerFailureKind = clientClosedPromptErrorForFinal
@@ -272,7 +291,6 @@ export async function finalizeCodexAttempt(
       } satisfies NonNullable<EmbeddedRunAttemptResult["codexAppServerFailure"]>)
     : undefined;
   const finalAborted = isFinalAborted();
-  const completedTurnStatus = activeProjector.getCompletedTurnStatus();
   const locallyCompletedTurn =
     state.completed &&
     (state.localCompletionRequested || !state.terminalTurnNotificationQueued) &&

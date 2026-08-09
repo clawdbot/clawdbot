@@ -49,7 +49,10 @@ import type { AgentMessage } from "../../runtime/index.js";
 import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js";
 import type { SessionManager } from "../../sessions/index.js";
 import type { TrustedSubagentCompletionHandoff } from "../../subagent-announce-handoff.js";
-import type { SwarmEffectiveAuthorityProof } from "../../subagent-registry.types.js";
+import type {
+  SwarmEffectiveAuthorityProof,
+  SwarmStructuredOutputState,
+} from "../../subagent-registry.types.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
@@ -161,6 +164,8 @@ export type RunEmbeddedAgentParams = {
   factoryNativeAuthority?: FactoryNativeRunAuthority;
   /** Freezes the effective Codex runtime proof before native work can continue. */
   onFactoryNativeAuthorityProof?: (proof: SwarmEffectiveAuthorityProof) => Promise<void> | void;
+  /** Persists a Codex-native schema-constrained collector result before terminal freeze. */
+  onSwarmStructuredOutputState?: (state: SwarmStructuredOutputState) => Promise<void> | void;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   /** Preserve Code Mode controls for a replay-safe restart recovery turn. */

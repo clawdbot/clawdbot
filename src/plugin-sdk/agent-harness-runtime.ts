@@ -122,6 +122,7 @@ export type { FactoryNativeRunAuthority } from "../agents/factory-authority-prof
 export type {
   SwarmEffectiveAuthorityProof,
   SwarmLaunchAuthority,
+  SwarmStructuredOutputState,
 } from "../agents/subagent-registry.types.js";
 export type {
   ContextEngine as HarnessContextEngine,

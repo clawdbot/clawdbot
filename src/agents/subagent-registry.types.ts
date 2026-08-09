@@ -107,6 +107,7 @@ export type SwarmCollectorCompletion = {
   status: SwarmCollectorStatus;
   structured?: unknown;
   schemaError?: string;
+  failure?: string;
   usage?: { inputTokens: number; outputTokens: number };
 };
 
@@ -256,6 +257,7 @@ export type SwarmTerminalEvidence = {
   outcome: {
     status: SwarmCollectorStatus;
     schemaError?: string;
+    failure?: string;
   };
   endedAt: number;
   frozenAt: number;

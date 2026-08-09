@@ -4255,6 +4255,51 @@ describe("runCodexAppServerAttempt", () => {
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
+  it("durably captures the native schema-constrained collector result before completion", async () => {
+    const schema = {
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+      additionalProperties: false,
+    };
+    const onSwarmStructuredOutputState = vi.fn();
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return {
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "msg-1", text: '{"answer":"yes"}' }],
+          },
+        };
+      }
+      return {};
+    });
+    const params = createRunParams();
+    params.swarmCollector = true;
+    params.swarmOutputSchema = schema;
+    params.onSwarmStructuredOutputState = onSwarmStructuredOutputState;
+
+    const result = await runCodexAppServerAttempt(params);
+
+    expect(harness.requests.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+      outputSchema: schema,
+    });
+    expect(onSwarmStructuredOutputState).toHaveBeenCalledExactlyOnceWith({
+      structured: { answer: "yes" },
+      invalidAttempts: 0,
+    });
+    expect(result.assistantTexts).toEqual(['{"answer":"yes"}']);
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+    });
+  });
+
   it("materializes Codex-native image generation into Gateway-owned reply media", async () => {
     const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
     const harness = createAppServerHarness(async (method) => {

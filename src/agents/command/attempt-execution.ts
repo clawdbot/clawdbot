@@ -1217,6 +1217,7 @@ export function runAgentAttempt(params: {
     swarmOutputSchema: params.opts.swarmOutputSchema,
     factoryNativeAuthority: params.opts.factoryNativeAuthority,
     onFactoryNativeAuthorityProof: params.opts.onFactoryNativeAuthorityProof,
+    onSwarmStructuredOutputState: params.opts.onSwarmStructuredOutputState,
     forceRestartSafeTools: params.opts.forceRestartSafeTools,
     forceCodeModeTools: params.opts.forceCodeModeTools,
     streamParams: params.opts.streamParams,

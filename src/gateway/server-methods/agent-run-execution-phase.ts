@@ -22,7 +22,10 @@ import {
 } from "../../agents/main-session-recovery-store.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
-import { recordSwarmEffectiveAuthorityProof } from "../../agents/subagent-registry.js";
+import {
+  recordSwarmEffectiveAuthorityProof,
+  recordSwarmStructuredOutput,
+} from "../../agents/subagent-registry.js";
 import {
   setChannelSourceTurnId,
   setChannelSourceTurnSameThreadRequired,
@@ -432,6 +435,18 @@ export function startAgentRunExecution(params: {
                 });
               }
             : undefined,
+          onSwarmStructuredOutputState:
+            params.request.swarmCollector === true && params.request.swarmOutputSchema
+              ? async (state) => {
+                  recordSwarmStructuredOutput(
+                    {
+                      runId: params.runId,
+                      childSessionKey: params.request.sessionKey,
+                    },
+                    state,
+                  );
+                }
+              : undefined,
           forceRestartSafeTools: params.request.forceRestartSafeTools,
           forceCodeModeTools: params.request.forceCodeModeTools,
           executionAttribution: prepared.attribution,

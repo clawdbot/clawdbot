@@ -1,8 +1,9 @@
-import { stableStringify } from "@openclaw/normalization-core";
+import { stableStringify, truncateUtf16Safe } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { VERSION } from "../version.js";
+import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { ensureCompletionState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { backfillCollectorArchiveAtMs } from "./subagent-registry-helpers.js";
@@ -15,6 +16,34 @@ import type {
 import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 import { hashSwarmEvidenceBytes } from "./swarm-replay-ledger.js";
 import { consumeSwarmStructuredOutput } from "./tools/structured-output-tool.js";
+
+const SWARM_TERMINAL_FAILURE_MAX_CHARS = 1_000;
+
+function stripControlCharacters(value: string): string {
+  const c0Start = String.fromCharCode(0x00);
+  const c0End = String.fromCharCode(0x1f);
+  const del = String.fromCharCode(0x7f);
+  const c1Start = String.fromCharCode(0x80);
+  const c1End = String.fromCharCode(0x9f);
+  return value.replace(new RegExp(`[${c0Start}-${c0End}${del}${c1Start}-${c1End}]`, "g"), " ");
+}
+
+function resolveBoundedExecutionFailure(entry: SubagentRunRecord): string | undefined {
+  const raw = entry.execution.outcome?.error;
+  if (!raw || raw === "completed") {
+    return undefined;
+  }
+  const sanitized = stripControlCharacters(sanitizeUserFacingText(raw, { errorContext: true }))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  if (sanitized.length <= SWARM_TERMINAL_FAILURE_MAX_CHARS) {
+    return sanitized;
+  }
+  return `${truncateUtf16Safe(sanitized, SWARM_TERMINAL_FAILURE_MAX_CHARS - 1).trimEnd()}…`;
+}
 
 function resolveStatus(
   entry: SubagentRunRecord,
@@ -113,6 +142,7 @@ function buildTerminalEvidence(params: {
     outcome: {
       status: params.completion.status,
       ...(params.completion.schemaError ? { schemaError: params.completion.schemaError } : {}),
+      ...(params.completion.failure ? { failure: params.completion.failure } : {}),
     },
     endedAt: params.endedAt,
     frozenAt: params.frozenAt,
@@ -165,10 +195,12 @@ export function updateSwarmCollectorCompletion(
         }
       : undefined;
   const resolvedStatus = resolveStatus(entry, captured?.structured !== undefined);
+  const failure = resolveBoundedExecutionFailure(entry);
   const next = {
     status: schemaError && resolvedStatus === "done" ? ("failed" as const) : resolvedStatus,
     ...(captured?.structured !== undefined ? { structured: captured.structured } : {}),
     ...(schemaError ? { schemaError } : {}),
+    ...(failure ? { failure } : {}),
     ...(usage ? { usage } : {}),
   };
   if (JSON.stringify(entry.collectorCompletion) === JSON.stringify(next)) {
