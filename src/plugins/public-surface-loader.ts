@@ -27,13 +27,11 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const publicSurfaceModuleCache = new Map<string, unknown>();
 const sourceArtifactRequire = createRequire(import.meta.url);
-const publicSurfaceLocationCache = new Map<
-  string,
-  {
-    modulePath: string;
-    boundaryRoot: string;
-  }
->();
+type PublicSurfaceLocation = {
+  modulePath: string;
+  boundaryRoot: string;
+};
+const publicSurfaceLocationCache = new Map<string, PublicSurfaceLocation>();
 const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
@@ -70,7 +68,7 @@ function createResolutionKey(params: { dirName: string; artifactBasename: string
 function resolvePublicSurfaceLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
-}): { modulePath: string; boundaryRoot: string } | null {
+}): PublicSurfaceLocation | null {
   const bundledPluginsDir = resolveBundledPluginsDir();
   const modulePath = resolveBundledPluginPublicSurfacePath({
     rootDir: OPENCLAW_PACKAGE_ROOT,
@@ -93,7 +91,7 @@ function resolvePublicSurfaceLocationUncached(params: {
 function resolvePublicSurfaceLocation(params: {
   dirName: string;
   artifactBasename: string;
-}): { modulePath: string; boundaryRoot: string } | null {
+}): PublicSurfaceLocation | null {
   const key = createResolutionKey(params);
   const cached = publicSurfaceLocationCache.get(key);
   if (cached) {
@@ -173,6 +171,23 @@ function loadValidatedPublicSurfaceModule(params: {
   }
 }
 
+function loadBundledPublicSurfaceAtLocation<T extends object>(params: {
+  dirName: string;
+  artifactBasename: string;
+  location: PublicSurfaceLocation;
+}): T {
+  return loadValidatedPublicSurfaceModule({
+    modulePath: params.location.modulePath,
+    boundaryRoot: params.location.boundaryRoot,
+    boundaryLabel:
+      params.location.boundaryRoot === OPENCLAW_PACKAGE_ROOT
+        ? "OpenClaw package root"
+        : "plugin root",
+    surfaceLabel: `bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
+    origin: "bundled",
+  }) as T;
+}
+
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicArtifactModuleSync<T extends object>(params: {
   dirName: string;
@@ -184,14 +199,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  return loadValidatedPublicSurfaceModule({
-    modulePath: location.modulePath,
-    boundaryRoot: location.boundaryRoot,
-    boundaryLabel:
-      location.boundaryRoot === OPENCLAW_PACKAGE_ROOT ? "OpenClaw package root" : "plugin root",
-    surfaceLabel: `bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
-    origin: "bundled",
-  }) as T;
+  return loadBundledPublicSurfaceAtLocation({ ...params, location });
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
@@ -221,16 +229,16 @@ export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extend
   artifactCandidates: readonly string[];
 }): T | null {
   for (const artifactBasename of params.artifactCandidates) {
-    try {
-      return loadBundledPluginPublicArtifactModuleSync<T>({
+    const location = resolvePublicSurfaceLocation({
+      dirName: params.dirName,
+      artifactBasename,
+    });
+    if (location) {
+      return loadBundledPublicSurfaceAtLocation<T>({
         dirName: params.dirName,
         artifactBasename,
+        location,
       });
-    } catch (error) {
-      if (error instanceof MissingPublicSurfaceError) {
-        continue;
-      }
-      throw error;
     }
   }
   return null;
