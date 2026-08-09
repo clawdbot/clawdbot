@@ -22,7 +22,9 @@ vi.mock("../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
 }));
 
-let capturedDispatchAgentHook: ((value: HookPayload) => Promise<unknown>) | undefined;
+let capturedDispatchAgentHook:
+  | ((value: HookPayload, context: { abortSignal: AbortSignal }) => Promise<unknown>)
+  | undefined;
 
 vi.mock("./hooks-request-handler.js", () => ({
   createHooksRequestHandler: vi.fn((opts: Record<string, unknown>) => {
@@ -85,7 +87,9 @@ function dispatch(value: HookPayload): Promise<unknown> {
   if (!capturedDispatchAgentHook) {
     throw new Error("dispatchAgentHook missing");
   }
-  return capturedDispatchAgentHook(value);
+  return capturedDispatchAgentHook(value, {
+    abortSignal: new AbortController().signal,
+  });
 }
 
 function expectOwnedEvent(text: string, agentId: string): void {

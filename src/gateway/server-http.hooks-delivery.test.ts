@@ -228,6 +228,9 @@ describe("hook request delivery normalization", () => {
         channel: "delivery-test",
         delivery: { mode: "none" },
       }),
+      expect.objectContaining({
+        abortSignal: expect.any(AbortSignal),
+      }),
     );
   });
 });
