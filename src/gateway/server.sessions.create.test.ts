@@ -3061,6 +3061,53 @@ test.each([
   expect(loadSessionEntry({ sessionKey: target, storePath })).toBeDefined();
 });
 
+test("sessions.create authenticates an agent-qualified parent before deriving child routing", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  const parentSessionKey = "agent:work:dashboard:foreign-owned";
+  testState.sessionStorePath = storeTemplate;
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  try {
+    await fs.mkdir(path.dirname(workStorePath), { recursive: true });
+    await writeSessionStore({
+      storePath: workStorePath,
+      agentId: "work",
+      entries: {
+        [parentSessionKey]: sessionStoreEntry("foreign-work-session", {
+          pluginOwnerId: "other-plugin",
+        }),
+      },
+    });
+    const pluginClient = {
+      connect: { scopes: ["operator.write"] },
+      internal: { pluginRuntimeOwnerId: "memory-core" },
+    } as never;
+
+    const created = await directSessionReq(
+      "sessions.create",
+      { parentSessionKey },
+      { client: pluginClient },
+    );
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: `Plugin "memory-core" cannot link session "${parentSessionKey}" because it did not create it.`,
+    });
+    expect(
+      loadSessionEntry({
+        agentId: "work",
+        sessionKey: parentSessionKey,
+        storePath: workStorePath,
+      }),
+    ).toMatchObject({ sessionId: "foreign-work-session", pluginOwnerId: "other-plugin" });
+  } finally {
+    testState.sessionStorePath = undefined;
+    testState.agentsConfig = undefined;
+  }
+});
+
 test("sessions.create allows plugin runtimes to link their own parent session", async () => {
   const { storePath } = await createSessionStoreDir();
   const parentSessionKey = "agent:main:dashboard:memory-core-parent";

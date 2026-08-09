@@ -285,11 +285,8 @@ export async function createGatewaySession(params: {
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const generatedDisplayName = normalizeOptionalString(params.generatedDisplayName);
-  const agentId = normalizeAgentId(
-    normalizeOptionalString(params.agentId) ??
-      parseAgentSessionKey(parentSessionKey)?.agentId ??
-      resolveDefaultAgentId(params.cfg),
-  );
+  const requestedAgentId = normalizeOptionalString(params.agentId);
+  let agentId = normalizeAgentId(requestedAgentId ?? resolveDefaultAgentId(params.cfg));
   const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
   const catalogPluginOwnerId = normalizeOptionalString(params.catalogTarget?.pluginOwnerId);
@@ -322,18 +319,49 @@ export async function createGatewaySession(params: {
       };
     }
   }
+  let authenticatedParentForAgentRouting: ReturnType<typeof loadSessionEntryReadOnly> | undefined;
+  if (
+    !requestedAgentId &&
+    parentSessionKey &&
+    resolveSessionStoreKey({ cfg: params.cfg, sessionKey: parentSessionKey }) !== "global"
+  ) {
+    const parent = loadSessionEntryReadOnly(parentSessionKey);
+    if (!parent.entry?.sessionId) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `unknown parent session: ${parentSessionKey}`,
+        ),
+      };
+    }
+    const parentOwnershipError = resolvePluginSessionOwnershipError({
+      action: params.fork === true ? "fork" : "link",
+      entry: parent.entry,
+      key: parent.canonicalKey,
+      pluginOwnerId: params.authorizedPluginId,
+    });
+    if (parentOwnershipError) {
+      return { ok: false, error: parentOwnershipError };
+    }
+    const authenticatedParentAgentId = parseAgentSessionKey(parent.canonicalKey)?.agentId;
+    if (authenticatedParentAgentId) {
+      agentId = normalizeAgentId(authenticatedParentAgentId);
+      authenticatedParentForAgentRouting = parent;
+    }
+  }
   if (requestedKey) {
-    const requestedAgentId = parseAgentSessionKey(requestedKey)?.agentId;
+    const requestedKeyAgentId = parseAgentSessionKey(requestedKey)?.agentId;
     if (
-      requestedAgentId &&
-      requestedAgentId !== agentId &&
+      requestedKeyAgentId &&
+      requestedKeyAgentId !== agentId &&
       normalizeOptionalString(params.agentId)
     ) {
       return {
         ok: false,
         error: errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `sessions.create key agent (${requestedAgentId}) does not match agentId (${agentId})`,
+          `sessions.create key agent (${requestedKeyAgentId}) does not match agentId (${agentId})`,
         ),
       };
     }
@@ -482,10 +510,12 @@ export async function createGatewaySession(params: {
       }
       parentSelectedAgentId = parentRequestedAgent.agentId;
     }
-    const parent = loadSessionEntryReadOnly(
-      parentSessionKey,
-      parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
-    );
+    const parent =
+      authenticatedParentForAgentRouting ??
+      loadSessionEntryReadOnly(
+        parentSessionKey,
+        parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
+      );
     if (!parent.entry?.sessionId) {
       return {
         ok: false,

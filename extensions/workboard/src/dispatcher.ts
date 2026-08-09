@@ -442,11 +442,7 @@ async function runWorkboardDispatch(
     try {
       const claimed = await params.store.claim(
         card.id,
-        {
-          ownerId,
-          ttlSeconds: card.metadata?.automation?.maxRuntimeSeconds,
-          sessionKey,
-        },
+        { ownerId, ttlSeconds: card.metadata?.automation?.maxRuntimeSeconds },
         {
           expectedAuthority: {
             boardId: cardBoardId(card),

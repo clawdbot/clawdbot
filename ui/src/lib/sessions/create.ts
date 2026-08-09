@@ -1,6 +1,5 @@
 import type { SessionsCreateResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { parseAgentSessionKey } from "./session-key.ts";
 
 export type SessionCreateOutcome = {
   key: string;
@@ -44,12 +43,8 @@ export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
     normalizedSessionKey && normalizedSessionKey.toLowerCase() !== "unknown"
       ? normalizedSessionKey
       : undefined;
-  const explicitAgentId = agentId?.trim();
-  const parentAgentId = parentSessionKey
-    ? parseAgentSessionKey(parentSessionKey)?.agentId
-    : undefined;
   return {
-    ...(explicitAgentId || parentAgentId ? { agentId: explicitAgentId ?? parentAgentId } : {}),
+    ...(agentId?.trim() ? { agentId: agentId.trim() } : {}),
     ...(parentSessionKey
       ? { parentSessionKey, emitCommandHooks: true, succeedsParent: false }
       : {}),
