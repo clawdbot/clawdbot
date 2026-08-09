@@ -21,7 +21,7 @@ import {
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 import {
-  resolveMemorySessionStartupDirtyFiles,
+  resolveMemorySessionStartupState,
   type MemorySessionStartupFileState,
 } from "./manager-session-sync-state.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
@@ -128,7 +128,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       return [];
     }
     const corpusEntries = await this.listSessionCorpusEntries();
-    if (corpusEntries.length === 0 || this.closed) {
+    if (this.closed) {
       return [];
     }
     const existingRows = loadMemorySourceFileState({
@@ -168,14 +168,23 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         this.getIndexConcurrency(),
       )
     ).filter((file): file is MemorySessionStartupFileState => file !== null);
-    const dirtyFiles = resolveMemorySessionStartupDirtyFiles({ files: fileStates, existingRows });
-    if (dirtyFiles.length === 0 || this.closed) {
+    const { dirtyFiles, hasStaleIndexedPaths } = resolveMemorySessionStartupState({
+      files: fileStates,
+      existingRows,
+    });
+    if (this.closed) {
       return dirtyFiles;
+    }
+    if (hasStaleIndexedPaths) {
+      this.sessionsDirty = true;
+      this.sessionsFullRetryDirty = true;
     }
     for (const file of dirtyFiles) {
       this.sessionsDirtyFiles.add(file);
     }
-    this.sessionsDirty = true;
+    if (dirtyFiles.length > 0) {
+      this.sessionsDirty = true;
+    }
     return dirtyFiles;
   }
 

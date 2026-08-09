@@ -13,7 +13,7 @@ import {
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -5182,6 +5182,68 @@ describe("memory index", () => {
 
       const result = manager.status();
       expect(result.dirty).toBe(true);
+    } finally {
+      restoreMemoryIndexStateDir();
+    }
+  });
+
+  it("status detects and no-force sync prunes indexed sessions removed from the corpus", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      provider: "none",
+      sources: ["sessions"],
+      sessionMemory: true,
+      minScore: 0,
+    });
+    const stateDirName = ".state-status-stale-session-test";
+    setMemoryIndexStateDir(path.join(workspaceDir, stateDirName));
+    const sessionId = "status-stale-session-test";
+    const sessionKey = `agent:main:memory:${sessionId}`;
+    const storePath = path.join(resolveSessionTranscriptsDirForAgent("main"), "sessions.json");
+    try {
+      await seedMemoryIndexSessionTranscript({
+        sessionId,
+        sessionKey,
+        messages: [
+          {
+            role: "user",
+            timestamp: 1,
+            content: "Deleted session index canary ORBIT-DELETE-91.",
+          },
+        ],
+      });
+
+      const initial = await getFreshManager(cfg, "cli");
+      managersForCleanup.add(initial);
+      await initial.sync({ reason: "cli", force: true });
+      await expect(
+        initial.search("ORBIT-DELETE-91", { minScore: 0, sources: ["sessions"] }),
+      ).resolves.not.toEqual([]);
+      await initial.close?.();
+
+      await expect(
+        deleteSessionEntry({
+          agentId: "main",
+          archiveTranscript: false,
+          expectedSessionId: sessionId,
+          sessionKey,
+          storePath,
+        }),
+      ).resolves.toBe(true);
+
+      const statusManager = await getFreshManager(cfg, "status");
+      managersForCleanup.add(statusManager);
+      expect(statusManager.status().dirty).toBe(true);
+
+      await statusManager.sync({ reason: "cli" });
+      await expect(
+        statusManager.search("ORBIT-DELETE-91", { minScore: 0, sources: ["sessions"] }),
+      ).resolves.toEqual([]);
+      const db = Reflect.get(statusManager, "db") as DatabaseSync;
+      const sourceCount = db
+        .prepare("SELECT COUNT(*) AS count FROM memory_index_sources WHERE source = 'sessions'")
+        .get() as { count: number };
+      expect(sourceCount.count).toBe(0);
     } finally {
       restoreMemoryIndexStateDir();
     }

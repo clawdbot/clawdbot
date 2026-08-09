@@ -238,6 +238,11 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     });
   }
 
+  async getCorpusPathsForTest(): Promise<string[]> {
+    const entries = await this.listSessionCorpusEntries();
+    return entries.map((entry) => this.sessionPathForCorpusEntry(entry));
+  }
+
   getDirtyArchiveFiles(): string[] {
     return Array.from(this.sessionsDirtyFiles);
   }
@@ -513,6 +518,20 @@ describe("session startup catch-up", () => {
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
   });
 
+  it("prunes indexed sessions that are absent from the live corpus", async () => {
+    const stalePath = "sessions/main/deleted.jsonl";
+    const harness = new SessionStartupCatchupHarness(
+      [{ path: stalePath, hash: "stale-hash", mtime: 10, size: 20 }],
+      true,
+    );
+
+    await expect(harness.catchUp()).resolves.toEqual([]);
+    await harness.waitForSessionSync();
+
+    expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
+    expect(harness.getIndexedSourceState(stalePath)).toBeUndefined();
+  });
+
   it("retries transient session transcript reads during session indexing", async () => {
     const session = await writeSessionFile("thread.jsonl.deleted.2026-02-16T22-27-33.000Z");
     const harness = new SessionStartupCatchupHarness([]);
@@ -595,10 +614,15 @@ describe("session startup catch-up", () => {
   });
 
   it("leaves unchanged indexed session files clean", async () => {
-    const session = await writeSessionFile("thread.jsonl");
+    const session = await writeSessionFile("thread.jsonl.deleted.2026-08-09T00-00-00.000Z");
+    const discovery = new SessionStartupCatchupHarness([]);
+    const [corpusPath] = await discovery.getCorpusPathsForTest();
+    if (!corpusPath) {
+      throw new Error("expected session transcript corpus path");
+    }
     const harness = new SessionStartupCatchupHarness([
       {
-        path: "sessions/main/thread.jsonl",
+        path: corpusPath,
         hash: "current-hash",
         mtime: session.mtimeMs,
         size: session.size,

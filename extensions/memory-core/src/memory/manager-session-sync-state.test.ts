@@ -1,7 +1,7 @@
 // Memory Core tests cover manager session sync state plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  resolveMemorySessionStartupDirtyFiles,
+  resolveMemorySessionStartupState,
   resolveMemorySessionSyncPlan,
 } from "./manager-session-sync-state.js";
 
@@ -80,7 +80,7 @@ describe("memory session sync state", () => {
   });
 
   it("marks missing and changed startup session files dirty", () => {
-    const dirtyFiles = resolveMemorySessionStartupDirtyFiles({
+    const { dirtyFiles } = resolveMemorySessionStartupState({
       files: [
         {
           absPath: "/tmp/sessions/unchanged.jsonl",
@@ -143,5 +143,16 @@ describe("memory session sync state", () => {
       "/tmp/sessions/resized.jsonl",
       "/tmp/sessions/missing.jsonl",
     ]);
+  });
+
+  it("detects indexed session paths that are absent from the live corpus", () => {
+    expect(
+      resolveMemorySessionStartupState({
+        files: [],
+        existingRows: [
+          { path: "sessions/deleted.jsonl", hash: "hash-deleted", mtime: 100, size: 10 },
+        ],
+      }),
+    ).toEqual({ dirtyFiles: [], hasStaleIndexedPaths: true });
   });
 });
