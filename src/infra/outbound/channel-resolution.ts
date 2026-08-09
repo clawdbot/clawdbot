@@ -12,14 +12,11 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   normalizeMessageChannel,
-  type DeliverableMessageChannel,
 } from "../../utils/message-channel.js";
 import { bootstrapOutboundChannelPlugin } from "./channel-bootstrap.runtime.js";
 
 /** Normalizes a raw channel id and rejects non-deliverable/internal channels. */
-export function normalizeDeliverableOutboundChannel(
-  raw?: string | null,
-): DeliverableMessageChannel | undefined {
+export function normalizeDeliverableOutboundChannel(raw?: string | null): string | undefined {
   const normalized = normalizeMessageChannel(raw);
   if (!normalized || !isDeliverableMessageChannel(normalized)) {
     return undefined;
@@ -28,7 +25,7 @@ export function normalizeDeliverableOutboundChannel(
 }
 
 function maybeBootstrapChannelPlugin(params: {
-  channel: DeliverableMessageChannel;
+  channel: string;
   cfg?: OpenClawConfig;
 }): PluginRegistry | undefined {
   return bootstrapOutboundChannelPlugin(params);
@@ -43,7 +40,7 @@ function normalizeOutboundChannelForResolution(params: {
   cfg?: OpenClawConfig;
   allowBootstrap?: boolean;
 }): {
-  channel?: DeliverableMessageChannel;
+  channel?: string;
   didBootstrap: boolean;
   bootstrapRegistry?: PluginRegistry;
 } {
@@ -59,7 +56,7 @@ function normalizeOutboundChannelForResolution(params: {
   );
   if (activeRuntimePlugin) {
     return {
-      channel: activeRuntimePlugin.id as DeliverableMessageChannel,
+      channel: activeRuntimePlugin.id,
       didBootstrap: false,
     };
   }
@@ -70,7 +67,7 @@ function normalizeOutboundChannelForResolution(params: {
   // External channel ids remain normalized before their runtime is registered.
   // Bootstrap first, then let the runtime candidate lookup confirm sendability.
   const bootstrapRegistry = maybeBootstrapChannelPlugin({
-    channel: normalized as DeliverableMessageChannel,
+    channel: normalized,
     cfg: params.cfg,
   });
   const bootstrappedRuntimePlugin = resolveActivatedOutboundPluginFromRuntimeRegistry(
@@ -78,7 +75,7 @@ function normalizeOutboundChannelForResolution(params: {
     bootstrapRegistry,
   );
   return {
-    channel: (bootstrappedRuntimePlugin?.id ?? normalized) as DeliverableMessageChannel,
+    channel: bootstrappedRuntimePlugin?.id ?? normalized,
     didBootstrap: true,
     ...(bootstrapRegistry ? { bootstrapRegistry } : {}),
   };

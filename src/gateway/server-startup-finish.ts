@@ -107,6 +107,7 @@ export async function finishGatewayStartup(params: {
     controlUiDeviceAuthMigration,
     nodeRegistry,
     workerEnvironmentService,
+    workerEnvironmentStartup,
     workerPlacementRuntime,
     workerPlacementControlAvailable,
     terminalSessions,
@@ -258,8 +259,8 @@ export async function finishGatewayStartup(params: {
         releaseControlUiDeviceAuthMigrationClaim(deviceId, { env: process.env }),
       nodeRegistry,
       ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
-      ...(workerPlacementRuntime
-        ? { workerSessionPlacementService: workerPlacementRuntime.placements }
+      ...(workerEnvironmentStartup
+        ? { workerSessionPlacementService: workerEnvironmentStartup.placementStore }
         : {}),
       ...(workerPlacementControlAvailable
         ? { workerPlacementDispatchService: workerPlacementControlAvailable }

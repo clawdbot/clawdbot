@@ -395,6 +395,10 @@ export const en: TranslationMap = {
       buildTitle: "Current build",
       gatewayVersion: "Gateway version",
       controlUiCommit: "Control UI commit",
+      builtAt: "Built",
+      installedAt: "Installed",
+      installedAtUnknown: "Unknown · recorded after the next successful update",
+      lastCommitAt: "Last commit",
       installKind: "Install type",
       policyTitle: "Update policy",
       channel: "Release channel",
@@ -412,6 +416,12 @@ export const en: TranslationMap = {
       available: "Update available {target}",
       upToDate: "Up to date",
       statusUnavailable: "Update status unavailable",
+      gitCommitAhead: "{count} commit ahead of tracked upstream",
+      gitCommitsAhead: "{count} commits ahead of tracked upstream",
+      gitDiverged: "Diverged · {ahead} ahead, {behind} behind",
+      gitFetchFailed: "Could not fetch the tracked upstream",
+      gitNoUpstream: "No tracked upstream is configured",
+      gitComparisonFailed: "Could not compare this checkout with its tracked upstream",
       updateNow: "Update now",
       updateNowDescription: "Install the available update and restart the Gateway.",
     },
@@ -423,6 +433,8 @@ export const en: TranslationMap = {
       "Update installed but running version did not change — restart may have been blocked.",
     verificationFailedWithVersions:
       "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
+    verificationFailedWithIdentity:
+      "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
     handoffTimeout:
       "Update handoff started, but completion was not reported after reconnect. Run `openclaw update status` for the final result.",
     outcomeUnknown:
@@ -447,6 +459,11 @@ export const en: TranslationMap = {
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
       restartUnhealthy:
         "The replacement process never became healthy. The previous process stayed up so you can recover.",
+      restartRevisionMismatch:
+        "The restarted Gateway is running a different revision. Check the service install root and retry.",
+      restartRevisionUnavailable:
+        "The restarted Gateway could not report its revision. Check the service install root and logs before retrying.",
+      alreadyCurrent: "This checkout is already at its tracked upstream revision.",
       managedServiceHandoffAlreadyRunning:
         "Another managed update is already running. Wait for it to complete, then refresh update status.",
       doctorFailed: "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
@@ -866,6 +883,7 @@ export const en: TranslationMap = {
     archiveSession: "Archive session",
     archiveSessionCount: "Archive {count}",
     restoreSession: "Restore session",
+    restoreSessionCount: "Restore {count}",
     stopCloudWorker: "Stop cloud worker…",
     stopCloudWorkerConfirm: 'Stop the cloud worker for "{session}"?',
     stopCloudWorkerConfirmAction: "Stop worker",
@@ -1817,6 +1835,8 @@ export const en: TranslationMap = {
     detached: "detached",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    dockMain: "Fill main content area",
+    dockMode: "Terminal panel position",
     unavailable: "The terminal is not available on this gateway.",
     uploadTooLarge: "File exceeds the 16 MiB terminal upload limit: {file}",
     uploadUnsafeCmdPath: "Cannot safely insert an uploaded path containing % or ! into cmd.exe",
@@ -4826,6 +4846,7 @@ export const en: TranslationMap = {
       askInSideChat: "Ask in side chat",
       rewind: "Rewind",
       rewindConfirm: "Rewind to before this message?",
+      dontAskAgain: "Don't ask again",
       rewindToHere: "Rewind to here",
       rewindUnavailable: "Rewind is unavailable while the agent is working",
       forkUnavailable: "Fork is unavailable while the agent is working",
@@ -5071,7 +5092,7 @@ export const en: TranslationMap = {
         usageCredits: "Usage credits",
         budgetValue: "{used} of {limit}",
         limitFiveHour: "5-hour limit",
-        limitWeekly: "Weekly · all models",
+        limitWeekly: "Weekly",
         limitDaily: "Daily limit",
         limitHours: "{hours}-hour limit",
       },
@@ -5130,6 +5151,7 @@ export const en: TranslationMap = {
     },
     attachments: {
       attachedFile: "Attached file",
+      showInTextField: "Show in text field",
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
       checking: "Checking...",

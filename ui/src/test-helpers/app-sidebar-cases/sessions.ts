@@ -358,12 +358,12 @@ describe("AppSidebar session mutation feedback", () => {
       ...args: Parameters<GatewayBrowserClient["request"]>
     ): Promise<T> => {
       const [method, params] = args;
-      if (method === "sessions.archiveMany") {
+      if (method === "sessions.patchMany") {
         const request = params as {
           targets: Array<{ key: string; agentId?: string }>;
-          archived: boolean;
+          patch: Record<string, unknown>;
         };
-        return harness.archiveMany(request.targets, request.archived).then((result) => result as T);
+        return harness.patchMany(request.targets, request.patch).then((result) => result as T);
       }
       return originalRequest
         ? originalRequest<T>(...args)
@@ -443,20 +443,21 @@ describe("AppSidebar session mutation feedback", () => {
     );
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
 
-    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(harness.archiveMany).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(3));
     expect(setSessionKey).not.toHaveBeenCalled();
-    expect(harness.archiveMany).toHaveBeenCalledWith(
-      [{ key: archivedRow.key, agentId: "main" }],
-      false,
+    expect(harness.patch).toHaveBeenNthCalledWith(
+      2,
+      archivedRow.key,
+      { archived: false },
+      { agentId: "main", deferListRefresh: true },
     );
-    // Archive restore owns the canonical refresh; the non-archive patch only
-    // restores the pin that archive projection intentionally removed.
-    expect(harness.patch).toHaveBeenLastCalledWith(
+    expect(harness.patch).toHaveBeenNthCalledWith(
+      3,
       archivedRow.key,
       { pinned: true },
       { agentId: "main", deferListRefresh: true },
     );
+    expect(harness.patchMany).not.toHaveBeenCalled();
     expect(harness.refreshReplacement).toHaveBeenCalledOnce();
     expect(navigate).not.toHaveBeenCalled();
   });
@@ -578,7 +579,7 @@ describe("AppSidebar session mutation feedback", () => {
 
   it("surfaces ordered partial batch-archive errors", async () => {
     const { harness, sidebar } = await mountMutationHarness();
-    harness.archiveMany.mockImplementationOnce(async (targets) => {
+    harness.patchMany.mockImplementationOnce(async (targets) => {
       return {
         outcomes: [
           { ok: true, key: targets[0]!.key, agentId: targets[0]!.agentId },
@@ -606,7 +607,7 @@ describe("AppSidebar session mutation feedback", () => {
         "agent:main:b: active run",
       );
     });
-    expect(harness.archiveMany).toHaveBeenCalledOnce();
+    expect(harness.patchMany).toHaveBeenCalledOnce();
     expect(harness.patch).not.toHaveBeenCalled();
     expect(harness.refreshReplacement).toHaveBeenCalledOnce();
   });
@@ -631,8 +632,8 @@ describe("AppSidebar session mutation feedback", () => {
 
   it("suppresses a late batch archive result after a reconnect", async () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
-    const pending = deferred<Awaited<ReturnType<typeof harness.archiveMany>>>();
-    harness.archiveMany.mockImplementationOnce(() => pending.promise);
+    const pending = deferred<Awaited<ReturnType<typeof harness.patchMany>>>();
+    harness.patchMany.mockImplementationOnce(() => pending.promise);
     selectSession(sidebar, "agent:main:a");
     selectSession(sidebar, "agent:main:b");
     await sidebar.updateComplete;
@@ -642,7 +643,7 @@ describe("AppSidebar session mutation feedback", () => {
     const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
     await menu?.updateComplete;
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
-    await waitForFast(() => expect(harness.archiveMany).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
 
     gateway.publish({ phase: "reconnecting" });
     gateway.publish({ phase: "connected" });
@@ -657,14 +658,14 @@ describe("AppSidebar session mutation feedback", () => {
       globalThis.setTimeout(resolve, 0);
     });
 
-    expect(harness.archiveMany).toHaveBeenCalledOnce();
+    expect(harness.patchMany).toHaveBeenCalledOnce();
     expect(harness.patch).not.toHaveBeenCalled();
   });
 
   it("does not truncate a pending batch when another mutation starts", async () => {
     const { harness, sidebar } = await mountMutationHarness();
-    const archive = deferred<Awaited<ReturnType<typeof harness.archiveMany>>>();
-    harness.archiveMany.mockImplementationOnce(() => archive.promise);
+    const archive = deferred<Awaited<ReturnType<typeof harness.patchMany>>>();
+    harness.patchMany.mockImplementationOnce(() => archive.promise);
     selectSession(sidebar, "agent:main:a");
     selectSession(sidebar, "agent:main:b");
     await sidebar.updateComplete;
@@ -675,14 +676,14 @@ describe("AppSidebar session mutation feedback", () => {
     let menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
     await menu?.updateComplete;
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
-    await waitForFast(() => expect(harness.archiveMany).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
 
     row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;
     menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
     await menu?.updateComplete;
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="u"]')?.click();
-    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledTimes(2));
 
     archive.resolve({
       outcomes: [
@@ -691,11 +692,9 @@ describe("AppSidebar session mutation feedback", () => {
       ],
     });
     await archive.promise;
-    expect(harness.archiveMany).toHaveBeenCalledOnce();
-    expect(harness.patch).toHaveBeenCalledTimes(2);
-    expect(harness.patch.mock.calls.map(([, patch]) => patch)).toEqual(
-      expect.arrayContaining([{ unread: true }, { unread: true }]),
-    );
+    expect(harness.patchMany).toHaveBeenCalledTimes(2);
+    expect(harness.patchMany.mock.calls[1]?.[1]).toEqual({ unread: true });
+    expect(harness.patch).not.toHaveBeenCalled();
   });
 
   it("never force-removes a preserved worktree through a reconnected client", async () => {

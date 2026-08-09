@@ -17,6 +17,7 @@ export type RouterOutletSnapshot<
   TModule = unknown,
   TData = unknown,
 > = RouterOutletStateSlice<TRouteId, TModule, TData> & {
+  settled: RouteMatch<TRouteId, TModule, TData> | undefined;
   showPending: boolean;
 };
 
@@ -68,6 +69,7 @@ function idleSnapshot<TRouteId extends string, TModule, TData>(): RouterOutletSn
     status: "idle",
     active: undefined,
     pending: undefined,
+    settled: undefined,
     showPending: false,
   };
 }
@@ -89,6 +91,7 @@ export class RouterOutletController<
   private unsubscribe?: () => void;
   private selection: RouterOutletStateSlice<TRouteId, TModule, TData> = idleSnapshot();
   private snapshotValue: RouterOutletSnapshot<TRouteId, TModule, TData> = idleSnapshot();
+  private settled?: RouteMatch<TRouteId, TModule, TData>;
   private pendingMatchId?: string;
   private pendingTimer?: ReturnType<typeof globalThis.setTimeout>;
   private showPending = false;
@@ -116,6 +119,7 @@ export class RouterOutletController<
 
     this.detachSource();
     this.router = inputs.router;
+    this.settled = undefined;
     if (this.connected) {
       this.attachSource();
       return;
@@ -123,8 +127,7 @@ export class RouterOutletController<
     const selection = inputs.router
       ? selectRouterOutletState(inputs.router.getState())
       : idleSnapshot<TRouteId, TModule, TData>();
-    this.selection = selection;
-    this.publish({ ...selection, showPending: false });
+    this.applySelection(selection);
   }
 
   connect(): void {
@@ -148,7 +151,11 @@ export class RouterOutletController<
 
   private attachSource(notify = true): void {
     const router = this.router;
-    if (!router || this.unsubscribe) {
+    if (this.unsubscribe) {
+      return;
+    }
+    if (!router) {
+      this.applySelection(idleSnapshot<TRouteId, TModule, TData>(), notify);
       return;
     }
     this.applySelection(selectRouterOutletState(router.getState()), notify);
@@ -173,6 +180,14 @@ export class RouterOutletController<
     notify = true,
   ): void {
     this.selection = selection;
+    if (selection.status === "idle") {
+      this.settled = undefined;
+    } else {
+      const rendered = selectRenderedRouteMatch(selection.active, selection.pending);
+      if (rendered?.status === "success") {
+        this.settled = rendered;
+      }
+    }
     const pending = selection.pending;
     const coldPending =
       pending?.status === "pending" && pending.module === undefined && pending.error === undefined;
@@ -190,7 +205,7 @@ export class RouterOutletController<
       this.schedulePendingFallback(pending.id);
     }
 
-    this.publish({ ...selection, showPending: this.showPending }, notify);
+    this.publish({ ...selection, settled: this.settled, showPending: this.showPending }, notify);
     this.updateNotFoundEffect(selection.status);
   }
 
@@ -211,7 +226,7 @@ export class RouterOutletController<
         return;
       }
       this.showPending = true;
-      this.publish({ ...this.selection, showPending: true });
+      this.publish({ ...this.selection, settled: this.settled, showPending: true });
     }, this.pendingDelayMs);
   }
 
@@ -254,6 +269,7 @@ export class RouterOutletController<
       previous.status === snapshot.status &&
       previous.active === snapshot.active &&
       previous.pending === snapshot.pending &&
+      previous.settled === snapshot.settled &&
       previous.showPending === snapshot.showPending
     ) {
       return;

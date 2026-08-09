@@ -87,20 +87,20 @@ describe("AppSidebar multi-select", () => {
     return menu;
   }
 
-  async function mountMultiSelect(methods?: string[] | null, archiveManyError?: Error) {
+  async function mountMultiSelect(methods?: string[] | null, patchManyError?: Error) {
     const harness = createSessionsHarness("main", KEYS);
     const request = vi.fn((method: string, params?: unknown) => {
-      if (method !== "sessions.archiveMany") {
+      if (method !== "sessions.patchMany") {
         return Promise.reject(new Error(`unexpected request: ${method}`));
       }
-      if (archiveManyError) {
-        return Promise.reject(archiveManyError);
+      if (patchManyError) {
+        return Promise.reject(patchManyError);
       }
-      const archiveParams = params as {
+      const patchParams = params as {
         targets: Array<{ key: string; agentId?: string }>;
-        archived: boolean;
+        patch: Record<string, unknown>;
       };
-      return harness.archiveMany(archiveParams.targets, archiveParams.archived);
+      return harness.patchMany(patchParams.targets, patchParams.patch);
     });
     const gateway = createGatewayHarness({
       request: (method, params) => {
@@ -200,20 +200,76 @@ describe("AppSidebar multi-select", () => {
     expect(menu.querySelector('[data-shortcut="r"]')).toBeNull();
     menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
 
-    await waitForFast(() => expect(harness.archiveMany).toHaveBeenCalledOnce());
-    expect(harness.archiveMany).toHaveBeenCalledWith(
+    await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
+    expect(harness.patchMany).toHaveBeenCalledWith(
       [
         { key: "agent:main:a", agentId: "main" },
         { key: "agent:main:b", agentId: "main" },
       ],
-      true,
+      { archived: true },
     );
     expect(harness.patch).not.toHaveBeenCalled();
     await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledTimes(1));
     expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
   });
 
-  it("archives serially when an older Gateway does not advertise archiveMany", async () => {
+  it("marks every selected session unread through patchMany", async () => {
+    const { sidebar, harness } = await mountMultiSelect(["sessions.patchMany"]);
+
+    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    await sidebar.updateComplete;
+    openContextMenu(sidebar, "agent:main:a");
+    await sidebar.updateComplete;
+    (await sessionMenu(sidebar)).querySelector<HTMLButtonElement>('[data-shortcut="u"]')?.click();
+
+    await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
+    expect(harness.patchMany).toHaveBeenCalledWith(
+      [
+        { key: "agent:main:a", agentId: "main" },
+        { key: "agent:main:b", agentId: "main" },
+      ],
+      { unread: true },
+    );
+    expect(harness.patch).not.toHaveBeenCalled();
+    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
+  });
+
+  it("writes a new group catalog before assigning the selection through patchMany", async () => {
+    const prompt = vi.spyOn(window, "prompt").mockReturnValue("Projects");
+    try {
+      const { sidebar, harness } = await mountMultiSelect([
+        "sessions.groups.put",
+        "sessions.patchMany",
+      ]);
+      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+      await sidebar.updateComplete;
+      openContextMenu(sidebar, "agent:main:a");
+      await sidebar.updateComplete;
+      const menu = await sessionMenu(sidebar);
+      menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
+
+      await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
+      expect(harness.groupsPut).toHaveBeenCalledWith(["Projects"]);
+      expect(harness.patchMany).toHaveBeenCalledWith(
+        [
+          { key: "agent:main:a", agentId: "main" },
+          { key: "agent:main:b", agentId: "main" },
+        ],
+        { category: "Projects" },
+      );
+      expect(harness.groupsPut.mock.invocationCallOrder[0]).toBeLessThan(
+        harness.patchMany.mock.invocationCallOrder[0]!,
+      );
+      expect(harness.patch).not.toHaveBeenCalled();
+      await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
+    } finally {
+      prompt.mockRestore();
+    }
+  });
+
+  it("archives serially when an older Gateway does not advertise patchMany", async () => {
     const { sidebar, harness, request } = await mountMultiSelect(["sessions.patch"]);
 
     click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
@@ -240,16 +296,16 @@ describe("AppSidebar multi-select", () => {
       { archived: true },
       { agentId: "main", deferListRefresh: true },
     );
-    expect(harness.archiveMany).not.toHaveBeenCalled();
-    expect(request.mock.calls.filter(([method]) => method === "sessions.archiveMany")).toEqual([]);
+    expect(harness.patchMany).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toEqual([]);
     await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
     expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
   });
 
-  it("archives serially when an older Gateway omits method metadata and rejects archiveMany", async () => {
+  it("archives serially when an older Gateway omits method metadata and rejects patchMany", async () => {
     const rejection = new GatewayRequestError({
       code: "INVALID_REQUEST",
-      message: "unknown method: sessions.archiveMany",
+      message: "unknown method: sessions.patchMany",
     });
     const { sidebar, harness, request } = await mountMultiSelect(null, rejection);
 
@@ -277,10 +333,10 @@ describe("AppSidebar multi-select", () => {
       { archived: true },
       { agentId: "main", deferListRefresh: true },
     );
-    expect(request.mock.calls.filter(([method]) => method === "sessions.archiveMany")).toHaveLength(
+    expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toHaveLength(
       1,
     );
-    expect(harness.archiveMany).not.toHaveBeenCalled();
+    expect(harness.patchMany).not.toHaveBeenCalled();
     await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
     expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
   });

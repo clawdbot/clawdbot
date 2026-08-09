@@ -6,11 +6,11 @@ import {
   type ReactiveControllerHost,
   type TemplateResult,
 } from "lit";
-import type { DockPanelLayoutStore, DockPanelSide } from "./dock-panel-layout.ts";
+import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
 
 type DockLayoutHost = ReactiveControllerHost & { readonly isConnected: boolean };
 
-type DockLayoutControllerOptions<TDock extends DockPanelSide> = {
+type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   layout: DockPanelLayoutStore<TDock>;
   reservationPrefix: string;
   isAvailable: () => boolean;
@@ -18,7 +18,7 @@ type DockLayoutControllerOptions<TDock extends DockPanelSide> = {
   onResize?: () => void;
 };
 
-export class DockLayoutController<TDock extends DockPanelSide> implements ReactiveController {
+export class DockLayoutController<TDock extends DockPanelPlacement> implements ReactiveController {
   open = false;
   dock: TDock;
   height: number;
@@ -195,7 +195,7 @@ export class DockLayoutController<TDock extends DockPanelSide> implements Reacti
   }
 
   renderResizer(classPrefix: string, label: string): TemplateResult | typeof nothing {
-    if (this.isFullscreen()) {
+    if (this.isFullscreen() || this.dock === "main") {
       return nothing;
     }
     return html`<div

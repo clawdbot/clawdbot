@@ -39,7 +39,10 @@ import { createShouldEmitVerboseProgress } from "./dispatch-from-config.harness-
 import { createDispatchReplyOperationCoordinator } from "./dispatch-from-config.lifecycle.js";
 import { createFinalizationAwareTtsPayloadApplier } from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
-import { loadRuntimePlugins } from "./dispatch-from-config.runtime-loaders.js";
+import {
+  loadPreparedModelRuntime,
+  loadRuntimePlugins,
+} from "./dispatch-from-config.runtime-loaders.js";
 import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
@@ -359,17 +362,27 @@ export async function gatherDispatchRequest(
     hasInboundAudio: () =>
       inboundAudio || getDispatchReplyOperation()?.acceptedSteeredInboundAudio === true,
   });
-  const { loadAgentRuntimePluginRegistryHandle } = await traceReplyPhase(
-    "reply.load_runtime_plugins",
-    loadRuntimePlugins,
-  );
-  const pluginRegistry = await traceReplyPhase("reply.load_runtime_plugin_registry_handle", () =>
-    loadAgentRuntimePluginRegistryHandle({
-      config: cfg,
-      workspaceDir,
-      allowGatewaySubagentBinding: true,
-    }),
-  );
+  const preparedPluginRegistry = params.usePublishedModelRuntime
+    ? await traceReplyPhase("reply.load_prepared_inbound_plugin_registry", async () => {
+        const { loadPublishedGatewayInboundPluginRegistry } = await loadPreparedModelRuntime();
+        return await loadPublishedGatewayInboundPluginRegistry({
+          agentId: sessionAgentId,
+        });
+      })
+    : undefined;
+  const pluginRegistry =
+    preparedPluginRegistry ??
+    (await traceReplyPhase("reply.load_runtime_plugin_registry_handle", async () => {
+      const { loadAgentRuntimePluginRegistryHandle } = await traceReplyPhase(
+        "reply.load_runtime_plugins",
+        loadRuntimePlugins,
+      );
+      return loadAgentRuntimePluginRegistryHandle({
+        config: cfg,
+        workspaceDir,
+        allowGatewaySubagentBinding: true,
+      });
+    }));
   return await withPluginRuntimeRegistryScope(pluginRegistry, async () => {
     const hookRunner = getGlobalHookRunner();
     // Extract message context for hooks (plugin and internal)

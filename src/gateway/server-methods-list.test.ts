@@ -98,7 +98,7 @@ describe("listGatewayMethods", () => {
       "tasks.retry",
       "tasks.dismiss",
       "audit.run.inspect",
-      "sessions.archiveMany",
+      "sessions.patchMany",
       "update.hold",
     ]);
     const methods = listGatewayMethods();
@@ -211,14 +211,14 @@ describe("listGatewayMethods", () => {
       "tasks.retry",
       "tasks.dismiss",
       "audit.run.inspect",
-      "sessions.archiveMany",
+      "sessions.patchMany",
       "update.hold",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
     expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
-    expect(methods.indexOf("sessions.archiveMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
-    expect(methods.indexOf("update.hold")).toBe(methods.indexOf("sessions.archiveMany") + 1);
+    expect(methods.indexOf("sessions.patchMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
+    expect(methods.indexOf("update.hold")).toBe(methods.indexOf("sessions.patchMany") + 1);
   });
 
   it("advertises the versioned Talk session RPCs", () => {

@@ -49,9 +49,9 @@ export const WORKER_PROTOCOL_MAX_FEATURE_LENGTH = 128;
 export const WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES = 64;
 export const WORKER_TRANSCRIPT_MAX_CONTENT_PARTS = 128;
 export const WORKER_TRANSCRIPT_MAX_JSON_DEPTH = 32;
-// Reserve at least 12 KiB for the complete transcript commit envelope and
-// assistant content. A 60 KiB replay leaves effectively no safe frame headroom.
-export const WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES = 48 * 1024;
+// Replay is opaque and cannot be truncated. Transcript projection separately
+// verifies that the complete commit frame fits the protocol payload ceiling.
+export const WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES = WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
 
 const WorkerCredentialSchema = Type.String({ minLength: 16, maxLength: 256 });
 const WorkerProtocolFeatureSchema = Type.String({

@@ -1,8 +1,7 @@
 {
   "id": "cua-computer",
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true
+    "configRepair": true
   },
   "activation": {
     "onStartup": true

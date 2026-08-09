@@ -13,7 +13,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { isAccountEnabled } from "../../shared/account-enabled.js";
 import {
   listDeliverableMessageChannels,
-  type DeliverableMessageChannel,
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
@@ -22,14 +21,14 @@ import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 
 /** Deliverable message channel id that can be selected for message actions. */
-type MessageChannelId = DeliverableMessageChannel;
+type MessageChannelId = string;
 /** Source that explains how message channel selection chose its result. */
 type MessageChannelSelectionSource = "explicit" | "tool-context-fallback" | "single-configured";
 
 const getMessageChannels = () => listDeliverableMessageChannels();
 
 function isKnownChannel(value: string): boolean {
-  return getMessageChannels().includes(value as MessageChannelId);
+  return getMessageChannels().includes(value);
 }
 
 function resolveKnownChannel(value?: string | null): MessageChannelId | undefined {

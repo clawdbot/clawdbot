@@ -13,12 +13,18 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
-import { suppressOpenAIResponsesCompaction } from "../transports/openai-responses-compaction-replay.js";
 import {
+  buildOpenAIResponsesCompactionReplayPlan,
   buildOpenAIResponsesReasoningReplayMetadata,
-  createOpenAIResponsesCompactionPrefixPruner,
+  buildOpenAIResponsesReplayContext,
+  suppressOpenAIResponsesCompaction,
+  type OpenAIResponsesReplayMode,
+} from "../transports/openai-responses-compaction-replay.js";
+import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import {
   createResponsesStreamWithEncryptedContentRetry,
-  resolveNewestOpenAIResponsesCompactionReplay,
+  prepareOpenAIResponsesReasoningItemForReplay,
+  readOpenAIResponsesReasoningReplayBlockMetadata,
 } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
@@ -78,19 +84,6 @@ function sanitizeToolResultText(text: string, fallback: string): string {
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
-function normalizeResponsesReasoningReplayItem(params: {
-  item: ReplayableResponseReasoningItem;
-  replayResponsesItemIds: boolean;
-}): ReplayableResponseReasoningItem {
-  const next = { ...(params.item as ReplayableResponseReasoningItem & Record<string, unknown>) };
-  if (!Array.isArray(next.summary)) {
-    next.summary = [];
-  }
-  if (!params.replayResponsesItemIds) {
-    delete next.id;
-  }
-  return next as ReplayableResponseReasoningItem;
-}
 
 function parseTextSignature(
   signature: string | undefined,
@@ -151,6 +144,7 @@ interface ConvertResponsesMessagesOptions {
   replayResponsesItemIds?: boolean;
   sessionId?: string;
   authProfileId?: string;
+  replayMode?: OpenAIResponsesReplayMode;
 }
 export { convertResponsesToolPayload };
 
@@ -207,6 +201,8 @@ type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperatu
   reasoningSummary?: ResponsesReasoningSummary;
 };
 
+type ResponsesLifecycleRequest = OpenAIResponsesRequestParams;
+
 // =============================================================================
 // Message conversion
 // =============================================================================
@@ -219,6 +215,10 @@ export function convertResponsesMessages<TApi extends Api>(
 ): ResponseInput {
   const messages: ResponseInput = [];
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
+  const replayContext = buildOpenAIResponsesReplayContext(model, {
+    sessionId: options?.sessionId,
+    authProfileId: options?.authProfileId,
+  });
 
   const normalizeIdPart = (part: string): string => {
     const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -257,12 +257,12 @@ export function convertResponsesMessages<TApi extends Api>(
     return `${normalizedCallId}|${normalizedItemId}`;
   };
 
-  const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
-  const compaction = resolveNewestOpenAIResponsesCompactionReplay(transformedMessages, model, {
+  const replayPlan = buildOpenAIResponsesCompactionReplayPlan(context.messages, model, {
     sessionId: options?.sessionId,
     authProfileId: options?.authProfileId,
+    mode: options?.replayMode,
   });
-  const compactionPruner = createOpenAIResponsesCompactionPrefixPruner(compaction);
+  const transformedMessages = transformMessages(replayPlan.messages, model, normalizeToolCallId);
 
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
@@ -280,13 +280,12 @@ export function convertResponsesMessages<TApi extends Api>(
       ],
     });
   }
+  if (replayPlan.compaction) {
+    messages.push(replayPlan.compaction);
+  }
 
   let msgIndex = 0;
   for (const msg of transformedMessages) {
-    if (compactionPruner.shouldSkipMessage(msg)) {
-      msgIndex += 1;
-      continue;
-    }
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         messages.push({
@@ -319,7 +318,6 @@ export function convertResponsesMessages<TApi extends Api>(
       }
     } else if (msg.role === "assistant") {
       const output: ResponseInput = [];
-      const assistantCompaction = msg === compaction?.owner ? compaction : undefined;
       let textFallbackOrdinal = 0;
       const assistantMsg = msg;
       let previousReplayItemWasReasoning = false;
@@ -328,20 +326,27 @@ export function convertResponsesMessages<TApi extends Api>(
         assistantMsg.provider === model.provider &&
         assistantMsg.api === model.api;
 
-      for (const [contentIndex, block] of msg.content.entries()) {
-        if (compactionPruner.shouldSkipAssistantBlock(msg, contentIndex)) {
-          continue;
-        }
-        if (assistantCompaction && contentIndex === assistantCompaction.replayIndex) {
-          output.push(assistantCompaction.item);
-        }
+      for (const block of msg.content) {
         if (block.type === "thinking") {
           if (block.thinkingSignature) {
-            const reasoningItem = normalizeResponsesReasoningReplayItem({
-              item: JSON.parse(block.thinkingSignature) as ReplayableResponseReasoningItem,
-              replayResponsesItemIds: shouldReplayResponsesItemIds,
-            });
-            output.push(reasoningItem as ResponseInputItem);
+            const reasoningItem = JSON.parse(
+              block.thinkingSignature,
+            ) as ReplayableResponseReasoningItem;
+            const blockMetadata = readOpenAIResponsesReasoningReplayBlockMetadata(
+              block as unknown as Record<string, unknown>,
+            );
+            // Unannotated items retain the shipped public-provider stateless replay contract.
+            // Once capture provenance exists, ciphertext is fenced to that exact route.
+            const replayableReasoningItem = prepareOpenAIResponsesReasoningItemForReplay(
+              reasoningItem,
+              replayContext,
+              blockMetadata,
+              { preserveUnattributedEncryptedContent: true },
+            );
+            if (!shouldReplayResponsesItemIds) {
+              delete replayableReasoningItem.id;
+            }
+            output.push(replayableReasoningItem as ResponseInputItem);
             previousReplayItemWasReasoning = true;
           }
         } else if (block.type === "text") {
@@ -374,7 +379,6 @@ export function convertResponsesMessages<TApi extends Api>(
           output.push(messageItem as ResponseInputItem);
           previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
-          compactionPruner.recordToolCall(block.id);
           const toolCall = block;
           const [callId, itemIdRaw] = splitResponsesToolCallId(toolCall.id);
           let itemId: string | undefined = shouldReplayResponsesItemIds ? itemIdRaw : undefined;
@@ -396,9 +400,6 @@ export function convertResponsesMessages<TApi extends Api>(
           previousReplayItemWasReasoning = false;
         }
       }
-      if (assistantCompaction && assistantCompaction.replayIndex >= msg.content.length) {
-        output.push(assistantCompaction.item);
-      }
       if (output.length === 0) {
         continue;
       }
@@ -409,10 +410,6 @@ export function convertResponsesMessages<TApi extends Api>(
       const hasImages = msg.content.some(isImageWithMediaPayload);
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasText = sanitizedTextResult.trim().length > 0;
-      if (!compactionPruner.shouldKeepToolResult(msg.toolCallId)) {
-        msgIndex++;
-        continue;
-      }
       const [callId] = splitResponsesToolCallId(msg.toolCallId);
 
       let output: string | ResponseFunctionCallOutputItemList;
@@ -599,7 +596,10 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   options?: ResponsesLifecycleStreamOptions;
   resolveRequestModel?: (model: Model<TApi>) => Model<TApi>;
   createClient: (model: Model<TApi>) => ResponsesStreamClient;
-  buildParams: (model: Model<TApi>) => ResponseCreateParamsStreaming;
+  buildParams: (
+    model: Model<TApi>,
+    replayMode: OpenAIResponsesReplayMode,
+  ) => ResponsesLifecycleRequest;
   processStreamOptions?: OpenAIResponsesProcessStreamOptions;
   formatError: (error: unknown) => string;
 }): Promise<void> {
@@ -609,11 +609,15 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   try {
     const model = params.resolveRequestModel?.(params.model) ?? params.model;
     const client = params.createClient(model);
-    let requestParams = params.buildParams(model);
-    const nextParams = await options?.onPayload?.(requestParams, model);
-    if (nextParams !== undefined) {
-      requestParams = nextParams as ResponseCreateParamsStreaming;
-    }
+    const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
+      let request = params.buildParams(model, replayMode);
+      const nextRequest = await options?.onPayload?.(request, model);
+      if (nextRequest !== undefined) {
+        request = nextRequest as ResponsesLifecycleRequest;
+      }
+      return request;
+    };
+    const requestParams = await buildRequest("checkpoint");
 
     firstEventAbort = createFirstStreamEventAbortController(options?.signal);
     const { stream: openaiStream, response } = await createResponsesStreamWithEncryptedContentRetry(
@@ -625,6 +629,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
           signal: firstEventAbort.signal,
         },
         model,
+        buildFullHistoryRequest: () => buildRequest("full-history"),
         onCompactionRejected: () =>
           suppressOpenAIResponsesCompaction(output, model, {
             sessionId: options?.sessionId,

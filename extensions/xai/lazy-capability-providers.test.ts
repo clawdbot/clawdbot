@@ -398,6 +398,75 @@ describe("xAI lazy capability providers", () => {
     );
   });
 
+  it.each([
+    ["undefined", (): undefined => undefined],
+    ["function", () => () => undefined],
+    ["symbol", () => Symbol("invalid-tool-result")],
+    ["bigint", () => ({ value: 1n })],
+    [
+      "circular",
+      () => {
+        const result: { self?: unknown } = {};
+        result.self = result;
+        return result;
+      },
+    ],
+    ["omitted custom serialization", () => ({ toJSON: () => undefined })],
+  ] as const)(
+    "rejects %s voice tool results before lazy queue admission",
+    async (_label, create) => {
+      const lazy = await loadLazyProviders();
+      const onError = vi.fn();
+      const bridge = lazy
+        .createLazyXaiRealtimeVoiceProvider()
+        .createBridge(createVoiceRequest({ onError }));
+
+      expect(() => bridge.submitToolResult("call-1", create())).toThrow(/serializ/i);
+      expect(onError).toHaveBeenCalledOnce();
+
+      await bridge.submitToolResult("call-1", { recovered: true });
+      await bridge.connect();
+
+      expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledExactlyOnceWith(
+        "call-1",
+        { recovered: true },
+        undefined,
+      );
+    },
+  );
+
+  it("snapshots lazy voice tool results with one canonical serialization", async () => {
+    const lazy = await loadLazyProviders();
+    const bridge = lazy.createLazyXaiRealtimeVoiceProvider().createBridge(createVoiceRequest());
+    const toJSON = vi.fn((key: string) => ({ key, ok: true }));
+
+    await bridge.submitToolResult("call-1", { toJSON });
+    await bridge.connect();
+
+    expect(toJSON).toHaveBeenCalledExactlyOnceWith("");
+    expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledExactlyOnceWith(
+      "call-1",
+      { key: "", ok: true },
+      undefined,
+    );
+  });
+
+  it("ignores unsupported interim voice results before lazy queue admission", async () => {
+    const lazy = await loadLazyProviders();
+    const onError = vi.fn();
+    const bridge = lazy
+      .createLazyXaiRealtimeVoiceProvider()
+      .createBridge(createVoiceRequest({ onError }));
+
+    expect(() =>
+      bridge.submitToolResult("call-1", undefined, { willContinue: true }),
+    ).not.toThrow();
+    await bridge.connect();
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(runtimeMocks.voiceSubmitToolResult).not.toHaveBeenCalled();
+  });
+
   it("bounds pending voice tool results by aggregate serialized bytes", async () => {
     const lazy = await loadLazyProviders();
     const onError = vi.fn();
@@ -407,7 +476,9 @@ describe("xAI lazy capability providers", () => {
     const accepted = { text: "a".repeat(200 * 1024) };
 
     await bridge.submitToolResult("call-1", accepted);
-    await bridge.submitToolResult("call-2", { text: "b".repeat(64 * 1024) });
+    expect(() => bridge.submitToolResult("call-2", { text: "b".repeat(64 * 1024) })).toThrow(
+      "xAI realtime voice pending tool result overflow during lazy startup",
+    );
     await bridge.connect();
 
     expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledOnce();
@@ -434,7 +505,9 @@ describe("xAI lazy capability providers", () => {
     bridge.sendUserMessage?.(acceptedMessage);
     bridge.sendUserMessage?.("c".repeat(64 * 1024));
     await bridge.submitToolResult("call-1", acceptedResult);
-    await bridge.submitToolResult("call-2", { text: "d".repeat(64 * 1024) });
+    expect(() => bridge.submitToolResult("call-2", { text: "d".repeat(64 * 1024) })).toThrow(
+      "xAI realtime voice pending tool result overflow during lazy startup",
+    );
 
     expect(runtimeMocks.voiceSendUserMessage).not.toHaveBeenCalled();
     expect(runtimeMocks.voiceSubmitToolResult).not.toHaveBeenCalled();
@@ -513,8 +586,11 @@ describe("xAI lazy capability providers", () => {
     await bridge.submitToolResult("call-1", { text: "a".repeat(200 * 1024) });
     const connectPromise = bridge.connect();
     await vi.waitFor(() => expect(runtimeMocks.voiceSubmitToolResult).toHaveBeenCalledOnce());
-    await bridge.submitToolResult("call-2", { text: "b".repeat(64 * 1024) });
+    expect(() => bridge.submitToolResult("call-2", { text: "b".repeat(64 * 1024) })).toThrow(
+      "xAI realtime voice pending tool result overflow during lazy startup",
+    );
 
+    expect(onError).toHaveBeenCalledOnce();
     expect(onError.mock.calls[0]?.[0]).toEqual(
       new Error("xAI realtime voice pending tool result overflow during lazy startup"),
     );

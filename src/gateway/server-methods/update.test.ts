@@ -44,6 +44,7 @@ const getUpdateAvailableMock = vi.fn(
 const getUpdateScheduleMock = vi.fn<
   () => import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState | null
 >(() => null);
+const refreshGatewayUpdateStatusMock = vi.fn(async () => {});
 type UpdateCampaignAdoption = NonNullable<
   ReturnType<import("../../infra/update-campaign.js").UpdateCampaignController["adopt"]>
 >;
@@ -159,6 +160,7 @@ vi.mock("../../infra/update-channels.js", () => ({
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
   getUpdateSchedule: getUpdateScheduleMock,
+  refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
 vi.mock("../../infra/update-campaign.js", () => ({

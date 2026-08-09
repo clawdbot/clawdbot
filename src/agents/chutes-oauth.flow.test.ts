@@ -1,7 +1,7 @@
-/** Tests Chutes OAuth token exchange and refresh HTTP flows. */
+/** Tests the retained core Chutes OAuth token exchange compatibility flow. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-import { exchangeChutesCodeForTokens, refreshChutesTokens } from "./chutes-oauth.js";
+import { exchangeChutesCodeForTokens } from "./chutes-oauth.js";
 
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
@@ -12,51 +12,6 @@ const urlToString = (url: Request | URL | string): string => {
   }
   return "url" in url ? url.url : String(url);
 };
-
-function createStoredCredential(
-  now: number,
-): Parameters<typeof refreshChutesTokens>[0]["credential"] {
-  return {
-    access: "at_old",
-    refresh: "rt_old",
-    expires: now - 10_000,
-    email: "fred",
-    clientId: "cid_test",
-  } as unknown as Parameters<typeof refreshChutesTokens>[0]["credential"];
-}
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
-
-function expectRefreshedCredential(
-  refreshed: Awaited<ReturnType<typeof refreshChutesTokens>>,
-  now: number,
-) {
-  // Refresh responses may omit refresh_token; the stored token remains valid and
-  // expiry keeps the safety skew applied.
-  expect(refreshed.access).toBe("at_new");
-  expect(refreshed.refresh).toBe("rt_old");
-  expect(refreshed.expires).toBe(now + 1800 * 1000 - 5 * 60 * 1000);
-}
 
 function rejectWhenAborted(init?: RequestInit): Promise<Response> {
   const signal = init?.signal;
@@ -235,81 +190,6 @@ describe("chutes-oauth", () => {
     expect(timeoutSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("refreshes tokens using stored client id and falls back to old refresh token", async () => {
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
-    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = urlToString(input);
-      if (url !== CHUTES_TOKEN_ENDPOINT) {
-        return new Response("not found", { status: 404 });
-      }
-      expect(init?.method).toBe("POST");
-      const body = init?.body as URLSearchParams;
-      expect(String(body.get("grant_type"))).toBe("refresh_token");
-      expect(String(body.get("client_id"))).toBe("cid_test");
-      expect(String(body.get("refresh_token"))).toBe("rt_old");
-      return new Response(
-        JSON.stringify({
-          access_token: "at_new",
-          expires_in: 1800,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    });
-
-    const now = 2_000_000;
-    const refreshed = await refreshChutesTokens({
-      credential: createStoredCredential(now),
-      fetchFn,
-      now,
-    });
-
-    expectRefreshedCredential(refreshed, now);
-    expect(timeoutSpy).toHaveBeenCalledOnce();
-    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
-  });
-
-  it("times out token refresh requests", async () => {
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
-      expect(delay).toBe(30_000);
-      return AbortSignal.abort(new DOMException("OAuth request timed out", "TimeoutError"));
-    });
-    const fetchFn = withFetchPreconnect(
-      async (_input: RequestInfo | URL, init?: RequestInit) => await rejectWhenAborted(init),
-    );
-
-    await expect(
-      refreshChutesTokens({ credential: createStoredCredential(2_000_000), fetchFn }),
-    ).rejects.toMatchObject({ name: "TimeoutError" });
-    expect(timeoutSpy).toHaveBeenCalledOnce();
-  });
-
-  it("refreshes tokens and ignores empty refresh_token values", async () => {
-    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = urlToString(input);
-      if (url !== CHUTES_TOKEN_ENDPOINT) {
-        return new Response("not found", { status: 404 });
-      }
-      expect(init?.method).toBe("POST");
-      return new Response(
-        JSON.stringify({
-          access_token: "at_new",
-          refresh_token: "",
-          expires_in: 1800,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    });
-
-    const now = 3_000_000;
-    const refreshed = await refreshChutesTokens({
-      credential: createStoredCredential(now),
-      fetchFn,
-      now,
-    });
-
-    expectRefreshedCredential(refreshed, now);
-  });
-
   it("normalizes and redacts structured token exchange errors", async () => {
     const leakedClientSecret = "oauth-client-secret-1234567890";
     const response = new Response(
@@ -364,65 +244,5 @@ describe("chutes-oauth", () => {
     expect(message).not.toContain("error_description");
     expect((error as { errorBody?: string }).errorBody).not.toContain(leakedClientSecret);
     expect(textSpy).not.toHaveBeenCalled();
-  });
-
-  it("bounds and redacts plain-text token refresh errors", async () => {
-    const leakedRefreshToken = "oauth-refresh-secret-1234567890";
-    const tracked = cancelTrackedResponse(
-      `${`refresh_token=${leakedRefreshToken} unavailable `.repeat(1024)}tail-marker`,
-      {
-        status: 401,
-        headers: { "content-type": "text/plain" },
-      },
-    );
-    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL) => {
-      const url = urlToString(input);
-      if (url === CHUTES_TOKEN_ENDPOINT) {
-        return tracked.response;
-      }
-      return new Response("not found", { status: 404 });
-    });
-
-    let error: unknown;
-    try {
-      await refreshChutesTokens({
-        credential: createStoredCredential(5_000_000),
-        fetchFn,
-        now: 5_000_000,
-      });
-    } catch (caught) {
-      error = caught;
-    }
-
-    expect(error).toMatchObject({ name: "ProviderHttpError", status: 401 });
-    const message = (error as Error).message;
-    expect(message).toContain("Chutes token refresh failed (401): refresh_token=");
-    expect(message).not.toContain(leakedRefreshToken);
-    expect(message).not.toContain("tail-marker");
-    expect((error as { errorBody?: string }).errorBody).not.toContain(leakedRefreshToken);
-    expect(textSpy).not.toHaveBeenCalled();
-    expect(tracked.wasCanceled()).toBe(true);
-  });
-
-  it("rejects unsafe refresh token lifetimes", async () => {
-    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL) => {
-      const url = urlToString(input);
-      if (url !== CHUTES_TOKEN_ENDPOINT) {
-        return new Response("not found", { status: 404 });
-      }
-      return new Response('{"access_token":"at_new","expires_in":1e309}', {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-
-    await expect(
-      refreshChutesTokens({
-        credential: createStoredCredential(4_000_000),
-        fetchFn,
-        now: 4_000_000,
-      }),
-    ).rejects.toThrow("Chutes token refresh returned invalid expires_in");
   });
 });

@@ -96,6 +96,8 @@ Options:
   --main-ref <ref>      Canonical mainline used to replace backport PRs.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
+  --release-provenance <sha -> #PR[, #PR]>
+                        Supply an exact provenance marker; repeatable.
   --write-ledger        Write the verified ledger back into CHANGELOG.md.
   --release-tag <tag>   GitHub release tag to compare; repeatable with --check-github.
   --check-github        Require each supplied GitHub release body to match.
@@ -103,9 +105,10 @@ Options:
   --help                Show this help text.`);
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const options = {
     releaseTags: [],
+    releaseProvenance: [],
     checkGithub: false,
     help: false,
     json: false,
@@ -150,6 +153,7 @@ function parseArgs(argv) {
       arg === "--target" ||
       arg === "--version" ||
       arg === "--release-tag" ||
+      arg === "--release-provenance" ||
       arg === "--shipped-ref" ||
       arg === "--github-snapshot" ||
       arg === "--main-ref" ||
@@ -162,6 +166,8 @@ function parseArgs(argv) {
       }
       if (arg === "--release-tag") {
         options.releaseTags.push(value);
+      } else if (arg === "--release-provenance") {
+        options.releaseProvenance.push(value);
       } else if (arg === "--shipped-ref") {
         options.shippedRefs.push(value);
       } else if (arg === "--manifest") {
@@ -851,38 +857,47 @@ function backportPullRequestOrigins(message) {
   ].map((match) => Number(match[1]));
 }
 
-export function releaseProvenanceMarkers(message) {
-  const markers = [];
-  for (const line of message.split("\n")) {
-    if (!/^Release provenance:/i.test(line)) {
-      continue;
-    }
-    const match = line.match(/^Release provenance: ([0-9a-f]{40}) -> (#\d+(?:,\s*#\d+)*)\.?\s*$/i);
-    if (!match) {
-      fail(`invalid release provenance marker: ${line}`);
-    }
-    markers.push({
-      commit: match[1].toLowerCase(),
-      pullRequests: [...match[2].matchAll(/#(\d+)/g)].map((reference) => Number(reference[1])),
-    });
+function releaseProvenanceMarker(line) {
+  const match = line.match(/^Release provenance: ([0-9a-f]{40}) -> (#\d+(?:,\s*#\d+)*)\.?\s*$/i);
+  if (!match) {
+    fail(`invalid release provenance marker: ${line}`);
   }
-  return markers;
+  return {
+    commit: match[1].toLowerCase(),
+    pullRequests: [...match[2].matchAll(/#(\d+)/g)].map((reference) => Number(reference[1])),
+  };
 }
 
-export function collectReleaseProvenanceOverrides(activeCommits) {
+export function releaseProvenanceMarkers(message) {
+  return message
+    .split("\n")
+    .filter((line) => /^Release provenance:/i.test(line))
+    .map(releaseProvenanceMarker);
+}
+
+export function collectReleaseProvenanceOverrides(activeCommits, releaseProvenance = []) {
   const activeCommitHashes = new Set(activeCommits.map((commit) => commit.hash));
   const overrides = new Map();
+  const addMarker = (marker) => {
+    if (!activeCommitHashes.has(marker.commit)) {
+      fail(`release provenance marker targets commit outside the active range: ${marker.commit}`);
+    }
+    const existing = overrides.get(marker.commit);
+    if (existing && existing.join(",") !== marker.pullRequests.join(",")) {
+      fail(`conflicting release provenance markers for ${marker.commit}`);
+    }
+    overrides.set(marker.commit, marker.pullRequests);
+  };
   for (const commit of activeCommits) {
     for (const marker of releaseProvenanceMarkers(commit.body)) {
-      if (!activeCommitHashes.has(marker.commit)) {
-        fail(`release provenance marker targets commit outside the active range: ${marker.commit}`);
-      }
-      const existing = overrides.get(marker.commit);
-      if (existing && existing.join(",") !== marker.pullRequests.join(",")) {
-        fail(`conflicting release provenance markers for ${marker.commit}`);
-      }
-      overrides.set(marker.commit, marker.pullRequests);
+      addMarker(marker);
     }
+  }
+  for (const value of releaseProvenance) {
+    if (/[\r\n]/u.test(value)) {
+      fail(`invalid release provenance marker: Release provenance: ${value}`);
+    }
+    addMarker(releaseProvenanceMarker(`Release provenance: ${value}`));
   }
   return overrides;
 }
@@ -1017,7 +1032,7 @@ function canonicalMainCommits(base, mainRef) {
   return commits;
 }
 
-function sourceCommits(base, target, mainRef) {
+function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const targetCommit = git(["rev-parse", `${target}^{commit}`]);
   if (!gitIsAncestor(base, targetCommit)) {
     fail(`release range base ${base} must be an ancestor of target ${target}`);
@@ -1193,7 +1208,7 @@ function sourceCommits(base, target, mainRef) {
     activeCommits.map((commit) => commit.hash),
     targetTimestamp,
   );
-  const provenanceOverrides = collectReleaseProvenanceOverrides(activeCommits);
+  const provenanceOverrides = collectReleaseProvenanceOverrides(activeCommits, releaseProvenance);
   const mainCommits = canonicalMainCommits(base, mainRef);
   const mainCommit = provenanceOverrides.size > 0 ? gitCommit(mainRef, true) : undefined;
   const mainCommitsByHash = new Map(mainCommits.map((commit) => [commit.hash, commit]));
@@ -2412,7 +2427,12 @@ function main() {
   githubSnapshotState = initializeGithubSnapshot(options);
   const changelog = readFileSync("CHANGELOG.md", "utf8");
   const section = sectionFor(changelog, options.version);
-  const source = sourceCommits(options.base, options.target, options.mainRef ?? "origin/main");
+  const source = sourceCommits(
+    options.base,
+    options.target,
+    options.mainRef ?? "origin/main",
+    options.releaseProvenance,
+  );
   const committedSection = optionalSectionFor(
     git(["show", `${source.target}:CHANGELOG.md`]),
     options.version,

@@ -4,6 +4,8 @@ import type { ResponseCreateParamsStreaming } from "openai/resources/responses/r
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import type { OpenAIResponsesReplayMode } from "../transports/openai-responses-compaction-replay.js";
+import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
@@ -88,8 +90,14 @@ export const streamAzureOpenAIResponses: StreamFunction<
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       return createClient(requestModel, apiKey, options);
     },
-    buildParams: (requestModel) =>
-      buildParams(requestModel, context, options, resolveDeploymentName(model, options)),
+    buildParams: (requestModel, replayMode) =>
+      buildParams(
+        requestModel,
+        context,
+        options,
+        resolveDeploymentName(model, options),
+        replayMode,
+      ),
     formatError: formatAzureOpenAIError,
   });
 
@@ -228,13 +236,15 @@ function buildParams(
   context: Context,
   options: AzureOpenAIResponsesOptions | undefined,
   deploymentName: string,
+  replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ) {
   const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS, {
     sessionId: options?.sessionId,
     authProfileId: options?.authProfileId,
+    replayMode,
   });
 
-  const params: ResponseCreateParamsStreaming = {
+  const params: ResponseCreateParamsStreaming & OpenAIResponsesRequestParams = {
     model: deploymentName,
     input: messages,
     stream: true,

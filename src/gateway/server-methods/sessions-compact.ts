@@ -12,6 +12,7 @@ import {
   resolveSessionWorkStartError,
   SESSION_TOTAL_TOKENS_VERSION,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
+  type SessionEntry,
 } from "../../config/sessions.js";
 import {
   applySessionPatchProjection,
@@ -76,14 +77,11 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     const compactRead = await applySessionPatchProjection({
       agentId: target.agentId,
       storePath,
-      resolveTarget: ({ entries }) => {
-        const snapshot = Object.fromEntries(
-          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-        );
+      resolveTarget: ({ store }) => {
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key,
-          store: snapshot,
+          store: store as Record<string, SessionEntry>,
           agentId: requestedAgentId,
         });
         compactPrimaryKey = primaryKey;

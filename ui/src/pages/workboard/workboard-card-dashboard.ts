@@ -149,6 +149,7 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
           ${hasBoard && provider && boardSnapshot && callbacks
             ? html`
                 <openclaw-board-view
+                  .active=${this.expanded}
                   .snapshot=${boardSnapshot}
                   .activeTabId=${this.activeTabId}
                   .widgetFrameUrl=${(name: string, revision: number) =>
@@ -157,7 +158,6 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
                   .sessions=${[]}
                   .canMutate=${this.canMutate}
                   .canGrant=${this.canGrant}
-                  .ticketRefreshEnabled=${this.expanded}
                 ></openclaw-board-view>
               `
             : html`<p class="workboard-card-dashboard__empty">${t("workboard.dashboardEmpty")}</p>`}

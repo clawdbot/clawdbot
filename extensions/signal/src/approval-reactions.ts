@@ -17,6 +17,7 @@ import {
   type ExecApprovalReplyDecision,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -82,7 +83,9 @@ type SignalApprovalDeliveryResult = {
   meta?: Record<string, unknown>;
 };
 
-const resolverRuntimeLoader = createLazyRuntimeModule(() => import("./approval-resolver.js"));
+const resolverRuntimeLoader = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
+);
 
 const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
   getOptionalSignalRuntime,
@@ -907,13 +910,14 @@ export async function maybeResolveSignalApprovalReaction(params: {
     return true;
   }
 
-  const { isApprovalNotFoundError, resolveSignalApproval } = await loadApprovalResolver();
+  const { resolveApprovalOverGateway } = await loadApprovalResolver();
   try {
-    const result = await resolveSignalApproval({
+    const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: target.approvalId,
       approvalKind: target.approvalKind,
       decision: target.decision,
+      channel: "signal",
       senderId: actorId,
       gatewayUrl: params.gatewayUrl,
     });

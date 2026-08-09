@@ -37,12 +37,15 @@ import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
 import { sleepWithAbort } from "../internal/retry-sleep.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
-import { suppressOpenAIResponsesCompaction } from "../transports/openai-responses-compaction-replay.js";
+import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  suppressOpenAIResponsesCompaction,
+  type OpenAIResponsesReplayMode,
+} from "../transports/openai-responses-compaction-replay.js";
 import { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
 import { createResponsesPromptEgressObserver } from "../transports/openai-responses-prompt-observer-internal.js";
 import {
-  buildOpenAIResponsesReasoningReplayMetadata,
   isInvalidEncryptedContentError,
   resolveNextResponsesEncryptedContentAttempt,
   type ResponsesEncryptedContentAttempt,
@@ -290,14 +293,17 @@ export const streamOpenAICodexResponses: StreamFunction<
       const optionHeaders = resolveAiTransportHeaderSentinels(options?.headers);
 
       const accountId = extractOpenAICodexAccountId(apiKey);
-      let body = buildRequestBody(model, context, options);
-      const nextBody = await options?.onPayload?.(body, model);
-      if (nextBody !== undefined) {
-        body = nextBody as RequestBody;
-      }
+      const buildBody = async (replayMode: OpenAIResponsesReplayMode) => {
+        let body = buildRequestBody(model, context, options, replayMode);
+        const nextBody = await options?.onPayload?.(body, model);
+        if (nextBody !== undefined) {
+          body = nextBody as RequestBody;
+        }
+        return body;
+      };
       let semanticAttempt: ResponsesEncryptedContentAttempt<RequestBody> = {
         kind: "initial",
-        request: body,
+        request: await buildBody("checkpoint"),
       };
       const observePromptEgress = createResponsesPromptEgressObserver(
         options,
@@ -327,10 +333,12 @@ export const streamOpenAICodexResponses: StreamFunction<
           sessionId || createCodexRequestId(),
         );
         let websocketStarted = false;
+        let websocketRequestSent = false;
         let retriedWebSocketConnectionLimit = false;
         while (true) {
           const activeAttempt = semanticAttempt;
           websocketStarted = false;
+          websocketRequestSent = false;
           try {
             await processWebSocketStream(
               resolveCodexWebSocketUrl(model.baseUrl),
@@ -352,6 +360,9 @@ export const streamOpenAICodexResponses: StreamFunction<
               firstEventAbort.abort,
               observePromptEgress,
               activeAttempt.kind,
+              () => {
+                websocketRequestSent = true;
+              },
             );
 
             if (activeSignal?.aborted) {
@@ -369,12 +380,17 @@ export const streamOpenAICodexResponses: StreamFunction<
             return;
           } catch (error) {
             const aborted = activeSignal?.aborted;
+            // Observer and local send failures happen before dispatch and must not
+            // be classified as provider rejection of encrypted replay state.
             const nextSemanticAttempt =
               !aborted &&
+              websocketRequestSent &&
               !websocketStarted &&
               error instanceof CodexApiError &&
               isInvalidEncryptedContentError(error)
-                ? resolveNextResponsesEncryptedContentAttempt(activeAttempt, error)
+                ? await resolveNextResponsesEncryptedContentAttempt(activeAttempt, error, {
+                    buildFullHistoryRequest: () => buildBody("full-history"),
+                  })
                 : undefined;
             if (nextSemanticAttempt) {
               semanticAttempt = nextSemanticAttempt;
@@ -533,7 +549,11 @@ export const streamOpenAICodexResponses: StreamFunction<
           throw transportAbortError(activeSignal);
         }
         const nextSemanticAttempt = terminalResponseError
-          ? resolveNextResponsesEncryptedContentAttempt(activeAttempt, terminalResponseError)
+          ? await resolveNextResponsesEncryptedContentAttempt(
+              activeAttempt,
+              terminalResponseError,
+              { buildFullHistoryRequest: () => buildBody("full-history") },
+            )
           : undefined;
         if (!nextSemanticAttempt) {
           throw terminalResponseError ?? new Error("Failed after retries");
@@ -608,12 +628,14 @@ function buildRequestBody(
   model: Model<"openai-chatgpt-responses">,
   context: Context,
   options?: OpenAICodexResponsesOptions,
+  replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ): RequestBody {
   const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
     includeSystemPrompt: false,
     replayResponsesItemIds: false,
     sessionId: options?.sessionId,
     authProfileId: options?.authProfileId,
+    replayMode,
   });
 
   const body: RequestBody = {
@@ -1546,6 +1568,7 @@ async function processWebSocketStream(
   abortFirstEventStream?: (reason: Error) => void,
   observePromptEgress?: ObserveResponsesPromptEgress,
   payloadVariant: ResponsesEncryptedContentAttempt<RequestBody>["kind"] = "initial",
+  onRequestSent?: () => void,
 ): Promise<void> {
   const { socket, entry, release } = await acquireWebSocket(
     url,
@@ -1570,6 +1593,7 @@ async function processWebSocketStream(
       payloadVariant,
     });
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
+    onRequestSent?.();
     await processResponsesStream(
       startWebSocketOutputOnFirstEvent(
         mapCodexEvents(parseWebSocket(socket, options?.signal)),

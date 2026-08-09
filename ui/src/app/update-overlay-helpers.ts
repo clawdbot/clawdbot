@@ -31,18 +31,21 @@ const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
   "restart-disabled": "updates.failureReasons.restartDisabled",
   "restart-unavailable": "updates.failureReasons.restartUnavailable",
   "restart-unhealthy": "updates.failureReasons.restartUnhealthy",
+  "restart-revision-mismatch": "updates.failureReasons.restartRevisionMismatch",
+  "restart-revision-unavailable": "updates.failureReasons.restartRevisionUnavailable",
+  "already-current": "updates.failureReasons.alreadyCurrent",
   "managed-service-handoff-already-running":
     "updates.failureReasons.managedServiceHandoffAlreadyRunning",
   "doctor-failed": "updates.failureReasons.doctorFailed",
 };
 
-type UpdateRestartStatusResponse = {
+export type UpdateRestartStatusResponse = {
   sentinel?: {
     kind?: string;
     status?: string;
     stats?: {
       reason?: string | null;
-      after?: { version?: string | null } | null;
+      after?: { sha?: string | null; version?: string | null } | null;
     } | null;
   } | null;
   updateAvailable?: UpdateAvailable | null;
@@ -54,7 +57,8 @@ export type UpdateRunResponse = {
   result?: {
     status?: string;
     reason?: string;
-    after?: { version?: string | null } | null;
+    before?: { sha?: string | null; version?: string | null } | null;
+    after?: { sha?: string | null; version?: string | null } | null;
   };
   handoff?: { status?: string };
   restart?: { coalesced?: boolean } | null;
@@ -71,15 +75,63 @@ async function requestUpdateRestartStatus(
   }
 }
 
+export function createUpdateStatusRefresher(params: {
+  getClient: () => GatewayBrowserClient | null;
+  getEpoch: () => number;
+  canRefresh: () => boolean;
+  isCurrent: (client: GatewayBrowserClient, epoch: number) => boolean;
+  onStatus: (response: UpdateRestartStatusResponse) => void;
+}) {
+  return async () => {
+    const client = params.getClient();
+    const epoch = params.getEpoch();
+    if (!client || !params.canRefresh()) {
+      return;
+    }
+    const response = await requestUpdateRestartStatus(client, 5_000);
+    if (response && params.isCurrent(client, epoch)) {
+      params.onStatus(response);
+    }
+  };
+}
+
+export function resolveExpectedUpdateSha(
+  schedule: UpdateScheduleState | null,
+  updateAvailable: UpdateAvailable | null,
+): string | null {
+  return schedule?.target?.kind === "git"
+    ? schedule.target.upstreamSha.trim() || null
+    : updateAvailable?.upstreamSha?.trim() || null;
+}
+
 export type PendingUpdateReconciliation = {
-  expected: string | null;
+  expectedVersion: string | null;
+  expectedSha: string | null;
   kind: "ambiguous" | "handoff" | "restart";
 };
+
+export function createPendingUpdateReconciliation(
+  kind: PendingUpdateReconciliation["kind"],
+  expectedVersion: string | null,
+  expectedSha: string | null,
+): PendingUpdateReconciliation {
+  return { expectedVersion, expectedSha, kind };
+}
 
 type UpdateVerificationWait = {
   timer: ReturnType<typeof globalThis.setTimeout>;
   resolve: (active: boolean) => void;
 };
+
+function commitsMatch(left: string, right: string): boolean {
+  const normalizedLeft = left.trim().toLowerCase();
+  const normalizedRight = right.trim().toLowerCase();
+  return (
+    normalizedLeft.length >= 7 &&
+    normalizedRight.length >= 7 &&
+    (normalizedLeft.startsWith(normalizedRight) || normalizedRight.startsWith(normalizedLeft))
+  );
+}
 
 export function createUpdateVerificationController(params: {
   getPending: () => PendingUpdateReconciliation | null;
@@ -88,6 +140,7 @@ export function createUpdateVerificationController(params: {
   getHello: () => GatewayHelloOk | null;
   publish: () => void;
   publishBanner: (banner: ApplicationStatusBanner | null) => void;
+  onVerifiedInstall?: (identity: { version: string | null; sha: string | null }) => void;
 }) {
   let generation = 0;
   let wait: UpdateVerificationWait | null = null;
@@ -122,15 +175,11 @@ export function createUpdateVerificationController(params: {
     if (!reconciliation) {
       return;
     }
-    const expectedVersion = reconciliation.expected?.trim() || null;
-    if (reconciliation.kind === "ambiguous") {
-      // Only the replacement Gateway version can prove a response-lost request; status is cached.
-      params.clearPending();
-      params.publishBanner(resolveAmbiguousUpdateOutcomeBanner(expectedVersion, params.getHello()));
-      return;
-    }
+    const expectedVersion = reconciliation.expectedVersion?.trim() || null;
+    const expectedSha = reconciliation.expectedSha?.trim() || null;
     const isCurrent = () => currentGeneration === generation && params.isCurrent(client, epoch);
-    let { deadline, pollMs } = resolveUpdateVerificationWindow(reconciliation.kind);
+    const verificationKind = reconciliation.kind === "handoff" ? "handoff" : "restart";
+    let { deadline, pollMs } = resolveUpdateVerificationWindow(verificationKind);
     while (isCurrent() && Date.now() < deadline) {
       const response = await requestUpdateRestartStatus(client, Math.max(0, deadline - Date.now()));
       if (!isCurrent()) {
@@ -159,24 +208,35 @@ export function createUpdateVerificationController(params: {
         return;
       }
       const actualVersion = sentinel?.stats?.after?.version?.trim() || null;
-      if (
-        sentinel?.kind === "update" &&
-        sentinel.status === "ok" &&
-        !actualVersion &&
-        !expectedVersion
-      ) {
-        params.clearPending();
-        params.publish();
-        return;
-      }
-      if (sentinel?.kind === "update" && actualVersion) {
-        params.clearPending();
-        params.publishBanner(
-          expectedVersion && actualVersion !== expectedVersion
-            ? resolveUpdateVerificationBanner({ expectedVersion, actualVersion })
-            : null,
-        );
-        return;
+      const actualSha = sentinel?.stats?.after?.sha?.trim() || null;
+      if (sentinel?.kind === "update" && sentinel.status === "ok") {
+        const versionMatches = !expectedVersion || actualVersion === expectedVersion;
+        const shaMatches =
+          !expectedSha || (actualSha !== null && commitsMatch(expectedSha, actualSha));
+        const hasExpectedIdentity = expectedVersion !== null || expectedSha !== null;
+        const hasActualIdentity = actualVersion !== null || actualSha !== null;
+        if (versionMatches && shaMatches && (hasActualIdentity || !hasExpectedIdentity)) {
+          params.clearPending();
+          params.onVerifiedInstall?.({ version: actualVersion, sha: actualSha });
+          params.publishBanner(null);
+          return;
+        }
+        const versionMismatch =
+          expectedVersion !== null && actualVersion !== null && actualVersion !== expectedVersion;
+        const shaMismatch =
+          expectedSha !== null && actualSha !== null && !commitsMatch(expectedSha, actualSha);
+        if (versionMismatch || shaMismatch) {
+          params.clearPending();
+          params.publishBanner(
+            resolveUpdateVerificationBanner({
+              expectedVersion,
+              actualVersion,
+              expectedSha,
+              actualSha,
+            }),
+          );
+          return;
+        }
       }
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) {
@@ -192,11 +252,16 @@ export function createUpdateVerificationController(params: {
     const currentVersion = params.getHello()?.server?.version?.trim() || null;
     params.clearPending();
     params.publishBanner(
-      expectedVersion && currentVersion !== expectedVersion
-        ? resolveUpdateVerificationBanner({ expectedVersion, actualVersion: currentVersion })
+      expectedSha || (expectedVersion && currentVersion !== expectedVersion)
+        ? resolveUpdateVerificationBanner({
+            expectedVersion,
+            actualVersion: currentVersion,
+            expectedSha,
+            actualSha: null,
+          })
         : reconciliation.kind === "handoff"
           ? resolvePendingUpdateHandoffTimeoutBanner()
-          : null,
+          : resolveUnknownUpdateOutcomeBanner(),
     );
   };
   return { cancel, verify };
@@ -329,6 +394,82 @@ function readScheduleTarget(value: unknown): UpdateScheduleState["target"] | nul
   return null;
 }
 
+function readGitInstallMetadata(value: Record<string, unknown>): {
+  currentSha?: string;
+  commitAtMs?: number;
+  installedAtMs?: number;
+} | null {
+  if (
+    (value.currentSha !== undefined &&
+      (typeof value.currentSha !== "string" || value.currentSha.length === 0)) ||
+    (value.commitAtMs !== undefined &&
+      (!Number.isInteger(value.commitAtMs) || Number(value.commitAtMs) < 0)) ||
+    (value.installedAtMs !== undefined &&
+      (!Number.isInteger(value.installedAtMs) || Number(value.installedAtMs) < 0))
+  ) {
+    return null;
+  }
+  return {
+    ...(typeof value.currentSha === "string" ? { currentSha: value.currentSha } : {}),
+    ...(value.commitAtMs === undefined ? {} : { commitAtMs: Number(value.commitAtMs) }),
+    ...(value.installedAtMs === undefined ? {} : { installedAtMs: Number(value.installedAtMs) }),
+  };
+}
+
+function readGitUpdateStatus(
+  value: unknown,
+): NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const metadata = readGitInstallMetadata(value);
+  if (!metadata) {
+    return null;
+  }
+  if (value.status === "current") {
+    return { ...metadata, status: "current" };
+  }
+  if (
+    value.status === "behind" &&
+    Number.isInteger(value.commitsBehind) &&
+    Number(value.commitsBehind) > 0
+  ) {
+    return { ...metadata, status: "behind", commitsBehind: Number(value.commitsBehind) };
+  }
+  if (
+    value.status === "ahead" &&
+    Number.isInteger(value.commitsAhead) &&
+    Number(value.commitsAhead) > 0
+  ) {
+    return { ...metadata, status: "ahead", commitsAhead: Number(value.commitsAhead) };
+  }
+  if (
+    value.status === "diverged" &&
+    Number.isInteger(value.commitsAhead) &&
+    Number(value.commitsAhead) > 0 &&
+    Number.isInteger(value.commitsBehind) &&
+    Number(value.commitsBehind) > 0
+  ) {
+    return {
+      ...metadata,
+      status: "diverged",
+      commitsAhead: Number(value.commitsAhead),
+      commitsBehind: Number(value.commitsBehind),
+    };
+  }
+  if (
+    value.status === "unavailable" &&
+    (value.reason === "fetch-failed" ||
+      value.reason === "no-upstream" ||
+      value.reason === "no-upstream-sha" ||
+      value.reason === "comparison-failed" ||
+      value.reason === "git-unavailable")
+  ) {
+    return { ...metadata, status: "unavailable", reason: value.reason };
+  }
+  return null;
+}
+
 function readScheduleCampaign(value: unknown): UpdateScheduleState["campaign"] | null {
   if (
     !isRecord(value) ||
@@ -368,12 +509,17 @@ export function readUpdateScheduleValue(value: unknown): UpdateScheduleState | n
   ) {
     return null;
   }
-  const rawInstallKind = isRecord(value.install) ? value.install.kind : undefined;
+  const rawInstall = isRecord(value.install) ? value.install : null;
+  const rawInstallKind = rawInstall?.kind;
   const installKind =
     rawInstallKind === "package" || rawInstallKind === "git" || rawInstallKind === "unknown"
       ? rawInstallKind
       : undefined;
   if (value.install !== undefined && installKind === undefined) {
+    return null;
+  }
+  const gitStatus = rawInstall?.git === undefined ? undefined : readGitUpdateStatus(rawInstall.git);
+  if (rawInstall?.git !== undefined && !gitStatus) {
     return null;
   }
   const target = value.target === undefined ? undefined : readScheduleTarget(value.target);
@@ -384,7 +530,9 @@ export function readUpdateScheduleValue(value: unknown): UpdateScheduleState | n
   return {
     channel: value.channel,
     autoEnabled: value.autoEnabled,
-    ...(installKind ? { install: { kind: installKind } } : {}),
+    ...(installKind
+      ? { install: { kind: installKind, ...(gitStatus ? { git: gitStatus } : {}) } }
+      : {}),
     ...(target ? { target } : {}),
     ...(campaign ? { campaign } : {}),
   };
@@ -396,6 +544,47 @@ export function readUpdateSchedule(hello: GatewayHelloOk | null): UpdateSchedule
     return null;
   }
   return readUpdateScheduleValue(snapshot.updateSchedule);
+}
+
+export function projectUpdateStatusResponse(
+  response: UpdateRestartStatusResponse,
+  current: {
+    updateStatusBanner: ApplicationStatusBanner | null;
+    heldUpdateCampaignId: string | null;
+  },
+): {
+  updateStatusBanner: ApplicationStatusBanner | null;
+  updateAvailable?: UpdateAvailable | null;
+  updateSchedule?: UpdateScheduleState | null;
+  heldUpdateCampaignId?: string | null;
+} {
+  const sentinel = response.sentinel;
+  const updateSchedule = Object.hasOwn(response, "schedule")
+    ? readUpdateScheduleValue(response.schedule)
+    : undefined;
+  return {
+    updateStatusBanner:
+      sentinel?.kind === "update" && sentinel.status
+        ? sentinel.status === "ok" || isPendingUpdateHandoffSentinel(sentinel)
+          ? null
+          : resolveUpdateStatusBanner({
+              status: sentinel.status,
+              reason: sentinel.stats?.reason ?? undefined,
+            })
+        : current.updateStatusBanner,
+    ...(Object.hasOwn(response, "updateAvailable")
+      ? { updateAvailable: readUpdateAvailableValue(response.updateAvailable) }
+      : {}),
+    ...(updateSchedule !== undefined
+      ? {
+          updateSchedule,
+          heldUpdateCampaignId:
+            updateSchedule?.campaign?.holdUntilMs !== undefined
+              ? updateSchedule.campaign.id
+              : current.heldUpdateCampaignId,
+        }
+      : {}),
+  };
 }
 
 function formatUpdateCountdown(deadlineMs: number, nowMs = Date.now()): string {
@@ -460,17 +649,24 @@ export function resolveUpdateStatusBanner(params: {
 }
 
 function resolveUpdateVerificationBanner(params: {
-  expectedVersion: string;
+  expectedVersion: string | null;
   actualVersion: string | null;
+  expectedSha: string | null;
+  actualSha: string | null;
 }): ApplicationStatusBanner {
+  const expected = params.expectedSha
+    ? params.expectedSha.slice(0, 12)
+    : params.expectedVersion
+      ? `v${params.expectedVersion}`
+      : t("common.unknown");
+  const actual = params.actualSha
+    ? params.actualSha.slice(0, 12)
+    : params.actualVersion
+      ? `v${params.actualVersion}`
+      : t("common.unknown");
   return {
     tone: "danger",
-    text: params.actualVersion
-      ? t("updates.verificationFailedWithVersions", {
-          expectedVersion: params.expectedVersion,
-          actualVersion: params.actualVersion,
-        })
-      : t("updates.verificationFailed"),
+    text: t("updates.verificationFailedWithIdentity", { expected, actual }),
   };
 }
 
@@ -506,17 +702,7 @@ export function resolveUnknownUpdateOutcomeBanner(): ApplicationStatusBanner {
   };
 }
 
-function resolveAmbiguousUpdateOutcomeBanner(
-  expectedVersion: string | null,
-  hello: GatewayHelloOk | null,
-): ApplicationStatusBanner | null {
-  const currentVersion = hello?.server?.version?.trim() || null;
-  return expectedVersion && currentVersion === expectedVersion
-    ? null
-    : resolveUnknownUpdateOutcomeBanner();
-}
-
-export function isPendingUpdateHandoffSentinel(
+function isPendingUpdateHandoffSentinel(
   sentinel: UpdateRestartStatusResponse["sentinel"],
 ): boolean {
   const reason = sentinel?.stats?.reason;

@@ -1,7 +1,7 @@
 // CUA config migrations belong to the plugin so doctor can repair a shipped
 // driverPath setting before strict manifest validation reaches this plugin.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 const DRIVER_PATH = ["plugins", "entries", "cua-computer", "config", "driverPath"];
 

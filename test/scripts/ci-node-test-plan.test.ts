@@ -1,7 +1,6 @@
 // Ci Node Test Plan tests cover ci node test plan script behavior.
-import { existsSync, readdirSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
-import fg from "fast-glob";
+import { existsSync, globSync, readdirSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assignVitestFsCacheWriter,
@@ -65,13 +64,13 @@ function listTestFiles(rootDir: string): string[] {
 function listMatchedTestFiles(config: VitestConfig): string[] {
   const testConfig = config.test ?? {};
   const cwd = testConfig.dir ? resolve(testConfig.dir) : process.cwd();
-  return fg
-    .sync(testConfig.include ?? [], {
-      absolute: false,
-      cwd,
-      dot: false,
-      ignore: testConfig.exclude ?? [],
-    })
+  const exclude = (testConfig.exclude ?? []).map((pattern) =>
+    isAbsolute(pattern) ? toRepoPath(relative(cwd, pattern)) : toRepoPath(pattern),
+  );
+  return globSync(testConfig.include ?? [], {
+    cwd,
+    exclude,
+  })
     .map((file) => toRepoPath(relative(process.cwd(), resolve(cwd, file))))
     .toSorted((a, b) => a.localeCompare(b));
 }
@@ -1133,12 +1132,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       agentVitestProjectOwners.embeddedOverflowCompaction.include,
     );
     const actual = [
-      ...fg
-        .sync(agentVitestProjectOwners.embedded.include)
+      ...globSync(agentVitestProjectOwners.embedded.include)
+        .map(toRepoPath)
         .filter((file) => !incompleteTurnFiles.has(file) && !overflowCompactionFiles.has(file)),
       ...agentVitestProjectOwners.embeddedIncompleteTurn.include,
       ...agentVitestProjectOwners.embeddedOverflowCompaction.include,
-      ...fg.sync(agentVitestProjectOwners.embeddedRun.include),
+      ...globSync(agentVitestProjectOwners.embeddedRun.include).map(toRepoPath),
     ].toSorted((left, right) => left.localeCompare(right));
     const expected = listTestFiles("src/agents/embedded-agent-runner").toSorted((left, right) =>
       left.localeCompare(right),

@@ -36,7 +36,8 @@ export type ChatModelControlsProps = {
   modelSelectionRuntimeId?: string;
   modelSwitching: boolean;
   modelsLoading?: boolean;
-  mutationDisabledReason?: string;
+  modelMutationDisabledReason?: string;
+  effortMutationDisabledReason?: string;
   showFastMode?: boolean;
   sending: boolean;
   sessionKey: string;
@@ -265,28 +266,29 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
   const commonDisabled =
-    !props.connected ||
-    busy ||
-    props.modelSwitching ||
-    !props.gatewayAvailable ||
-    Boolean(props.mutationDisabledReason);
+    !props.connected || busy || props.modelSwitching || !props.gatewayAvailable;
+  const effortMutationDisabled = Boolean(props.effortMutationDisabledReason);
   const modelDisabled =
     commonDisabled ||
+    Boolean(props.modelMutationDisabledReason) ||
     catalogLoadingWithoutSnapshot ||
     (managedCatalog === undefined && Boolean(props.modelsLoading) && selectOptions.length === 0);
   const thinkingDisabled =
     commonDisabled ||
+    effortMutationDisabled ||
     (managedCatalog !== undefined && !managedCatalog.hasSnapshot) ||
     (thinking.options.length === 0 && thinking.currentOverride === "");
   const showFastMode = props.showFastMode !== false;
   const effortDisabled =
-    commonDisabled || (thinking.options.length === 0 && (!showFastMode || fastMode.disabled));
+    commonDisabled ||
+    effortMutationDisabled ||
+    (thinking.options.length === 0 && (!showFastMode || fastMode.disabled));
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
         defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
         disabled: modelDisabled,
-        disabledReason: props.mutationDisabledReason,
+        disabledReason: props.modelMutationDisabledReason,
         modelCatalogState: managedCatalog,
         modelSelectionLocked: props.modelSelectionLocked === true,
         modelOptions,
@@ -300,8 +302,11 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
       })}
       ${renderChatEffortPicker({
         disabled: effortDisabled,
-        disabledReason: props.mutationDisabledReason,
-        fastMode: { ...fastMode, disabled: fastMode.disabled || commonDisabled },
+        disabledReason: props.effortMutationDisabledReason,
+        fastMode: {
+          ...fastMode,
+          disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
+        },
         selectedThinkingValue: thinking.currentOverride,
         sessionKey: props.sessionKey,
         showFastMode,

@@ -9,7 +9,7 @@ import { configureAiTransportHost } from "../host.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
-} from "../transports/openai-responses-replay-internal.js";
+} from "../transports/openai-responses-compaction-replay.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -96,6 +96,7 @@ const gpt56SolModel = {
 } satisfies Model<"openai-responses">;
 
 const testAllowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
+const reasoningReplayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
 
 function createAssistantOutput(): AssistantMessage {
   return {
@@ -831,6 +832,87 @@ describe("convertResponsesMessages", () => {
     });
   });
 
+  const sameRouteReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(
+    nativeOpenAIModel,
+    reasoningReplayIdentity,
+  );
+  const sessionMismatchReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(
+    nativeOpenAIModel,
+    { ...reasoningReplayIdentity, sessionId: "session-b" },
+  );
+  const authMismatchReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(
+    nativeOpenAIModel,
+    { ...reasoningReplayIdentity, authProfileId: "profile-b" },
+  );
+  const endpointMismatchReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(
+    { ...nativeOpenAIModel, baseUrl: "https://proxy.example.com/v1" },
+    reasoningReplayIdentity,
+  );
+
+  it.each([
+    ["matching block metadata", sameRouteReplayMetadata, sessionMismatchReplayMetadata, true],
+    ["mismatched block metadata", sessionMismatchReplayMetadata, sameRouteReplayMetadata, false],
+    ["auth-mismatched block metadata", authMismatchReplayMetadata, undefined, false],
+    ["endpoint-mismatched block metadata", endpointMismatchReplayMetadata, undefined, false],
+    ["malformed block metadata", null, sameRouteReplayMetadata, false],
+    ["matching embedded metadata", undefined, sameRouteReplayMetadata, true],
+    ["mismatched embedded metadata", undefined, sessionMismatchReplayMetadata, false],
+    ["malformed embedded metadata", undefined, null, false],
+  ])(
+    "fences encrypted reasoning with %s",
+    (_name, blockMetadata, embeddedMetadata, preservesCiphertext) => {
+      const input = convertResponsesMessages(
+        nativeOpenAIModel,
+        {
+          messages: [
+            {
+              ...createAssistantOutput(),
+              content: [
+                {
+                  type: "thinking",
+                  thinking: "Safe visible reasoning.",
+                  thinkingSignature: JSON.stringify({
+                    type: "reasoning",
+                    id: "rs_route_fenced",
+                    summary: [{ type: "summary_text", text: "safe summary" }],
+                    content: [{ type: "reasoning_text", text: "safe content" }],
+                    encrypted_content: "route-bound-ciphertext",
+                    ...(embeddedMetadata !== undefined
+                      ? { __openclaw_replay: embeddedMetadata }
+                      : {}),
+                  }),
+                  ...(blockMetadata !== undefined
+                    ? { openclawReasoningReplay: blockMetadata }
+                    : {}),
+                },
+              ] as unknown as AssistantMessage["content"],
+            },
+          ],
+        },
+        allowedToolCallProviders,
+        {
+          includeSystemPrompt: false,
+          replayResponsesItemIds: true,
+          ...reasoningReplayIdentity,
+        },
+      ) as unknown as Array<Record<string, unknown>>;
+
+      const reasoningItem = input.find((item) => item.type === "reasoning");
+      expect(reasoningItem).toMatchObject({
+        type: "reasoning",
+        id: "rs_route_fenced",
+        summary: [{ type: "summary_text", text: "safe summary" }],
+        content: [{ type: "reasoning_text", text: "safe content" }],
+      });
+      expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
+      if (preservesCiphertext) {
+        expect(reasoningItem).toHaveProperty("encrypted_content", "route-bound-ciphertext");
+      } else {
+        expect(reasoningItem).not.toHaveProperty("encrypted_content");
+      }
+    },
+  );
+
   it("serializes structured tool results as text instead of image placeholders", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
@@ -988,16 +1070,21 @@ describe("processResponsesStream", () => {
       buildOpenAIResponsesReasoningReplayMetadata(nativeOpenAIModel, replayIdentity),
     );
     const context: Context = {
-      messages: [prior, { role: "user", content: "recover", timestamp: 1 }],
+      messages: [
+        { role: "user", content: "full history prefix", timestamp: 0 },
+        prior,
+        { role: "user", content: "recover", timestamp: 1 },
+      ],
     };
     const requests: ResponseCreateParamsStreaming[] = [];
     const output = createAssistantOutput();
+    const onPayload = vi.fn((request: unknown) => request);
 
     await runResponsesStreamLifecycle({
       stream: new AssistantMessageEventStream(),
       model: nativeOpenAIModel,
       output,
-      options: replayIdentity,
+      options: { ...replayIdentity, onPayload },
       createClient: () => ({
         responses: {
           create: (request) => {
@@ -1026,14 +1113,12 @@ describe("processResponsesStream", () => {
           },
         },
       }),
-      buildParams: () => ({
+      buildParams: (_model, replayMode) => ({
         model: nativeOpenAIModel.id,
-        input: convertResponsesMessages(
-          nativeOpenAIModel,
-          context,
-          testAllowedToolCallProviders,
-          replayIdentity,
-        ),
+        input: convertResponsesMessages(nativeOpenAIModel, context, testAllowedToolCallProviders, {
+          ...replayIdentity,
+          replayMode,
+        }),
         stream: true,
       }),
       formatError: (error) => (error instanceof Error ? error.message : String(error)),
@@ -1043,10 +1128,13 @@ describe("processResponsesStream", () => {
     expect(requests[0]?.input).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: "compaction", id: "cmp_rejected" })]),
     );
+    expect(JSON.stringify(requests[0]?.input)).not.toContain("full history prefix");
     const retryInput = requests[1]?.input;
     expect(Array.isArray(retryInput)).toBe(true);
     const retryItems = Array.isArray(retryInput) ? retryInput : [];
     expect(retryItems.some((item) => item.type === "compaction")).toBe(false);
+    expect(JSON.stringify(retryInput)).toContain("full history prefix");
+    expect(onPayload).toHaveBeenCalledTimes(2);
     expect(output.stopReason).toBe("stop");
     expect(output.providerReplay).toMatchObject({
       type: "openai-responses-compaction-suppression",

@@ -110,6 +110,7 @@ type WorkerEnvironmentServiceOptions = {
     install: WorkerInstallationArtifact["install"],
   ) => Promise<WorkerInstallationArtifact>;
   bootstrapWorker: (params: {
+    operationId: string;
     sshEndpoint: WorkerSshEndpoint;
     installation: WorkerInstallationArtifact;
     resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
@@ -545,10 +546,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         destroying,
         new Error(`${detail}; provider teardown pending: ${boundedError(cleanupError)}`),
       );
-      throw serviceError("bootstrap_failure", "Worker bootstrap failed; teardown is pending");
+      throw serviceError(
+        "bootstrap_failure",
+        `Worker bootstrap failed; teardown is pending: ${detail}`,
+      );
     }
     finishProvenDestroy(destroying);
-    throw serviceError("bootstrap_failure", "Worker bootstrap failed");
+    throw serviceError("bootstrap_failure", `Worker bootstrap failed: ${detail}`);
   };
 
   const finishBootstrap = async (
@@ -563,6 +567,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     try {
       receipt = await callBootstrap((signal) =>
         options.bootstrapWorker({
+          operationId: record.provisionOperationId,
           sshEndpoint: record.sshEndpoint,
           installation,
           resolveIdentity: identityResolverFor(record, provider, record.leaseId),

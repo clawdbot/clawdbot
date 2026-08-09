@@ -24,14 +24,13 @@ import type {
   Usage,
 } from "../types.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
+import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import {
+  OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE,
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   type OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
-import {
-  captureOpenAIResponsesCompaction,
-  encodeTextSignatureV1,
-} from "./openai-responses-replay-internal.js";
+import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 
 export type ResponsesEventSink = { push(event: AssistantMessageEvent): void };
 export type TextBlockReference = {
@@ -269,7 +268,12 @@ export function createResponsesTerminalController(params: {
         }
       } else {
         params.setLastTextBlock(null);
-        if (item.type === "compaction" && output.providerReplay?.id !== item.id) {
+        const alreadyCapturedCompaction =
+          item.type === "compaction" &&
+          output.providerReplay?.type === OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE &&
+          output.providerReplay.id === item.id &&
+          output.providerReplay.data === item.encrypted_content;
+        if (item.type === "compaction" && !alreadyCapturedCompaction) {
           let replayIndex = blocks.length;
           for (const laterItem of items.slice(terminalIndex + 1)) {
             const laterContentIndex = params.outputItemContentIndexes.get(laterItem);

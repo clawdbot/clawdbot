@@ -254,6 +254,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       }
     | undefined;
   protected readonly lastVisibleBoardDock = new Map<string, BoardVisibleChatDock>();
+  protected retainedBoardSessionKey = "";
   protected readonly observerDigestHistory = new ObserverDigestHistory();
   protected builtinBoardSnapshot: BoardViewSnapshot | null = null;
   protected builtinBoardSnapshotBase: BoardSnapshot | null = null;

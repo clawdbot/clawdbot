@@ -9,8 +9,7 @@ import {
 } from "./plugin-module-loader-cache.js";
 
 const DOCTOR_CONTRACT_SURFACES = [
-  "legacyConfigRules",
-  "normalizeCompatibilityConfig",
+  "configRepair",
   "resolveSessionStoreAgentIds",
   "sessionRouteStateOwners",
   "stateMigrations",
@@ -38,6 +37,12 @@ describe("bundled plugin doctor contract declarations", () => {
       })(artifactPath) as Parameters<typeof coercePluginDoctorContractModule>[0];
       const { summary } = coercePluginDoctorContractModule(mod);
       for (const surface of DOCTOR_CONTRACT_SURFACES) {
+        if (surface === "sessionRouteStateOwners" && record.sessionRouteStateOwners !== undefined) {
+          if (summary.sessionRouteStateOwners) {
+            mismatches.push(`${record.id}: bundled owner metadata must use the manifest`);
+          }
+          continue;
+        }
         const declared = declaration[surface] === true;
         if (declared !== summary[surface]) {
           mismatches.push(

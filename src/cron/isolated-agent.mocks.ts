@@ -21,6 +21,9 @@ vi.mock("../agents/prepared-model-catalog.js", async () => {
       entries: (await loadPreparedModelCatalog(params)) ?? [],
       routeVariants: [],
     })),
+    loadProviderScopedThinkingCatalog: vi.fn(
+      async (params) => (await loadPreparedModelCatalog(params)) ?? [],
+    ),
     loadPublishedPreparedModelCatalog: loadPreparedModelCatalog,
     publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
       owner.agentId === agentId.trim().toLowerCase(),

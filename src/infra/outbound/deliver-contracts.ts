@@ -31,7 +31,7 @@ export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
 
 export type OutboundDeliveryIntent = {
   id: string;
-  channel: Exclude<OutboundChannel, "none">;
+  channel: OutboundChannel;
   to: string;
   accountId?: string;
   queuePolicy: OutboundDeliveryQueuePolicy;
@@ -119,7 +119,7 @@ export type PlatformSendRoute = {
 
 export type ChannelHandlerParams = {
   cfg: OpenClawConfig;
-  channel: Exclude<OutboundChannel, "none">;
+  channel: OutboundChannel;
   to: string;
   accountId?: string;
   replyToId?: string | null;
@@ -144,7 +144,7 @@ export type ChannelHandlerParams = {
 
 export type DeliverOutboundPayloadsCoreParams = {
   cfg: OpenClawConfig;
-  channel: Exclude<OutboundChannel, "none">;
+  channel: OutboundChannel;
   to: string;
   accountId?: string;
   payloads: ReplyPayload[];

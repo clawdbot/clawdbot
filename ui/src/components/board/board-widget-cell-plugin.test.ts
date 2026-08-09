@@ -117,6 +117,60 @@ describe("plugin board widget cells", () => {
     expect(cell.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
 
+  it("passes activity to a retained Workboard plugin element", async () => {
+    const context = {
+      gateway: {
+        snapshot: {
+          phase: "stopped",
+          hello: {
+            controlUiWidgetKinds: [
+              { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
+            ],
+          },
+        },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+    } as unknown as ApplicationContext;
+    const widget: BoardViewWidget = {
+      name: "work-item",
+      tabId: "main",
+      title: "Work item",
+      contentKind: "plugin",
+      pluginKind: "workboard:card",
+      props: { cardId: "card-123" },
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const provider = createApplicationContextProvider(context);
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = widget;
+    cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+    cell.sessionKey = "agent:main:test";
+    cell.callbacks = callbacks();
+    provider.append(cell);
+    document.body.append(provider);
+
+    await vi.waitFor(() =>
+      expect(cell.querySelector("openclaw-workboard-card-widget")).not.toBeNull(),
+    );
+    const retained = cell.querySelector("openclaw-workboard-card-widget");
+    expect(retained?.active).toBe(true);
+
+    cell.active = false;
+    await cell.updateComplete;
+    expect(cell.querySelector("openclaw-workboard-card-widget")).toBe(retained);
+    expect(retained?.active).toBe(false);
+
+    cell.active = true;
+    await cell.updateComplete;
+    expect(cell.querySelector("openclaw-workboard-card-widget")).toBe(retained);
+    expect(retained?.active).toBe(true);
+  });
+
   it.each([
     { name: "read-only board", canMutate: false, widgetReadOnly: false },
     { name: "read-only widget", canMutate: true, widgetReadOnly: true },

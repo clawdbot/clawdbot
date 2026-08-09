@@ -12,15 +12,14 @@ import {
   stripLeadingSilentToken,
   stripSilentToken,
 } from "../auto-reply/tokens.js";
-import {
-  getAgentEventLifecycleGeneration,
-  isAgentEventLifecycleGenerationCurrent,
-} from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  type DeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import {
@@ -32,9 +31,8 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
-  runAnnounceDeliveryWithRetry,
-  resolveSubagentAnnounceTimeoutMs,
 } from "./subagent-announce-delivery.js";
+import { type DescendantWakeDeps, runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import {
   resolveAnnounceOrigin,
@@ -61,16 +59,10 @@ import {
 } from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import { terminateAcceptedCollectorRun } from "./subagent-spawn-cleanup.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
-type SubagentAnnounceDeps = {
-  callGateway: typeof callGateway;
-  dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
-  getRuntimeConfig: typeof getRuntimeConfig;
-  loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
-};
+type SubagentAnnounceDeps = DescendantWakeDeps;
 
 const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
   callGateway,
@@ -124,36 +116,6 @@ export function hasUsableSessionEntry(entry: unknown): entry is Record<string, u
   return typeof sessionId !== "string" || sessionId.trim() !== "";
 }
 
-function buildDescendantWakeMessage(params: { findings: string; taskLabel: string }): string {
-  return [
-    "[Subagent Context] Your prior run ended while waiting for descendant subagent completions.",
-    "[Subagent Context] All pending descendants for that run have now settled.",
-    "[Subagent Context] Continue your workflow using these results. Spawn more subagents if needed, otherwise send your final answer.",
-    "",
-    `Task: ${params.taskLabel}`,
-    "",
-    params.findings,
-  ].join("\n");
-}
-
-const WAKE_RUN_SUFFIX = ":wake";
-
-function stripWakeRunSuffixes(runId: string): string {
-  let next = runId.trim();
-  while (next.endsWith(WAKE_RUN_SUFFIX)) {
-    next = next.slice(0, -WAKE_RUN_SUFFIX.length);
-  }
-  return next || runId.trim();
-}
-
-function isWakeContinuationRun(runId: string): boolean {
-  const trimmed = runId.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return stripWakeRunSuffixes(trimmed) !== trimmed;
-}
-
 function stripAndClassifyReply(text: string): string | null {
   let result = text;
   let didStrip = false;
@@ -173,109 +135,6 @@ function stripAndClassifyReply(text: string): string | null {
     return null;
   }
   return result;
-}
-
-async function wakeSubagentRunAfterDescendants(params: {
-  runId: string;
-  childSessionKey: string;
-  taskLabel: string;
-  findings: string;
-  announceId: string;
-  isChildSessionEffectsAllowed: () => boolean;
-  signal?: AbortSignal;
-}): Promise<boolean> {
-  if (params.signal?.aborted || !params.isChildSessionEffectsAllowed()) {
-    return false;
-  }
-
-  const childEntry = loadSessionEntryByKey(params.childSessionKey);
-  if (!hasUsableSessionEntry(childEntry)) {
-    return false;
-  }
-
-  const cfg = subagentAnnounceDeps.getRuntimeConfig();
-  const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
-  const wakeLifecycleGeneration = getAgentEventLifecycleGeneration();
-  const wakeMessage = buildDescendantWakeMessage({
-    findings: params.findings,
-    taskLabel: params.taskLabel,
-  });
-
-  let wakeRunId;
-  try {
-    const wakeResponse = await runAnnounceDeliveryWithRetry<{ runId?: string }>({
-      operation: "descendant wake agent call",
-      signal: params.signal,
-      run: async () => {
-        if (!params.isChildSessionEffectsAllowed()) {
-          return {};
-        }
-        return await subagentAnnounceDeps.dispatchGatewayMethodInProcess(
-          "agent",
-          {
-            sessionKey: params.childSessionKey,
-            message: wakeMessage,
-            deliver: false,
-            inputProvenance: {
-              kind: "inter_session",
-              sourceSessionKey: params.childSessionKey,
-              sourceChannel: INTERNAL_MESSAGE_CHANNEL,
-              sourceTool: "subagent_announce",
-            },
-            idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
-          },
-          {
-            timeoutMs: announceTimeoutMs,
-          },
-        );
-      },
-    });
-    wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
-  } catch {
-    return false;
-  }
-
-  if (!wakeRunId) {
-    return false;
-  }
-
-  const terminateUnownedWake = async () => {
-    await terminateAcceptedCollectorRun({
-      childSessionKey: params.childSessionKey,
-      gatewayRunId: wakeRunId,
-      expectedSessionId:
-        typeof childEntry.sessionId === "string"
-          ? childEntry.sessionId.trim() || undefined
-          : undefined,
-      expectedLifecycleRevision:
-        typeof childEntry.lifecycleRevision === "string"
-          ? childEntry.lifecycleRevision.trim() || undefined
-          : undefined,
-      timeoutMs: announceTimeoutMs,
-      callGateway: subagentAnnounceDeps.callGateway,
-    });
-  };
-  const { replaceSubagentRunAfterSteer } = await loadSubagentRegistryRuntime();
-  if (
-    !params.isChildSessionEffectsAllowed() ||
-    !isAgentEventLifecycleGenerationCurrent(wakeLifecycleGeneration)
-  ) {
-    await terminateUnownedWake();
-    return false;
-  }
-  const replaced = await replaceSubagentRunAfterSteer({
-    previousRunId: params.runId,
-    nextRunId: wakeRunId,
-    lifecycleGeneration: wakeLifecycleGeneration,
-    preserveFrozenResultFallback: true,
-    // Persist the wake message as the replacement run's task so that any
-    // post-restart redispatch reconstructs the correct prompt.
-    task: wakeMessage,
-  });
-  if (!replaced) {
-    await terminateUnownedWake();
-  }
-  return replaced;
 }
 
 export async function runSubagentAnnounceFlow(params: {
@@ -435,30 +294,20 @@ export async function runSubagentAnnounceFlow(params: {
       childRunId: params.childRunId,
     });
 
-    const childRunAlreadyWoken = isWakeContinuationRun(params.childRunId);
-    if (
-      params.wakeOnDescendantSettle === true &&
-      childSessionEffectsAllowed() &&
-      childCompletionFindings?.trim() &&
-      !childRunAlreadyWoken
-    ) {
-      const wakeAnnounceId = buildAnnounceIdFromChildRun({
-        childSessionKey: params.childSessionKey,
-        childRunId: stripWakeRunSuffixes(params.childRunId),
-      });
-      const woke = await wakeSubagentRunAfterDescendants({
-        runId: params.childRunId,
-        childSessionKey: params.childSessionKey,
-        taskLabel: params.label || params.task || "task",
-        findings: childCompletionFindings,
-        announceId: wakeAnnounceId,
-        isChildSessionEffectsAllowed: childSessionEffectsAllowed,
-        signal: params.signal,
-      });
-      if (woke) {
-        shouldDeleteChildSession = false;
-        return true;
-      }
+    const woke = await runDescendantWake({
+      enabled: params.wakeOnDescendantSettle === true,
+      runId: params.childRunId,
+      childSessionKey: params.childSessionKey,
+      taskLabel: params.label || params.task || "task",
+      findings: childCompletionFindings,
+      isChildSessionEffectsAllowed: childSessionEffectsAllowed,
+      hasUsableSessionEntry,
+      deps: subagentAnnounceDeps,
+      signal: params.signal,
+    });
+    if (woke) {
+      shouldDeleteChildSession = false;
+      return true;
     }
 
     const fallbackReply = failedTerminalOutcome

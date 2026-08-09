@@ -78,6 +78,37 @@ describe("resolveApprovalOverGateway", () => {
     expect(result).toEqual({ applied: true, approval: recordedApproval });
   });
 
+  it.each([
+    ["signal", "Signal"],
+    ["whatsapp", "WhatsApp"],
+    ["matrix", "Matrix"],
+    ["imessage", "iMessage"],
+    ["telegram", "Telegram"],
+    ["discord", "Discord"],
+    ["googlechat", "Google Chat"],
+    ["slack", "Slack"],
+  ] as const)(
+    "derives the %s approval client label from channel metadata",
+    async (channel, label) => {
+      await resolveApprovalOverGateway({
+        cfg: {} as never,
+        approvalId: "approval-1",
+        approvalKind: "exec",
+        decision: "deny",
+        channel,
+        senderId: "owner",
+      });
+
+      const [gatewayClientOptions] = requireFirstMockCall(
+        hoisted.withOperatorApprovalsGatewayClient,
+        "gateway client",
+      );
+      expect(gatewayClientOptions).toMatchObject({
+        clientDisplayName: `${label} approval (owner)`,
+      });
+    },
+  );
+
   it("uses explicit plugin kind without inspecting the approval id", async () => {
     await resolveApprovalOverGateway({
       cfg: {} as never,

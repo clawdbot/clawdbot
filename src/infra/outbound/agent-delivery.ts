@@ -16,7 +16,6 @@ import {
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
   normalizeMessageChannel,
-  type GatewayMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveOutboundSessionRoute, type OutboundSessionRoute } from "./outbound-session.js";
@@ -30,7 +29,7 @@ import {
 
 type AgentDeliveryPlan = {
   baseDelivery: SessionDeliveryTarget;
-  resolvedChannel: GatewayMessageChannel;
+  resolvedChannel: string;
   resolvedTo?: string;
   resolvedAccountId?: string;
   resolvedThreadId?: string | number;

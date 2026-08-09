@@ -348,30 +348,56 @@ describe("resolveInitialTuiAgentId", () => {
 
 describe("resolveGatewayDisconnectState", () => {
   it("returns scope-upgrade recovery guidance when disconnect reason requires pairing", () => {
-    const state = resolveGatewayDisconnectState("gateway closed (1008): pairing required");
+    const state = resolveGatewayDisconnectState({
+      reason: "gateway closed (1008): pairing required",
+    });
     expect(state.connectionStatus).toContain("pairing required");
     expect(state.activityStatus).toBe("device approval needed: preview latest request");
-    expect(state.pairingHint).toContain("openclaw devices approve --latest");
-    expect(state.pairingHint).toContain("openclaw devices approve <requestId>");
-    expect(state.pairingHint).toContain("--token");
+    expect(state.remediation).toContain("openclaw devices approve --latest");
+    expect(state.remediation).toContain("openclaw devices approve <requestId>");
+    expect(state.remediation).toContain("--url");
+    expect(state.remediation).toContain("--token/--password");
     // Must steer users to `devices`, not the unrelated chat-DM `pairing` command.
-    expect(state.pairingHint).not.toContain("openclaw pairing");
+    expect(state.remediation).not.toContain("openclaw pairing");
   });
 
-  it("returns the same guidance when the gateway reports a pending scope upgrade", () => {
-    const state = resolveGatewayDisconnectState(
-      "gateway closed (1008): scope upgrade pending approval",
-    );
+  it("uses structured pairing details before the generic close reason", () => {
+    const state = resolveGatewayDisconnectState({
+      details: { code: "PAIRING_REQUIRED", reason: "scope-upgrade" },
+      reason: "connect failed",
+    });
     expect(state.activityStatus).toBe("device approval needed: preview latest request");
-    expect(state.pairingHint).toContain("openclaw devices approve --latest");
-    expect(state.pairingHint).toContain("openclaw devices approve <requestId>");
+    expect(state.connectionStatus).toContain("scope upgrade pending approval");
+    expect(state.remediation).toContain("openclaw devices approve --latest");
+  });
+
+  it("shows the device-token rotation command for structured token mismatch", () => {
+    const state = resolveGatewayDisconnectState({
+      details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+      reason: "device token mismatch",
+    });
+    expect(state.activityStatus).toBe("gateway authentication needs attention");
+    expect(state.remediation).toContain(
+      "openclaw devices rotate --device <deviceId> --role operator",
+    );
+  });
+
+  it("shows wait-and-retry guidance for a temporary authentication lockout", () => {
+    const state = resolveGatewayDisconnectState({
+      details: { code: "AUTH_RATE_LIMITED" },
+      reason: "unauthorized: too many failed authentication attempts (retry later)",
+    });
+    expect(state.activityStatus).toBe("gateway authentication temporarily rate-limited");
+    expect(state.remediation).toContain("temporary authentication lockout");
+    expect(state.remediation).not.toContain("gateway.remote.token");
+    expect(state.remediation).not.toContain("devices rotate");
   });
 
   it("falls back to idle for generic disconnect reasons", () => {
-    const state = resolveGatewayDisconnectState("network timeout");
+    const state = resolveGatewayDisconnectState({ reason: "network timeout" });
     expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
     expect(state.activityStatus).toBe("idle");
-    expect(state.pairingHint).toBeUndefined();
+    expect(state.remediation).toBeUndefined();
   });
 });
 

@@ -15,7 +15,7 @@ const loadTranscriptRuntime = createLazyRuntimeModule(
 export async function mirrorDeliveredPayloads(params: {
   delivery: DeliverOutboundPayloadsCoreParams;
   payloads: readonly NormalizedOutboundPayload[];
-  channel: Exclude<OutboundChannel, "none">;
+  channel: OutboundChannel;
   to: string;
 }): Promise<void> {
   const mirror = params.delivery.mirror;

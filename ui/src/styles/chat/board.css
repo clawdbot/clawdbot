@@ -66,6 +66,10 @@
   background: color-mix(in srgb, var(--panel) 35%, transparent);
 }
 
+.board-session-surface[hidden] {
+  display: none;
+}
+
 .board-session-surface--dock-bottom {
   flex-direction: column;
 }
