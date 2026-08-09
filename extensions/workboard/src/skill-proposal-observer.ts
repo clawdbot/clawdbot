@@ -30,7 +30,6 @@ function buildSkillProposalFollowupNotes(event: PluginHookSkillProposalChangedEv
     "A committed Skill Workshop proposal is pending operator review.",
     `Proposal: ${event.proposal.id}`,
     `Kind: ${event.proposal.kind}`,
-    `Revision: ${event.proposal.revision}`,
     ...(source ? [`Source: ${source}`] : []),
     "Approval boundary: this card does not apply, publish, reject, or modify the skill.",
   ].join("\n");
@@ -68,13 +67,13 @@ export function createWorkboardSkillProposalHandler(params: {
       const captured = await captureSkillProposalFollowup({ event, ctx, store: params.store });
       if (captured) {
         params.api.logger.info?.(
-          `workboard: ensured skill proposal follow-up event=${event.eventId} proposal=${event.proposal.id} card=${captured.cardId}`,
+          `workboard: ensured skill proposal follow-up event=${event.eventId} card=${captured.cardId}`,
         );
       }
     } catch (error) {
       const errorKind = error instanceof Error ? error.name : "UnknownError";
       params.api.logger.warn?.(
-        `workboard: skill proposal follow-up failed event=${event.eventId} proposal=${event.proposal.id} error=${errorKind}`,
+        `workboard: skill proposal follow-up failed event=${event.eventId} error=${errorKind}`,
       );
     }
   };

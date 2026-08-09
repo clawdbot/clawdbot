@@ -34,7 +34,7 @@ function proposalEvent(
     action: "created",
     occurredAt: "2026-08-10T00:00:00.000Z",
     proposal: {
-      id: "proposal-1",
+      id: "github-pr-workflow-20260810-abcdef1234",
       kind: "create",
       status: "pending",
       revision: "v1",
@@ -59,7 +59,16 @@ describe("Workboard Skill Workshop proposal observer", () => {
     const actions = ["created", "revised", "evaluation_completed"] as const;
     for (const [index, action] of actions.entries()) {
       const sequence = index + 1;
-      await handler(proposalEvent({ eventId: `event-${sequence}`, sequence, action }), ctx);
+      const proposal = proposalEvent().proposal;
+      await handler(
+        proposalEvent({
+          eventId: `event-${sequence}`,
+          sequence,
+          action,
+          proposal: { ...proposal, revision: `v${sequence}` },
+        }),
+        ctx,
+      );
     }
 
     await expect(store.list()).resolves.toEqual([
@@ -68,8 +77,8 @@ describe("Workboard Skill Workshop proposal observer", () => {
         status: "todo",
         labels: ["skill-workshop", "proposal-review"],
         agentId: "main",
-        taskId: "proposal-1",
-        notes: expect.stringContaining("Proposal: proposal-1"),
+        taskId: "github-pr-workflow-20260810-abcdef1234",
+        notes: expect.not.stringContaining("Revision:"),
         metadata: {
           automation: {
             idempotencyKey: expect.stringMatching(/^skill-workshop-proposal-v1:[a-f0-9]{32}$/),
@@ -79,6 +88,7 @@ describe("Workboard Skill Workshop proposal observer", () => {
     ]);
     expect(logger.info).toHaveBeenCalledTimes(3);
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain("github-pr-workflow");
   });
 
   it("ignores terminal proposal events", async () => {
@@ -108,7 +118,11 @@ describe("Workboard Skill Workshop proposal observer", () => {
     await expect(
       handler(
         proposalEvent({
-          proposal: { ...proposalEvent().proposal, skillName: "secret-skill-name" },
+          proposal: {
+            ...proposalEvent().proposal,
+            id: "secret-skill-name-20260810-abcdef1234",
+            skillName: "secret-skill-name",
+          },
         }),
         ctx,
       ),
@@ -117,6 +131,7 @@ describe("Workboard Skill Workshop proposal observer", () => {
     const warning = String(logger.warn.mock.calls[0]?.[0] ?? "");
     expect(warning).toContain("error=Error");
     expect(warning).not.toContain("secret-skill-name");
+    expect(warning).not.toContain("secret-skill-name-20260810-abcdef1234");
     expect(warning).not.toContain("provider echoed secret proposal content");
     expect(logger.info).not.toHaveBeenCalled();
   });
