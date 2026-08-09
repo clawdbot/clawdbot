@@ -6,6 +6,16 @@ import {
 
 const MAX_PENDING_AUDIO_BYTES = OPENAI_QUICKSILVER_RELAY_FRAME_BYTES * 250;
 
+function readPendingAudio(pending: OpenAIQuicksilverPendingAudio): Buffer {
+  const length = pending.length;
+  const audio = Buffer.alloc(length);
+  const readBytes = pending.readInto(audio);
+  if (readBytes !== length) {
+    throw new Error(`Expected to read ${length} pending audio bytes, got ${readBytes}`);
+  }
+  return audio;
+}
+
 describe("GPT-Live pending microphone audio", () => {
   it("copies caller-owned PCM16 and drops an incomplete sample", () => {
     const source = Buffer.from([0x01, 0x02, 0x03]);
@@ -13,7 +23,7 @@ describe("GPT-Live pending microphone audio", () => {
     pending.append(source);
     source.fill(0xff);
 
-    expect(pending.drain()).toEqual(Buffer.from([0x01, 0x02]));
+    expect(readPendingAudio(pending)).toEqual(Buffer.from([0x01, 0x02]));
   });
 
   it("appends audio in capture order while it fits", () => {
@@ -21,21 +31,21 @@ describe("GPT-Live pending microphone audio", () => {
     pending.append(Buffer.from([0x01, 0x02]));
     pending.append(Buffer.from([0x03, 0x04]));
 
-    expect(pending.drain()).toEqual(Buffer.from([0x01, 0x02, 0x03, 0x04]));
+    expect(readPendingAudio(pending)).toEqual(Buffer.from([0x01, 0x02, 0x03, 0x04]));
   });
 
   it("retains the newest bounded tail across existing and oversized input", () => {
     const pending = new OpenAIQuicksilverPendingAudio();
     pending.append(Buffer.alloc(MAX_PENDING_AUDIO_BYTES, 0x01));
     pending.append(Buffer.from([0x02, 0x02]));
-    const appended = pending.drain();
+    const appended = readPendingAudio(pending);
     const oversized = Buffer.alloc(MAX_PENDING_AUDIO_BYTES + 4, 0x03);
     oversized.writeUInt16LE(0x1111, 0);
     oversized.writeUInt16LE(0x2222, oversized.length - 2);
     const expectedOversizedTail = Buffer.from(oversized.subarray(4));
     pending.append(oversized);
     oversized.fill(0xff);
-    const oversizedResult = pending.drain();
+    const oversizedResult = readPendingAudio(pending);
 
     expect(appended).toHaveLength(MAX_PENDING_AUDIO_BYTES);
     expect(appended.subarray(0, -2).every((byte) => byte === 0x01)).toBe(true);
@@ -53,7 +63,7 @@ describe("GPT-Live pending microphone audio", () => {
 
     expect(pending.readInto(wrappedRead)).toBe(8);
     expect(wrappedRead).toEqual(Buffer.from([0x01, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]));
-    expect(pending.drain()).toEqual(Buffer.from([0x08, 0x09]));
+    expect(readPendingAudio(pending)).toEqual(Buffer.from([0x08, 0x09]));
     expect(pending).toHaveLength(0);
   });
 
@@ -64,31 +74,25 @@ describe("GPT-Live pending microphone audio", () => {
 
     expect(pending.readInto(target)).toBe(2);
     expect(target).toEqual(Buffer.from([0x01, 0x02, 0xff]));
-    expect(pending.drain()).toEqual(Buffer.from([0x03, 0x04]));
+    expect(readPendingAudio(pending)).toEqual(Buffer.from([0x03, 0x04]));
   });
 
-  it("releases circular storage after draining an owned PCM copy", () => {
+  it("releases circular storage on clear without allocating an output copy", () => {
     const pending = new OpenAIQuicksilverPendingAudio();
     const sample = Buffer.from([0x01, 0x02]);
     const allocations = vi.spyOn(Buffer, "alloc");
-    let transferred: Buffer | undefined;
     let allocatedSizes: number[] = [];
     try {
       pending.append(sample);
-      transferred = pending.drain();
+      pending.clear();
       pending.append(sample);
       allocatedSizes = allocations.mock.calls.map(([bytes]) => bytes);
     } finally {
       allocations.mockRestore();
     }
 
-    expect(transferred).toEqual(sample);
-    expect(allocatedSizes).toEqual([
-      MAX_PENDING_AUDIO_BYTES,
-      sample.length,
-      MAX_PENDING_AUDIO_BYTES,
-    ]);
-    expect(pending.drain()).toEqual(sample);
+    expect(allocatedSizes).toEqual([MAX_PENDING_AUDIO_BYTES, MAX_PENDING_AUDIO_BYTES]);
+    expect(readPendingAudio(pending)).toEqual(sample);
   });
 
   it("copies each of 500 capture frames once without concatenating retained history", () => {
@@ -118,7 +122,7 @@ describe("GPT-Live pending microphone audio", () => {
       allocations.mockRestore();
     }
 
-    const retained = pending.drain();
+    const retained = readPendingAudio(pending);
     expect(copiedBytes).toBe(500 * OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
     expect(concatCalls).toBe(0);
     expect(allocatedSizes).toEqual([MAX_PENDING_AUDIO_BYTES]);

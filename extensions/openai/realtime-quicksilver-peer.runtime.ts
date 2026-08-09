@@ -44,6 +44,7 @@ export type OpenAIQuicksilverAudioPeerCallbacks = {
 export type OpenAIQuicksilverAudioPeerContract = {
   createOffer(): Promise<string>;
   applyAnswer(answerSdp: string): Promise<void>;
+  adoptPendingAudio(pendingAudio: OpenAIQuicksilverPendingAudio): void;
   sendAudio(audio: Buffer): void;
   close(): void;
 };
@@ -168,7 +169,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   private activeInboundSsrc: number | undefined;
   private inboundRtpState: InboundRtpState = { pendingPackets: new Map() };
   private mediaTimer: ReturnType<typeof setInterval> | undefined;
-  private readonly pendingAudio = new OpenAIQuicksilverPendingAudio();
+  private pendingAudio = new OpenAIQuicksilverPendingAudio();
   private sequenceNumber = randomInt(0x1_0000);
   private subscribedTracks = new Set<string>();
   private timestamp = randomInt(0x1_0000_0000);
@@ -217,6 +218,20 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     // OpenAI answers may not declare SSRCs. Subscribe to the receiver's stable
     // default track directly instead of relying only on peer.ontrack demux.
     this.attachInboundTrack(this.state.transceiver.receiver.track);
+  }
+
+  adoptPendingAudio(pendingAudio: OpenAIQuicksilverPendingAudio): void {
+    if (this.closed) {
+      pendingAudio.clear();
+      return;
+    }
+    // Bridge adoption happens before external sends; preexisting audio would violate
+    // single-owner handoff and must not be silently replaced.
+    if (this.pendingAudio.length > 0) {
+      pendingAudio.clear();
+      throw new Error("GPT-Live WebRTC peer already owns pending audio");
+    }
+    this.pendingAudio = pendingAudio;
   }
 
   sendAudio(audio: Buffer): void {

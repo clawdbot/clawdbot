@@ -71,14 +71,6 @@ export class OpenAIQuicksilverPendingAudio {
     return readBytes;
   }
 
-  drain(): Buffer {
-    const audio = Buffer.alloc(this.pendingBytes);
-    this.readInto(audio);
-    // Return an owned copy and release startup storage.
-    this.clear();
-    return audio;
-  }
-
   clear(): void {
     this.storage = undefined;
     this.readOffset = 0;

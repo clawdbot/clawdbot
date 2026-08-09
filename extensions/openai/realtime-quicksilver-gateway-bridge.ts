@@ -118,7 +118,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private closed = false;
   private closeNotified = false;
   private peer: OpenAIQuicksilverAudioPeerContract | undefined;
-  private readonly pendingAudio = new OpenAIQuicksilverPendingAudio();
+  private pendingAudio = new OpenAIQuicksilverPendingAudio();
   private ready = false;
   private sideband: ActiveSideband | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -238,7 +238,11 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       );
       this.peer = await waitForConnectStep(peerPromise, connectSignal);
       if (this.pendingAudio.length > 0) {
-        this.peer.sendAudio(this.pendingAudio.drain());
+        const pendingAudio = this.pendingAudio;
+        // Detach synchronously before adoption so bridge teardown can only clear
+        // the new owner and no capture can interleave with the transfer.
+        this.pendingAudio = new OpenAIQuicksilverPendingAudio();
+        this.peer.adoptPendingAudio(pendingAudio);
       }
       const offerSdp = await waitForConnectStep(this.peer.createOffer(), connectSignal);
       const auth = await waitForConnectStep(this.config.resolveAuth(), connectSignal);
