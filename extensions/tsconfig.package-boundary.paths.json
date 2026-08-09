@@ -882,6 +882,9 @@
       ],
       "openclaw/plugin-sdk/plugin-state-store-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/plugin-state-store-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/model-ref-parse": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/model-ref-parse.d.ts"
       ]
     }
   }

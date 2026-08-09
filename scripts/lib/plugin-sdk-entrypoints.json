@@ -6,6 +6,7 @@
   "runtime",
   "health",
   "doctor-repair-runtime",
+  "model-ref-parse",
   "plugin-state-store-runtime",
   "runtime-doctor-migrations",
   "runtime-env",

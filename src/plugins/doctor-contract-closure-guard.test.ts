@@ -35,6 +35,33 @@ const FORBIDDEN_SPECIFIER_RULES = new Map<string, { reason: string; kinds: Set<C
     },
   ],
   [
+    "openclaw/plugin-sdk/ssrf-runtime",
+    {
+      reason:
+        "the SSRF runtime barrel cold-loads DNS, proxy state, and logging; " +
+        "legacy private-network config migration lives in openclaw/plugin-sdk/runtime-doctor-migrations",
+      kinds: new Set(["doctor-contract", "legacy-setup"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/provider-model-shared",
+    {
+      reason:
+        "the provider-model barrel cold-loads replay/endpoint/catalog helpers; " +
+        "use openclaw/plugin-sdk/model-ref-parse for provider/model reference parsing",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/channel-secret-basic-runtime",
+    {
+      reason:
+        "the channel-secret barrel cold-loads secret-ref/account-routing modules; " +
+        "the canonical record guard is openclaw/plugin-sdk/string-coerce-runtime",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
     "openclaw/plugin-sdk/plugin-state-store-runtime",
     {
       reason:

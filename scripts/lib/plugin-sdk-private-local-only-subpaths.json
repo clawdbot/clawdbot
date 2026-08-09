@@ -81,6 +81,7 @@
   "message-tool-delivery-hints",
   "migration",
   "migration-runtime",
+  "model-ref-parse",
   "music-generation",
   "node-host",
   "number-runtime",

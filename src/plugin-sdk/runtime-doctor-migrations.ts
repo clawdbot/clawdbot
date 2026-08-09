@@ -15,6 +15,11 @@ import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.j
 
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 export { defineChannelAliasMigration } from "../config/channel-alias-migration.js";
+export {
+  createLegacyPrivateNetworkDoctorContract,
+  hasLegacyFlatAllowPrivateNetworkAlias,
+  migrateLegacyFlatAllowPrivateNetworkAlias,
+} from "../config/legacy-private-network-migration.js";
 export type {
   ChannelAliasMigrationSpec,
   StreamingAliasMode,

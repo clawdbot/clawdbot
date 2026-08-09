@@ -405,6 +405,9 @@
     "./plugin-sdk/doctor-repair-runtime": {
       "default": "./dist/plugin-sdk/doctor-repair-runtime.js"
     },
+    "./plugin-sdk/model-ref-parse": {
+      "default": "./dist/plugin-sdk/model-ref-parse.js"
+    },
     "./plugin-sdk/plugin-state-store-runtime": {
       "default": "./dist/plugin-sdk/plugin-state-store-runtime.js"
     },
