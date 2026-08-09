@@ -187,7 +187,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: dependency-light agent scope helpers for doctor migration enumeration.
       // +1: dependency-light channel streaming config readers for doctor closures
       //     (realtime-voice-activation is private-local and not counted here).
-      151,
+      // +2: versioned multiplayer-memory authorization contract and conformance suite.
+      153,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -253,7 +254,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: worker desktop endpoint contract for desktop-capable worker leases.
       // +1: native command spec merger through the native-command-registry facade.
       // -2: remove unused WhatsApp-specific ack policy exports from channel-feedback.
-      4847,
+      // +56: versioned serializable memory-authorization contract and reusable backend-conformance
+      //      types, capability declarations, and helpers.
+      4904,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -308,7 +311,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: channel streaming config reader functions and session-agent scope resolver.
       // +1: native command spec merger through the native-command-registry facade.
       // -1: remove the unused WhatsApp-specific ack policy helper.
-      2920,
+      // +6: capability-declaration validators and pure backend-conformance helpers.
+      2926,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -330,7 +334,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: text-runtime now names its global-singleton exports explicitly.
       // -1: infra-runtime now names its error exports explicitly.
       // -1: infra-runtime excludes the internal system-event receipt API.
-      79,
+      // +2: focused authorization-contract and conformance facades.
+      81,
       env,
     ),
   };

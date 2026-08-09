@@ -444,6 +444,7 @@ type MemoryOperation =
   | "export"
   | "delete"
   | "sync"
+  | "status"
   | "policy-admin";
 
 type MemoryAccessContext = DeepReadonly<{
@@ -1005,9 +1006,15 @@ interface AuthorizedMemoryRuntime {
   statusAuthorized(params: {
     context: MemoryAccessContext;
     plan: AuthorizedMemoryPlan;
-  }): Promise<AuthorizedMemoryResultEnvelope<MemoryProviderStatus>>;
+  }): Promise<AuthorizedMemoryResultEnvelope<AuthorizedMemoryStatus>>;
 }
 ```
+
+`AuthorizedMemoryStatus` is a small serializable projection: a selected backend
+identifier plus optional provider, model, resource-count, and dirty-state facts.
+It deliberately is not `MemoryProviderStatus`, the built-in host-manager
+diagnostic shape whose backend is fixed to `"builtin"` and which can include
+backend-private filesystem and index details.
 
 The selected `MemoryPluginCapability`, rather than its optional runtime alone,
 declares `authorization`. The declaration is additive during Phase 0 and must

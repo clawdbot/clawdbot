@@ -340,9 +340,13 @@ interface AuthorizedMemoryRuntime {
   importAuthorized(...): Promise<MemoryWriteResult>;
   syncAuthorized(...): Promise<AuthorizedMemoryResultEnvelope<MemorySyncResult>>;
   exportAuthorized(...): Promise<AuthorizedMemoryResultEnvelope<MemoryExportResult>>;
-  statusAuthorized(...): Promise<AuthorizedMemoryResultEnvelope<MemoryProviderStatus>>;
+  statusAuthorized(...): Promise<AuthorizedMemoryResultEnvelope<AuthorizedMemoryStatus>>;
 }
 ```
+
+`AuthorizedMemoryStatus` is a versioned, backend-neutral status projection.
+Do not reuse the built-in manager's `MemoryProviderStatus`, whose `backend` is
+fixed to `"builtin"` and whose diagnostics are not a cross-backend SDK contract.
 
 The selected `MemoryPluginCapability`, rather than its optional `runtime`,
 declares `authorization`. Legacy agents may continue to use the existing manager
