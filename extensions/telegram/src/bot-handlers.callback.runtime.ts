@@ -26,7 +26,11 @@ import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
-import { resolveTelegramForumFlag, withResolvedTelegramForumFlag } from "./bot/helpers.js";
+import {
+  resolveTelegramForumFlag,
+  resolveTelegramMessageThreadSpec,
+  withResolvedTelegramForumFlag,
+} from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import { getTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
@@ -159,9 +163,8 @@ export function registerTelegramCallbackQueryHandler(
         cfg: authorizationCfg,
         chatId,
         isGroup,
-        isForum,
         senderId,
-        messageThreadId,
+        threadSpec: resolveTelegramMessageThreadSpec(callbackMessage, isForum),
       });
       const { resolvedThreadId, dmThreadId, storeAllowFrom, groupConfig } = eventAuthContext;
       const requireTopic = (groupConfig as { requireTopic?: boolean } | undefined)?.requireTopic;

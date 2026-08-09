@@ -491,6 +491,10 @@ async function runConfigCommand(args: string[]) {
   await sharedProgram.parseAsync(args, { from: "user" });
 }
 
+function runConfigSet(...args: string[]) {
+  return runConfigCommand(["config", "set", ...args]);
+}
+
 let ExitError: new (code: number, message?: string) => Error;
 
 describe("config cli", () => {
@@ -563,7 +567,7 @@ describe("config cli", () => {
       };
       setSnapshot(resolved, runtimeMerged);
 
-      await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
+      await runConfigSet("gateway.auth.mode", "token");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
@@ -595,7 +599,7 @@ describe("config cli", () => {
       } as OpenClawConfig;
       setSnapshot(resolved, runtimeMerged);
 
-      await runConfigCommand(["config", "set", "channels.telegram.dmPolicy", "pairing"]);
+      await runConfigSet("channels.telegram.dmPolicy", "pairing");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       expect(requireWriteOptions().explicitSetPaths).toEqual([
@@ -652,7 +656,7 @@ describe("config cli", () => {
       } as unknown as OpenClawConfig;
       setSnapshot(resolved, runtimeMerged);
 
-      await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
+      await runConfigSet("gateway.auth.mode", "token");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
@@ -748,9 +752,9 @@ describe("config cli", () => {
         ],
       });
 
-      await expect(
-        runConfigCommand(["config", "set", "agents.defaults.model.primary", "missing/nope"]),
-      ).rejects.toThrow(ExitError);
+      await expect(runConfigSet("agents.defaults.model.primary", "missing/nope")).rejects.toThrow(
+        ExitError,
+      );
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes('Cannot set model reference "missing/nope"');
@@ -768,7 +772,7 @@ describe("config cli", () => {
         errors: [],
       });
 
-      await runConfigCommand(["config", "set", "agents.defaults.model.primary", "${MODEL_REF}"]);
+      await runConfigSet("agents.defaults.model.primary", "${MODEL_REF}");
 
       expect(firstWrittenConfig().agents?.defaults?.model).toEqual({
         primary: "${MODEL_REF}",
@@ -926,7 +930,7 @@ describe("config cli", () => {
       };
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand(["config", "set", "gateway.port", "18790"]);
+      await runConfigSet("gateway.port", "18790");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const agent = firstWrittenConfig().agents?.list?.[0];
@@ -960,7 +964,7 @@ describe("config cli", () => {
       };
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand(["config", "set", "gateway.port", "18790"]);
+      await runConfigSet("gateway.port", "18790");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       expect(firstWrittenConfig().models?.providers?.google?.models?.[0]?.id).toBe(
@@ -1007,7 +1011,7 @@ describe("config cli", () => {
       };
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand(["config", "set", "gateway.port", "18790"]);
+      await runConfigSet("gateway.port", "18790");
 
       expect(firstWrittenConfig().models?.providers?.myproxy?.models?.[0]?.id).toBe(
         "vendor/modern-model",
@@ -1218,7 +1222,7 @@ describe("config cli", () => {
       };
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
+      await runConfigSet("gateway.auth.mode", "token");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
@@ -1242,7 +1246,7 @@ describe("config cli", () => {
       };
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand(["config", "set", "gateway.auth.mode", "password"]);
+      await runConfigSet("gateway.auth.mode", "password");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
@@ -1692,7 +1696,7 @@ describe("config cli", () => {
       const resolved: OpenClawConfig = { gateway: { port: 18789 } };
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand(["config", "set", "gateway.auth.mode", "{bad"]);
+      await runConfigSet("gateway.auth.mode", "{bad");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
@@ -1700,9 +1704,9 @@ describe("config cli", () => {
     });
 
     it("throws when strict parsing is enabled via --strict-json", async () => {
-      await expect(
-        runConfigCommand(["config", "set", "gateway.auth.mode", "{bad", "--strict-json"]),
-      ).rejects.toThrow(ExitError);
+      await expect(runConfigSet("gateway.auth.mode", "{bad", "--strict-json")).rejects.toThrow(
+        ExitError,
+      );
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
@@ -1711,18 +1715,16 @@ describe("config cli", () => {
     });
 
     it("keeps --json as a strict parsing alias", async () => {
-      await expect(
-        runConfigCommand(["config", "set", "gateway.auth.mode", "{bad", "--json"]),
-      ).rejects.toThrow(ExitError);
+      await expect(runConfigSet("gateway.auth.mode", "{bad", "--json")).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
     });
 
     it("rejects JSON5-only object syntax when strict parsing is enabled", async () => {
-      await expect(
-        runConfigCommand(["config", "set", "gateway.auth", "{mode:'token'}", "--strict-json"]),
-      ).rejects.toThrow(ExitError);
+      await expect(runConfigSet("gateway.auth", "{mode:'token'}", "--strict-json")).rejects.toThrow(
+        ExitError,
+      );
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
@@ -1870,7 +1872,7 @@ describe("config cli", () => {
       const resolved: OpenClawConfig = {};
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand(["config", "set", "agents.list.0.id", '"tech"', "--strict-json"]);
+      await runConfigSet("agents.list.0.id", '"tech"', "--strict-json");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig() as {
@@ -2128,7 +2130,7 @@ describe("config cli", () => {
     it("logs a dry-run note when value mode performs no validation checks", async () => {
       setGatewaySnapshot();
 
-      await runConfigCommand(["config", "set", "gateway.port", "19001", "--dry-run"]);
+      await runConfigSet("gateway.port", "19001", "--dry-run");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
@@ -2208,7 +2210,7 @@ describe("config cli", () => {
         `openclaw-config-batch-nonexistent-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
       );
       await expect(
-        runConfigCommand(["config", "set", "--batch-file", nonexistentBatchPath, "--allow-exec"]),
+        runConfigSet("--batch-file", nonexistentBatchPath, "--allow-exec"),
       ).rejects.toThrow(ExitError);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -2345,9 +2347,7 @@ describe("config cli", () => {
     });
 
     it("rejects empty inline batches before reading or rewriting config", async () => {
-      await expect(runConfigCommand(["config", "set", "--batch-json", "[]"])).rejects.toThrow(
-        ExitError,
-      );
+      await expect(runConfigSet("--batch-json", "[]")).rejects.toThrow(ExitError);
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -2358,9 +2358,7 @@ describe("config cli", () => {
     it("rejects empty batch files before reading or rewriting config", async () => {
       const pathname = writeTempJson5File("openclaw-config-batch-empty", []);
       try {
-        await expect(runConfigCommand(["config", "set", "--batch-file", pathname])).rejects.toThrow(
-          ExitError,
-        );
+        await expect(runConfigSet("--batch-file", pathname)).rejects.toThrow(ExitError);
       } finally {
         fs.rmSync(pathname, { force: true });
       }
@@ -2381,7 +2379,7 @@ describe("config cli", () => {
       );
       fs.writeFileSync(pathname, '[{"path":"gateway.auth.mode","value":"token"}]', "utf8");
       try {
-        await runConfigCommand(["config", "set", "--batch-file", pathname]);
+        await runConfigSet("--batch-file", pathname);
       } finally {
         fs.rmSync(pathname, { force: true });
       }
@@ -2424,7 +2422,7 @@ describe("config cli", () => {
         "utf8",
       );
       try {
-        await runConfigCommand(["config", "set", "--batch-file", pathname]);
+        await runConfigSet("--batch-file", pathname);
       } finally {
         fs.rmSync(pathname, { force: true });
       }
@@ -2449,9 +2447,7 @@ describe("config cli", () => {
       );
       fs.writeFileSync(pathname, '{"path":"gateway.auth.mode","value":"token"}', "utf8");
       try {
-        await expect(runConfigCommand(["config", "set", "--batch-file", pathname])).rejects.toThrow(
-          ExitError,
-        );
+        await expect(runConfigSet("--batch-file", pathname)).rejects.toThrow(ExitError);
       } finally {
         fs.rmSync(pathname, { force: true });
       }
@@ -3794,7 +3790,7 @@ describe("config cli", () => {
       };
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand(["config", "set", "agents.list[1].id", "renamed"]);
+      await runConfigSet("agents.list[1].id", "renamed");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
@@ -4414,7 +4410,7 @@ describe("config cli", () => {
       };
       setSnapshot(resolved, withRuntimeDefaults(resolved));
 
-      await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
+      await runConfigSet("gateway.auth.mode", "token");
 
       expectLogIncludes("Restart the gateway to apply.");
       expectLogExcludes("Change will apply without restarting the gateway.");
@@ -4430,7 +4426,7 @@ describe("config cli", () => {
       } as unknown as OpenClawConfig;
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand(["config", "set", "plugins.entries.canvas.enabled", "false"]);
+      await runConfigSet("plugins.entries.canvas.enabled", "false");
 
       expectLogIncludes("Updated plugins.entries.canvas.enabled");
       expectLogIncludes("Restart the gateway to apply.");

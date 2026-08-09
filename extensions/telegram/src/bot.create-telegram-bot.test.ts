@@ -3799,6 +3799,122 @@ describe("createTelegramBot", () => {
     expect(replySpy.mock.calls.at(1)?.[0].SessionKey).toContain("thread:124:99");
   });
 
+  it("authorizes and routes channel-DM messages with the canonical topic identity", async () => {
+    const chatId = -100123456700;
+    loadConfig.mockReturnValue({
+      agents: { list: [{ id: "channel-topic-agent" }] },
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["701"],
+          groups: {
+            [String(chatId)]: {
+              allowFrom: ["701"],
+              requireMention: false,
+              topics: {
+                "77": {
+                  agentId: "channel-topic-agent",
+                  allowFrom: ["700"],
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await dispatchMessage({
+      me: { id: 999, username: "openclaw_bot" },
+      message: {
+        chat: {
+          id: chatId,
+          type: "supergroup",
+          title: "Channel Inbox",
+          is_direct_messages: true,
+        },
+        from: { id: 700, first_name: "Ada" },
+        text: "route this topic",
+        date: 1736380800,
+        message_id: 7700,
+        direct_messages_topic: { topic_id: 77 },
+        message_thread_id: 999,
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.MessageThreadId).toBe(77);
+    expect(payload.OriginatingTo).toBe(`telegram:${chatId}:direct-topic:77`);
+    expect(payload.SessionKey).toContain("agent:channel-topic-agent:");
+    expect(payload.SessionKey).toContain(":topic:77");
+  });
+
+  it.each([
+    {
+      name: "topic allows and base chat denies",
+      baseAllowFrom: ["701"],
+      topicAllowFrom: ["700"],
+      expectedCalls: 1,
+    },
+    {
+      name: "topic denies and base chat allows",
+      baseAllowFrom: ["700"],
+      topicAllowFrom: ["701"],
+      expectedCalls: 0,
+    },
+  ])("authorizes channel-DM callbacks from the canonical topic: $name", async (testCase) => {
+    const chatId = -100123456701;
+    const pluginHandler = vi.fn(async () => ({ handled: true }));
+    expect(
+      registerPluginInteractiveHandler("channel-topic-actions", {
+        channel: "telegram",
+        namespace: "channel-topic",
+        handler: pluginHandler,
+      }),
+    ).toEqual({ ok: true });
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: testCase.baseAllowFrom,
+          groups: {
+            [String(chatId)]: {
+              allowFrom: testCase.baseAllowFrom,
+              topics: { "77": { allowFrom: testCase.topicAllowFrom } },
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    await getCallbackHandler()({
+      callbackQuery: {
+        id: `channel-topic-${testCase.expectedCalls}`,
+        data: "channel-topic:run",
+        from: { id: 700, first_name: "Ada" },
+        message: {
+          chat: {
+            id: chatId,
+            type: "supergroup",
+            title: "Channel Inbox",
+            is_direct_messages: true,
+          },
+          date: 1736380800,
+          message_id: 7701,
+          direct_messages_topic: { topic_id: 77 },
+          message_thread_id: 999,
+        },
+      },
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(pluginHandler).toHaveBeenCalledTimes(testCase.expectedCalls);
+    clearPluginInteractiveHandlers();
+  });
+
   it("routes non-default account DMs to the per-account fallback session without explicit bindings", async () => {
     loadConfig.mockReturnValue({
       channels: {
