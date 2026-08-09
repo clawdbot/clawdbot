@@ -1596,9 +1596,9 @@ openclaw-chat-video-player {
   align-items: start;
   gap: 6px 10px;
   padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  background: var(--panel);
   box-shadow: 0 10px 28px color-mix(in srgb, var(--bg) 45%, transparent);
 }
 
@@ -1607,7 +1607,7 @@ openclaw-chat-video-player {
 }
 
 .task-suggestion__eyebrow {
-  color: var(--accent);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1678,10 +1678,7 @@ openclaw-chat-video-player {
   gap: 5px;
   height: 26px;
   padding: 0 10px;
-  border-color: var(--accent);
   border-radius: var(--radius-md) 0 0 var(--radius-md);
-  background: var(--primary);
-  color: var(--primary-foreground);
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
@@ -1704,10 +1701,7 @@ openclaw-chat-video-player {
   margin-left: -1px;
   padding: 0;
   place-items: center;
-  border-color: var(--accent);
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  background: var(--primary);
-  color: var(--primary-foreground);
 }
 
 .task-suggestion__menu-trigger svg {

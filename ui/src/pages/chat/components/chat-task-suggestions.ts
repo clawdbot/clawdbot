@@ -85,7 +85,7 @@ export function renderChatTaskSuggestions(props: {
             <div class="task-suggestion__actions">
               <div class="task-suggestion__split">
                 <button
-                  class="btn primary btn--primary task-suggestion__start"
+                  class="btn task-suggestion__start"
                   type="button"
                   ?disabled=${busy || !props.canAccept}
                   title=${props.canAccept ? "" : t("chat.taskSuggestions.adminRequired")}
@@ -123,7 +123,7 @@ export function renderChatTaskSuggestions(props: {
                       >
                         <button
                           slot="trigger"
-                          class="btn primary task-suggestion__menu-trigger"
+                          class="btn task-suggestion__menu-trigger"
                           type="button"
                           ?disabled=${busy || !props.canAccept}
                           title=${props.canAccept ? "" : t("chat.taskSuggestions.adminRequired")}
