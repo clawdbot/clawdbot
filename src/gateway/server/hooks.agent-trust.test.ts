@@ -66,9 +66,9 @@ let capturedDispatchWakeHook: ((...args: unknown[]) => unknown) | undefined;
 
 vi.mock("./hooks-request-handler.js", () => ({
   createHooksRequestHandler: vi.fn((opts: Record<string, unknown>) => {
-    const dispatchAgentHook = opts.dispatchAgentHook as (...args: unknown[]) => unknown;
+    const capturedHandler = opts.dispatchAgentHook as (...args: unknown[]) => unknown;
     capturedDispatchAgentHook = (value, context) =>
-      dispatchAgentHook(value, context ?? { abortSignal: new AbortController().signal });
+      capturedHandler(value, context ?? { abortSignal: new AbortController().signal });
     capturedDispatchWakeHook = opts.dispatchWakeHook as typeof capturedDispatchWakeHook;
     return vi.fn();
   }),

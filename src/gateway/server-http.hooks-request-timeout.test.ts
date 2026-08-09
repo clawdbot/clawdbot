@@ -83,9 +83,9 @@ describe("createHooksRequestHandler timeout status mapping", () => {
       const dispatchAgentHook = vi.fn(
         async (_value: unknown, context: { abortSignal: AbortSignal }) => {
           dispatchSignal = context.abortSignal;
-          await new Promise<void>((resolve) =>
-            context.abortSignal.addEventListener("abort", () => resolve()),
-          );
+          await new Promise<void>((resolve) => {
+            context.abortSignal.addEventListener("abort", () => resolve());
+          });
           return {
             ok: false as const,
             statusCode: 503 as const,
@@ -121,9 +121,9 @@ describe("createHooksRequestHandler timeout status mapping", () => {
       async (_value: unknown, context: { abortSignal: AbortSignal }) => {
         const admitted = await Promise.race([
           admissionReleased.then(() => true),
-          new Promise<false>((resolve) =>
-            context.abortSignal.addEventListener("abort", () => resolve(false)),
-          ),
+          new Promise<false>((resolve) => {
+            context.abortSignal.addEventListener("abort", () => resolve(false));
+          }),
         ]);
         if (!admitted) {
           return {
