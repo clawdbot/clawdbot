@@ -169,15 +169,7 @@ function readErrorDetail(event: ElevenLabsRealtimeTranscriptionEvent): string {
 function createElevenLabsRealtimeTranscriptionSession(
   config: ElevenLabsRealtimeTranscriptionSessionConfig,
 ): RealtimeTranscriptionSession {
-  let lastTranscript: string | undefined;
-
-  const emitTranscript = (text: string) => {
-    if (text === lastTranscript) {
-      return;
-    }
-    lastTranscript = text;
-    config.onTranscript?.(text);
-  };
+  let pendingTimestampEcho: string | undefined;
 
   const sendAudioChunk = (
     audio: Buffer,
@@ -196,6 +188,7 @@ function createElevenLabsRealtimeTranscriptionSession(
     transport: RealtimeTranscriptionWebSocketTransport,
   ) => {
     if (event.message_type === "session_started") {
+      pendingTimestampEcho = undefined;
       transport.markReady();
       return;
     }
@@ -213,7 +206,13 @@ function createElevenLabsRealtimeTranscriptionSession(
       case "committed_transcript":
       case "committed_transcript_with_timestamps":
         if (event.text) {
-          emitTranscript(event.text);
+          // A committed segment can have one matching timestamp companion, never another turn.
+          const hasTimestamps = event.message_type !== "committed_transcript";
+          const isEcho = hasTimestamps && pendingTimestampEcho === event.text;
+          pendingTimestampEcho = hasTimestamps ? undefined : event.text;
+          if (!isEcho) {
+            config.onTranscript?.(event.text);
+          }
         }
         return;
       default:
