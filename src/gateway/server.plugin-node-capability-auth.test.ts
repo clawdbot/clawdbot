@@ -8,6 +8,10 @@ import { join as joinPath } from "node:path";
 import type { Duplex } from "node:stream";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -836,6 +840,25 @@ describe("gateway plugin node capability auth", () => {
           ws.terminate();
           await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
           await expectWsRejected(url, {}, 401);
+
+          // A draining Gateway must refuse new desktop observers like every other
+          // core upgrade; otherwise restart/suspension leaks long-lived sockets.
+          const draining = mintWorkerDesktopObserverToken({
+            environmentId: "worker:boundary",
+            ownerEpoch: 4,
+            control: false,
+            localSocketPath,
+          });
+          markGatewayRestartDraining();
+          try {
+            await expectWsRejected(
+              `ws://127.0.0.1:${listener.port}${WORKER_DESKTOP_OBSERVE_PATH}?token=${draining.token}`,
+              {},
+              503,
+            );
+          } finally {
+            resetGatewayWorkAdmission();
+          }
         },
       });
       expect(release).toHaveBeenCalledOnce();

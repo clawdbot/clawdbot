@@ -920,6 +920,14 @@ export function attachGatewayUpgradeHandler(opts: {
           socket.destroy();
           return;
         }
+        // Desktop observers are long-lived Gateway sockets, so they obey the same
+        // suspension/restart admission boundary as core upgrades. Without this a
+        // drained Gateway would keep accepting new desktop streams.
+        if (isGatewayWorkAdmissionClosed()) {
+          writeGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+          socket.destroy();
+          return;
+        }
         const { handleWorkerDesktopUpgrade } =
           await import("./worker-environments/desktop-observe.js");
         handleWorkerDesktopUpgrade(req, socket, head, {
