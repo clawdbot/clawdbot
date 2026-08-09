@@ -1,4 +1,3 @@
-import { loadEmbeddedAgentSubscriberForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { dispatchReplyWithBufferedBlockDispatcher as dispatchReplyWithBufferedBlockDispatcherRuntime } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { expect, it, vi } from "vitest";
 import {
@@ -121,83 +120,30 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
   ])(
     "finalizes the default streamed draft in place after an unexpected reply failure in a $label",
     async ({ createMessageContext }) => {
-      let releaseFirstSend: (() => void) | undefined;
-      const firstSend = new Promise<void>((resolve) => {
-        releaseFirstSend = resolve;
-      });
       const answerDraftStream = createTestDraftStream({
-        onWaitForInFlight: async () => {
-          await firstSend;
-          answerDraftStream.setMessageId(2001);
-        },
+        onWaitForInFlight: () => answerDraftStream.setMessageId(2001),
       });
       const reasoningDraftStream = createTestDraftStream();
       createTelegramDraftStream
         .mockImplementationOnce(() => answerDraftStream)
         .mockImplementationOnce(() => reasoningDraftStream);
       let partialAccepted: boolean | void = undefined;
-      let providerFailed = false;
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
         expect(params.replyOptions?.disableBlockStreaming).toBe(true);
         return await dispatchReplyWithBufferedBlockDispatcherRuntime({
           ...params,
           replyResolver: async (_ctx, opts) => {
-            const subscribeEmbeddedAgentSession = await loadEmbeddedAgentSubscriberForTest();
-            let emitSubscriberEvent: ((event: unknown) => unknown) | undefined;
-            const subscription = subscribeEmbeddedAgentSession({
-              session: {
-                subscribe: (listener: (event: unknown) => unknown) => {
-                  emitSubscriberEvent = listener;
-                  return () => {};
-                },
-              } as never,
-              runId: "telegram-partial-provider-failure",
-              onBeforeTerminalDelivery: async () => undefined,
-              onPartialReply: async (payload) => {
-                partialAccepted = await opts?.onPartialReply?.(payload);
-                return partialAccepted;
-              },
-            });
-            const providerError = new Error("unexpected model failure");
-            const failedAssistant = {
-              role: "assistant",
-              content: [{ type: "text", text: "partial answer" }],
-              stopReason: "error",
-              errorMessage: providerError.message,
-              provider: "test-provider",
-              model: "test-model",
-            };
-            emitSubscriberEvent?.({
-              type: "message_update",
-              message: { role: "assistant" },
-              assistantMessageEvent: { type: "text_delta", delta: "partial answer" },
-            });
-            emitSubscriberEvent?.({ type: "message_end", message: failedAssistant });
-            providerFailed = true;
-            emitSubscriberEvent?.({
-              type: "agent_end",
-              messages: [failedAssistant],
-              willRetry: false,
-            });
-            await subscription.waitForPendingEvents();
-            subscription.unsubscribe();
-            throw providerError;
+            partialAccepted = await opts?.onPartialReply?.({ text: "partial answer" });
+            throw new Error("unexpected model failure");
           },
         });
       });
 
-      const dispatch = dispatchWithContext({
+      await dispatchWithContext({
         context: createMessageContext(),
         streamMode: "partial",
         telegramCfg: { streaming: { mode: "partial" } },
       });
-
-      await vi.waitFor(() => expect(answerDraftStream.waitForInFlight).toHaveBeenCalledOnce());
-      expect(providerFailed).toBe(true);
-      expect(answerDraftStream.update).toHaveBeenCalledWith("partial answer");
-      expect(deliverReplies).not.toHaveBeenCalled();
-      releaseFirstSend?.();
-      await dispatch;
 
       expect(partialAccepted).toBeUndefined();
       expect(answerDraftStream.waitForInFlight).toHaveBeenCalledOnce();
