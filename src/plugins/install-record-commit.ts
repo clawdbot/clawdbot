@@ -343,8 +343,8 @@ async function removeCreatedRetainedManagedNpmInstallMarkers(markerPaths: string
 
 async function clearActiveRetainedManagedNpmInstallMarkers(
   nextInstallRecords: Record<string, PluginInstallRecord>,
-): Promise<Array<{ markerPath: string; contents: string }>> {
-  const clearedMarkers: Array<{ markerPath: string; contents: string }> = [];
+  clearedMarkers: Array<{ markerPath: string; contents: string }>,
+): Promise<void> {
   for (const record of Object.values(nextInstallRecords)) {
     if (record.source !== "npm" || !record.installPath?.trim()) {
       continue;
@@ -366,10 +366,10 @@ async function clearActiveRetainedManagedNpmInstallMarkers(
     }
     const cleared = await clearRetainedManagedNpmInstallMarker(record.installPath);
     if (cleared) {
+      // Record each cleared marker immediately so a later filesystem failure can roll it back.
       clearedMarkers.push({ markerPath, contents });
     }
   }
-  return clearedMarkers;
 }
 
 async function restoreClearedRetainedManagedNpmInstallMarkers(
@@ -414,8 +414,9 @@ async function commitPluginInstallRecordsWithWriter(params: {
         // Keep partial progress visible to the rollback path.
         createdMarkerPaths: retainedMarkerPaths,
       });
-      clearedMarkerSnapshots.push(
-        ...(await clearActiveRetainedManagedNpmInstallMarkers(prepared.nextInstallRecords)),
+      await clearActiveRetainedManagedNpmInstallMarkers(
+        prepared.nextInstallRecords,
+        clearedMarkerSnapshots,
       );
       const installRecordsChanged = !pluginInstallRecordMapsEqual(
         prepared.previousInstallRecords,

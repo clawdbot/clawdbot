@@ -17,6 +17,7 @@ import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
+  resolveRetainedManagedNpmInstallMarkerPath,
 } from "./managed-npm-retention.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
@@ -849,6 +850,67 @@ describe("commitConfigWithPendingPluginInstalls", () => {
 
       expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(true);
     } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("restores earlier active markers when clearing a later marker fails", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const installPaths = ["codex", "voice-call"].map((pluginId) =>
+      path.join(
+        stateDir,
+        "npm",
+        "projects",
+        `${pluginId}-v2`,
+        "node_modules",
+        "@openclaw",
+        pluginId,
+      ),
+    );
+    for (const [index, installPath] of installPaths.entries()) {
+      fs.mkdirSync(installPath, { recursive: true });
+      await markRetainedManagedNpmInstall({
+        packageDir: installPath,
+        pluginId: index === 0 ? "codex" : "voice-call",
+        retainedAt: "2026-04-25T00:00:00.000Z",
+        reason: "test-retained-generation",
+      });
+    }
+    const laterMarkerPath = resolveRetainedManagedNpmInstallMarkerPath(installPaths[1] ?? "");
+    const realRm = fs.promises.rm.bind(fs.promises);
+    const rmSpy = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+      if (String(target) === laterMarkerPath) {
+        const error = new Error("marker clear failed") as NodeJS.ErrnoException;
+        error.code = "EIO";
+        throw error;
+      }
+      return await realRm(target, options);
+    });
+
+    try {
+      await expect(
+        commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: {},
+          nextInstallRecords: Object.fromEntries(
+            installPaths.map((installPath, index) => {
+              const pluginId = index === 0 ? "codex" : "voice-call";
+              return [
+                pluginId,
+                {
+                  source: "npm",
+                  spec: `@openclaw/${pluginId}@2.0.0`,
+                  installPath,
+                },
+              ];
+            }),
+          ),
+          nextConfig: {},
+        }),
+      ).rejects.toThrow("marker clear failed");
+
+      expect(installPaths.every(hasRetainedManagedNpmInstallMarker)).toBe(true);
+    } finally {
+      rmSpy.mockRestore();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
