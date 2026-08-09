@@ -51,8 +51,12 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
   const copyLabel = t("devices.pairing.copySetupCode");
   const setup = lifecycle.phase === "waiting" ? lifecycle.setup : null;
   const gatewayUrls = setup?.gatewayUrls ?? (setup ? [setup.gatewayUrl] : []);
-  const showAccessChoices = lifecycle.phase !== "success";
-  const canSelectAccess = lifecycle.phase === "selection" || lifecycle.phase === "error";
+  const showAccessChoices =
+    lifecycle.phase !== "success" &&
+    !(lifecycle.phase === "error" && lifecycle.source === "status");
+  const canSelectAccess =
+    lifecycle.phase === "selection" ||
+    (lifecycle.phase === "error" && lifecycle.source === "create");
 
   return html`
     <openclaw-modal-dialog label=${title} description=${description} @modal-cancel=${props.onClose}>
@@ -129,7 +133,13 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
           ${lifecycle.phase === "error"
             ? html`
                 <div class="callout danger device-pair-setup__error" role="alert">
-                  <strong>${t("devices.pairing.failed")}</strong>
+                  <strong
+                    >${t(
+                      lifecycle.source === "status"
+                        ? "devices.pairing.statusFailed"
+                        : "devices.pairing.failed",
+                    )}</strong
+                  >
                   <span>${lifecycle.message}</span>
                 </div>
                 <button class="btn primary" type="button" @click=${props.onRefresh}>

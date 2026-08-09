@@ -22,7 +22,14 @@ export type DevicePairSetupLifecycle =
   | { phase: "selection"; access: DevicePairSetupAccess }
   | { phase: "loading"; access: DevicePairSetupAccess }
   | { phase: "waiting"; access: DevicePairSetupAccess; setup: DevicePairSetup }
-  | { phase: "error"; access: DevicePairSetupAccess; message: string }
+  | { phase: "error"; source: "create"; access: DevicePairSetupAccess; message: string }
+  | {
+      phase: "error";
+      source: "status";
+      access: DevicePairSetupAccess;
+      setupId: string;
+      message: string;
+    }
   | {
       phase: "success";
       access: DevicePairSetupCompletion["access"];
@@ -75,22 +82,57 @@ function clearDevicePairSetupExpiry(state: DevicePairSetupState) {
   }
 }
 
+type DevicePairSetupCompletionLookup =
+  | { status: "found"; completion: DevicePairSetupCompletion }
+  | { status: "missing" }
+  | { status: "unavailable"; message: string };
+
 async function readGatewaySetupCompletion(
   state: DevicePairSetupState,
   setupId: string,
-): Promise<DevicePairSetupCompletion | null> {
+): Promise<DevicePairSetupCompletionLookup> {
   const client = state.client;
   if (!client || !state.connected) {
-    return null;
+    return { status: "unavailable", message: "Gateway unavailable" };
   }
   try {
     const result = await client.request<DevicePairSetupStatusResult>("device.pair.setupStatus", {
       setupId,
     });
-    return parseDevicePairSetupCompletion(result?.completion);
-  } catch {
-    return null;
+    if (result?.completion === undefined) {
+      return { status: "missing" };
+    }
+    const completion = parseDevicePairSetupCompletion(result.completion);
+    return completion?.setupId === setupId
+      ? { status: "found", completion }
+      : { status: "unavailable", message: "Invalid setup status response" };
+  } catch (err) {
+    return { status: "unavailable", message: String(err) };
   }
+}
+
+function applyDevicePairSetupCompletionLookup(
+  state: DevicePairSetupState,
+  setupId: string,
+  access: DevicePairSetupAccess,
+  lookup: DevicePairSetupCompletionLookup,
+): void {
+  const lifecycle = state.devicePairSetupLifecycle;
+  const ownsLifecycle =
+    (lifecycle.phase === "waiting" && lifecycle.setup.setupId === setupId) ||
+    (lifecycle.phase === "error" && lifecycle.source === "status" && lifecycle.setupId === setupId);
+  if (!ownsLifecycle) {
+    return;
+  }
+  if (lookup.status === "found") {
+    completeDevicePairSetup(state, lookup.completion);
+    return;
+  }
+  state.devicePairSetupLifecycle =
+    lookup.status === "missing"
+      ? { phase: "expired", access }
+      : { phase: "error", source: "status", access, setupId, message: lookup.message };
+  state.onDevicePairSetupChange();
 }
 
 async function expireDevicePairSetup(state: DevicePairSetupState, setupId: string) {
@@ -104,15 +146,11 @@ async function expireDevicePairSetup(state: DevicePairSetupState, setupId: strin
   // its expiry with the event never delivered. Reconcile the gateway's recorded
   // outcome first or a successful pairing is presented as expired.
   const completion = await readGatewaySetupCompletion(state, setupId);
-  if (completion && completeDevicePairSetup(state, completion)) {
-    return;
-  }
   const lifecycle = state.devicePairSetupLifecycle;
   if (lifecycle.phase !== "waiting" || lifecycle.setup.setupId !== setupId) {
     return;
   }
-  state.devicePairSetupLifecycle = { phase: "expired", access: lifecycle.access };
-  state.onDevicePairSetupChange();
+  applyDevicePairSetupCompletionLookup(state, setupId, lifecycle.access, completion);
 }
 
 function scheduleDevicePairSetupExpiry(state: DevicePairSetupState, setup: DevicePairSetup) {
@@ -150,7 +188,12 @@ export function completeDevicePairSetup(
   completion: DevicePairSetupCompletion,
 ): boolean {
   const lifecycle = state.devicePairSetupLifecycle;
-  if (lifecycle.phase !== "waiting" || lifecycle.setup.setupId !== completion.setupId) {
+  const matchesActiveSetup =
+    (lifecycle.phase === "waiting" && lifecycle.setup.setupId === completion.setupId) ||
+    (lifecycle.phase === "error" &&
+      lifecycle.source === "status" &&
+      lifecycle.setupId === completion.setupId);
+  if (!matchesActiveSetup) {
     return false;
   }
   clearDevicePairSetupExpiry(state);
@@ -171,11 +214,24 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
   const client = state.client;
   const lifecycle = state.devicePairSetupLifecycle;
   const access = lifecycle.access === "limited" ? "limited" : "full";
-  if (!client || !state.connected || state.devicePairSetupLifecycle.phase === "loading") {
+  if (
+    !client ||
+    !state.connected ||
+    state.devicePairSetupLifecycle.phase === "loading" ||
+    devicePairSetupRequests.has(state)
+  ) {
     return;
   }
   const requestToken = {};
   devicePairSetupRequests.set(state, requestToken);
+  if (lifecycle.phase === "error" && lifecycle.source === "status") {
+    const lookup = await readGatewaySetupCompletion(state, lifecycle.setupId);
+    if (devicePairSetupRequests.get(state) === requestToken) {
+      applyDevicePairSetupCompletionLookup(state, lifecycle.setupId, access, lookup);
+      devicePairSetupRequests.delete(state);
+    }
+    return;
+  }
   clearDevicePairSetupExpiry(state);
   state.devicePairSetupLifecycle = { phase: "loading", access };
   try {
@@ -200,7 +256,12 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
       state.client === client &&
       state.devicePairSetupOpen
     ) {
-      state.devicePairSetupLifecycle = { phase: "error", access, message: String(err) };
+      state.devicePairSetupLifecycle = {
+        phase: "error",
+        source: "create",
+        access,
+        message: String(err),
+      };
     }
   } finally {
     if (devicePairSetupRequests.get(state) === requestToken) {
@@ -215,7 +276,8 @@ export async function setDevicePairSetupAccess(
 ) {
   if (
     (state.devicePairSetupLifecycle.phase !== "selection" &&
-      state.devicePairSetupLifecycle.phase !== "error") ||
+      (state.devicePairSetupLifecycle.phase !== "error" ||
+        state.devicePairSetupLifecycle.source !== "create")) ||
     state.devicePairSetupLifecycle.access === access
   ) {
     return;

@@ -208,6 +208,7 @@ describe("device pairing setup state", () => {
 
     expect(state.devicePairSetupLifecycle).toEqual({
       phase: "error",
+      source: "create",
       access: "full",
       message: "Error: setup unavailable",
     });
@@ -341,26 +342,12 @@ describe("device pairing setup state", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([
-    ["no completion is recorded", async () => ({})],
-    [
-      "the reconcile request fails",
-      async () => {
-        throw new Error("offline");
-      },
-    ],
-    [
-      "the recorded completion belongs to another setup",
-      async () => ({
-        completion: completion("other-setup"),
-      }),
-    ],
-  ] as const)("shows expiry when %s", async (_label, statusResponse) => {
+  it("shows expiry only when the gateway authoritatively has no completion", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const request = vi.fn(async (method: string) =>
       method === "device.pair.setupStatus"
-        ? await statusResponse()
+        ? {}
         : setupResult("live-setup", "SECRET", { expiresAtMs: 2_000 }),
     );
     const state = createDevicePairSetupState({
@@ -374,6 +361,78 @@ describe("device pairing setup state", () => {
 
     expect(state.devicePairSetupLifecycle).toEqual({ phase: "expired", access: "full" });
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    [
+      "the reconcile request fails",
+      async () => {
+        throw new Error("offline");
+      },
+      "Error: offline",
+    ],
+    [
+      "the recorded completion belongs to another setup",
+      async () => ({ completion: completion("other-setup") }),
+      "Invalid setup status response",
+    ],
+  ] as const)(
+    "keeps an unknown outcome recoverable when %s",
+    async (_label, statusResponse, message) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const request = vi.fn(async (method: string) =>
+        method === "device.pair.setupStatus"
+          ? await statusResponse()
+          : setupResult("live-setup", "SECRET", { expiresAtMs: 2_000 }),
+      );
+      const state = createDevicePairSetupState({
+        client: { request } as unknown as DevicePairSetupState["client"],
+        connected: true,
+      });
+      state.devicePairSetupOpen = true;
+
+      await refreshDevicePairSetup(state);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(state.devicePairSetupLifecycle).toEqual({
+        phase: "error",
+        source: "status",
+        access: "full",
+        setupId: "live-setup",
+        message,
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("retries an unknown outcome without minting a replacement credential", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(setupResult("live-setup", "SECRET", { expiresAtMs: 2_000 }))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ completion: completion("live-setup") });
+    const state = createDevicePairSetupState({
+      client: { request } as unknown as DevicePairSetupState["client"],
+      connected: true,
+    });
+    state.devicePairSetupOpen = true;
+
+    await refreshDevicePairSetup(state);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await refreshDevicePairSetup(state);
+
+    expect(request).toHaveBeenLastCalledWith("device.pair.setupStatus", {
+      setupId: "live-setup",
+    });
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(state.devicePairSetupLifecycle).toEqual({
+      phase: "success",
+      access: "full",
+      deviceName: "Operator’s iPhone",
+    });
   });
 
   it("lets a regenerated setup outlive a slow reconcile for the retired one", async () => {
