@@ -107,18 +107,26 @@ private func gatewayTLSTestTrust(systemTrusted: Bool) throws -> SecTrust {
 struct GatewayTLSPinningTests {
     @Test func `keychain namespace configures once and fails closed after use`() {
         var state = GatewayTLSKeychainNamespaceState()
-        #expect(state.configure(suffix: ".profile.work"))
-        #expect(state.configure(suffix: ".profile.work"))
-        #expect(!state.configure(suffix: ".profile.other"))
-        #expect(state.service(base: "ai.openclaw.tls-pinning") ==
-            "ai.openclaw.tls-pinning.profile.work")
-        #expect(state.configure(suffix: ".profile.work"))
-        #expect(!state.configure(suffix: ""))
+        let configuredWork = state.configure(suffix: ".profile.work")
+        let reconfiguredWork = state.configure(suffix: ".profile.work")
+        let configuredOther = state.configure(suffix: ".profile.other")
+        let workService = state.service(base: "ai.openclaw.tls-pinning")
+        let configuredWorkAfterUse = state.configure(suffix: ".profile.work")
+        let configuredDefaultAfterUse = state.configure(suffix: "")
+        #expect(configuredWork)
+        #expect(reconfiguredWork)
+        #expect(!configuredOther)
+        #expect(workService == "ai.openclaw.tls-pinning.profile.work")
+        #expect(configuredWorkAfterUse)
+        #expect(!configuredDefaultAfterUse)
 
         var usedDefault = GatewayTLSKeychainNamespaceState()
-        #expect(usedDefault.service(base: "ai.openclaw.tls-pinning") == "ai.openclaw.tls-pinning")
-        #expect(usedDefault.configure(suffix: ""))
-        #expect(!usedDefault.configure(suffix: ".profile.work"))
+        let defaultService = usedDefault.service(base: "ai.openclaw.tls-pinning")
+        let configuredDefault = usedDefault.configure(suffix: "")
+        let configuredProfileAfterDefaultUse = usedDefault.configure(suffix: ".profile.work")
+        #expect(defaultService == "ai.openclaw.tls-pinning")
+        #expect(configuredDefault)
+        #expect(!configuredProfileAfterDefaultUse)
     }
 
     private func withFakeKeychain<T>(_ operation: (GatewayTLSFakeKeychain) throws -> T) rethrows -> T {
