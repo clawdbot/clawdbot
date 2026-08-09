@@ -55,5 +55,19 @@ struct AppProfileSourceInvariantTests {
         #expect(menuBar.contains("if let exitCode = Self.processExitCode(for: ownership)"))
         #expect(menuBar.contains("Darwin.exit(exitCode)"))
         #expect(!menuBar.contains("@State private var tailscaleService = TailscaleService.shared"))
+
+        let gatewayManager = try String(
+            contentsOf: sourceRoot.appendingPathComponent("GatewayProcessManager.swift"),
+            encoding: .utf8)
+        #expect(gatewayManager.components(separatedBy: "profileOwnsGateway(").count - 1 >= 5)
+
+        let portGuardian = try String(
+            contentsOf: sourceRoot.appendingPathComponent("PortGuardian.swift"),
+            encoding: .utf8)
+        let profilePreserve = try #require(portGuardian.range(of: "if AppProfile.current.isActive"))
+        let firstTerminate = try #require(portGuardian.range(
+            of: "terminateProcess",
+            range: profilePreserve.lowerBound..<portGuardian.endIndex))
+        #expect(profilePreserve.lowerBound < firstTerminate.lowerBound)
     }
 }

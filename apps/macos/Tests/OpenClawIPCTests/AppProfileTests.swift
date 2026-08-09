@@ -82,6 +82,57 @@ struct AppProfileTests {
         #expect(AppProfile(environment: ["OPENCLAW_PROFILE": String(repeating: "a", count: 64)]).name != nil)
     }
 
+    @Test func `colliding profile apps cannot reserve the same exact port`() throws {
+        let root = try self.makeReservationRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let first = ProfileGatewayPortReservation.acquire(
+            profile: AppProfile(environment: ["OPENCLAW_PROFILE": "p1402"]),
+            port: 55636,
+            homeDirectory: home,
+            temporaryDirectory: root)
+        let second = ProfileGatewayPortReservation.acquire(
+            profile: AppProfile(environment: ["OPENCLAW_PROFILE": "p2380"]),
+            port: 55636,
+            homeDirectory: home,
+            temporaryDirectory: root)
+
+        #expect(first.conflict == nil)
+        #expect(second.conflict?.contains("p2380") == true)
+    }
+
+    @Test func `persisted other profile gateway reserves its exact port`() throws {
+        let root = try self.makeReservationRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        let agents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "ProgramArguments": ["node", "openclaw.mjs", "gateway", "--port", "55636"],
+            ],
+            format: .xml,
+            options: 0)
+        try data.write(to: agents.appendingPathComponent("ai.openclaw.p1402.plist"))
+
+        let reservation = ProfileGatewayPortReservation.acquire(
+            profile: AppProfile(environment: ["OPENCLAW_PROFILE": "p2380"]),
+            port: 55636,
+            homeDirectory: home,
+            temporaryDirectory: root)
+
+        #expect(reservation.conflict?.contains("profile \"p1402\"") == true)
+    }
+
+    private func makeReservationRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("app-profile-port-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        return root
+    }
+
     @Test func `profile launch at login reason outranks bundle location`() {
         let profiled = LaunchAtLoginPresentation.resolve(
             profile: AppProfile(environment: ["OPENCLAW_PROFILE": "work"]),

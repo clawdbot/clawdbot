@@ -221,7 +221,8 @@ struct GeneralSettings: View {
         let presentation = GeneralStatusPresentation.resolve(
             mode: self.state.connectionMode,
             isPaused: self.state.isPaused,
-            controlState: ControlChannel.shared.state)
+            controlState: ControlChannel.shared.state,
+            localFailure: self.gatewayManager.lastFailureReason)
 
         return HStack(alignment: .center, spacing: 14) {
             ZStack {
@@ -371,6 +372,7 @@ struct GeneralSettings: View {
             Spacer(minLength: 18)
 
             if ControlChannel.shared.state == .connected,
+               self.localGatewayFailure == nil,
                let ping = ControlChannel.shared.lastPingMs
             {
                 Text("\(Int(ping)) ms")
@@ -399,9 +401,10 @@ struct GeneralSettings: View {
     }
 
     private var connectionStatusTint: Color {
+        if self.localGatewayFailure != nil { return .red }
         switch ControlChannel.shared.state {
-        case .connected: .green
-        case .connecting, .disconnected, .degraded: .orange
+        case .connected: return .green
+        case .connecting, .disconnected, .degraded: return .orange
         }
     }
 
@@ -414,6 +417,7 @@ struct GeneralSettings: View {
     }
 
     private var connectionStatusSubtitle: String {
+        if let failure = self.localGatewayFailure { return failure }
         switch self.state.connectionMode {
         case .local:
             return "OpenClaw starts and monitors the Gateway on this Mac."
@@ -427,6 +431,10 @@ struct GeneralSettings: View {
         case .unconfigured:
             return "Choose local or remote before the app can attach to a Gateway."
         }
+    }
+
+    private var localGatewayFailure: String? {
+        self.state.connectionMode == .local ? self.gatewayManager.lastFailureReason : nil
     }
 
     private var gatewayModeGroup: some View {
@@ -805,10 +813,11 @@ struct GeneralSettings: View {
     }
 
     private var gatewayStatusColor: Color {
+        if self.localGatewayFailure != nil { return .red }
         switch self.gatewayStatus.kind {
-        case .ok: .green
-        case .checking: .secondary
-        case .missingNode, .missingGateway, .incompatible, .error: .orange
+        case .ok: return .green
+        case .checking: return .secondary
+        case .missingNode, .missingGateway, .incompatible, .error: return .orange
         }
     }
 }

@@ -389,6 +389,11 @@ struct MenuContent: View {
     }
 
     private var healthStatus: (label: String, color: Color) {
+        if self.state.connectionMode == .local,
+           let failure = GatewayProcessManager.shared.lastFailureReason
+        {
+            return (failure, .red)
+        }
         if self.state.connectionMode == .remote {
             let live = GatewayConnectionPresentation(state: self.controlChannel.state)
             switch live.tone {

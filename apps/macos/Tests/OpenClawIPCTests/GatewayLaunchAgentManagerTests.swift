@@ -46,6 +46,21 @@ struct GatewayLaunchAgentManagerTests {
         #expect(GatewayLaunchAgentManager.startupMigrationTolerance >= 120)
     }
 
+    @Test func `malformed canonical profile claims fail closed`() throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let agents = home.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        try Data("not a plist".utf8).write(to: agents.appendingPathComponent("ai.openclaw.p1402.plist"))
+
+        let claim = GatewayLaunchAgentManager.conflictingProfileClaimOwner(
+            port: 55636,
+            excludingLabel: "ai.openclaw.p2380",
+            homeDirectory: home)
+
+        #expect(claim?.contains("p1402") == true)
+    }
+
     @Test func `reads Gateway service ownership command directly from launchd`() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-gateway-\(UUID().uuidString).plist")

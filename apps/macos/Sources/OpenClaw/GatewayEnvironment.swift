@@ -108,8 +108,21 @@ enum GatewayEnvironment {
 
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.env")
     private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
+    private static let profilePortReservation: ProfileGatewayPortReservation = .acquire(
+        profile: .current,
+        port: GatewayEnvironment.selectedGatewayPort())
 
     static func gatewayPort() -> Int {
+        guard AppProfile.current.isActive else { return self.selectedGatewayPort() }
+        return self.profilePortReservation.port
+    }
+
+    static func profileGatewayPortConflict() -> String? {
+        guard AppProfile.current.isActive else { return nil }
+        return self.profilePortReservation.conflict
+    }
+
+    private static func selectedGatewayPort() -> Int {
         self.resolvedGatewayPort(
             environment: ProcessInfo.processInfo.environment,
             configPort: OpenClawConfigFile.gatewayPort(),

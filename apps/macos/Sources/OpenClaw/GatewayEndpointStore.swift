@@ -86,6 +86,7 @@ actor GatewayEndpointStore {
         let token: @Sendable () -> String?
         let password: @Sendable () -> String?
         let localPort: @Sendable () -> Int
+        let localUnavailableReason: @Sendable () -> String?
         let remoteRouteIfRunning: @Sendable () async -> RemoteTunnelManager.Route?
         let remoteRouteIsCurrent: @Sendable (RemoteTunnelManager.Route) async -> Bool
         let canStartRemoteTunnel: @Sendable () -> Bool
@@ -113,6 +114,7 @@ actor GatewayEndpointStore {
                     launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
             },
             localPort: { GatewayEnvironment.gatewayPort() },
+            localUnavailableReason: { GatewayEnvironment.profileGatewayPortConflict() },
             remoteRouteIfRunning: { await RemoteTunnelManager.shared.controlTunnelRouteIfRunning() },
             remoteRouteIsCurrent: { await RemoteTunnelManager.shared.isCurrentRoute($0) },
             canStartRemoteTunnel: { GatewayEndpointStore.primaryAppLaunchAdmitted.withValue { $0 } },
@@ -364,6 +366,7 @@ actor GatewayEndpointStore {
     private var endpointRevision: UInt64 = 0
     private var resolutionGeneration: UInt64 = 0
     private var activeSource: SourceSnapshot?
+    private var localUnavailableReason: String?
 
     init(deps: Deps = .live) {
         self.deps = deps
@@ -377,6 +380,7 @@ actor GatewayEndpointStore {
         }
 
         let port = deps.localPort()
+        self.localUnavailableReason = deps.localUnavailableReason()
         let root = OpenClawConfigFile.loadDict()
         let bind = GatewayEndpointStore.resolveGatewayBindMode(
             root: root,
@@ -398,6 +402,10 @@ actor GatewayEndpointStore {
             remoteTarget: "")
         switch initialMode {
         case .local:
+            if let reason = self.localUnavailableReason {
+                self.state = .unavailable(mode: .local, reason: reason)
+                return
+            }
             let url = URL(string: "\(scheme)://\(host):\(port)")!
             self.endpointRevision = 1
             self.state = .ready(
@@ -438,6 +446,13 @@ actor GatewayEndpointStore {
 
     func currentState() async -> GatewayEndpointState {
         self.state
+    }
+
+    func setLocalUnavailableReason(_ reason: String?) {
+        self.localUnavailableReason = reason
+        if let reason {
+            self.setState(.unavailable(mode: .local, reason: reason))
+        }
     }
 
     func refresh() async {
@@ -506,6 +521,10 @@ actor GatewayEndpointStore {
         case .local:
             self.cancelRemoteEnsure()
             guard await self.sourceIsCurrent(source, generation: generation) else { return }
+            if let reason = self.localUnavailableReason {
+                self.setState(.unavailable(mode: .local, reason: reason))
+                return
+            }
             let url = URL(string: "\(source.scheme)://\(source.localHost):\(source.localPort)")!
             self.publishReadyEndpoint(source: source, url: url)
         case .remote:

@@ -113,6 +113,7 @@ final class GatewayProcessManager {
     private var launchAgentReadinessRevision: UInt64 = 0
     private var launchAgentInstallGeneration: UInt64?
     private var launchAgentFreshInstallGeneration: UInt64?
+    private var profilePortConflict: String?
     private var lastObservedGatewayPID: Int32?
     /// Async readiness audits may outlive stop/restart. Only the current generation may publish
     /// their failure state or retain a PID for a later repair.
@@ -146,6 +147,16 @@ final class GatewayProcessManager {
             self.logger.info("gateway process skipped: remote mode active")
             return
         }
+        if active, self.profilePortConflict != nil {
+            self.profilePortConflict = nil
+            Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(nil) }
+        }
+        if active, let conflict = GatewayEnvironment.profileGatewayPortConflict() {
+            self.desiredActive = false
+            self.recordProfilePortConflict(conflict)
+            Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(conflict) }
+            return
+        }
         self.logger.debug("gateway active requested active=\(active)")
         self.desiredActive = active
         self.refreshEnvironmentStatus()
@@ -159,6 +170,7 @@ final class GatewayProcessManager {
     func ensureLaunchAgentEnabledIfNeeded() async -> Bool {
         guard !CommandResolver.connectionModeIsRemote() else { return false }
         guard self.desiredActive else { return false }
+        guard self.profilePortConflict == nil else { return false }
         if GatewayLaunchAgentManager.isLaunchAgentWriteDisabled() {
             self.appendLog("[gateway] launchd auto-enable skipped (attach-only)\n")
             self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
@@ -522,16 +534,9 @@ final class GatewayProcessManager {
         guard self.isCurrentGatewayStart(startGeneration) else { return true }
         let instanceText = instance.map { self.describe(instance: $0) }
         let hasListener = instance != nil
-        let managedProfilePID = AppProfile.current.isActive
-            ? await GatewayLaunchAgentManager.runningGatewayPID()
-            : nil
         if hasListener,
-           !Self.profileAllowsExistingGatewayAttachment(
-               profile: .current,
-               listenerPID: instance?.pid,
-               managedServicePID: managedProfilePID)
+           await !(self.profileOwnsGateway(instance, port: port))
         {
-            self.failProfilePortOwnership(port: port)
             return true
         }
 
@@ -546,12 +551,7 @@ final class GatewayProcessManager {
                 guard self.isCurrentGatewayStart(startGeneration) else { return true }
                 let attachedInstance = await PortGuardian.shared.describe(port: port)
                 guard self.isCurrentGatewayStart(startGeneration) else { return true }
-                if !Self.profileAllowsExistingGatewayAttachment(
-                    profile: .current,
-                    listenerPID: attachedInstance?.pid,
-                    managedServicePID: managedProfilePID)
-                {
-                    self.failProfilePortOwnership(port: port)
+                if await !(self.profileOwnsGateway(attachedInstance, port: port)) {
                     return true
                 }
                 let snap = decodeHealthSnapshot(from: data)
@@ -611,9 +611,29 @@ final class GatewayProcessManager {
         return listenerPID == managedServicePID
     }
 
-    private func failProfilePortOwnership(port: Int) {
+    private func profileOwnsGateway(_ instance: PortGuardian.Descriptor?, port: Int) async -> Bool {
+        guard AppProfile.current.isActive else { return true }
+        let managedPID = await GatewayLaunchAgentManager.runningGatewayPID()
+        guard Self.profileAllowsExistingGatewayAttachment(
+            profile: .current,
+            listenerPID: instance?.pid,
+            managedServicePID: managedPID)
+        else {
+            await self.failProfilePortOwnership(port: port)
+            return false
+        }
+        return true
+    }
+
+    private func failProfilePortOwnership(port: Int) async {
         let message = "Gateway port \(port) is already owned by another process or OpenClaw profile. " +
             "Set gateway.port to a free port for profile \(AppProfile.current.name ?? "named")."
+        self.recordProfilePortConflict(message)
+        await GatewayEndpointStore.shared.setLocalUnavailableReason(message)
+    }
+
+    private func recordProfilePortConflict(_ message: String) {
+        self.profilePortConflict = message
         self.status = .failed(message)
         self.lastFailureReason = message
         self.appendLog("[gateway] \(message)\n")
@@ -776,6 +796,7 @@ extension GatewayProcessManager {
                 _ = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs))
                 guard !Task.isCancelled else { return }
                 let instance = await PortGuardian.shared.describe(port: context.port)
+                guard await self.profileOwnsGateway(instance, port: context.port) else { return }
                 guard self.publishLaunchdGatewayReady(
                     instance: instance,
                     context: context,
@@ -1039,6 +1060,7 @@ extension GatewayProcessManager {
                 _ = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs))
                 guard !Task.isCancelled else { return false }
                 let instance = await PortGuardian.shared.describe(port: readinessPort)
+                guard await self.profileOwnsGateway(instance, port: readinessPort) else { return false }
                 return self.publishGatewayReadinessSuccess(
                     instance: instance,
                     startGeneration: startGeneration,

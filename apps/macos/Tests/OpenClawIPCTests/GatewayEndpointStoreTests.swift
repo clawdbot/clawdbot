@@ -267,6 +267,7 @@ struct GatewayEndpointStoreTests {
             token: token,
             password: { nil },
             localPort: { 18789 },
+            localUnavailableReason: { nil },
             remoteRouteIfRunning: remoteRouteIfRunning,
             remoteRouteIsCurrent: remoteRouteIsCurrent,
             canStartRemoteTunnel: canStartRemoteTunnel,
@@ -291,6 +292,27 @@ struct GatewayEndpointStoreTests {
         }
         let root: [String: Any] = gateway.isEmpty ? [:] : ["gateway": gateway]
         return ConnectionModeResolver.resolve(root: root, defaults: defaults)
+    }
+
+    @Test func `local conflict remains unavailable across refresh until cleared`() async throws {
+        let source = self.source(mode: .local)
+        let store = self.makeStore(sourceSnapshot: { source })
+
+        await store.setLocalUnavailableReason("Profile port conflict")
+        await store.refresh()
+        #expect(await store.currentState() == .unavailable(
+            mode: .local,
+            reason: "Profile port conflict"))
+        await #expect(throws: Error.self) {
+            _ = try await store.requireEndpoint()
+        }
+
+        await store.setLocalUnavailableReason(nil)
+        await store.refresh()
+        guard case .ready = await store.currentState() else {
+            Issue.record("Expected local endpoint to recover after conflict clears")
+            return
+        }
     }
 
     private func dashboardURL(

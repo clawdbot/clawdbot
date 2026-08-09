@@ -35,6 +35,42 @@ enum GatewayLaunchAgentManager {
             "Library/LaunchAgents/\(profile.gatewayLaunchAgentLabel).plist")
     }
 
+    static func conflictingProfileClaimOwner(
+        port: Int,
+        excludingLabel: String,
+        homeDirectory: URL) -> String?
+    {
+        let directory = homeDirectory.appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: directory.path) else { return nil }
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil)
+        else {
+            return "installed profile Gateway claims cannot be inspected"
+        }
+        for url in entries {
+            guard url.pathExtension == "plist" else { continue }
+            let label = url.deletingPathExtension().lastPathComponent
+            guard label != excludingLabel,
+                  let owner = self.profileOwner(forLaunchAgentLabel: label)
+            else { continue }
+            guard let snapshot = LaunchAgentPlist.snapshot(url: url), let claimedPort = snapshot.port else {
+                return "profile \"\(owner)\" has an unreadable Gateway reservation"
+            }
+            if claimedPort == port { return "profile \"\(owner)\"" }
+        }
+        return nil
+    }
+
+    private static func profileOwner(forLaunchAgentLabel label: String) -> String? {
+        if label == AppProfile(environment: [:]).gatewayLaunchAgentLabel { return "default" }
+        let prefix = "ai.openclaw."
+        guard label.hasPrefix(prefix) else { return nil }
+        let name = String(label.dropFirst(prefix.count))
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": name])
+        return profile.name == name && profile.gatewayLaunchAgentLabel == label ? name : nil
+    }
+
     private static var generatedEnvironmentDirectoryURL: URL {
         OpenClawPaths.stateDirURL.appendingPathComponent("service-env", isDirectory: true)
     }
