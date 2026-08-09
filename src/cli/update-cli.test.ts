@@ -1857,7 +1857,7 @@ describe("update-cli", () => {
     expect(runDaemonRestart).toHaveBeenCalledOnce();
     const completionCall = vi
       .mocked(spawnSync)
-      .mock.calls.find(([, args]) => args[1] === "completion");
+      .mock.calls.find(([, args]) => args?.[1] === "completion");
     expect(completionCall?.[2]?.env?.OPENCLAW_PROFILE).toBe("personal");
   });
 
