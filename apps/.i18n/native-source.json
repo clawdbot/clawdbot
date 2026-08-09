@@ -32514,14 +32514,6 @@
       "id": "native.apple.e7d1ee5662c1d646"
     },
     {
-      "kind": "ui-call",
-      "line": 1020,
-      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
-      "source": "Test",
-      "surface": "apple",
-      "id": "native.apple.0397fa643df26663"
-    },
-    {
       "kind": "ui-named-argument",
       "line": 74,
       "path": "apps/macos/Sources/OpenClaw/DeepLinks.swift",
