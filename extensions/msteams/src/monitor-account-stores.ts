@@ -1,9 +1,5 @@
-import {
-  createAccountScopedMSTeamsConversationStore,
-  createMSTeamsConversationStoreState,
-} from "./conversation-store-state.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import { createAccountScopedMSTeamsPollStore } from "./poll-store-scoped.js";
 import { createMSTeamsPollStoreState, type MSTeamsPollStore } from "./polls.js";
 
 export function createMSTeamsMonitorStores(
@@ -15,10 +11,7 @@ export function createMSTeamsMonitorStores(
 ): { conversationStore: MSTeamsConversationStore; pollStore: MSTeamsPollStore } {
   return {
     conversationStore:
-      overrides.conversationStore ??
-      createAccountScopedMSTeamsConversationStore(createMSTeamsConversationStoreState(), accountId),
-    pollStore:
-      overrides.pollStore ??
-      createAccountScopedMSTeamsPollStore(createMSTeamsPollStoreState(), accountId),
+      overrides.conversationStore ?? createMSTeamsConversationStoreState({ accountId }),
+    pollStore: overrides.pollStore ?? createMSTeamsPollStoreState({ accountId }),
   };
 }

@@ -24,24 +24,6 @@ const sendContextMockState = vi.hoisted(() => {
 
 vi.mock("./conversation-store-state.js", () => ({
   createMSTeamsConversationStoreState: () => sendContextMockState.store,
-  createAccountScopedMSTeamsConversationStore: (
-    store: typeof sendContextMockState.store,
-    accountId: string,
-  ) => {
-    if (accountId === "default") {
-      return store;
-    }
-    const prefix = `${accountId}:`;
-    return {
-      ...store,
-      get: (conversationId: string) => store.get(`${prefix}${conversationId}`),
-      remove: (conversationId: string) => store.remove(`${prefix}${conversationId}`),
-      upsert: (conversationId: string, reference: StoredConversationReference) =>
-        store.upsert(`${prefix}${conversationId}`, reference),
-      findPreferredDmByUserId: store.findPreferredDmByUserId,
-      list: store.list,
-    };
-  },
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -283,9 +265,7 @@ describe("resolveMSTeamsSendContext", () => {
       conversationId: "19:channel@thread.tacv2",
     });
 
-    expect(sendContextMockState.store.get).toHaveBeenCalledWith(
-      "secondary:19:channel@thread.tacv2",
-    );
+    expect(sendContextMockState.store.get).toHaveBeenCalledWith("19:channel@thread.tacv2");
     expect(sendContextMockState.loadMSTeamsSdkWithAuth).toHaveBeenCalledWith(
       {
         appId: "secondary-app-id",

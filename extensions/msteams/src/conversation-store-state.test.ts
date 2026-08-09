@@ -9,10 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  createAccountScopedMSTeamsConversationStore,
-  createMSTeamsConversationStoreState,
-} from "./conversation-store-state.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
@@ -154,7 +151,7 @@ describe("msteams conversation store (plugin state)", () => {
         user: { id: "default-user" },
       });
 
-      const accountStore = createAccountScopedMSTeamsConversationStore(baseStore, "19");
+      const accountStore = createMSTeamsConversationStoreState({ stateDir, accountId: "19" });
       await accountStore.upsert("19:account@thread.tacv2", {
         conversation: { conversationType: "personal" },
         channelId: "msteams",
@@ -186,7 +183,7 @@ describe("msteams conversation store (plugin state)", () => {
         user: { id: "legacy-user" },
       });
 
-      const defaultStore = createAccountScopedMSTeamsConversationStore(baseStore, "default");
+      const defaultStore = createMSTeamsConversationStoreState({ stateDir });
       await expect(defaultStore.get("legacy-conversation")).resolves.toMatchObject({
         conversation: { id: "legacy-conversation" },
         user: { id: "legacy-user" },
@@ -240,9 +237,11 @@ describe("msteams conversation store (plugin state)", () => {
 
   it("finds account-scoped personal DMs by AAD object id", async () => {
     await withTempDir("openclaw-msteams-store-", async (stateDir) => {
-      const store = createMSTeamsConversationStoreState({ stateDir });
-      const defaultStore = createAccountScopedMSTeamsConversationStore(store, "default");
-      const secondaryStore = createAccountScopedMSTeamsConversationStore(store, "secondary");
+      const defaultStore = createMSTeamsConversationStoreState({ stateDir });
+      const secondaryStore = createMSTeamsConversationStoreState({
+        stateDir,
+        accountId: "secondary",
+      });
 
       await defaultStore.upsert("default-dm", {
         conversation: { id: "default-dm", conversationType: "personal" },
@@ -282,6 +281,36 @@ describe("msteams conversation store (plugin state)", () => {
       await expect(defaultStore.list()).resolves.toEqual([
         expect.objectContaining({ conversationId: "default-dm" }),
       ]);
+    });
+  });
+
+  it("keeps each account's conversation retention quota independent", async () => {
+    await withTempDir("openclaw-msteams-store-", async (stateDir) => {
+      const defaultStore = createMSTeamsConversationStoreState({ stateDir });
+      const busyStore = createMSTeamsConversationStoreState({ stateDir, accountId: "busy" });
+      await defaultStore.upsert("default-conversation", {
+        conversation: { id: "default-conversation", conversationType: "personal" },
+        channelId: "msteams",
+        serviceUrl: "https://default.example.com",
+        user: { id: "default-user" },
+        lastSeenAt: "2026-01-01T00:00:00.000Z",
+      });
+
+      for (let index = 0; index <= 1000; index += 1) {
+        const id = `busy-${String(index).padStart(4, "0")}`;
+        await busyStore.upsert(id, {
+          conversation: { id, conversationType: "personal" },
+          channelId: "msteams",
+          serviceUrl: "https://busy.example.com",
+          user: { id: `busy-user-${index}` },
+          lastSeenAt: new Date(Date.UTC(2026, 1, 1, 0, 0, index)).toISOString(),
+        });
+      }
+
+      await expect(defaultStore.get("default-conversation")).resolves.toMatchObject({
+        user: { id: "default-user" },
+      });
+      await expect(busyStore.list()).resolves.toHaveLength(1000);
     });
   });
 

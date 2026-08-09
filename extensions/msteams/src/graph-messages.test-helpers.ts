@@ -25,7 +25,6 @@ vi.mock("./conversation-store-state.js", () => ({
   createMSTeamsConversationStoreState: () => ({
     findPreferredDmByUserId: graphMessagesMockState.findPreferredDmByUserId,
   }),
-  createAccountScopedMSTeamsConversationStore: (store: unknown) => store,
 }));
 
 export const TOKEN = "test-graph-token";

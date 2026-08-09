@@ -1,10 +1,7 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveDefaultMSTeamsAccountId } from "./accounts.js";
-import {
-  createAccountScopedMSTeamsConversationStore,
-  createMSTeamsConversationStoreState,
-} from "./conversation-store-state.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 
 function stripTargetPrefix(raw: string): string {
   const trimmed = raw.trim();
@@ -32,10 +29,7 @@ export async function resolveGraphConversationId(
     options?.accountId ??
       (options?.cfg ? resolveDefaultMSTeamsAccountId(options.cfg) : DEFAULT_ACCOUNT_ID),
   );
-  const store = createAccountScopedMSTeamsConversationStore(
-    createMSTeamsConversationStoreState(),
-    accountId,
-  );
+  const store = createMSTeamsConversationStoreState({ accountId });
   const found = await store.findPreferredDmByUserId(cleaned);
   if (!found) {
     throw new Error(

@@ -16,18 +16,9 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("./polls.js", () => ({
-  createMSTeamsPollStoreState: () => ({
-    createPoll: mocks.createPoll,
-  }),
-}));
-
-vi.mock("./poll-store-scoped.js", () => ({
-  createAccountScopedMSTeamsPollStore: (
-    store: { createPoll: (poll: unknown) => Promise<void> },
-    accountId: string,
-  ) => ({
+  createMSTeamsPollStoreState: ({ accountId }: { accountId: string }) => ({
     createPoll: async (poll: unknown) =>
-      await store.createPoll({
+      await mocks.createPoll({
         ...(poll && typeof poll === "object" && !Array.isArray(poll) ? poll : {}),
         accountId,
       }),

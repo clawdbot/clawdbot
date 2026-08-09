@@ -19,10 +19,7 @@ import {
   validateMSTeamsProactiveServiceUrlBoundary,
   type MSTeamsSdkCloudOptions,
 } from "./cloud.js";
-import {
-  createAccountScopedMSTeamsConversationStore,
-  createMSTeamsConversationStoreState,
-} from "./conversation-store-state.js";
+import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type {
   MSTeamsConversationStore,
   StoredConversationReference,
@@ -191,10 +188,7 @@ export async function resolveMSTeamsSendContext(params: {
     throw new Error("msteams credentials not configured");
   }
 
-  const store = createAccountScopedMSTeamsConversationStore(
-    createMSTeamsConversationStoreState(),
-    accountId,
-  );
+  const store = createMSTeamsConversationStoreState({ accountId });
 
   // Parse recipient and find conversation reference
   const recipient = parseRecipient(params.to);
