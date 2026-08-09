@@ -728,40 +728,8 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("paired node reconnects", (getStarted) => {
-    test("preserves a fresh v4 node pairing tuple for Gateway rollback", async () => {
-      const node = loadDeviceIdentity("node-v4-pairing-rollback");
-      const current = await connectNodeClient({
-        port: getStarted().port,
-        deviceIdentity: node.identity,
-        commands: [],
-      });
-      await current.stopAndWait();
-      expect(await getPairedDevice(node.identity.deviceId)).toMatchObject({
-        platform: "darwin",
-        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-      });
-      expect((await getPairedDevice(node.identity.deviceId))?.deviceFamily).toBeUndefined();
-
-      const legacy = await connectNodeClient({
-        port: getStarted().port,
-        deviceIdentity: node.identity,
-        commands: [],
-        protocol: "legacy",
-      });
-      try {
-        expect(
-          (await listDevicePairing()).pending.find(
-            (entry) => entry.deviceId === node.identity.deviceId,
-          ),
-        ).toBeUndefined();
-      } finally {
-        await legacy.stopAndWait();
-      }
-    });
-
-    test("preserves a fresh v3 node pairing tuple for Gateway rollback", async () => {
-      const legacyNode = loadDeviceIdentity("node-v3-pairing-rollback");
+    test("normalizes a fresh v3 node pairing to canonical metadata", async () => {
+      const legacyNode = loadDeviceIdentity("node-v3-pairing-normalization");
       const connected = await connectNodeClient({
         port: getStarted().port,
         deviceIdentity: legacyNode.identity,
@@ -770,11 +738,11 @@ describe("gateway node pairing authorization", () => {
       });
       try {
         expect(await getPairedDevice(legacyNode.identity.deviceId)).toMatchObject({
-          platform: "darwin",
+          platform: "macos",
+          deviceFamily: "Mac",
           clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
           clientMode: GATEWAY_CLIENT_MODES.NODE,
         });
-        expect((await getPairedDevice(legacyNode.identity.deviceId))?.deviceFamily).toBeUndefined();
         expect(
           (await listDevicePairing()).pending.find(
             (entry) => entry.deviceId === legacyNode.identity.deviceId,
@@ -782,46 +750,6 @@ describe("gateway node pairing authorization", () => {
         ).toBeUndefined();
       } finally {
         await connected.stopAndWait();
-      }
-    });
-
-    test("migrates an existing v4 node pairing tuple for Gateway rollback", async () => {
-      const pairedNode = await pairDeviceIdentity({
-        name: "node-existing-v4-pairing-rollback",
-        role: "node",
-        scopes: [],
-        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-        platform: "macos",
-        deviceFamily: "Mac",
-      });
-      const current = await connectNodeClient({
-        port: getStarted().port,
-        deviceIdentity: pairedNode.identity,
-        commands: [],
-      });
-      await current.stopAndWait();
-      expect(await getPairedDevice(pairedNode.identity.deviceId)).toMatchObject({
-        platform: "darwin",
-        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-      });
-      expect((await getPairedDevice(pairedNode.identity.deviceId))?.deviceFamily).toBeUndefined();
-
-      const legacy = await connectNodeClient({
-        port: getStarted().port,
-        deviceIdentity: pairedNode.identity,
-        commands: [],
-        protocol: "legacy",
-      });
-      try {
-        expect(
-          (await listDevicePairing()).pending.find(
-            (entry) => entry.deviceId === pairedNode.identity.deviceId,
-          ),
-        ).toBeUndefined();
-      } finally {
-        await legacy.stopAndWait();
       }
     });
 
@@ -844,9 +772,9 @@ describe("gateway node pairing authorization", () => {
       });
       try {
         expect(await getPairedDevice(pairedNode.identity.deviceId)).toMatchObject({
-          platform: "darwin",
+          platform: "macos",
+          deviceFamily: "Mac",
         });
-        expect((await getPairedDevice(pairedNode.identity.deviceId))?.deviceFamily).toBeUndefined();
         expect(
           (await listDevicePairing()).pending.filter(
             (entry) => entry.deviceId === pairedNode.identity.deviceId,

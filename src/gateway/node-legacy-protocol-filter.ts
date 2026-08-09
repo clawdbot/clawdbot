@@ -33,14 +33,6 @@ const LEGACY_NODE_HOST_DESKTOP_METADATA: Readonly<
   windows: { platform: "windows", deviceFamily: "Windows" },
 };
 
-const RELEASED_V3_NODE_HOST_PLATFORMS: Readonly<Record<string, string>> = {
-  darwin: "darwin",
-  linux: "linux",
-  macos: "darwin",
-  win32: "win32",
-  windows: "win32",
-};
-
 /** Normalizes desktop aliases used by protocol-v3-compatible node hosts. */
 export function normalizeNodeHostCompatibilityMetadata(
   client: ConnectParams["client"],
@@ -64,19 +56,6 @@ export function normalizeNodeHostCompatibilityMetadata(
     platform: metadata.platform,
     deviceFamily: deviceFamily || metadata.deviceFamily,
   };
-}
-
-/** Stores the tuple a released v3 node host will reproduce after Gateway rollback. */
-export function resolveNodeHostPairingMetadata(
-  client: ConnectParams["client"],
-): Pick<ConnectParams["client"], "platform" | "deviceFamily"> {
-  if (client.id !== GATEWAY_CLIENT_IDS.NODE_HOST || client.mode !== GATEWAY_CLIENT_MODES.NODE) {
-    return { platform: client.platform, deviceFamily: client.deviceFamily };
-  }
-  const platform = RELEASED_V3_NODE_HOST_PLATFORMS[client.platform];
-  return platform
-    ? { platform, deviceFamily: undefined }
-    : { platform: client.platform, deviceFamily: client.deviceFamily };
 }
 
 export function filterLegacyNodeProtocolFeatures(params: {

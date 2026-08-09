@@ -29,10 +29,7 @@ import {
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { isBrowserCopilotClient } from "../../../utils/message-channel.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "../../device-pairing-prune.js";
-import {
-  normalizeNodeHostCompatibilityMetadata,
-  resolveNodeHostPairingMetadata,
-} from "../../node-legacy-protocol-filter.js";
+import { normalizeNodeHostCompatibilityMetadata } from "../../node-legacy-protocol-filter.js";
 import { shouldAutoApproveNodePairingFromTrustedCidrs } from "../../node-pairing-auto-approve.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { formatForLog } from "../../ws-log.js";
@@ -132,10 +129,7 @@ export async function authorizeGatewayConnectDevice(
   let allowControlUiDeviceAuthMigrationForUnpairedInstall = false;
   let pairedClientId: string | undefined;
   let pairedBrowserOrigin: string | undefined;
-  // Persist the tuple a released v3 node host will reproduce after rollback.
-  // The active v4 session remains canonical below.
-  const pairingMetadata = resolveNodeHostPairingMetadata(connectParams.client);
-  // Canonicalize the active v4 session before comparing existing pairings.
+  // Canonicalize protocol-v3 desktop aliases before pairing persistence and comparison.
   connectParams.client = normalizeNodeHostCompatibilityMetadata(connectParams.client);
   const browserCopilotOrigin = isBrowserCopilotClient(connectParams.client)
     ? normalizeChromeExtensionOrigin(requestOrigin)
@@ -216,8 +210,8 @@ export async function authorizeGatewayConnectDevice(
     };
     const clientPairingMetadata = {
       displayName: connectParams.client.displayName,
-      platform: pairingMetadata.platform,
-      deviceFamily: pairingMetadata.deviceFamily,
+      platform: connectParams.client.platform,
+      deviceFamily: connectParams.client.deviceFamily,
       clientId: connectParams.client.id,
       clientMode: connectParams.client.mode,
       ...(browserCopilotOrigin ? { browserOrigin: browserCopilotOrigin } : {}),

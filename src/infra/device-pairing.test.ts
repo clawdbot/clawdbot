@@ -1052,9 +1052,6 @@ describe("device pairing tokens", () => {
   test("metadata refresh can update display metadata but not approved role and scope fields", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedNodeDevice(baseDir);
-    await mutatePairedDevice(baseDir, "node-1", (device) => {
-      device.deviceFamily = "Mac";
-    });
 
     await updatePairedDeviceMetadata(
       "node-1",
@@ -1062,7 +1059,6 @@ describe("device pairing tokens", () => {
         displayName: "renamed-node",
         operatorLabel: "Kitchen Mac",
         platform: "iOS 26.5.0",
-        deviceFamily: undefined,
         role: "operator",
         roles: ["operator"],
         scopes: ["operator.admin"],
@@ -1077,7 +1073,6 @@ describe("device pairing tokens", () => {
     expect(paired?.displayName).toBe("renamed-node");
     expect(paired?.operatorLabel).toBe("Kitchen Mac");
     expect(paired?.platform).toBe("iOS 26.5.0");
-    expect(paired?.deviceFamily).toBeUndefined();
     expect(paired?.publicKey).toBe("public-key-node-1");
     expect(paired?.role).toBe("node");
     expect(paired?.roles).toEqual(["node"]);
