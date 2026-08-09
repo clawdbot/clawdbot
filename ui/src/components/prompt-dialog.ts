@@ -3,7 +3,7 @@ import { html, nothing, render } from "lit";
 import { t } from "../i18n/index.ts";
 import "./modal-dialog.ts";
 
-export type PromptDialogOptions = {
+type PromptDialogOptions = {
   title: string;
   fieldLabel: string;
   confirmLabel: string;
