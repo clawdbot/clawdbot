@@ -247,23 +247,26 @@ export function createHooksRequestHandler(
       return await awaitHookReplay(existing, req, res);
     }
     const abortController = new AbortController();
-    let pending!: PendingHookReplay;
-    const promise = Promise.resolve()
-      .then(() => dispatch(abortController.signal))
-      .then((result) => {
-        if (result.ok) {
-          rememberHookRunId(key, result.runId, now);
-        }
-        return result;
-      })
-      .finally(() => {
-        pending.abortController = undefined;
-        // Failed admission stays retryable; identity guards against deleting a newer replay.
-        if (key && pendingHookReplays.get(key) === pending) {
-          pendingHookReplays.delete(key);
-        }
-      });
-    pending = { promise, abortController, key, waiters: 0 };
+    const pending: PendingHookReplay = {
+      abortController,
+      key,
+      waiters: 0,
+      promise: Promise.resolve()
+        .then(() => dispatch(abortController.signal))
+        .then((result) => {
+          if (result.ok) {
+            rememberHookRunId(key, result.runId, now);
+          }
+          return result;
+        })
+        .finally(() => {
+          pending.abortController = undefined;
+          // Failed admission stays retryable; identity guards against deleting a newer replay.
+          if (key && pendingHookReplays.get(key) === pending) {
+            pendingHookReplays.delete(key);
+          }
+        }),
+    };
     if (key) {
       pendingHookReplays.set(key, pending);
     }

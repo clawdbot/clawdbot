@@ -101,11 +101,11 @@ describe("gateway hook admission", () => {
       const accepted = createDeferred();
       const acceptedCompletion = createDeferred();
       const acceptedFinished = createDeferred();
-      const mapSet = Map.prototype.set;
+      const mapSet = Reflect.get(Map.prototype, "set") as typeof Map.prototype.set;
       let queueEntries = 0;
       vi.spyOn(Map.prototype, "set").mockImplementation(
         function (this: Map<unknown, unknown>, key, value) {
-          const result = mapSet.call(this, key, value);
+          const result = Reflect.apply(mapSet, this, [key, value]);
           if (
             key === "agent:main:hook:proof:disconnect" &&
             value instanceof Promise &&
@@ -116,10 +116,13 @@ describe("gateway hook admission", () => {
           return result;
         },
       );
-      const abort = AbortController.prototype.abort;
+      const abort = Reflect.get(
+        AbortController.prototype,
+        "abort",
+      ) as typeof AbortController.prototype.abort;
       vi.spyOn(AbortController.prototype, "abort").mockImplementation(
         function (this: AbortController, reason) {
-          abort.call(this, reason);
+          Reflect.apply(abort, this, [reason]);
           const message =
             typeof reason === "object" && reason !== null && "message" in reason
               ? String(reason.message)
@@ -246,10 +249,10 @@ describe("gateway hook admission", () => {
           `overlap-${testCase.name}`,
         );
         await waitForCronIsolatedRuns(1);
-        const mapGet = Map.prototype.get;
+        const mapGet = Reflect.get(Map.prototype, "get") as typeof Map.prototype.get;
         vi.spyOn(Map.prototype, "get").mockImplementation(
           function (this: Map<unknown, unknown>, key) {
-            const value = mapGet.call(this, key);
+            const value = Reflect.apply(mapGet, this, [key]);
             if (
               typeof value === "object" &&
               value !== null &&
