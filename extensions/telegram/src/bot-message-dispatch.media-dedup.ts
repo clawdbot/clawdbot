@@ -1,4 +1,4 @@
-// Telegram plugin module implements bot message dispatch.media dedup behavior.
+// Keep sent-block media out of both delivery fields so outbound planning cannot restore it.
 export function deduplicateBlockSentMedia<
   T extends { mediaUrl?: string; mediaUrls?: string[]; text?: string },
 >(payload: T, sentBlockMediaUrls: ReadonlySet<string>): T | undefined {
@@ -12,9 +12,10 @@ export function deduplicateBlockSentMedia<
   if (remainingMedia.length === 0 && !payload.text) {
     return undefined;
   }
+  const mediaUrl = payload.mediaUrl;
   return {
     ...payload,
     mediaUrls: remainingMedia,
-    mediaUrl: remainingMedia.length === 0 ? undefined : payload.mediaUrl,
+    mediaUrl: mediaUrl && sentBlockMediaUrls.has(mediaUrl.trim()) ? undefined : mediaUrl,
   };
 }
