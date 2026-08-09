@@ -16,10 +16,8 @@ import {
 import {
   applyWorkspaceDirectoryChanges,
   assertActualWorkspaceManifest,
-  changedPaths,
   ConcurrentWorkspacePathError,
   hasReplacedBaseEntryAncestor,
-  manifestNodes,
   preflightWorkspaceApply,
   readActualWorkspaceManifest,
   retainedConflictPaths,
@@ -31,6 +29,7 @@ import {
   reconciliationEntries,
 } from "./workspace-reconcile-derived-paths.js";
 import { entryMatches } from "./workspace-reconcile-fs.js";
+import { changedPaths, manifestNodes } from "./workspace-reconcile-plan.js";
 import {
   applyWorkspacePatch,
   createWorkspacePatch,

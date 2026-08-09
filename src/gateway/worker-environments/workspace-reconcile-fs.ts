@@ -7,15 +7,71 @@ import { runCommandBuffered } from "../../process/exec.js";
 import { activeWorkspaceHashContext, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import {
   gitFileMode,
+  MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
 const PATCH_TIMEOUT_MS = 10 * 60_000;
+const MAX_RECONCILIATION_PATH_BYTES = 64 * 1024 * 1024;
 
 export function localPath(root: string, relative: string): string {
   return path.join(root, ...relative.split("/"));
+}
+
+export function isPortableRootContainedSymlink(
+  root: string,
+  entryPath: string,
+  target: string,
+): boolean {
+  if (
+    !target ||
+    target.includes("\\") ||
+    path.posix.isAbsolute(target) ||
+    path.win32.parse(target).root !== ""
+  ) {
+    return false;
+  }
+  const resolved = path.resolve(path.dirname(localPath(root, entryPath)), target);
+  return resolved === root || resolved.startsWith(`${root}${path.sep}`);
+}
+
+export async function localWorkspaceDescendantPaths(
+  root: string,
+  entryPaths: readonly string[],
+): Promise<string[]> {
+  const paths: string[] = [];
+  const pending = [...entryPaths];
+  let pathBytes = 0;
+  let enumeratedEntries = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    const names: string[] = [];
+    for await (const entry of await fs.opendir(localPath(root, directory))) {
+      names.push(entry.name);
+      enumeratedEntries += 1;
+      if (enumeratedEntries > MAX_RECONCILIATION_ENTRIES) {
+        throw new Error("Gateway workspace manifest has too many entries");
+      }
+    }
+    for (const name of names.toSorted()) {
+      const childPath = `${directory}/${name}`;
+      pathBytes += Buffer.byteLength(childPath);
+      if (pathBytes > MAX_RECONCILIATION_PATH_BYTES) {
+        throw new Error("Gateway workspace manifest paths exceed their byte limit");
+      }
+      if (isDerivedWorkspacePath(childPath)) {
+        continue;
+      }
+      paths.push(childPath);
+      const stats = await fs.lstat(localPath(root, childPath));
+      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+        pending.push(childPath);
+      }
+    }
+  }
+  return paths;
 }
 
 type WorkspaceFileSnapshot =
@@ -26,6 +82,7 @@ async function readOpenedWorkspaceFile(params: {
   handle: Awaited<ReturnType<typeof fs.open>>;
   expectedPath: string;
   root?: string;
+  maxBytes: number;
 }): Promise<WorkspaceFileSnapshot> {
   const { memo: hashMemo, metrics } = activeWorkspaceHashContext() ?? {};
   const before = await params.handle.stat({ bigint: true });
@@ -33,7 +90,7 @@ async function readOpenedWorkspaceFile(params: {
   if (!before.isFile() || (params.root && !isPathInside(params.root, realPath))) {
     throw new Error("Gateway workspace file changed while it was being read");
   }
-  if (before.size > BigInt(MAX_RECONCILIATION_FILE_BYTES)) {
+  if (before.size > BigInt(params.maxBytes)) {
     return { type: "unsupported" };
   }
   const identity = workspaceStatIdentity("gateway", before);
@@ -54,7 +111,7 @@ async function readOpenedWorkspaceFile(params: {
         break;
       }
       size += bytesRead;
-      if (size > MAX_RECONCILIATION_FILE_BYTES) {
+      if (size > params.maxBytes) {
         return { type: "unsupported" };
       }
       hash.update(buffer.subarray(0, bytesRead));
@@ -81,6 +138,7 @@ async function readOpenedWorkspaceFile(params: {
 export async function readWorkspaceFileSnapshot(
   root: string,
   entryPath: string,
+  maxBytes = MAX_RECONCILIATION_FILE_BYTES,
 ): Promise<WorkspaceFileSnapshot> {
   const absolute = localPath(root, entryPath);
   const handle = await fs.open(
@@ -88,11 +146,7 @@ export async function readWorkspaceFileSnapshot(
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
   );
   try {
-    return await readOpenedWorkspaceFile({
-      handle,
-      expectedPath: absolute,
-      root,
-    });
+    return await readOpenedWorkspaceFile({ handle, expectedPath: absolute, root, maxBytes });
   } finally {
     await handle.close();
   }
@@ -104,7 +158,11 @@ async function readAbsoluteFileSnapshot(absolute: string): Promise<WorkspaceFile
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
   );
   try {
-    return await readOpenedWorkspaceFile({ handle, expectedPath: absolute });
+    return await readOpenedWorkspaceFile({
+      handle,
+      expectedPath: absolute,
+      maxBytes: MAX_RECONCILIATION_FILE_BYTES,
+    });
   } finally {
     await handle.close();
   }

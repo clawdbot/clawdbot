@@ -21,6 +21,7 @@ import type { WorkerEnvironmentService } from "./worker-environments/service.js"
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/workspace-reconcile.js";
+import { preflightWorkerWorkspace } from "./worker-environments/workspace-sync-local.js";
 import { createWorkerWorkspaceConflictTranscriptHandlers } from "./worker-workspace-conflict-transcript.js";
 
 const WORKER_PLACEMENT_RECONCILE_INTERVAL_MS = 60_000;
@@ -265,6 +266,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
                 `Session ${sessionKey} runtime changed to ${currentRuntime} before cloud worker dispatch. Retry.`,
               );
             }
+            await preflightWorkerWorkspace({ localPath: worktree.path });
             placement = startDispatch();
             clearSessionQueues(lifecycleIdentities);
             params.revokeSessionAuthority({

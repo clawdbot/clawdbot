@@ -19,6 +19,7 @@ import {
   recoverAcceptedWorkspacePublication,
 } from "./workspace-accepted-sync.js";
 import { registerWorkspaceReconcileReporter } from "./workspace-finalize.js";
+import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-manifest.js";
 import {
   createWorkspaceReconcileMetrics,
   MAX_WORKSPACE_HASH_MEMO_BYTES,
@@ -108,8 +109,7 @@ export function createWorkerWorkspaceActions(
     return prepared;
   };
 
-  const runTask = (argv: string[], commandOptions: CommandOptions): Promise<SpawnResult> =>
-    track(options.runner.run(argv, commandOptions));
+  const runTask = (argv: string[], opts: CommandOptions) => track(options.runner.run(argv, opts));
 
   const { runBoundedInboundRsync, runRsync } = createWorkerWorkspaceRsyncTransport({
     ownerSignal: options.ownerSignal,
@@ -217,6 +217,7 @@ export function createWorkerWorkspaceActions(
 
         gitTransferListPath = await createGitTransferList({
           gitRoot,
+          baseCommit,
           temporaryDirectory: path.join(temporaryDirectory, "transfer"),
           signal: options.ownerSignal,
           timeoutMs: WORKSPACE_TIMEOUT_MS,
@@ -444,7 +445,7 @@ export function createWorkerWorkspaceActions(
           "--archive",
           "--no-recursive",
           "--checksum",
-          `--max-size=${MAX_RECONCILIATION_FILE_BYTES}`,
+          `--max-size=${MAX_WORKSPACE_MANIFEST_BYTES}`,
           `--bwlimit=${INBOUND_RSYNC_BW_LIMIT_KIB}`,
           "-e",
           rsyncSsh,
@@ -454,7 +455,7 @@ export function createWorkerWorkspaceActions(
         ],
         destinationRoot: manifestRoot,
         entryLimit: 1,
-        totalByteLimit: MAX_RECONCILIATION_FILE_BYTES,
+        totalByteLimit: MAX_WORKSPACE_MANIFEST_BYTES,
       });
       if (!success(baseManifestTransfer)) {
         throw workspaceSyncError(baseManifestTransfer);
@@ -462,8 +463,7 @@ export function createWorkerWorkspaceActions(
       const baseRaw = await readTransferredManifest(baseManifestPath);
       const base = parseWorkerWorkspaceManifest(baseRaw, request.baseManifestRef);
       await fs.rm(baseManifestPath);
-      // Finish or undo any interrupted accepted-state publication before measuring
-      // the current worker tree; otherwise reconciliation would plan from a partial swap.
+      // Recover interrupted publication before measuring; a partial swap is not a planning base.
       await recoverAcceptedWorkspacePublication({
         runWorkspaceCommand,
         remoteWorkspaceDir: request.remoteWorkspaceDir,
@@ -505,7 +505,7 @@ export function createWorkerWorkspaceActions(
             "--archive",
             "--no-recursive",
             "--checksum",
-            `--max-size=${MAX_RECONCILIATION_FILE_BYTES}`,
+            `--max-size=${MAX_WORKSPACE_MANIFEST_BYTES}`,
             `--bwlimit=${INBOUND_RSYNC_BW_LIMIT_KIB}`,
             "-e",
             rsyncSsh,
@@ -515,7 +515,7 @@ export function createWorkerWorkspaceActions(
           ],
           destinationRoot: manifestRoot,
           entryLimit: 1,
-          totalByteLimit: MAX_RECONCILIATION_FILE_BYTES,
+          totalByteLimit: MAX_WORKSPACE_MANIFEST_BYTES,
         });
         if (!success(currentManifestTransfer)) {
           throw workspaceSyncError(currentManifestTransfer);
