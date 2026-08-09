@@ -14,8 +14,11 @@ import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/s
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
+import type { EmbeddedStateSignalProcess } from "../infra/embedded-state-lock.js";
+import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
@@ -598,7 +601,43 @@ function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
   };
 }
 
+function formatActiveGatewayTuiRefusal(identity: GatewayLockIdentity): string {
+  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Run without --local to use it, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
+}
+
+/** Hold canonical state ownership for the complete lifetime of a local TUI. */
+export async function withEmbeddedTuiStateLock<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  deps: {
+    gatewayLockOptions?: GatewayLockOptions;
+    process?: EmbeddedStateSignalProcess;
+  } = {},
+): Promise<T> {
+  const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
+    await import("../infra/embedded-state-lock.js");
+  const signalBridge = createEmbeddedStateSignalBridge(deps.process ?? process);
+  let stateLock: Awaited<ReturnType<typeof acquireEmbeddedStateLock>> | undefined;
+  try {
+    stateLock = await acquireEmbeddedStateLock({
+      options: deps.gatewayLockOptions,
+      signal: signalBridge.signal,
+      formatActiveGatewayRefusal: formatActiveGatewayTuiRefusal,
+    });
+    return await run(signalBridge.signal);
+  } finally {
+    await stateLock?.release();
+    signalBridge.dispose();
+  }
+}
+
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
+  if (opts.local === true && opts.backend === undefined) {
+    return await withEmbeddedTuiStateLock(async () => await runTuiUnlocked(opts));
+  }
+  return await runTuiUnlocked(opts);
+}
+
+async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
   const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
   const cliInvocation = resolveCurrentOpenClawCliInvocation([]);

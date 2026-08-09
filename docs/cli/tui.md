@@ -77,6 +77,10 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
   `agent:<id>:...`).
 - Local mode uses the embedded agent runtime directly. Most local tools work,
   but Gateway-only features are unavailable.
+- Local mode requires exclusive ownership of the configured state directory. It
+  refuses to start while a Gateway or another embedded writer owns that state;
+  run without `--local` to use the active Gateway, or stop it first with
+  `openclaw gateway stop`.
 - Local mode adds `/auth [provider]` to the TUI command surface.
 - Plugin approval gates still apply in local mode: tools that require approval
   prompt for a decision in the terminal, nothing is silently auto-approved.
