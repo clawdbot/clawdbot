@@ -17,11 +17,11 @@ import {
   finalizeHeartbeatOutcome,
 } from "./heartbeat-runner-delivery.js";
 import {
-  invokeHeartbeatAgentRun,
   prepareHeartbeatRunStage,
   resolveHeartbeatWakeStage,
   type HeartbeatRunOptions,
 } from "./heartbeat-runner-execution.js";
+import { invokeHeartbeatAgentRun } from "./heartbeat-runner-invoke.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import type { HeartbeatRunResult } from "./heartbeat-wake-contracts.js";
 import { HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } from "./heartbeat-wake.js";
