@@ -101,7 +101,6 @@ type ChatHistoryPaneRequests = {
   branchVersion: number;
   subscriptionGeneration: number;
   pendingSubscriptionReleases: Set<SessionMessageSubscription>;
-  pendingTerminalRefreshRequestKey?: string;
   inFlightHistory?: InFlightChatHistoryRequest;
 };
 
@@ -172,7 +171,6 @@ function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
   requests.inFlightHistory = undefined;
-  requests.pendingTerminalRefreshRequestKey = undefined;
   state.chatLoading = false;
   state.chatHistoryAnchorActive = false;
   state.chatHistoryAnchorPending = null;
@@ -281,8 +279,13 @@ export type ChatState = {
   chatMessagesBySession?: ChatMessageCache;
   /** True while the pane renders a one-shot historical window instead of its canonical tail. */
   chatHistoryAnchorActive?: boolean;
-  /** Owns a one-shot historical request before its projection is rendered. */
-  chatHistoryAnchorPending?: (SessionHistoryAnchor & { requestKey: string }) | null;
+  /** Owns a one-shot historical view until its selected message is visibly centered. */
+  chatHistoryAnchorPending?:
+    | (SessionHistoryAnchor & {
+        requestKey: string;
+        terminalRefreshPending?: boolean;
+      })
+    | null;
   /** Active leaf of the history snapshot currently rendered by this pane. */
   chatDisplayedLeafEntryId?: string | null;
   chatThinkingLevel: string | null;
@@ -331,12 +334,29 @@ export function isChatHistoryAnchorIsolated(
 }
 
 export function deferPendingChatHistoryAnchorTerminalRefresh(state: ChatState): boolean {
-  const requestKey = state.chatHistoryAnchorPending?.requestKey;
-  if (!requestKey) {
+  const pending = state.chatHistoryAnchorPending;
+  if (!pending) {
     return false;
   }
-  getChatHistoryPaneRequests(state).pendingTerminalRefreshRequestKey = requestKey;
+  pending.terminalRefreshPending = true;
   return true;
+}
+
+export function completeChatHistoryAnchorVisibility(
+  state: ChatState,
+  anchor: SessionHistoryAnchor,
+): boolean {
+  const pending = state.chatHistoryAnchorPending;
+  if (
+    state.chatHistoryAnchorActive !== true ||
+    !pending ||
+    pending.sessionId !== anchor.sessionId ||
+    pending.messageId !== anchor.messageId
+  ) {
+    return false;
+  }
+  state.chatHistoryAnchorPending = null;
+  return pending.terminalRefreshPending === true;
 }
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -1472,7 +1492,7 @@ export async function loadChatHistory(
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
   const requestKey = `${connectionEpoch}\u0000${method}\u0000${sessionKey}\u0000${requestAgentId ?? ""}\u0000${historyAnchor?.sessionId ?? ""}\u0000${historyAnchor?.messageId ?? ""}\u0000${CHAT_HISTORY_REQUEST_LIMIT}`;
-  if (historyAnchor) {
+  if (historyAnchor && state.chatHistoryAnchorPending?.requestKey !== requestKey) {
     state.chatHistoryAnchorPending = { ...historyAnchor, requestKey };
   }
   const requests = getChatHistoryPaneRequests(state);
@@ -1503,25 +1523,9 @@ export async function loadChatHistory(
     historyAnchor,
     requestKey,
   );
-  // The async loader acquires its history version before its first await.
-  const requestVersion = requests.historyVersion;
   const promise = pendingRequest.finally(() => {
     if (requests.inFlightHistory?.promise === promise) {
       requests.inFlightHistory = undefined;
-    }
-    const ownsPendingTerminalRefresh =
-      historyAnchor !== undefined &&
-      requests.pendingTerminalRefreshRequestKey === requestKey &&
-      requests.historyVersion === requestVersion &&
-      state.client === client &&
-      state.connected &&
-      state.connectionEpoch === connectionEpoch &&
-      visibleSessionMatches(state, sessionKey, requestAgentId);
-    if (requests.pendingTerminalRefreshRequestKey === requestKey) {
-      requests.pendingTerminalRefreshRequestKey = undefined;
-    }
-    if (ownsPendingTerminalRefresh) {
-      void loadChatHistory(state).finally(() => state.requestUpdate?.());
     }
   });
   requests.inFlightHistory = {
@@ -1603,6 +1607,7 @@ async function loadChatHistoryUncached(
   historyAnchor: SessionHistoryAnchor | undefined,
   requestKey: string,
 ): Promise<ChatHistoryResult | undefined> {
+  let anchorProjectionApplied = false;
   const ownership = beginChatHistoryRequest(
     state,
     client,
@@ -1736,9 +1741,7 @@ async function loadChatHistoryUncached(
       },
     );
     state.chatHistoryAnchorActive = Boolean(historyAnchor);
-    if (state.chatHistoryAnchorPending?.requestKey === requestKey) {
-      state.chatHistoryAnchorPending = null;
-    }
+    anchorProjectionApplied = Boolean(historyAnchor);
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
       state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
@@ -1937,7 +1940,11 @@ async function loadChatHistoryUncached(
       setChatError(state, String(err));
     }
   } finally {
-    if (historyAnchor && state.chatHistoryAnchorPending?.requestKey === requestKey) {
+    if (
+      historyAnchor &&
+      !anchorProjectionApplied &&
+      state.chatHistoryAnchorPending?.requestKey === requestKey
+    ) {
       state.chatHistoryAnchorPending = null;
     }
     if (ownsChatHistoryRequest(state, ownership)) {

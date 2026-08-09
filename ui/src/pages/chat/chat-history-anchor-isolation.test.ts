@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-history.ts";
+import {
+  completeChatHistoryAnchorVisibility,
+  loadChatHistory,
+  type ChatHistoryResult,
+  type ChatState,
+} from "./chat-history.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
@@ -81,12 +86,15 @@ describe("historical transcript anchor isolation", () => {
     resolveAnchor({ messages: [historical], sessionId: "session-history" });
     await load;
 
-    expect(state.chatHistoryAnchorPending).toBeNull();
+    expect(state.chatHistoryAnchorPending).toMatchObject({
+      sessionId: "session-history",
+      messageId: "historical-hit",
+    });
     expect(state.chatHistoryAnchorActive).toBe(true);
     expect(state.chatMessages).toEqual([historical]);
   });
 
-  it("replays a terminal refresh after the matching pending anchor settles", async () => {
+  it("replays a terminal refresh only after the matching anchor is visibly complete", async () => {
     const current = message("user", "current tail", "current-tail", 9);
     const historical = message("user", "historical hit", "historical-hit", 1);
     const final = message("assistant", "new live reply", "live-final", 10);
@@ -137,14 +145,24 @@ describe("historical transcript anchor isolation", () => {
 
     resolveAnchor({ messages: [historical], sessionId: "session-history" });
     await load;
-    await vi.waitFor(() => expect(historyRequest).toBe(2));
+    await Promise.resolve();
+    expect(historyRequest).toBe(1);
     expect(state.chatHistoryAnchorActive).toBe(true);
     expect(state.chatMessages).toEqual([historical]);
 
+    const shouldRefresh = completeChatHistoryAnchorVisibility(state, {
+      sessionId: "session-history",
+      messageId: "historical-hit",
+    });
+    expect(shouldRefresh).toBe(true);
+    const refresh = shouldRefresh ? loadChatHistory(state) : Promise.resolve(undefined);
+    await vi.waitFor(() => expect(historyRequest).toBe(2));
+
     resolveOrdinary({ messages: [current, final], sessionId: "session-current" });
-    await vi.waitFor(() => expect(state.chatHistoryAnchorActive).toBe(false));
+    await refresh;
 
     expect(historyRequest).toBe(2);
+    expect(state.chatHistoryAnchorActive).toBe(false);
     expect(state.chatMessages).toEqual([current, final]);
   });
 
@@ -190,6 +208,12 @@ describe("historical transcript anchor isolation", () => {
     });
     expect(state.chatHistoryAnchorActive).toBe(true);
     expect(state.chatMessages).toEqual([historical]);
+    expect(
+      completeChatHistoryAnchorVisibility(state, {
+        sessionId: "session-history",
+        messageId: "historical-hit",
+      }),
+    ).toBe(false);
 
     handlePageGatewayEvent(state, {
       type: "event",

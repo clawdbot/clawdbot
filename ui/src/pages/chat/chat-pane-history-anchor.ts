@@ -1,6 +1,6 @@
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
-import { loadChatHistory } from "./chat-history.ts";
+import { completeChatHistoryAnchorVisibility, loadChatHistory } from "./chat-history.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { cancelChatScroll } from "./scroll.ts";
 
@@ -48,9 +48,34 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
         }
         this.requestUpdate();
         await this.updateComplete;
+        if (
+          !this.isConnected ||
+          this.historyAnchor?.sessionId !== anchor.sessionId ||
+          this.historyAnchor.messageId !== anchor.messageId ||
+          this.state !== state ||
+          this.historyAnchorRequestKey !== requestKey
+        ) {
+          return;
+        }
         cancelChatScroll(state);
-        if (await this.transcript.scrollToMessage(anchor.messageId)) {
+        const centered = await this.transcript.scrollToMessage(anchor.messageId);
+        if (
+          !this.isConnected ||
+          this.historyAnchor?.sessionId !== anchor.sessionId ||
+          this.historyAnchor.messageId !== anchor.messageId ||
+          this.state !== state ||
+          this.historyAnchorRequestKey !== requestKey
+        ) {
+          return;
+        }
+        const shouldRefresh = completeChatHistoryAnchorVisibility(state, anchor);
+        if (centered) {
           this.onHistoryAnchorConsumed?.();
+          if (shouldRefresh) {
+            void loadChatHistory(state, { deferBranches: true }).finally(() =>
+              state.requestUpdate?.(),
+            );
+          }
           return;
         }
 

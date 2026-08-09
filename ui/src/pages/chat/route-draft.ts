@@ -41,14 +41,6 @@ export function draftSearchFromLocation(location: RouteLocation): string {
   return search.size > 0 ? "?" + search.toString() : "";
 }
 
-export function locationWithoutDraft(location: RouteLocation): RouteLocation {
-  const params = new URLSearchParams(location.search);
-  params.delete("draft");
-  params.delete(SESSION_COMPOSER_FOCUS_PARAM);
-  const search = params.toString();
-  return { ...location, search: search ? `?${search}` : "" };
-}
-
 // A one-shot route draft belongs only to its matching pane until the page consumes it.
 export function routeDraft(
   data: RouteDraftData | null | undefined,
