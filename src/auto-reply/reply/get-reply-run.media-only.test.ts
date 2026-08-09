@@ -66,6 +66,8 @@ vi.mock("../../config/sessions/group.js", () => ({
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePath: vi.fn().mockReturnValue("/tmp/session.jsonl"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
+  // Continuation resolves the agent-scoped store before session-id filtering.
+  resolveStorePath: vi.fn().mockReturnValue("/tmp/sessions.json"),
 }));
 
 const sessionSystemEventsMocks = vi.hoisted(() => {

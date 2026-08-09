@@ -201,7 +201,7 @@ describe("LabsPage", () => {
     },
     {
       label: "Cloud Worker Desktop",
-      index: 6,
+      index: 7,
       sourceConfig: { cloudWorkers: { desktop: false } },
       expectedPatch: { cloudWorkers: { desktop: true } },
       note: "labs: update workerDesktop",
