@@ -43,17 +43,51 @@ describe("retired QMD memory config migration", () => {
       memory: {
         backend: "qmd",
         citations: "on",
-        qmd: { sessions: { enabled: true } },
-        search: { provider: "openai", qmd: { extraCollections: [{ path: "/tmp/shared" }] } },
+        qmd: {
+          sessions: { enabled: true },
+          paths: [
+            { path: "/tmp/global" },
+            { path: "/tmp/patterned", pattern: "notes/*.md" },
+            { path: " /tmp/shared ", pattern: "**/*.md" },
+            { path: " " },
+          ],
+        },
+        search: {
+          provider: "openai",
+          extraPaths: ["notes", "/tmp/shared"],
+          qmd: { extraCollections: [{ path: "/tmp/search" }] },
+        },
       },
       agents: {
         defaults: {
-          memory: { search: { extraPaths: ["notes"], qmd: { extraCollections: [] } } },
+          memory: {
+            search: {
+              extraPaths: ["notes"],
+              qmd: { extraCollections: [{ path: "/tmp/defaults" }] },
+            },
+          },
         },
         entries: {
-          research: { memory: { search: { enabled: false, qmd: { extraCollections: [] } } } },
+          research: {
+            memory: {
+              search: {
+                enabled: false,
+                extraPaths: ["/tmp/existing"],
+                qmd: {
+                  extraCollections: [{ path: "/tmp/research", pattern: "*.md" }],
+                },
+              },
+            },
+          },
         },
-        list: [{ id: "legacy", memory: { search: { qmd: {} } } }],
+        list: [
+          {
+            id: "legacy",
+            memory: {
+              search: { qmd: { extraCollections: [{ path: "/tmp/list" }] } },
+            },
+          },
+        ],
       },
     });
 
@@ -65,10 +99,35 @@ describe("retired QMD memory config migration", () => {
     expect(result.raw).not.toHaveProperty("agents.list.0.memory.search.qmd");
     expect(result.raw).toHaveProperty("memory.citations", "on");
     expect(result.raw).toHaveProperty("memory.search.provider", "openai");
-    expect(result.raw).toHaveProperty("agents.defaults.memory.search.extraPaths", ["notes"]);
+    expect(result.raw).toHaveProperty("memory.search.extraPaths", [
+      "notes",
+      "/tmp/shared",
+      "/tmp/global",
+      "/tmp/patterned",
+      "/tmp/search",
+    ]);
+    expect(result.raw).toHaveProperty("agents.defaults.memory.search.extraPaths", [
+      "notes",
+      "/tmp/defaults",
+    ]);
     expect(result.raw).toHaveProperty("agents.entries.research.memory.search.enabled", false);
+    expect(result.raw).toHaveProperty("agents.entries.research.memory.search.extraPaths", [
+      "/tmp/existing",
+      "/tmp/research",
+    ]);
+    expect(result.raw).toHaveProperty("agents.list.0.memory.search.extraPaths", ["/tmp/list"]);
+    expect(result.changes).toContain(
+      "Migrated 3 external QMD paths from memory.qmd.paths and memory.search.qmd.extraCollections → memory.search.extraPaths.",
+    );
+    expect(result.changes).toContain(
+      "Removed 1 QMD path pattern filter from memory.qmd.paths and memory.search.qmd.extraCollections; builtin memory indexes supported files under the preserved paths.",
+    );
+    expect(result.changes).toContain(
+      "Removed 1 QMD path pattern filter from agents.entries.research.memory.search.qmd.extraCollections; builtin memory indexes supported files under the preserved paths.",
+    );
     expect(result.changes).toContain(
       "Removed retired QMD memory configuration; builtin memory is now the only memory engine.",
     );
+    expect(applyRetired(result.raw).changes).toEqual([]);
   });
 });

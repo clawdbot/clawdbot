@@ -21,9 +21,9 @@ import {
   moveVoice,
   stripRetiredTuningKnobs,
 } from "./legacy-config-migrations.runtime.retired-media.js";
+import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
-import { visitAgentConfigScopes } from "./legacy-config-migrations.runtime.tier-eval.js";
-import { deleteRetiredPath, visitChannelEntries } from "./legacy-config-record-shared.js";
+import { visitChannelEntries } from "./legacy-config-record-shared.js";
 
 const rule = (
   path: string[],
@@ -34,31 +34,6 @@ const rule = (
   message: `${message} Run "openclaw doctor --fix".`,
   ...(match ? { match } : {}),
 });
-
-function hasRetiredAgentMemoryQmd(value: unknown): boolean {
-  const memory = getRecord(getRecord(value)?.memory);
-  const search = getRecord(memory?.search);
-  return Boolean(search && Object.hasOwn(search, "qmd"));
-}
-
-function migrateRetiredMemoryQmd(raw: Record<string, unknown>, changes: string[]): void {
-  let removed = false;
-  for (const path of [
-    ["memory", "backend"],
-    ["memory", "qmd"],
-    ["memory", "search", "qmd"],
-  ] as const) {
-    removed = deleteRetiredPath(raw, path) || removed;
-  }
-  visitAgentConfigScopes(raw, (scope) => {
-    removed = deleteRetiredPath(scope, ["memory", "search", "qmd"]) || removed;
-  });
-  if (removed) {
-    changes.push(
-      "Removed retired QMD memory configuration; builtin memory is now the only memory engine.",
-    );
-  }
-}
 
 function moveKey(
   owner: Record<string, unknown> | null | undefined,
@@ -445,39 +420,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
-    id: "runtime.memory-qmd-retired",
-    describe: "Remove retired QMD memory configuration",
-    legacyRules: [
-      rule(
-        ["memory", "backend"],
-        "memory.backend is retired; builtin memory is now the only memory engine.",
-      ),
-      rule(["memory", "qmd"], "memory.qmd is retired because the QMD memory backend was removed."),
-      rule(
-        ["memory", "search", "qmd"],
-        "memory.search.qmd is retired because the QMD memory backend was removed.",
-      ),
-      rule(
-        ["agents", "defaults", "memory", "search", "qmd"],
-        "agents.defaults.memory.search.qmd is retired because the QMD memory backend was removed.",
-      ),
-      rule(
-        ["agents", "entries"],
-        "agents.entries.*.memory.search.qmd is retired because the QMD memory backend was removed.",
-        (value) => {
-          const entries = getRecord(value);
-          return entries ? Object.values(entries).some(hasRetiredAgentMemoryQmd) : false;
-        },
-      ),
-      rule(
-        ["agents", "list"],
-        "agents.list.*.memory.search.qmd is retired because the QMD memory backend was removed.",
-        (value) => Array.isArray(value) && value.some(hasRetiredAgentMemoryQmd),
-      ),
-    ],
-    apply: migrateRetiredMemoryQmd,
-  }),
+  LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
   defineLegacyConfigMigration({
     id: "runtime.retired-internal-hook-handlers",
     describe: "Remove retired internal hook handler registrations",
