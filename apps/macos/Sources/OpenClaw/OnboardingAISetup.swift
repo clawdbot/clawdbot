@@ -455,7 +455,7 @@ final class OnboardingAISetupModel {
 
     private func retainAmbiguousActivation(
         ifOwnedBy context: AttemptContext,
-        activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner,
+        activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?,
         activationDeadline: Date)
     {
         guard isCurrentAttempt(context) else { return }
@@ -860,24 +860,21 @@ extension OnboardingAISetupModel {
                 "The Gateway connection changed. Check for AI accounts again."))
             return
         }
-        guard let routeFingerprint = await gateway.activationOwnershipFingerprint(
+        let routeFingerprint = await gateway.activationOwnershipFingerprint(
             ifCurrentServerLease: lease)
-        else {
-            let failure = Self.transportFailure(
-                "Secure storage is unavailable, so OpenClaw cannot safely resume this AI setup.")
-            self.statuses[kind] = .failed(failure)
-            self.exposeActivationFailure(failure, whenTerminal: !tryNextCandidateOnFailure)
-            self.phase = .ready
-            return
-        }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         let params = Self.activationParams(
             kind: kind,
             modelRef: modelRef,
             supportsExactModel: supportsExactModel)
-        let activationOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
-            id: UUID().uuidString,
-            routeFingerprint: routeFingerprint)
+        // Keychain-unavailable degrades to an ownerless resume record instead of
+        // refusing setup: relaunch then repeats activation rather than trusting
+        // the receipt, so a broken login keychain cannot dead-end onboarding.
+        let activationOwner = routeFingerprint.map { fingerprint in
+            OnboardingSystemAgentResumeStore.ActivationOwner(
+                id: UUID().uuidString,
+                routeFingerprint: fingerprint)
+        }
         self.pendingActivationOwner = activationOwner
         self.pendingActivationRequiresFreshActivation = true
         // Activation can persist before the response reaches the app. Cover the
@@ -965,7 +962,10 @@ extension OnboardingAISetupModel {
                 // A managed Gateway can restart after persisting fresh-Mac Codex setup.
                 // The retired process cannot mutate further, so accept only the same
                 // route/auth owner, an exact persisted transition, and a fresh live turn.
+                // Ownerless (keychain-unavailable) activations cannot prove ownership
+                // and fall through to the deadline probe instead.
                 if !Task.isCancelled,
+                   let activationOwner,
                    await !(self.gateway.isCurrentServerLease(lease)),
                    await self.reconcileActivationAfterGatewayRestart(
                        kind: kind,
@@ -1491,18 +1491,17 @@ extension OnboardingAISetupModel {
             return
         }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-        guard let routeFingerprint = await gateway.activationOwnershipFingerprint(
+        let routeFingerprint = await gateway.activationOwnershipFingerprint(
             ifCurrentServerLease: lease)
-        else {
-            self.manualError = Self.transportFailure(
-                "Secure storage is unavailable, so OpenClaw cannot safely resume this AI setup.")
-            return
-        }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         let requestTimeoutMs = Self.activationRequestTimeoutMs(for: "api-key")
-        let activationOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
-            id: UUID().uuidString,
-            routeFingerprint: routeFingerprint)
+        // Same keychain-unavailable degradation as detected candidates: an
+        // ownerless record keeps the ambiguity window without a resume receipt.
+        let activationOwner = routeFingerprint.map { fingerprint in
+            OnboardingSystemAgentResumeStore.ActivationOwner(
+                id: UUID().uuidString,
+                routeFingerprint: fingerprint)
+        }
         self.pendingActivationOwner = activationOwner
         self.pendingActivationRequiresFreshActivation = true
         // Manual activation has the same persist-before-response ambiguity as

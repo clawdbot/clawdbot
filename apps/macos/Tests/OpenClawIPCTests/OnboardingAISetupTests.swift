@@ -1797,7 +1797,7 @@ struct OnboardingAISetupTests {
         #expect(defaults.object(forKey: onboardingSystemAgentPendingKey) == nil)
     }
 
-    @Test func `activation fails closed when Keychain binding is unavailable`() async throws {
+    @Test func `activation proceeds ownerless when Keychain binding is unavailable`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingMissingKeychainBindingTests"))
         let recorder = AISetupRequestRecorder()
         let url = try #require(URL(string: "ws://example.invalid"))
@@ -1809,17 +1809,21 @@ struct OnboardingAISetupTests {
                 detectedKind: "codex-cli")))
         let model = makeAISetupModel(gateway: gateway, defaults: defaults)
 
+        // The explicit activation must dispatch to the Gateway instead of
+        // dead-ending on the missing Keychain binding.
         await model.detectAndAutoConnect()
         await model.activate(kind: "codex-cli")
 
-        #expect(await (recorder.snapshot()).methods == ["openclaw.setup.detect"])
+        let methods = await recorder.snapshot().methods
+        #expect(methods == ["openclaw.setup.detect", "openclaw.setup.activate"])
+        // The ownerless record must not outlive the cleanly failed activation.
         #expect(!isPending(defaults))
         #expect(model.phase == .ready)
         guard case let .failed(failure) = model.statuses["codex-cli"] else {
-            Issue.record("expected secure-storage failure")
+            Issue.record("expected activation failure from the Gateway response")
             return
         }
-        #expect(failure.detail?.contains("Secure storage") == true)
+        #expect(failure.detail?.contains("Secure storage") != true)
     }
 
     @Test func `active v3 record keeps its deadline while credential verifier is scrubbed`() throws {

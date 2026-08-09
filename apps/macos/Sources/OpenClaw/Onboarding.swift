@@ -232,11 +232,13 @@ enum OnboardingSystemAgentResumeStore {
     }
 
     static func isOwned(
-        by activationOwner: ActivationOwner,
+        by activationOwner: ActivationOwner?,
         for routeIdentity: String?,
         defaults: UserDefaults = .standard,
         now: Date = Date()) -> Bool
     {
+        // A nil owner names ownerless (keychain-unavailable) records exactly,
+        // never a wildcard — mirroring ownerMatches.
         guard let routeIdentity = normalized(routeIdentity),
               let record = loadRecords(defaults: defaults, now: now)[routeIdentity]
         else { return false }
