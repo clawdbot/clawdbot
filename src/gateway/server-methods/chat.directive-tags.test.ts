@@ -1807,9 +1807,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.broadcast).toHaveBeenCalledOnce();
   });
 
-  it("hydrates reply context before injecting into the captured exact run", async () => {
+  it("hydrates and accepts reply injection before ACK without waiting for delivery", async () => {
     await createGatewayUserTurnSqliteFixture("openclaw-chat-send-reply-steer-");
     mockState.hasMessageReceivedHooks = true;
+    const hydration = createDeferred();
+    mockState.replyContextWait = hydration.promise;
     mockState.replyContextResult = {
       ReplyToId: "prior-message",
       ReplyToBody: "quoted deployment status",
@@ -1817,9 +1819,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     };
     const auditEvents: Array<{ reasonCode?: unknown }> = [];
     const disposeAudit = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
-    const { context, send } = createChatRequestFixture();
-    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
-      await options?.userTurnTranscriptRecorder?.persistApproved();
+    const { context, respond, send } = createChatRequestFixture();
+    const delivery = createDeferred();
+    let reportAcceptance: ((accepted: boolean) => void) | undefined;
+    const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
+      reportAcceptance = options?.onQueueAccepted;
+      return delivery.promise;
     });
     const operation = replyRunRegistry.begin({
       sessionKey: "main",
@@ -1836,28 +1841,53 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     try {
-      await send({
+      const pendingSend = send({
         idempotencyKey: "idem-reply-steer",
         requestParams: {
           expectedRunId: "run-a",
           queueMode: "steer",
           replyToId: "prior-message",
         },
+        waitFor: "none",
       });
+
+      await waitForAssertion(() => expect(mockState.replyContextCalls).toBe(1));
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();
+
+      hydration.resolve();
+      await waitForAssertion(() => expect(queueMessage).toHaveBeenCalledOnce());
+      expect(queueMessage.mock.calls[0]?.[0]).toContain("Reply target of current user message:");
+      expect(queueMessage.mock.calls[0]?.[0]).toContain("quoted deployment status");
+      expect(queueMessage.mock.calls[0]?.[0]).toContain("hello");
+      expect(respond).not.toHaveBeenCalled();
+
+      reportAcceptance?.(true);
+      await pendingSend;
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.any(Object),
+      );
+      expect(context.broadcast).not.toHaveBeenCalled();
+      expect(mockState.lastDispatchCtx).toBeUndefined();
+
+      delivery.resolve();
+      await waitForAssertion(() => expect(context.broadcast).toHaveBeenCalledOnce());
     } finally {
+      hydration.resolve();
+      delivery.resolve();
       operation.complete();
       disposeAudit();
     }
 
-    expect(queueMessage).toHaveBeenCalledOnce();
-    expect(queueMessage.mock.calls[0]?.[0]).toContain("Reply target of current user message:");
-    expect(queueMessage.mock.calls[0]?.[0]).toContain("quoted deployment status");
-    expect(queueMessage.mock.calls[0]?.[0]).toContain("hello");
     expect(mockState.messageReceivedCalls).toHaveLength(1);
     expect(readPersistedUserMessages()).toHaveLength(1);
     expect(auditEvents.filter((event) => event.reasonCode === "active_run_injected")).toHaveLength(
       1,
     );
+    expect(mockState.replyContextCalls).toBe(1);
     expect(mockState.lastDispatchCtx).toBeUndefined();
     expect(context.broadcast).toHaveBeenCalledOnce();
   });
@@ -1871,7 +1901,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ReplyToBody: "quoted deployment status",
       ReplyToSender: "Alice",
     };
-    const { context, send } = createChatRequestFixture();
+    const { context, respond, send } = createChatRequestFixture();
     const dispatchCallsBefore = dispatchInboundMessageMock.mock.calls.length;
     const originalQueue = vi.fn(async () => {});
     const successorQueue = vi.fn(async () => {});
@@ -1892,7 +1922,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     let successor: ReturnType<typeof replyRunRegistry.begin> | undefined;
 
     try {
-      await send({
+      const pendingSend = send({
         idempotencyKey: "idem-reply-steer-race",
         requestParams: {
           expectedRunId: "run-a",
@@ -1902,6 +1932,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         waitFor: "none",
       });
       await waitForAssertion(() => expect(mockState.replyContextCalls).toBe(1));
+      expect(respond).not.toHaveBeenCalled();
+      expect(originalQueue).not.toHaveBeenCalled();
       original.complete();
       successor = replyRunRegistry.begin({
         sessionKey: "main",
@@ -1917,6 +1949,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         messageInjection: { isAvailable: () => true, queueMessage: successorQueue },
       });
       hydration.resolve();
+      await pendingSend;
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.any(Object),
+      );
       await waitForAssertion(() => {
         expect(context.dedupe.get("chat:idem-reply-steer-race")?.payload).toMatchObject({
           status: "ok",
@@ -1931,6 +1970,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(originalQueue).not.toHaveBeenCalled();
     expect(successorQueue).not.toHaveBeenCalled();
     expect(successorCancel).not.toHaveBeenCalled();
+    expect(mockState.replyContextCalls).toBe(1);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore + 1);
     expect(mockState.lastMessageInjectionAttempted).toBe(true);
     expect(readPersistedUserMessages()).toHaveLength(1);
@@ -1938,6 +1978,51 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ([, payload]) => payload as Record<string, unknown>,
     );
     expect(broadcasts.filter((payload) => payload.state === "error")).toEqual([]);
+  });
+
+  it("keeps ordinary reply hydration after ACK when no injection target was captured", async () => {
+    await createGatewayUserTurnSqliteFixture("openclaw-chat-send-reply-no-steer-");
+    const hydration = createDeferred();
+    mockState.replyContextWait = hydration.promise;
+    mockState.replyContextResult = {
+      ReplyToId: "prior-message",
+      ReplyToBody: "quoted deployment status",
+      ReplyToSender: "Alice",
+    };
+    const { context, respond, send } = createChatRequestFixture();
+
+    const pendingSend = send({
+      idempotencyKey: "idem-reply-no-steer",
+      requestParams: { replyToId: "prior-message" },
+      waitFor: "none",
+    });
+    try {
+      await waitForAssertion(() => expect(mockState.replyContextCalls).toBe(1));
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.any(Object),
+      );
+      expect(mockState.lastDispatchCtx).toBeUndefined();
+      await pendingSend;
+
+      hydration.resolve();
+      await waitForAssertion(() => {
+        expect(context.dedupe.get("chat:idem-reply-no-steer")?.payload).toMatchObject({
+          status: "ok",
+        });
+      });
+    } finally {
+      hydration.resolve();
+    }
+
+    expect(mockState.replyContextCalls).toBe(1);
+    expect(mockState.lastDispatchCtx).toMatchObject({
+      ReplyToId: "prior-message",
+      ReplyToBody: "quoted deployment status",
+      ReplyToSender: "Alice",
+    });
   });
 
   it("falls back once when exact-run injection rejects acceptance", async () => {

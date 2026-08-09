@@ -422,8 +422,8 @@ describe("runCodexAppServerAttempt steering", () => {
     );
   });
 
-  it("cancels batched steering when its native turn completes", async () => {
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+  it("seals unsent steering without erasing an earlier consumed dispatch", async () => {
+    const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
 
     const run = runCodexAppServerAttempt(params);
@@ -442,66 +442,57 @@ describe("runCodexAppServerAttempt steering", () => {
       )?.[1] as typeof handle;
       expect(handle).toBeDefined();
     }, fastWait);
-    const onFirstAccepted = vi.fn();
-    const onSecondAccepted = vi.fn();
-    const firstRejected = expect(
-      handle!.queueMessage("first", {
-        debounceMs: 30_000,
-        onQueueAccepted: onFirstAccepted,
-      }),
-    ).rejects.toThrow("steering queue cancelled");
-    const secondRejected = expect(
-      handle!.queueMessage("second", {
-        debounceMs: 30_000,
-        onQueueAccepted: onSecondAccepted,
-      }),
-    ).rejects.toThrow("steering queue cancelled");
-
-    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await Promise.all([firstRejected, secondRejected]);
-    await run;
-
-    expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([]);
-    expect(onFirstAccepted).toHaveBeenCalledWith(false);
-    expect(onSecondAccepted).toHaveBeenCalledWith(false);
-    await expect(handle!.queueMessage("too late", { debounceMs: 0 })).rejects.toThrow(
-      "steering queue cancelled",
-    );
-  });
-
-  it("keeps an on-wire steer at-most-once when its native turn completes", async () => {
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
-    const params = createSteeringParams();
-
-    const run = runCodexAppServerAttempt(params);
-    await waitForMethod("turn/start");
-    let handle:
-      | {
-          queueMessage: (
-            text: string,
-            options: { debounceMs: number; onQueueAccepted?: (accepted: boolean) => void },
-          ) => Promise<{ transcriptCommit: "unconfirmed"; errorMessage: string } | undefined>;
-        }
-      | undefined;
-    await vi.waitFor(() => {
-      handle = activeRunRegistrationMocks.setActiveEmbeddedRun.mock.calls.findLast(
-        (call) => call[0] === params.sessionId,
-      )?.[1] as typeof handle;
-      expect(handle).toBeDefined();
-    }, fastWait);
-    const onQueueAccepted = vi.fn();
-    const delivery = handle!.queueMessage("on the wire", { debounceMs: 0, onQueueAccepted });
+    const onDispatchedAccepted = vi.fn();
+    const onUnsentAccepted = vi.fn();
+    const onLateAccepted = vi.fn();
+    const dispatchedDelivery = handle!.queueMessage("on the wire", {
+      debounceMs: 0,
+      onQueueAccepted: onDispatchedAccepted,
+    });
     await vi.waitFor(
       () => expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1),
       fastWait,
     );
+    const steer = requests.find((entry) => entry.method === "turn/steer");
+    const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
+      ?.clientUserMessageId;
+    if (!clientUserMessageId) {
+      throw new Error("turn/steer clientUserMessageId missing");
+    }
+    const unsentDelivery = handle!.queueMessage("still debounced", {
+      debounceMs: 30_000,
+      onQueueAccepted: onUnsentAccepted,
+    });
+    const unsentRejected = expect(unsentDelivery).rejects.toThrow("queue admission sealed");
 
-    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await expect(delivery).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
-    expect(onQueueAccepted).toHaveBeenCalledWith(true);
+    // Raw receipt seals admission immediately, while serialized projection still
+    // honors the matching consumption notification already ahead of the terminal.
+    const consumed = notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "steered-user-message", type: "userMessage", clientId: clientUserMessageId },
+      },
+    });
+    const completed = completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await Promise.all([consumed, completed]);
+
+    await expect(dispatchedDelivery).resolves.toBeUndefined();
+    await unsentRejected;
+    expect(onDispatchedAccepted).toHaveBeenCalledWith(true);
+    expect(onUnsentAccepted).toHaveBeenCalledWith(false);
     await run;
 
-    expect(requests.filter((entry) => entry.method === "turn/steer")).toHaveLength(1);
+    expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
+      expect.objectContaining({
+        params: expect.objectContaining({ expectedTurnId: "turn-1", clientUserMessageId }),
+      }),
+    ]);
+    await expect(
+      handle!.queueMessage("too late", { debounceMs: 0, onQueueAccepted: onLateAccepted }),
+    ).rejects.toThrow("steering queue cancelled");
+    expect(onLateAccepted).toHaveBeenCalledWith(false);
   });
 
   it("routes request_user_input prompts through the active run follow-up queue", async () => {

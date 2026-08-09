@@ -65,6 +65,7 @@ export function createCodexSteeringQueue(params: {
   let batchTimer: NodeJS.Timeout | undefined;
   let batchSequence = 0;
   let sendChain: Promise<void> = Promise.resolve();
+  let sealedError: Error | undefined;
   let closedError: Error | undefined;
 
   const clearBatchTimer = () => {
@@ -129,6 +130,24 @@ export function createCodexSteeringQueue(params: {
       rejectItem(item, error);
     }
   };
+  const sealQueueAdmission = () => {
+    if (sealedError || closedError) {
+      return;
+    }
+    sealedError = new Error("codex app-server steering queue admission sealed");
+    clearBatchTimer();
+    batchedMessages = [];
+    const dispatchedItems = new Set(
+      [...dispatchedBatches.values()].flatMap((batch) => batch.items),
+    );
+    // Terminal receipt closes admission immediately, but a user-message
+    // completion already ahead of it on the wire still owns its dispatched batch.
+    for (const item of pendingMessages) {
+      if (!dispatchedItems.has(item)) {
+        rejectItem(item, sealedError);
+      }
+    }
+  };
   const abortQueue = () => {
     closeQueue(new Error("codex app-server steering queue aborted"));
   };
@@ -143,6 +162,7 @@ export function createCodexSteeringQueue(params: {
     }
     const unavailableError =
       closedError ??
+      sealedError ??
       (params.signal.aborted ? new Error("codex app-server steering queue aborted") : undefined);
     if (unavailableError) {
       for (const item of liveItems) {
@@ -244,6 +264,14 @@ export function createCodexSteeringQueue(params: {
 
   return {
     async queue(text: string, options?: CodexSteeringQueueOptions) {
+      const unavailableError =
+        closedError ??
+        sealedError ??
+        (params.signal.aborted ? new Error("codex app-server steering queue aborted") : undefined);
+      if (unavailableError) {
+        options?.onQueueAccepted?.(false);
+        throw unavailableError;
+      }
       const pendingUserInput = params.claimPendingUserInput();
       if (pendingUserInput) {
         if (!options?.images?.length) {
@@ -260,14 +288,6 @@ export function createCodexSteeringQueue(params: {
         const { item, delivery } = createPendingMessage(text, options);
         await Promise.all([enqueueSend([item]).finally(() => pendingUserInput.cancel()), delivery]);
         return;
-      }
-      if (closedError) {
-        options?.onQueueAccepted?.(false);
-        throw closedError;
-      }
-      if (params.signal.aborted) {
-        options?.onQueueAccepted?.(false);
-        throw new Error("codex app-server steering queue aborted");
       }
       const { item, delivery } = createPendingMessage(text, options);
       batchedMessages.push(item);
@@ -294,6 +314,7 @@ export function createCodexSteeringQueue(params: {
       }
       return true;
     },
+    sealAdmission: sealQueueAdmission,
     cancel: cancelQueue,
   };
 }
