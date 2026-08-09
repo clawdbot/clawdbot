@@ -38,7 +38,7 @@ export function listModelRefsFromConfigValue(value: unknown): string[] {
   return refs;
 }
 
-/** Collect configured model references from agents, channels, hooks, and message config. */
+/** Collect configured model references from agents, tools, channels, hooks, and message config. */
 export function collectConfiguredModelRefs(
   config: unknown,
   options: { includeChannelModelOverrides?: boolean } = {},
@@ -64,7 +64,7 @@ export function collectConfiguredModelRefs(
       }
     }
   };
-  const collectFromAgent = (path: string, agent: unknown) => {
+  const collectFromAgent = (path: string, agent: unknown, includeEntrySelectors = false) => {
     if (!isRecord(agent)) {
       return;
     }
@@ -95,18 +95,45 @@ export function collectConfiguredModelRefs(
         pushModelRef(`${path}.models.${modelRef}`, modelRef);
       }
     }
+    if (includeEntrySelectors) {
+      const tools = isRecord(agent.tools) ? agent.tools : {};
+      const exec = isRecord(tools.exec) ? tools.exec : {};
+      collectModelConfig(
+        `${path}.tools.exec.reviewer.model`,
+        isRecord(exec.reviewer) ? exec.reviewer.model : undefined,
+      );
+      pushModelRef(
+        `${path}.tts.summaryModel`,
+        isRecord(agent.tts) ? agent.tts.summaryModel : undefined,
+      );
+    }
   };
 
   const root = isRecord(config) ? config : {};
+  const tools = isRecord(root.tools) ? root.tools : {};
+  const exec = isRecord(tools.exec) ? tools.exec : {};
+  collectModelConfig(
+    "tools.exec.reviewer.model",
+    isRecord(exec.reviewer) ? exec.reviewer.model : undefined,
+  );
+  const media = isRecord(tools.media) ? tools.media : {};
+  for (const capability of ["image", "audio", "video"] as const) {
+    pushModelRef(
+      `tools.media.${capability}.preferredModel`,
+      isRecord(media[capability]) ? media[capability].preferredModel : undefined,
+    );
+  }
   const agents = isRecord(root.agents) ? root.agents : {};
   collectFromAgent("agents.defaults", agents.defaults);
-  if (isRecord(agents.entries)) {
-    for (const [agentId, entry] of Object.entries(agents.entries)) {
-      collectFromAgent(`agents.entries.${agentId}`, entry);
+  if (Object.hasOwn(agents, "entries")) {
+    if (isRecord(agents.entries)) {
+      for (const [agentId, entry] of Object.entries(agents.entries)) {
+        collectFromAgent(`agents.entries.${agentId}`, entry, true);
+      }
     }
   } else if (Array.isArray(agents.list)) {
     for (const [index, entry] of agents.list.entries()) {
-      collectFromAgent(`agents.list.${index}`, entry);
+      collectFromAgent(`agents.list.${index}`, entry, true);
     }
   }
   if (options.includeChannelModelOverrides !== false) {
@@ -129,14 +156,25 @@ export function collectConfiguredModelRefs(
   }
   pushModelRef("hooks.gmail.model", isRecord(hooks.gmail) ? hooks.gmail.model : undefined);
   pushModelRef("tts.summaryModel", isRecord(root.tts) ? root.tts.summaryModel : undefined);
-  pushModelRef(
-    "channels.discord.voice.model",
-    isRecord(root.channels) &&
-      isRecord(root.channels.discord) &&
-      isRecord(root.channels.discord.voice)
-      ? root.channels.discord.voice.model
-      : undefined,
-  );
+  const discord =
+    isRecord(root.channels) && isRecord(root.channels.discord) ? root.channels.discord : {};
+  const collectDiscordVoice = (path: string, value: unknown) => {
+    const voice = isRecord(value) ? value : {};
+    pushModelRef(`${path}.model`, voice.model);
+    pushModelRef(
+      `${path}.tts.summaryModel`,
+      isRecord(voice.tts) ? voice.tts.summaryModel : undefined,
+    );
+  };
+  collectDiscordVoice("channels.discord.voice", discord.voice);
+  if (isRecord(discord.accounts)) {
+    for (const [accountId, account] of Object.entries(discord.accounts)) {
+      collectDiscordVoice(
+        `channels.discord.accounts.${accountId}.voice`,
+        isRecord(account) ? account.voice : undefined,
+      );
+    }
+  }
   return refs;
 }
 

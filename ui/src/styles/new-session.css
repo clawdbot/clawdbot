@@ -338,6 +338,35 @@ wa-popover.new-session-page__place-popover::part(body) {
   border-radius: var(--radius-md);
 }
 
+.new-session-page__start-split {
+  display: inline-flex;
+  align-items: center;
+}
+
+.new-session-page__start-primary {
+  width: 34px;
+  min-width: 34px;
+  border-radius: var(--radius-full) 0 0 var(--radius-full);
+}
+
+wa-dropdown.new-session-page__start-menu {
+  display: inline-flex;
+}
+
+.new-session-page__start-menu-trigger {
+  width: 22px;
+  min-width: 22px;
+  height: 36px;
+  padding: 0 4px 0 2px;
+  border-left: 1px solid color-mix(in srgb, var(--primary-foreground) 28%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+}
+
+.new-session-page__start-menu-trigger svg {
+  width: 13px;
+  height: 13px;
+}
+
 /* Keep a long first prompt visible before scrolling. The shared auto-height
    controller measures content; this surface owns its ten-line visual cap. */
 .new-session-page__composer .new-session-page__message {

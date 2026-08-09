@@ -363,7 +363,7 @@ async function buildSnapshotBatch(
   }
   const registryMs = performance.now() - registryStartedAt;
   const preparedAgentFacts = [...preparedInputs.values()];
-  const configuredRuntimeModelCount = preparedAgentFacts.reduce(
+  const configuredRuntimeModelCount = [...preparedCatalogs.values()].reduce(
     (count, facts) => count + facts.configuredRuntimeModels.length,
     0,
   );
