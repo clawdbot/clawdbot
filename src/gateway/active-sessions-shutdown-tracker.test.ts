@@ -2,7 +2,7 @@
 // when gateway shutdown, restart, or lifecycle cleanup must emit one session_end.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -18,11 +18,16 @@ import {
 
 const cfg: OpenClawConfig = {};
 
-afterEach(() => {
+// The tracker is module state and suites share a worker, so draining only on
+// the way out leaves the first assertion reading whatever ran before this file.
+function drainActiveSessions() {
   for (const entry of listActiveSessionsForShutdown()) {
     forgetActiveSessionForShutdown(entry.sessionId);
   }
-});
+}
+
+beforeEach(drainActiveSessions);
+afterEach(drainActiveSessions);
 
 describe("active-sessions-shutdown-tracker", () => {
   it("returns an empty list when no sessions have been noted", () => {
