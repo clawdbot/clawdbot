@@ -13,7 +13,6 @@ import {
   dispatchCronDeliveryMock,
   getChannelPluginMock,
   isCliProviderMock,
-  isHeartbeatOnlyResponseMock,
   loadRunCronIsolatedAgentTurn,
   loadSessionEntryMock,
   makeCronSession,
@@ -113,6 +112,7 @@ function mockPendingMessagePresentationWarningOutcome() {
     synthesizedText: "Final cron report",
     deliveryPayload: { text: "Final cron report" },
     deliveryPayloads: [{ text: "Final cron report" }],
+    deliveryDisposition: { kind: "visible" },
     deliveryPayloadHasStructuredContent: false,
     hasFatalErrorPayload: false,
     embeddedRunError: undefined,
@@ -460,6 +460,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       synthesizedText: "Final cron report from the agent.",
       deliveryPayload: { text: "Final cron report from the agent." },
       deliveryPayloads: [{ text: "Final cron report from the agent." }],
+      deliveryDisposition: { kind: "visible" },
       deliveryPayloadHasStructuredContent: false,
       hasFatalErrorPayload: false,
       hasFatalStructuredErrorPayload: false,
@@ -1172,7 +1173,18 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   it("skips cron delivery when output is heartbeat-only", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
-    isHeartbeatOnlyResponseMock.mockReturnValue(true);
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: "HEARTBEAT_OK",
+      outputText: "HEARTBEAT_OK",
+      synthesizedText: "HEARTBEAT_OK",
+      deliveryPayload: { text: "HEARTBEAT_OK" },
+      deliveryPayloads: [{ text: "HEARTBEAT_OK" }],
+      deliveryDisposition: { kind: "heartbeat", controlOnly: true },
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      hasFatalStructuredErrorPayload: false,
+      embeddedRunError: undefined,
+    });
 
     await runCronIsolatedAgentTurn({
       ...makeParams(),
@@ -1838,6 +1850,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       synthesizedText: "Interim cron report",
       deliveryPayload: { text: "Interim cron report" },
       deliveryPayloads: [{ text: "Interim cron report" }],
+      deliveryDisposition: { kind: "visible" },
       deliveryPayloadHasStructuredContent: false,
       hasFatalErrorPayload: false,
       hasFatalStructuredErrorPayload: false,
@@ -1920,6 +1933,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       synthesizedText: "Cron report",
       deliveryPayload: { text: "Cron report" },
       deliveryPayloads: [{ text: "Cron report" }],
+      deliveryDisposition: { kind: "visible" },
       deliveryPayloadHasStructuredContent: false,
       hasFatalErrorPayload: false,
       hasFatalStructuredErrorPayload: false,
