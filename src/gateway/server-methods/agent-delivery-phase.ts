@@ -110,13 +110,15 @@ export async function resolveAgentDeliveryPhase(params: {
 
   if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
     try {
-      resolvedChannel = (
-        await resolveMessageChannelSelection({ cfg: params.cfgForAgent ?? params.cfg })
-      ).channel;
+      const selection = await resolveMessageChannelSelection({
+        cfg: params.cfgForAgent ?? params.cfg,
+      });
+      resolvedChannel = selection.channel;
       deliveryTargetMode = deliveryTargetMode ?? "implicit";
       effectivePlan = {
         ...deliveryPlan,
         resolvedChannel,
+        plugin: selection.plugin,
         deliveryTargetMode,
         resolvedAccountId,
       };
@@ -148,7 +150,8 @@ export async function resolveAgentDeliveryPhase(params: {
     resolvedChannel = INTERNAL_MESSAGE_CHANNEL;
     deliveryTargetMode = undefined;
     resolvedTo = undefined;
-    effectivePlan = { ...deliveryPlan, resolvedChannel, resolvedTo, deliveryTargetMode };
+    const { plugin: _plugin, ...pluginFreePlan } = deliveryPlan;
+    effectivePlan = { ...pluginFreePlan, resolvedChannel, resolvedTo, deliveryTargetMode };
   }
 
   if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
@@ -220,7 +223,7 @@ export async function resolveAgentDeliveryPhase(params: {
       : undefined;
   return {
     activeSessionAgentId,
-    deliveryPlan,
+    deliveryPlan: effectivePlan,
     resolvedChannel,
     deliveryTargetMode,
     resolvedAccountId,

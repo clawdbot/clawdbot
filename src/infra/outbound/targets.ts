@@ -57,6 +57,7 @@ import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targ
 /** Resolves a user-supplied outbound destination through the channel plugin. */
 export function resolveOutboundTarget(params: {
   channel: string;
+  plugin?: ChannelPlugin;
   to?: string;
   allowFrom?: string[];
   allowBootstrap?: boolean;
@@ -66,11 +67,13 @@ export function resolveOutboundTarget(params: {
 }): OutboundTargetResolution {
   return (
     resolveOutboundTargetWithPlugin({
-      plugin: resolveOutboundChannelPlugin({
-        channel: params.channel,
-        cfg: params.cfg,
-        allowBootstrap: params.allowBootstrap,
-      }),
+      plugin:
+        params.plugin ??
+        resolveOutboundChannelPlugin({
+          channel: params.channel,
+          cfg: params.cfg,
+          allowBootstrap: params.allowBootstrap,
+        }),
       target: params,
       onMissingPlugin: () =>
         params.channel === INTERNAL_MESSAGE_CHANNEL

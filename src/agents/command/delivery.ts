@@ -23,7 +23,8 @@ import {
   type SerializedDurableMessagePayloadOutcome,
 } from "../../channels/message/runtime.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -462,6 +463,7 @@ function normalizeAgentCommandReplyPayloads(params: {
   payloads: RunResult["payloads"];
   result: RunResult;
   deliveryChannel?: string;
+  plugin?: ChannelPlugin;
   accountId?: string;
   applyChannelTransforms?: boolean;
   includeRunModelContext?: boolean;
@@ -478,7 +480,7 @@ function normalizeAgentCommandReplyPayloads(params: {
     return payloads as ReplyPayload[];
   }
   const applyChannelTransforms = params.applyChannelTransforms ?? true;
-  const deliveryPlugin = applyChannelTransforms ? getChannelPlugin(channel) : undefined;
+  const deliveryPlugin = applyChannelTransforms ? params.plugin : undefined;
 
   const sessionKey = params.outboundSession?.key ?? params.opts.sessionKey;
   const agentId =
@@ -576,11 +578,13 @@ export async function deliverAgentCommandResult(
     });
     params.assertDeliveryCurrent?.();
     let deliveryChannel = deliveryPlan.resolvedChannel;
+    let preparedPlugin = deliveryPlan.plugin;
     if (deliver && isInternalMessageChannel(deliveryChannel) && !explicitChannelHint) {
       try {
         const selection = await resolveMessageChannelSelection({ cfg });
         params.assertDeliveryCurrent?.();
         deliveryChannel = selection.channel;
+        preparedPlugin = selection.plugin;
       } catch {
         // Keep the internal channel marker; error handling below reports the failure.
       }
@@ -591,11 +595,11 @@ export async function deliverAgentCommandResult(
         : {
             ...deliveryPlan,
             resolvedChannel: deliveryChannel,
+            plugin: preparedPlugin,
           };
-    // Channel docking: delivery channels are resolved via plugin registry.
     const deliveryPlugin =
       deliver && !isInternalMessageChannel(deliveryChannel)
-        ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
+        ? effectiveDeliveryPlan.plugin
         : undefined;
     const isDeliveryChannelKnown =
       isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
@@ -718,6 +722,7 @@ export async function deliverAgentCommandResult(
     deliveryTarget,
     resolvedReplyToId,
     resolvedThreadTarget,
+    deliveryPlugin,
   } = deliveryRouting;
 
   let deliveryLoggedError = false;
@@ -764,6 +769,7 @@ export async function deliverAgentCommandResult(
     payloads,
     result,
     deliveryChannel,
+    plugin: deliveryPlugin,
     accountId: resolvedAccountId,
     applyChannelTransforms: deliver,
   });
@@ -783,6 +789,7 @@ export async function deliverAgentCommandResult(
       payloads: sentTexts.map((text) => ({ text })),
       result,
       deliveryChannel,
+      plugin: deliveryPlugin,
       accountId: resolvedAccountId,
       applyChannelTransforms: deliver,
       includeRunModelContext: false,
