@@ -691,6 +691,30 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       model: "custom-model",
       expectedModel: "custom-model",
     },
+    {
+      // Issue #121034: Bedrock rejects provider-qualified refs.
+      name: "strips the OpenClaw Bedrock provider prefix for Claude ACP startup",
+      model: "amazon-bedrock/global.anthropic.claude-sonnet-5",
+      expectedModel: "global.anthropic.claude-sonnet-5",
+    },
+    {
+      name: "matches the Bedrock provider prefix case-insensitively",
+      model: "Amazon-Bedrock/us.anthropic.claude-opus-4-6-v1",
+      expectedModel: "us.anthropic.claude-opus-4-6-v1",
+    },
+    {
+      // Bare inference-profile ids and ARNs are native Bedrock values the SDK
+      // accepts as-is; only the documented OpenClaw prefixes may be stripped.
+      name: "preserves native Bedrock inference-profile ids",
+      model: "global.anthropic.claude-sonnet-5",
+      expectedModel: "global.anthropic.claude-sonnet-5",
+    },
+    {
+      name: "preserves Bedrock inference-profile ARNs",
+      model: "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5",
+      expectedModel:
+        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-5",
+    },
   ])("$name", async ({ model, expectedModel }) => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
@@ -1912,13 +1936,23 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       key: "model",
       value: "anthropic/claude-sonnet-4-6",
     });
+    await runtime.setConfigOption({
+      handle,
+      key: "model",
+      value: "amazon-bedrock/global.anthropic.claude-sonnet-5",
+    });
 
-    expect(setConfigOption).toHaveBeenCalledOnce();
-    expect(setConfigOption).toHaveBeenCalledWith({
+    expect(setConfigOption).toHaveBeenNthCalledWith(1, {
       handle,
       key: "model",
       value: "claude-sonnet-4-6",
     });
+    expect(setConfigOption).toHaveBeenNthCalledWith(2, {
+      handle,
+      key: "model",
+      value: "global.anthropic.claude-sonnet-5",
+    });
+    expect(setConfigOption).toHaveBeenCalledTimes(2);
   });
 
   it("recognizes claude-agent-acp commands", () => {
