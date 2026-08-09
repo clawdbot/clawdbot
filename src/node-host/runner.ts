@@ -111,6 +111,8 @@ function handleNodeHostReconnectPaused(
 
 const NODE_PLUGIN_TOOLS_UPDATE_METHOD = "node.pluginTools.update";
 const NODE_SKILLS_UPDATE_METHOD = "node.skills.update";
+const NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS = 250;
+const NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS = 5_000;
 
 function isExactUnknownMethodError(error: unknown, method: string): boolean {
   return (
@@ -158,6 +160,9 @@ type NodeOptionalPublicationState = {
   publishedParams?: unknown;
   hasRejectedParams: boolean;
   rejectedParams?: unknown;
+  retryDelayMs: number;
+  retryPending: boolean;
+  retryTimer?: NodeJS.Timeout;
   inFlight?: Promise<void>;
 };
 
@@ -245,11 +250,26 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
   >();
+  const retireOptionalPublications = () => {
+    for (const state of optionalPublicationStates.values()) {
+      if (state.retryTimer) {
+        clearTimeout(state.retryTimer);
+      }
+    }
+    optionalPublicationStates.clear();
+  };
+  const retireGatewayConnection = () => {
+    gatewayConnectionGeneration += 1;
+    gatewayHelloReceived = false;
+    connectedGatewayProtocol = 0;
+    retireOptionalPublications();
+  };
 
   const queueOptionalPublication = (
     method: NodeOptionalPublicationMethod,
     params: unknown,
     label: string,
+    isRetry = false,
   ): void => {
     if (!gatewayHelloReceived) {
       return;
@@ -264,6 +284,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         hasPending: false,
         hasPublishedParams: false,
         hasRejectedParams: false,
+        retryDelayMs: NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS,
+        retryPending: false,
       };
       optionalPublicationStates.set(method, state);
     }
@@ -276,6 +298,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         isDeepStrictEqual(state.publishedParams, params))
     ) {
       return;
+    }
+    if (state.retryTimer) {
+      clearTimeout(state.retryTimer);
+      state.retryTimer = undefined;
+    }
+    if (!isRetry) {
+      state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
     }
     state.hasRejectedParams = false;
     state.rejectedParams = undefined;
@@ -313,6 +342,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
           state.hasPublishedParams = true;
           state.hasRejectedParams = false;
           state.rejectedParams = undefined;
+          state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
+          state.retryPending = false;
         } catch (error) {
           if (!connectionIsCurrent()) {
             return;
@@ -322,11 +353,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
             state.status = "unsupported";
             state.pendingParams = undefined;
             state.hasPending = false;
+            state.retryPending = false;
           } else {
             writeStderrLine(`node host ${label} publish failed: ${String(error)}`);
             if (failure === "rejected") {
               state.hasRejectedParams = true;
               state.rejectedParams = nextParams;
+              state.retryPending = false;
               if (state.hasPending && isDeepStrictEqual(state.pendingParams, nextParams)) {
                 state.pendingParams = undefined;
                 state.hasPending = false;
@@ -337,6 +370,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
               // value is never skipped against an uncertain remote state.
               state.hasPublishedParams = false;
               state.publishedParams = undefined;
+              if (!state.hasPending) {
+                state.pendingParams = nextParams;
+                state.hasPending = true;
+                state.retryPending = true;
+              }
             }
           }
         }
@@ -354,7 +392,21 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
           const pendingParams = state.pendingParams;
           state.pendingParams = undefined;
           state.hasPending = false;
-          queueOptionalPublication(method, pendingParams, label);
+          const retryPending = state.retryPending;
+          state.retryPending = false;
+          if (retryPending) {
+            const retryDelayMs = state.retryDelayMs;
+            state.retryDelayMs = Math.min(retryDelayMs * 2, NODE_OPTIONAL_PUBLICATION_RETRY_MAX_MS);
+            state.retryTimer = setTimeout(() => {
+              state.retryTimer = undefined;
+              if (gatewayHelloReceived && connectionIsCurrent()) {
+                queueOptionalPublication(method, pendingParams, label, true);
+              }
+            }, retryDelayMs);
+            state.retryTimer.unref?.();
+          } else {
+            queueOptionalPublication(method, pendingParams, label);
+          }
         }
       }
     });
@@ -425,6 +477,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       gatewayConnectionGeneration += 1;
       gatewayHelloReceived = true;
       connectedGatewayProtocol = hello.protocol;
+      retireOptionalPublications();
       optionalPublicationStates = new Map();
       publishInventory();
     },
@@ -443,10 +496,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       });
     },
     onClose: (code, reason) => {
-      gatewayConnectionGeneration += 1;
-      gatewayHelloReceived = false;
-      connectedGatewayProtocol = 0;
-      optionalPublicationStates.clear();
+      retireGatewayConnection();
       activeRuntime.cancelAll();
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
@@ -460,10 +510,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     onManifestChanged: (manifest) => {
       // Manifest changes force a reconnect. Retire the current publication queue
       // now so it cannot drain against the closing connection.
-      gatewayConnectionGeneration += 1;
-      gatewayHelloReceived = false;
-      connectedGatewayProtocol = 0;
-      optionalPublicationStates.clear();
+      retireGatewayConnection();
       client.updateNodeManifest(manifest);
     },
   });
@@ -481,6 +528,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     process.off("SIGTERM", onSigterm);
   };
   const stopClientAndMcp = async () => {
+    retireGatewayConnection();
     client.stop();
     try {
       await activeRuntime.close();

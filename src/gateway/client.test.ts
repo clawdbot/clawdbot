@@ -1239,6 +1239,18 @@ describe("GatewayClient connect auth payload", () => {
       expectedMaxProtocol: PROTOCOL_VERSION,
     },
     {
+      name: "built-in node hosts with an explicit spanning range",
+      options: {
+        role: "node",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        minProtocol: MIN_NODE_PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+      },
+      expectedMinProtocol: PROTOCOL_VERSION,
+      expectedMaxProtocol: PROTOCOL_VERSION,
+    },
+    {
       name: "node role without node mode",
       options: { role: "node" },
       expectedMinProtocol: MIN_CLIENT_PROTOCOL_VERSION,
@@ -1380,6 +1392,57 @@ describe("GatewayClient connect auth payload", () => {
       client.stop();
     },
   );
+
+  it("reconnects with the current envelope when a legacy probe reaches an upgraded Gateway", async () => {
+    const onHelloOk = vi.fn();
+    const client = createClientWithIdentity("device-gateway-upgrade", vi.fn(), {
+      role: "node",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      platform: "macos",
+      deviceFamily: "Mac",
+      onHelloOk,
+    });
+
+    const { ws: currentWs, connect: currentConnect } = startClientAndConnect({ client });
+    emitConnectFailure(
+      currentWs,
+      currentConnect.id,
+      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      "protocol mismatch",
+    );
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
+    const v3Ws = getLatestWs();
+    v3Ws.emitOpen();
+    emitConnectChallenge(v3Ws, "nonce-v3-initial");
+    const v3Connect = connectRequestFrom(v3Ws);
+    emitHelloOk(v3Ws, v3Connect.id, MIN_NODE_PROTOCOL_VERSION);
+    await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
+
+    v3Ws.emitClose(1012, "gateway restarting after upgrade");
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(2), { timeout: 3_000 });
+    const upgradedProbeWs = getLatestWs();
+    upgradedProbeWs.emitOpen();
+    emitConnectChallenge(upgradedProbeWs, "nonce-v3-upgraded");
+    const upgradedProbeConnect = connectRequestFrom(upgradedProbeWs);
+    expect(upgradedProbeConnect.params).toMatchObject({
+      minProtocol: MIN_NODE_PROTOCOL_VERSION,
+      maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+    });
+    emitHelloOk(upgradedProbeWs, upgradedProbeConnect.id, PROTOCOL_VERSION);
+
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(3), { timeout: 3_000 });
+    expect(onHelloOk).toHaveBeenCalledOnce();
+    const currentReconnectWs = getLatestWs();
+    currentReconnectWs.emitOpen();
+    emitConnectChallenge(currentReconnectWs, "nonce-v4-upgraded");
+    expect(connectRequestFrom(currentReconnectWs).params).toMatchObject({
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: { platform: "macos", deviceFamily: "Mac" },
+    });
+    client.stop();
+  });
 
   it("keeps canonical platform metadata for non-node-host node clients", () => {
     const client = createClientWithIdentity("device-third-party-node", vi.fn(), {

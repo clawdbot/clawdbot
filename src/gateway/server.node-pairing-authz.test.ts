@@ -2,7 +2,10 @@
 // command scopes, and gateway enforcement around node client identity.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
+import {
+  type HelloOk,
+  MIN_NODE_PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   approveNodePairing,
   listNodePairing,
@@ -722,6 +725,43 @@ describe("gateway node pairing authorization", () => {
   });
 
   describeWithGatewayServer("paired node reconnects", (getStarted) => {
+    test("preserves a fresh v3 node pairing tuple for Gateway rollback", async () => {
+      const legacyNode = loadDeviceIdentity("node-v3-pairing-rollback");
+      const connectLegacyNode = () =>
+        connectGatewayClient({
+          url: `ws://127.0.0.1:${getStarted().port}`,
+          token: "secret",
+          role: "node",
+          clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          clientDisplayName: "legacy-node-host",
+          clientVersion: "2026.5.7",
+          platform: "darwin",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+          minProtocol: MIN_NODE_PROTOCOL_VERSION,
+          maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+          scopes: [],
+          commands: [],
+          deviceIdentity: legacyNode.identity,
+        });
+
+      const connected = await connectLegacyNode();
+      try {
+        expect(await getPairedDevice(legacyNode.identity.deviceId)).toMatchObject({
+          platform: "darwin",
+          clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          clientMode: GATEWAY_CLIENT_MODES.NODE,
+        });
+        expect((await getPairedDevice(legacyNode.identity.deviceId))?.deviceFamily).toBeUndefined();
+        expect(
+          (await listDevicePairing()).pending.find(
+            (entry) => entry.deviceId === legacyNode.identity.deviceId,
+          ),
+        ).toBeUndefined();
+      } finally {
+        await connected.stopAndWait();
+      }
+    });
+
     test("normalizes signed blank desktop family before device metadata reapproval", async () => {
       const pairedNode = await pairDeviceIdentity({
         name: "node-blank-family-reconnect",

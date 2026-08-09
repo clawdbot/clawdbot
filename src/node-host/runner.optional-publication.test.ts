@@ -399,7 +399,7 @@ describe("runNodeHost optional publications", () => {
     });
   });
 
-  it("retries an unchanged desired inventory after a transient active failure", async () => {
+  it("retries unchanged desired inventory after a transient failure without another event", async () => {
     let pluginPublicationCount = 0;
     let rejectInitialPublication: ((error: Error) => void) | undefined;
     await withReadyNodeHost(async ({ client, options }) => {
@@ -421,7 +421,6 @@ describe("runNodeHost optional publications", () => {
       } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
       await vi.waitFor(() => expect(rejectInitialPublication).toBeDefined());
 
-      mocks.availabilityChanged?.();
       rejectInitialPublication?.(new Error("temporary publish failure"));
 
       await vi.waitFor(() => {
@@ -474,7 +473,7 @@ describe("runNodeHost optional publications", () => {
         const publications = client.request.mock.calls.filter(
           ([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD,
         );
-        expect(publications).toHaveLength(3);
+        expect(publications.length).toBeGreaterThanOrEqual(3);
         expect(publications.at(-1)?.[1]).toEqual({ tools: initialPluginTools });
       });
     });
