@@ -19,6 +19,11 @@ import {
 } from "./workspace-accepted-sync.js";
 import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
 import {
+  REMOTE_WORKSPACE_QUIESCE_JS,
+  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+  REMOTE_WORKSPACE_RESUME_JS,
+} from "./workspace-quiescence-scripts.js";
+import {
   applyStagedWorkerWorkspace,
   assertWorkspaceMatchesManifest,
   assertWorkspaceResultStable,
@@ -53,12 +58,6 @@ import {
   type WorkerWorkspaceActionsOptions,
 } from "./workspace-sync-helpers.js";
 import { createGitTransferList, runLocalCommandToFile } from "./workspace-sync-local.js";
-export { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
-import {
-  REMOTE_WORKSPACE_QUIESCE_JS,
-  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-  REMOTE_WORKSPACE_RESUME_JS,
-} from "./workspace-quiescence-scripts.js";
 import {
   REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
   REMOTE_GIT_WORKSPACE_SETUP_SCRIPT,

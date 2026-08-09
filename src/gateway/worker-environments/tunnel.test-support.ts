@@ -15,7 +15,7 @@ import type {
   WorkerWorkspaceReconciliationJournal,
   WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-reconcile.js";
-import { stableWorkerPathComponent } from "./workspace-sync.js";
+import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
 
 export function waitForFast<T>(
   callback: () => T | Promise<T>,
