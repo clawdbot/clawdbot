@@ -171,11 +171,11 @@ function loadValidatedPublicSurfaceModule(params: {
   }
 }
 
-function loadBundledPublicSurfaceAtLocation<T extends object>(params: {
+function loadBundledPublicSurfaceAtLocation(params: {
   dirName: string;
   artifactBasename: string;
   location: PublicSurfaceLocation;
-}): T {
+}): object {
   return loadValidatedPublicSurfaceModule({
     modulePath: params.location.modulePath,
     boundaryRoot: params.location.boundaryRoot,
@@ -185,7 +185,7 @@ function loadBundledPublicSurfaceAtLocation<T extends object>(params: {
         : "plugin root",
     surfaceLabel: `bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     origin: "bundled",
-  }) as T;
+  });
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
@@ -199,7 +199,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  return loadBundledPublicSurfaceAtLocation({ ...params, location });
+  return loadBundledPublicSurfaceAtLocation({ ...params, location }) as T;
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
@@ -234,11 +234,11 @@ export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extend
       artifactBasename,
     });
     if (location) {
-      return loadBundledPublicSurfaceAtLocation<T>({
+      return loadBundledPublicSurfaceAtLocation({
         dirName: params.dirName,
         artifactBasename,
         location,
-      });
+      }) as T;
     }
   }
   return null;
