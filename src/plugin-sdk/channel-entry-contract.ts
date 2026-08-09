@@ -103,7 +103,7 @@ export type BundledChannelEntryContract<TPlugin = ChannelPlugin> = {
   id: string;
   name: string;
   description: string;
-  configSchema: ChannelEntryConfigSchema<TPlugin>;
+  configSchema: ChannelConfigSchema;
   features?: BundledChannelEntryFeatures;
   register: (api: OpenClawPluginApi) => void;
   loadChannelPlugin: (options?: BundledEntryModuleLoadOptions) => TPlugin;

@@ -510,7 +510,7 @@ type DefinedChannelPluginEntry<TPlugin> = {
   id: string;
   name: string;
   description: string;
-  configSchema: ChannelEntryConfigSchema<TPlugin>;
+  configSchema: ChannelConfigSchema;
   register: (api: OpenClawPluginApi) => void;
   channelPlugin: TPlugin;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
