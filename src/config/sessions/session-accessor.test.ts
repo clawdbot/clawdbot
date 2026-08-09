@@ -12,7 +12,10 @@ import {
 } from "../../sessions/transcript-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  isOpenClawAgentDatabaseOpen,
+  listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
@@ -38,6 +41,7 @@ import {
   listSessionTranscriptInstances,
   loadReplySessionInitializationSnapshot,
   loadSessionEntry,
+  loadSessionEntryReadOnly,
   loadTranscriptEvents,
   markSessionAbortTarget,
   onSessionIdentityMutation,
@@ -1098,6 +1102,244 @@ describe("session accessor seam", () => {
           role: "user",
           content: "default store sqlite turn",
         }),
+      }),
+    );
+  });
+
+  it("rejects a transcript turn when the session id rotates mid-append", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "old-rotate-session",
+      sessionKey: "agent:main:turn-rotate",
+      storePath,
+    };
+    await replaceSessionEntry(
+      { sessionKey: scope.sessionKey, storePath },
+      { sessionId: scope.sessionId, updatedAt: Date.now() },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "user", content: "rotate-hello", timestamp: Date.now() },
+          shouldAppend: async () => {
+            // Simulate a concurrent reset rotating the session id between target
+            // resolution and the transcript append.
+            await replaceSessionEntry(
+              { sessionKey: scope.sessionKey, storePath },
+              { sessionId: "new-rotate-session", updatedAt: Date.now() },
+            );
+            return true;
+          },
+        },
+      ],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.rejectedReason).toBe("session-rebound");
+    // The message must not be silently written into the stale session transcript.
+    await expect(
+      loadTranscriptEvents({ ...scope, sessionId: "old-rotate-session" }),
+    ).resolves.not.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ content: "rotate-hello" }),
+      }),
+    );
+  });
+
+  it("rejects a default-store transcript turn when the session id rotates mid-append", async () => {
+    // Caller omits storePath; resolveTranscriptTurnTarget derives the default
+    // store. The guarded path must still apply so rotation is visible.
+    const stateDir = path.join(tempDir, "state-rotate-default");
+    const expectedStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const scope = {
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      sessionId: "old-default-rotate",
+      sessionKey: "agent:main:default-rotate",
+    };
+    await replaceSessionEntry(
+      { sessionKey: scope.sessionKey, storePath: expectedStorePath },
+      { sessionId: scope.sessionId, updatedAt: Date.now() },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "user", content: "default-rotate-hello", timestamp: Date.now() },
+          shouldAppend: async () => {
+            await replaceSessionEntry(
+              { sessionKey: scope.sessionKey, storePath: expectedStorePath },
+              { sessionId: "new-default-rotate", updatedAt: Date.now() },
+            );
+            return true;
+          },
+        },
+      ],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.rejectedReason).toBe("session-rebound");
+    await expect(
+      loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "old-default-rotate",
+        sessionKey: scope.sessionKey,
+        storePath: expectedStorePath,
+      }),
+    ).resolves.not.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ content: "default-rotate-hello" }),
+      }),
+    );
+  });
+
+  it("keeps sessionStore-mirrored transcript turns on the legacy append path (#119221)", async () => {
+    // Mirror-only sessionStore callers (entry from memory, not a persisted
+    // SQLite row) must stay on the legacy append — the guarded transaction
+    // requires a persisted row to validate and would reject as session-rebound.
+    // Populate the mirror with an entry and deliberately create NO SQLite row,
+    // so resolveTranscriptTurnTarget resolves from the mirror (resolved.existing)
+    // and loadSessionEntry finds nothing — entryFromPersistedStore stays false.
+    const sessionStore = {} as Record<string, import("./types.js").SessionEntry>;
+    const scope = {
+      agentId: "main",
+      sessionId: "mirror-only-session",
+      sessionKey: "agent:main:mirror-only",
+      storePath,
+      sessionStore,
+    };
+    sessionStore[scope.sessionKey] = {
+      sessionId: scope.sessionId,
+      updatedAt: Date.now(),
+    };
+    // No replaceSessionEntry: the SQLite store has no row for this key.
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "user", content: "mirror-only-hello", timestamp: Date.now() },
+        },
+      ],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    // No session-rebound — the legacy append accepted the message.
+    expect(result.rejectedReason).toBeUndefined();
+    expect(result.appendedCount).toBe(1);
+  });
+
+  it("does not create database state for rejected memory-only transcript turns", async () => {
+    for (const source of ["sessionStore", "sessionEntry"] as const) {
+      const stateDir = path.join(tempDir, `rejected-memory-only-${source}`);
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const agentId = "main";
+      const sessionKey = `agent:main:rejected-memory-only-${source}`;
+      const sessionId = `rejected-memory-only-${source}`;
+      const memoryStorePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env });
+      const sessionEntry: SessionEntry = { sessionId, updatedAt: Date.now() };
+      const memorySource =
+        source === "sessionStore"
+          ? { sessionStore: { [sessionKey]: sessionEntry } }
+          : { sessionEntry };
+      expect(
+        loadSessionEntryReadOnly({ agentId, env, sessionKey, storePath: memoryStorePath }),
+      ).toBeUndefined();
+      expect(fs.existsSync(databasePath)).toBe(false);
+
+      const result = await persistSessionTranscriptTurn(
+        { agentId, env, sessionId, sessionKey, storePath: memoryStorePath, ...memorySource },
+        {
+          messages: [
+            {
+              message: { role: "user", content: "rejected-memory-only" },
+              shouldAppend: () => false,
+            },
+          ],
+          touchSessionEntry: true,
+          updateMode: "none",
+        },
+      );
+
+      expect(result).toMatchObject({ appendedCount: 0, messages: [] });
+      expect(fs.existsSync(databasePath)).toBe(false);
+      expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+      expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
+    }
+  });
+
+  it("guards durable sessionStore transcript turns when the entry falls back to SQLite (#119221)", async () => {
+    // sessionStore mirror is empty (no entry for the key), so resolveTranscriptTurnTarget
+    // falls back to loadSessionEntry (SQLite). The entry is persisted — the guarded
+    // path must apply and reject on rotation.
+    const scope = {
+      agentId: "main",
+      sessionId: "durable-fallback-session",
+      sessionKey: "agent:main:durable-fallback",
+      storePath,
+      sessionStore: {} as Record<string, import("./types.js").SessionEntry>,
+    };
+    await replaceSessionEntry(
+      { sessionKey: scope.sessionKey, storePath },
+      { sessionId: scope.sessionId, updatedAt: Date.now() },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          message: { role: "user", content: "durable-fallback-hello", timestamp: Date.now() },
+          shouldAppend: async () => {
+            await replaceSessionEntry(
+              { sessionKey: scope.sessionKey, storePath },
+              { sessionId: "new-durable-fallback", updatedAt: Date.now() },
+            );
+            return true;
+          },
+        },
+      ],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.rejectedReason).toBe("session-rebound");
+  });
+
+  it("rejects a transcript turn when the session id rotates before target resolution", async () => {
+    // A reset wins before resolveTranscriptTurnTarget reads the entry, so the
+    // resolved entry already holds the replacement id. The caller still passes
+    // its old id. The guarded transaction must use the caller's id (not the
+    // resolved entry's) to detect the mismatch and reject.
+    const scope = {
+      agentId: "main",
+      sessionId: "old-preresolve-session",
+      sessionKey: "agent:main:preresolve-rotate",
+      storePath,
+    };
+    // Rotate the entry before the turn is attempted — resolve will read the new id.
+    await replaceSessionEntry(
+      { sessionKey: scope.sessionKey, storePath },
+      { sessionId: "new-preresolve-session", updatedAt: Date.now() },
+    );
+
+    const result = await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { role: "user", content: "preresolve-hello", timestamp: Date.now() } }],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
+
+    expect(result.rejectedReason).toBe("session-rebound");
+    await expect(
+      loadTranscriptEvents({ ...scope, sessionId: "new-preresolve-session" }),
+    ).resolves.not.toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({ content: "preresolve-hello" }),
       }),
     );
   });
