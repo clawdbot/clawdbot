@@ -1534,6 +1534,67 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("returns to v3 when the Gateway rolls back before v4 readiness", async () => {
+    const onHelloOk = vi.fn();
+    const client = createClientWithIdentity("device-gateway-rollback-before-ready", vi.fn(), {
+      role: "node",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      onHelloOk,
+    });
+
+    const { ws: initialWs, connect: initialConnect } = startClientAndConnect({ client });
+    emitConnectFailure(
+      initialWs,
+      initialConnect.id,
+      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      "protocol mismatch",
+    );
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
+    const v3Ws = getLatestWs();
+    v3Ws.emitOpen();
+    emitConnectChallenge(v3Ws, "nonce-v3-ready");
+    const v3Connect = connectRequestFrom(v3Ws);
+    emitHelloOk(v3Ws, v3Connect.id, MIN_NODE_PROTOCOL_VERSION);
+    await waitForFast(() => expect(onHelloOk).toHaveBeenCalledOnce());
+
+    v3Ws.emitClose(1012, "gateway upgrading");
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(2), { timeout: 3_000 });
+    const v3UpgradeProbeWs = getLatestWs();
+    v3UpgradeProbeWs.emitOpen();
+    emitConnectChallenge(v3UpgradeProbeWs, "nonce-v3-upgrade-probe");
+    const v3UpgradeProbe = connectRequestFrom(v3UpgradeProbeWs);
+    emitConnectFailure(
+      v3UpgradeProbeWs,
+      v3UpgradeProbe.id,
+      { expectedProtocol: PROTOCOL_VERSION },
+      "protocol mismatch",
+    );
+
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(3), { timeout: 3_000 });
+    const v4Ws = getLatestWs();
+    v4Ws.emitOpen();
+    emitConnectChallenge(v4Ws, "nonce-v4-before-rollback");
+    const v4Connect = connectRequestFrom(v4Ws);
+    emitConnectFailure(
+      v4Ws,
+      v4Connect.id,
+      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      "protocol mismatch",
+    );
+
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(4), { timeout: 3_000 });
+    const recoveredV3Ws = getLatestWs();
+    recoveredV3Ws.emitOpen();
+    emitConnectChallenge(recoveredV3Ws, "nonce-v3-after-rollback");
+    expect(connectRequestFrom(recoveredV3Ws).params).toMatchObject({
+      minProtocol: MIN_NODE_PROTOCOL_VERSION,
+      maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+    });
+    expect(onHelloOk).toHaveBeenCalledOnce();
+    client.stop();
+  });
+
   it("keeps canonical platform metadata for non-node-host node clients", () => {
     const client = createClientWithIdentity("device-third-party-node", vi.fn(), {
       role: "node",

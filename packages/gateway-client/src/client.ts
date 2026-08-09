@@ -396,7 +396,7 @@ export class GatewayClient {
   private deps: Required<GatewayClientHostDeps>;
   private stopped = false;
   private useLegacyNodeProtocolEnvelope = false;
-  private legacyNodeProtocolRetryBudgetUsed = false;
+  private nodeProtocolTransitionPending = false;
   private suppressNextHelloCallback = false;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
@@ -891,7 +891,6 @@ export class GatewayClient {
   private shouldRetryWithLegacyNodeProtocol(error: GatewayProtocolRequestError): boolean {
     if (
       this.useLegacyNodeProtocolEnvelope ||
-      this.legacyNodeProtocolRetryBudgetUsed ||
       !this.shouldNegotiateLegacyNodeProtocol() ||
       !(error instanceof GatewayClientRequestError)
     ) {
@@ -972,7 +971,7 @@ export class GatewayClient {
     if (reconnectWithCurrentNodeProtocol) {
       this.useLegacyNodeProtocolEnvelope = false;
     }
-    this.legacyNodeProtocolRetryBudgetUsed = false;
+    this.nodeProtocolTransitionPending = false;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.suppressedTransientPreHelloCleanCloses = 0;
@@ -1007,18 +1006,22 @@ export class GatewayClient {
     assembled: AssembledConnect,
   ) {
     if (this.shouldRetryWithCurrentNodeProtocol(error)) {
-      // Keep the retry budget armed until v4 succeeds so contradictory
-      // mismatch responses cannot bounce the client between envelopes.
+      const resetBackoff = !this.nodeProtocolTransitionPending;
       this.useLegacyNodeProtocolEnvelope = false;
-      this.legacyNodeProtocolRetryBudgetUsed = true;
-      this.protocol.resetReconnectBackoff(250);
+      this.nodeProtocolTransitionPending = true;
+      if (resetBackoff) {
+        this.protocol.resetReconnectBackoff(250);
+      }
       this.logDebug("gateway rejected protocol v3; retrying node host with protocol v4");
       return { closeCode: 1008, closeReason: "connect retry" };
     }
     if (this.shouldRetryWithLegacyNodeProtocol(error)) {
+      const resetBackoff = !this.nodeProtocolTransitionPending;
       this.useLegacyNodeProtocolEnvelope = true;
-      this.legacyNodeProtocolRetryBudgetUsed = true;
-      this.protocol.resetReconnectBackoff(250);
+      this.nodeProtocolTransitionPending = true;
+      if (resetBackoff) {
+        this.protocol.resetReconnectBackoff(250);
+      }
       this.logDebug("gateway rejected protocol v4; retrying node host with protocol v3");
       return { closeCode: 1008, closeReason: "connect retry" };
     }
