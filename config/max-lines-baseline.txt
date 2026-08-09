@@ -322,8 +322,6 @@ packages/tool-call-repair/src/stream-normalizer.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts
 src/acp/control-plane/manager.turn-results.test.ts
-src/acp/event-ledger.ts
-src/acp/translator.ts
 src/agents/acp-spawn-parent-stream.test.ts
 src/agents/acp-spawn.test.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
