@@ -135,9 +135,16 @@ describe("media persistence migration targets", () => {
       env,
     }).path;
     createLegacyAgentDatabase({ env, path: databasePath });
+    unregisterOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
+    expect(
+      listOpenClawRegisteredAgentDatabases({
+        env,
+        includeIncompatibleSchemaVersions: true,
+      }),
+    ).toEqual([]);
 
     const result = migrateLegacyMediaPersistence({
-      allowedAgentDatabasePaths: [databasePath],
+      configuredAgentDatabaseTargets: [{ agentId: "main", path: databasePath }],
       env,
     });
 

@@ -1301,18 +1301,18 @@ export async function autoMigrateLegacyState(params: {
   const mediaPersistence =
     params.doctorOnlyStateMigrations === true
       ? migrateLegacyMediaPersistence({
-          allowedAgentDatabasePaths: resolveSessionStoreTargets(
+          configuredAgentDatabaseTargets: resolveSessionStoreTargets(
             params.cfg,
             { allAgents: true },
             { env },
-          ).map(
-            (target) =>
-              resolveSqliteTargetFromSessionStorePath(target.storePath, {
-                agentId: target.agentId,
-                defaultAgentId: resolveDefaultAgentId(params.cfg),
-                env,
-              }).path,
-          ),
+          ).map((target) => ({
+            agentId: target.agentId,
+            path: resolveSqliteTargetFromSessionStorePath(target.storePath, {
+              agentId: target.agentId,
+              defaultAgentId: resolveDefaultAgentId(params.cfg),
+              env,
+            }).path,
+          })),
           env: { ...env, OPENCLAW_STATE_DIR: stateDir },
         })
       : { changes: [], warnings: [] };

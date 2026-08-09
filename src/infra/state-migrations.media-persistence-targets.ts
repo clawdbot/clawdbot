@@ -15,7 +15,7 @@ type AgentDatabaseMediaMigrationTarget = {
   agentId: string;
   path: string;
   realPath: string;
-  source: "disk" | "registry";
+  source: "configured" | "disk" | "registry";
 };
 
 type CandidateTarget = Omit<AgentDatabaseMediaMigrationTarget, "realPath">;
@@ -41,8 +41,8 @@ function listDefaultAgentDatabaseTargets(
 }
 
 export function resolveAgentDatabaseMediaMigrationTargets(params: {
-  allowedAgentDatabasePaths: readonly string[];
   changes: string[];
+  configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   env: NodeJS.ProcessEnv;
   warnings: string[];
 }): AgentDatabaseMediaMigrationTarget[] {
@@ -63,6 +63,11 @@ export function resolveAgentDatabaseMediaMigrationTargets(params: {
       agentId: entry.agentId,
       path: entry.path,
       source: "registry" as const,
+    })),
+    ...params.configuredAgentDatabaseTargets.map((target) => ({
+      agentId: target.agentId,
+      path: target.path,
+      source: "configured" as const,
     })),
   ];
   const activeStateDir = resolveStateDir(params.env);
@@ -101,9 +106,9 @@ export function resolveAgentDatabaseMediaMigrationTargets(params: {
         params.warnings.push(`Could not resolve agent database ${pathname}: ${String(error)}`);
       }
     }
-    const isConfiguredPath = params.allowedAgentDatabasePaths.some((allowedPath) => {
+    const isConfiguredPath = params.configuredAgentDatabaseTargets.some((configuredTarget) => {
       try {
-        return configuredPathMatcher(pathname, allowedPath);
+        return configuredPathMatcher(pathname, configuredTarget.path);
       } catch {
         return false;
       }

@@ -590,7 +590,7 @@ function listTranscriptArchives(directory: string): string[] {
 /** Doctor-only migration from top-level Media* transcript fields to canonical facts. */
 export function migrateLegacyMediaPersistence(
   params: {
-    allowedAgentDatabasePaths?: readonly string[];
+    configuredAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
     hooks?: {
       beforeArchiveReplace?: (archivePath: string) => void;
       beforeDatabaseTransaction?: (databasePath: string) => void;
@@ -602,8 +602,8 @@ export function migrateLegacyMediaPersistence(
   const changes: string[] = [];
   const warnings: string[] = [];
   const targets = resolveAgentDatabaseMediaMigrationTargets({
-    allowedAgentDatabasePaths: params.allowedAgentDatabasePaths ?? [],
     changes,
+    configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
     env,
     warnings,
   });
@@ -630,7 +630,7 @@ export function migrateLegacyMediaPersistence(
           : undefined,
         pathname,
       });
-      if (entry.source === "disk" || result.versionAdvanced) {
+      if (entry.source !== "registry" || result.versionAdvanced) {
         registerOpenClawAgentDatabase({ agentId: entry.agentId, env, path: pathname });
       }
       if (
