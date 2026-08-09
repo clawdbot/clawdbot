@@ -1722,7 +1722,7 @@ describe("GatewayClient connect auth payload", () => {
   function emitHelloOk(
     ws: MockWebSocket,
     connectId: string | undefined,
-    protocol = PROTOCOL_VERSION,
+    protocol: number = PROTOCOL_VERSION,
   ) {
     ws.emitMessage(
       JSON.stringify({
