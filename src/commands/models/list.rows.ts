@@ -512,25 +512,44 @@ export async function appendConfiguredProviderRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
 }): Promise<void> {
+  const replaceMode = params.context.cfg.models?.mode === "replace";
   for (const [provider, providerConfig] of Object.entries(
     params.context.cfg.models?.providers ?? {},
   )) {
     for (const configuredModel of providerConfig.models ?? []) {
-      if (!shouldListConfiguredProviderModel({ providerConfig, model: configuredModel })) {
+      if (
+        !replaceMode &&
+        !shouldListConfiguredProviderModel({ providerConfig, model: configuredModel })
+      ) {
         continue;
       }
-      const key = modelKey(provider, configuredModel.id);
+      // Strip a self-prefix against the source provider before display aliasing.
+      // Auth stays on the source provider so alias-backed profiles remain valid.
+      const sourceKey = modelKey(provider, configuredModel.id);
+      const sourceSlash = sourceKey.indexOf("/");
+      const modelId = replaceMode ? sourceKey.slice(sourceSlash + 1) : configuredModel.id;
+      const displayProvider = replaceMode
+        ? canonicalizeModelCatalogProviderAlias(provider, {
+            cfg: params.context.cfg,
+            metadataSnapshot: params.context.metadataSnapshot,
+          })
+        : provider;
+      const key = modelKey(displayProvider, modelId);
       const model = toConfiguredProviderListModel({
         provider,
         providerConfig,
-        model: configuredModel,
+        model: { ...configuredModel, id: modelId },
       });
+      const authEvaluation = replaceMode
+        ? params.context.authIndex.evaluateModelAuth(provider, toModelAuthRef(model))
+        : undefined;
       await appendVisibleRow({
         rows: params.rows,
         model,
         key,
         context: params.context,
         seenKeys: params.seenKeys,
+        ...(authEvaluation ? { authEvaluation } : {}),
         allowAuthAvailabilityOverride: true,
         normalizeWithProviderPlugin: true,
       });
@@ -545,6 +564,9 @@ export async function appendAuthenticatedCatalogRows(params: {
   seenKeys: Set<string>;
   catalogSnapshot?: ModelCatalogSnapshot;
 }): Promise<void> {
+  if (params.context.cfg.models?.mode === "replace") {
+    return;
+  }
   const { entries: catalog, routeVariants } =
     params.catalogSnapshot ?? (await loadListModelCatalogSnapshot(params.context));
   const routeIndex = createModelCatalogLogicalRouteIndex(routeVariants);

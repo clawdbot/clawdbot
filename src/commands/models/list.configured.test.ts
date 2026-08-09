@@ -44,6 +44,7 @@ import { appendConfiguredModelRowSources } from "./list.row-sources.js";
 import type { ModelRow } from "./list.types.js";
 
 afterEach(() => {
+  vi.clearAllMocks();
   vi.unstubAllEnvs();
 });
 
@@ -203,6 +204,63 @@ describe("resolveConfiguredEntries", () => {
 });
 
 describe("configured model list rows", () => {
+  it("keeps raw alias auth for self-prefixed implicit models in replace mode", async () => {
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+    const catalogEntry = {
+      id: "glm-4.7",
+      name: "GLM 4.7",
+      provider: "zai",
+      input: ["text"] as const,
+      contextWindow: 128_000,
+    };
+    mocks.loadPreparedModelCatalogSnapshot.mockResolvedValue({
+      entries: [catalogEntry],
+      routeVariants: [catalogEntry],
+    });
+    const cfg = {
+      agents: { defaults: { model: { primary: "z.ai/glm-4.7" } } },
+      models: {
+        mode: "replace" as const,
+        providers: {
+          "z.ai": {
+            baseUrl: "https://api.z.ai/v1",
+            models: [
+              { id: "z.ai/glm-4.7", name: "GLM 4.7", input: ["text" as const] },
+              { id: "z.ai/glm-4.8", name: "GLM 4.8", input: ["text" as const] },
+            ],
+          },
+        },
+      },
+    };
+    const { entries } = resolveConfiguredEntries(cfg);
+    const evaluateModelAuth = vi.fn((provider: string) => ({
+      availability: provider === "z.ai",
+      routeResolution: null,
+    }));
+    const rows: ModelRow[] = [];
+
+    await appendConfiguredModelRowSources({
+      rows,
+      entries,
+      context: {
+        cfg,
+        agentDir: "/tmp/openclaw-agent",
+        authIndex: { evaluateModelAuth },
+        configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
+        discoveredKeys: new Set(),
+        filter: {},
+        skipRuntimeModelSuppression: true,
+      },
+    });
+
+    expect(rows.map((row) => row.key)).toEqual(["zai/glm-4.7", "zai/glm-4.8"]);
+    expect(rows[1]).toMatchObject({ name: "GLM 4.8", available: true });
+    expect(evaluateModelAuth).toHaveBeenCalledWith(
+      "z.ai",
+      expect.objectContaining({ modelId: "glm-4.8" }),
+    );
+  });
+
   it("renders plugin-catalog metadata for a fallback ref instead of default placeholders", async () => {
     const catalogEntry = {
       id: "k3",
