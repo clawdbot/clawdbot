@@ -40,7 +40,6 @@ import {
   loadPersistedAuthProfileStore,
   mergeAuthProfileStores,
 } from "./persisted.js";
-import { shouldPublishRuntimeExternalAuthProfiles } from "./runtime-external-profile-publication.js";
 import {
   clearRuntimeAuthProfileStoreSnapshot as clearRuntimeAuthProfileStoreSnapshotImpl,
   clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
@@ -1162,7 +1161,6 @@ export function ensureAuthProfileStore(
   }
   const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
   const effectiveOptions = resolveRuntimeAuthProfileLoadOptions(options);
-  const publishExternalProfiles = shouldPublishRuntimeExternalAuthProfiles();
   const externalCli = resolveExternalCliOverlayOptions(effectiveOptions);
   const runtimeStore = resolveRuntimeAuthProfileStore(effectiveAgentDir, effectiveOptions);
   const store = overlayExternalAuthProfiles(
@@ -1174,7 +1172,6 @@ export function ensureAuthProfileStore(
   );
   if (!runtimeStore) {
     if (
-      publishExternalProfiles &&
       hasScopedExternalCliOverlay(externalCli) &&
       (store.runtimeExternalProfileIds?.length ?? 0) > 0
     ) {
@@ -1187,7 +1184,7 @@ export function ensureAuthProfileStore(
     // snapshot must retain unrelated external profiles. Publish the merged owner fact so prepared
     // model and chat metadata generations converge without reopening credential sources.
     const materialized = mergeRuntimeExternalProfileState({ next: store, existing: runtimeStore });
-    if (publishExternalProfiles && !isDeepStrictEqual(materialized, runtimeStore)) {
+    if (!isDeepStrictEqual(materialized, runtimeStore)) {
       setRuntimeAuthProfileStoreSnapshot(materialized, effectiveAgentDir);
     }
     return store;

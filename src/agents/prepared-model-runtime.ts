@@ -2,7 +2,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import { registerRuntimeAuthMaterializationMutationListener } from "./auth-profiles/runtime-materializations.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
+import { publishPreparedRuntimeAuthMaterializations } from "./prepared-model-runtime-materializations.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimeOwnerRetention,
@@ -748,6 +750,14 @@ function invalidateForAuthMutation(event: AuthMutationEvent): void {
 }
 
 registerRuntimeAuthProfileStoreMutationListener(invalidateForAuthMutation);
+registerRuntimeAuthMaterializationMutationListener((event) => {
+  publishPreparedRuntimeAuthMaterializations({
+    event,
+    owners,
+    onInvalidated: () => notifyPreparedModelRuntimePublication({ phase: "invalidated" }),
+    onPublished: () => notifyPreparedModelRuntimePublication({ phase: "published" }),
+  });
+});
 
 function resetPreparedModelRuntimeSnapshotsForTest(): void {
   pendingModelRuntimeReplacement?.resolve();

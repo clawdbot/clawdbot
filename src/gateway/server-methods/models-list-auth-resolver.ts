@@ -1,13 +1,16 @@
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credentials.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
+import { resolveExternalCliAuthProfiles } from "../../agents/auth-profiles/external-cli-sync.js";
 import {
-  ensureAuthProfileStore,
-  loadAuthProfileStoreWithoutExternalProfiles,
-} from "../../agents/auth-profiles.js";
-import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
+  recordRuntimeAuthMaterialization,
+  type RuntimeAuthMaterialization,
+} from "../../agents/auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
   createModelAuthAvailabilityResolver,
+  type ModelAuthAvailabilityEvaluation,
+  type ModelAuthAvailabilityRef,
   type ModelAuthAvailabilityResolver,
 } from "../../agents/model-auth-availability.js";
 import { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
@@ -54,21 +57,23 @@ export function createModelsListAuthResolver(params: {
   // it after the Gateway execution snapshot was built.
   const authStore =
     params.preparedAuthStore ??
-    (params.includeOpenAIExternalProfiles
-      ? ensureAuthProfileStore(agentDir, {
-          config: params.cfg,
-          externalCliProviderIds: ["openai"],
-          allowKeychainPrompt: false,
-          readOnly: true,
-          syncExternalCli: false,
-        })
-      : loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
-          allowKeychainPrompt: false,
-        }));
+    loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+      allowKeychainPrompt: false,
+    });
   // A prepared projection must hydrate from its own auth-store generation. Reading the global
   // snapshot can mix generations; treating this store as persisted loses resolved SecretRefs.
   const preparedRuntimeAuthStore = params.preparedAuthStore;
-  return createModelAuthAvailabilityResolver({
+  const externalCliProviderIds =
+    !params.preparedAuthStore && params.includeOpenAIExternalProfiles ? ["openai"] : [];
+  const externalProfileIds = new Set(
+    externalCliProviderIds.length
+      ? resolveExternalCliAuthProfiles(authStore, {
+          allowKeychainPrompt: false,
+          providerIds: externalCliProviderIds,
+        }).map(({ profileId }) => profileId)
+      : [],
+  );
+  const resolver = createModelAuthAvailabilityResolver({
     cfg: params.cfg,
     authStore,
     agentDir,
@@ -79,8 +84,49 @@ export function createModelsListAuthResolver(params: {
     preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
     skipSetupProviderFallback: true,
     syntheticAuthProviderRefs: listEnabledSyntheticAuthProviderRefs(params),
-    externalCliProviderIds: [],
+    externalCliProviderIds,
     ...(preparedRuntimeAuthStore ? { preparedRuntimeAuthStore } : {}),
     routeResolverFactory: params.routeResolverFactory,
   });
+  if (externalProfileIds.size === 0) {
+    return resolver;
+  }
+  const evaluateModelAuth = (
+    provider: string,
+    ref: ModelAuthAvailabilityRef = {},
+  ): ModelAuthAvailabilityEvaluation => {
+    const evaluation = resolver.evaluateModelAuth(provider, ref);
+    const route = evaluation.selectedRoute;
+    const profileId = evaluation.selectedProfileId;
+    if (
+      evaluation.availability === true &&
+      route &&
+      profileId &&
+      externalProfileIds.has(profileId)
+    ) {
+      const modelId = ref.modelId?.trim();
+      if (modelId) {
+        recordRuntimeAuthMaterialization({
+          agentDir,
+          provider,
+          modelId,
+          modelApi: route.api,
+          modelBaseUrl: route.baseUrl,
+          requestTransportOverrides: route.requestTransportOverrides,
+          authMode:
+            evaluation.selectedAuthMode ??
+            (route.authRequirement === "subscription" ? "oauth" : "api-key"),
+          runtimeOwnerId: "external-cli",
+          authProfileId: profileId,
+        });
+      }
+    }
+    return evaluation;
+  };
+  return {
+    ...resolver,
+    evaluateModelAuth,
+    resolveProviderAuthAvailability: (provider, ref) =>
+      evaluateModelAuth(provider, ref).availability,
+  };
 }

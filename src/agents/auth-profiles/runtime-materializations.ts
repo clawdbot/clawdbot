@@ -28,7 +28,10 @@ function ownerKey(agentDir?: string): string {
 }
 
 function notify(agentDir?: string): void {
-  const event = { ...(agentDir ? { agentDir } : {}), affectsInheritedStores: false };
+  const event = {
+    ...(agentDir ? { agentDir } : {}),
+    affectsInheritedStores: agentDir === undefined,
+  };
   for (const listener of listeners) {
     listener(event);
   }

@@ -11,7 +11,6 @@ import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
 import { overlayExternalAuthProfiles } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
-import { withoutRuntimeExternalAuthProfilePublication } from "./runtime-external-profile-publication.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./runtime-snapshots.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -173,7 +172,7 @@ describe("auth external oauth helpers", () => {
     }
   });
 
-  it("preserves resolved runtime refs across producer publication and owner rebuild", () => {
+  it("preserves resolved runtime refs when startup publishes scoped external auth", () => {
     const agentDir = "/tmp/openclaw-external-oauth-prepared-owner";
     const resolved = createStore({
       "openai:configured": {
@@ -187,30 +186,21 @@ describe("auth external oauth helpers", () => {
     readCodexCliCredentialsCachedMock.mockReturnValue(
       createCredential({ expires: createUsableOAuthExpiry() }),
     );
-    let rebuilt: AuthProfileStore | undefined;
-    const listener = vi.fn(() => {
-      rebuilt = withoutRuntimeExternalAuthProfilePublication(() =>
-        ensureAuthProfileStore(agentDir, {
-          externalCliProviderIds: ["openai"],
-          allowKeychainPrompt: false,
-          readOnly: true,
-          syncExternalCli: false,
-        }),
-      );
-    });
+    const listener = vi.fn();
     const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
     try {
-      ensureAuthProfileStore(agentDir, {
+      const hydrated = ensureAuthProfileStore(agentDir, {
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
         readOnly: true,
         syncExternalCli: false,
       });
 
-      expect(rebuilt?.profiles["openai:configured"]).toEqual(
+      expect(hydrated.profiles["openai:configured"]).toEqual(
         resolved.profiles["openai:configured"],
       );
-      expect(rebuilt?.profiles["openai:default"]?.type).toBe("oauth");
+      expect(hydrated.profiles["openai:default"]?.type).toBe("oauth");
+      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles).toEqual(hydrated.profiles);
       expect(listener).toHaveBeenCalledOnce();
     } finally {
       unregister();

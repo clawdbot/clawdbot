@@ -27,8 +27,6 @@ import {
   discoverModels,
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
-import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
-import { withoutRuntimeExternalAuthProfilePublication } from "./auth-profiles/runtime-external-profile-publication.js";
 import {
   buildInlineProviderModels,
   type InlineModelEntry,
@@ -135,32 +133,22 @@ function prepareAgentFacts(
   additionalProviderIds: readonly string[] = [],
 ): PreparedModelRuntimeAgentBaseFacts {
   const env = input.env ?? process.env;
+  const templateAuthStorage = discoverAuthStorage(input.agentDir, {
+    config: input.config,
+    // Prepared owners consume only the already-published runtime auth generation. External CLI
+    // hydration belongs to startup/control-plane and turn-time producers, never rebuilds.
+    readOnly: true,
+    ambientCredentials,
+    ...(input.skipCredentials ? { skipCredentials: true } : {}),
+    ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
+    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+    ...(input.env ? { env } : {}),
+  });
+  const credentials = templateAuthStorage.getAll();
   const configuredModelRefs = collectPreparedModelRuntimeConfiguredRefs(
     input.config,
     input.agentId,
   );
-  const externalCli = externalCliDiscoveryForProviders({
-    cfg: input.config,
-    providers: configuredModelRefs.flatMap(({ value }) => {
-      const separator = value.indexOf("/");
-      return separator > 0 ? [value.slice(0, separator)] : [];
-    }),
-  });
-  const templateAuthStorage = withoutRuntimeExternalAuthProfilePublication(() =>
-    discoverAuthStorage(input.agentDir, {
-      config: input.config,
-      // The generation owns external overlays discovered here. Republishing one mid-build would
-      // recursively stale the owner currently materializing it.
-      readOnly: true,
-      ambientCredentials,
-      externalCli,
-      ...(input.skipCredentials ? { skipCredentials: true } : {}),
-      ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      ...(input.env ? { env } : {}),
-    }),
-  );
-  const credentials = templateAuthStorage.getAll();
   return {
     input,
     env,

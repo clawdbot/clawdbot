@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   getPreparedRuntimeAuthMaterializations,
   recordRuntimeAuthMaterialization,
+  registerRuntimeAuthMaterializationMutationListener,
   revokeRuntimeAuthMaterializations,
 } from "./runtime-materializations.js";
 import {
@@ -65,11 +66,35 @@ function expectOpenAICodexSnapshotCredential(
 }
 
 describe("runtime auth profile snapshots", () => {
-  it("publishes exact successful-auth facts and clears them with credential ownership", () => {
-    const agentDir = "/tmp/openclaw-auth-runtime-materialized";
+  it("marks default-owner materializations as inherited mutations", () => {
     const listener = vi.fn();
+    const unregister = registerRuntimeAuthMaterializationMutationListener(listener);
+    try {
+      recordRuntimeAuthMaterialization({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-chatgpt-responses",
+        modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+        requestTransportOverrides: "none",
+        authMode: "oauth",
+        runtimeOwnerId: "codex",
+      });
+
+      expect(listener).toHaveBeenCalledWith({ affectsInheritedStores: true });
+    } finally {
+      unregister();
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
+  it("publishes successful-auth facts without impersonating credential rotation", () => {
+    const agentDir = "/tmp/openclaw-auth-runtime-materialized";
+    const pluginStoreListener = vi.fn();
+    const materializationListener = vi.fn();
     setRuntimeAuthProfileStoreSnapshot(createStore("materialized"), agentDir);
-    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+    const unregisterStore = registerRuntimeAuthProfileStoreMutationListener(pluginStoreListener);
+    const unregisterMaterialization =
+      registerRuntimeAuthMaterializationMutationListener(materializationListener);
     try {
       const materialization = {
         agentDir,
@@ -117,14 +142,17 @@ describe("runtime auth profile snapshots", () => {
       expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
         expect.objectContaining({ runtimeOwnerId: "other-harness", modelId: "gpt-5.4" }),
       ]);
-      expect(listener).toHaveBeenCalledTimes(4);
+      expect(materializationListener).toHaveBeenCalledTimes(4);
+      expect(pluginStoreListener).not.toHaveBeenCalled();
 
       recordRuntimeAuthMaterialization(materialization);
 
       setRuntimeAuthProfileStoreSnapshot(createStore("replaced"), agentDir);
       expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([]);
+      expect(pluginStoreListener).toHaveBeenCalledOnce();
     } finally {
-      unregister();
+      unregisterMaterialization();
+      unregisterStore();
       clearRuntimeAuthProfileStoreSnapshots();
     }
   });

@@ -57,6 +57,9 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   mutationListeners: new Set<
     (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
   >(),
+  materializationListeners: new Set<
+    (event: { agentDir?: string; affectsInheritedStores: boolean }) => void
+  >(),
 }));
 
 vi.mock("./model-catalog.js", () => ({
@@ -116,6 +119,12 @@ vi.mock("./agent-scope.js", () => ({
 vi.mock("./auth-profiles/runtime-materializations.js", () => ({
   getPreparedRuntimeAuthMaterializations: () =>
     preparedModelRuntimeMocks.preparedAuthMaterializations,
+  registerRuntimeAuthMaterializationMutationListener: (
+    listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
+  ) => {
+    preparedModelRuntimeMocks.materializationListeners.add(listener);
+    return () => preparedModelRuntimeMocks.materializationListeners.delete(listener);
+  },
   recordRuntimeAuthMaterialization: (params: {
     agentDir?: string;
     provider: string;
@@ -141,7 +150,7 @@ vi.mock("./auth-profiles/runtime-materializations.js", () => ({
       agentDir: params.agentDir,
       affectsInheritedStores: params.agentDir === undefined,
     };
-    for (const listener of preparedModelRuntimeMocks.mutationListeners) {
+    for (const listener of preparedModelRuntimeMocks.materializationListeners) {
       listener(event);
     }
     return true;
@@ -164,7 +173,7 @@ vi.mock("./auth-profiles/runtime-materializations.js", () => ({
       agentDir: params.agentDir,
       affectsInheritedStores: params.agentDir === undefined,
     };
-    for (const listener of preparedModelRuntimeMocks.mutationListeners) {
+    for (const listener of preparedModelRuntimeMocks.materializationListeners) {
       listener(event);
     }
     return true;

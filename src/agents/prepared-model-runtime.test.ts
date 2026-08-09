@@ -575,7 +575,7 @@ describe("prepared model runtime snapshots", () => {
       expected: undefined,
     },
   ] as const)(
-    "scopes $label startup CLI hydration to configured providers",
+    "consumes $label startup CLI hydration without rediscovery",
     async ({ credential, expected }) => {
       const config = {
         agents: {
@@ -593,10 +593,9 @@ describe("prepared model runtime snapshots", () => {
       });
 
       const discoveryOptions = mocks.discoverAuthStorage.mock.calls[0]?.[1] as {
-        externalCli?: { mode?: string; providerIds?: Iterable<string> };
+        externalCli?: unknown;
       };
-      expect(discoveryOptions.externalCli?.mode).toBe("scoped");
-      expect([...(discoveryOptions.externalCli?.providerIds ?? [])]).toContain("openai");
+      expect(discoveryOptions.externalCli).toBeUndefined();
       expect(snapshot.authModes.openai).toBe(expected);
     },
   );

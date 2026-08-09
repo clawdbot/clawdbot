@@ -235,6 +235,7 @@ describe("gateway chat metadata lifecycle composition", () => {
       pluginHarnessOwnsAuthBootstrap: true,
     });
 
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
     expect(mocks.preparedAuthMaterializations).toEqual([
       expect.objectContaining({
         provider: "openai",

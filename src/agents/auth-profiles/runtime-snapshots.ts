@@ -9,7 +9,6 @@ import { mergeAuthProfileStores } from "./persisted.js";
 import {
   clearAllRuntimeAuthMaterializations,
   clearRuntimeAuthMaterializations,
-  registerRuntimeAuthMaterializationMutationListener,
 } from "./runtime-materializations.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
@@ -225,11 +224,7 @@ export function registerRuntimeAuthProfileStoreMutationListener(
   listener: RuntimeAuthProfileStoreMutationListener,
 ): () => void {
   runtimeAuthStoreMutationListeners.add(listener);
-  const unregisterMaterializations = registerRuntimeAuthMaterializationMutationListener(listener);
-  return () => {
-    runtimeAuthStoreMutationListeners.delete(listener);
-    unregisterMaterializations();
-  };
+  return () => runtimeAuthStoreMutationListeners.delete(listener);
 }
 
 /** Reads a cloned runtime auth profile store snapshot for an agent dir. */
