@@ -91,6 +91,30 @@ describe("config form search", () => {
     expect(matched).toBe(true);
   });
 
+  it.each([
+    { values: [], query: "secondary endpoint" },
+    { values: ["primary"], query: "secondary endpoint" },
+    { values: [], query: "overflow endpoint" },
+    { values: ["primary"], query: "overflow endpoint" },
+  ])("searches positional and typed-tail schemas for $values", ({ values, query }) => {
+    const matched = matchesNodeSearch({
+      schema: {
+        type: "array",
+        items: [
+          { type: "string", description: "Primary endpoint" },
+          { type: "string", description: "Secondary endpoint" },
+        ],
+        additionalItems: { type: "string", description: "Overflow endpoint" },
+      },
+      value: values,
+      path: ["endpoints"],
+      hints: {},
+      criteria: parseConfigSearchQuery(query),
+    });
+
+    expect(matched).toBe(true);
+  });
+
   it("searches additional-property schemas before entries exist", () => {
     const matched = matchesNodeSearch({
       schema: {

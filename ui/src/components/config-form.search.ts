@@ -1,5 +1,6 @@
 import type { ConfigUiHints } from "../api/types.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
+import { arrayItemSchema } from "./config-form.constraints.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
 export type ConfigSearchCriteria = {
@@ -205,31 +206,33 @@ export function matchesNodeSearch(params: {
   if (type !== "array") {
     return false;
   }
-  const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
-  if (!itemsSchema) {
+  if (!schema.items) {
     return false;
   }
   const values = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
-  if (values.length === 0) {
-    return matchesNodeSearch({
-      schema: itemsSchema,
-      value: undefined,
-      path: [...path, 0],
-      hints,
-      criteria,
-      textMatcher,
-    });
+  const tupleLength = Array.isArray(schema.items) ? schema.items.length : 1;
+  const typedTail =
+    Array.isArray(schema.items) &&
+    schema.additionalItems !== null &&
+    typeof schema.additionalItems === "object";
+  const searchLength = Math.max(values.length, tupleLength + (typedTail ? 1 : 0));
+  for (let index = 0; index < searchLength; index += 1) {
+    const itemSchema = arrayItemSchema(schema, index);
+    if (
+      itemSchema &&
+      matchesNodeSearch({
+        schema: itemSchema,
+        value: values[index],
+        path: [...path, index],
+        hints,
+        criteria,
+        textMatcher,
+      })
+    ) {
+      return true;
+    }
   }
-  return values.some((entry, index) =>
-    matchesNodeSearch({
-      schema: itemsSchema,
-      value: entry,
-      path: [...path, index],
-      hints,
-      criteria,
-      textMatcher,
-    }),
-  );
+  return false;
 }
 
 export function matchesConfigSectionSearch(params: {
