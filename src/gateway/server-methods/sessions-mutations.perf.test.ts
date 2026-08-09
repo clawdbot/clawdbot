@@ -7,6 +7,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import type { CronJob } from "../../cron/types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -14,6 +15,21 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
+
+const sqliteTransactionLabels = vi.hoisted(() => [] as string[]);
+
+vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-agent-db.js")>();
+  const runOpenClawAgentWriteTransaction: typeof actual.runOpenClawAgentWriteTransaction = (
+    operation,
+    options,
+    transactionOptions,
+  ) => {
+    sqliteTransactionLabels.push(transactionOptions?.operationLabel ?? "agent.write");
+    return actual.runOpenClawAgentWriteTransaction(operation, options, transactionOptions);
+  };
+  return { ...actual, runOpenClawAgentWriteTransaction };
+});
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -43,6 +59,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     const targets = Array.from({ length: 30 }, (_, index) => ({
       key: `agent:main:archive-perf-${index}`,
     }));
+    const transcriptRoots = new Map<string, string>();
     const transcriptTails = new Map<string, string>();
     for (const [index, target] of targets.entries()) {
       const sessionId = `session-archive-perf-${index}`;
@@ -50,23 +67,31 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         { agentId: "main", sessionKey: target.key },
         { sessionId, updatedAt: index + 1 },
       );
-      let parentId: string | undefined;
-      for (let messageIndex = 0; messageIndex < 8; messageIndex += 1) {
-        const appended = await appendTranscriptMessage(
-          { agentId: "main", sessionId, sessionKey: target.key },
-          {
-            message: {
-              role: "user",
-              content: `history ${index}:${messageIndex}`,
-              timestamp: messageIndex + 1,
-            },
-            now: messageIndex + 1,
-            ...(parentId ? { parentId } : {}),
+      const root = await appendTranscriptMessage(
+        { agentId: "main", sessionId, sessionKey: target.key },
+        {
+          message: {
+            role: "user",
+            content: `history root ${index}`,
+            timestamp: 1,
           },
-        );
-        parentId = appended.messageId;
-      }
-      transcriptTails.set(target.key, parentId!);
+          now: 1,
+        },
+      );
+      const tail = await appendTranscriptMessage(
+        { agentId: "main", sessionId, sessionKey: target.key },
+        {
+          message: {
+            role: "assistant",
+            content: `history tail ${index}`,
+            timestamp: 2,
+          },
+          now: 2,
+          parentId: root.messageId,
+        },
+      );
+      transcriptRoots.set(target.key, root.messageId);
+      transcriptTails.set(target.key, tail.messageId);
     }
 
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
@@ -74,18 +99,27 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       database.db,
       ["whole-store-projection", "transcript-full-hydration"] as const,
       (sql) => {
+        const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
         if (
-          sql.includes('select "current_session_id", "entry_json", "session_key", "updated_at"') &&
-          sql.includes('from "session_nodes"') &&
-          sql.includes('order by "session_key"')
+          normalized.includes(
+            'select "current_session_id", "entry_json", "session_key", "updated_at"',
+          ) &&
+          normalized.includes('from "session_nodes"') &&
+          normalized.includes('order by "session_key"')
         ) {
           return "whole-store-projection";
         }
-        return sql.includes('select "event_json" from "transcript_events"') &&
-          sql.includes('order by "seq" asc') &&
-          !sql.includes("limit")
-          ? "transcript-full-hydration"
-          : null;
+        const fromIndex = normalized.indexOf(" from ");
+        const selectedColumns = fromIndex > 0 ? normalized.slice("select ".length, fromIndex) : "";
+        const readsTranscriptPayload =
+          normalized.startsWith("select ") &&
+          /\b(?:from|join) "transcript_events"(?: |$)/.test(normalized) &&
+          (selectedColumns.includes("event_json") ||
+            /(?:^|, )(?:(?:"[^"]+"\.)?\*)/.test(selectedColumns));
+        const boundedPayloadLookup =
+          normalized.includes(" limit ") ||
+          /(?:"[^"]+"\.)?"(?:event_id|seq)" = (?:\?|\$\d+)/.test(normalized);
+        return readsTranscriptPayload && !boundedPayloadLookup ? "transcript-full-hydration" : null;
       },
     );
     await loadTranscriptEvents({
@@ -95,6 +129,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     });
     expect(statements.counts["transcript-full-hydration"]).toBe(1);
     statements.counts["transcript-full-hydration"] = 0;
+    sqliteTransactionLabels.length = 0;
     const originalExec = database.db.exec.bind(database.db);
     const transactionCounts = { begin: 0, commit: 0 };
     const execSpy = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
@@ -108,7 +143,52 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     });
     try {
       const respond = vi.fn();
-      const cronList = vi.fn(async () => []);
+      const job = (partial: Partial<CronJob> & Pick<CronJob, "id">): CronJob =>
+        ({ enabled: true, sessionTarget: "isolated", ...partial }) as CronJob;
+      const cronJobs = new Map(
+        [
+          job({
+            id: "unrelated",
+            sessionTarget: "session:agent:main:not-archived",
+          }),
+          job({
+            id: "bound-first",
+            sessionTarget: `session:${targets[0]!.key}`,
+          }),
+          job({
+            id: "bound-shared",
+            sessionKey: targets[2]!.key,
+            sessionTarget: `session:${targets[1]!.key}`,
+          }),
+          job({
+            id: "bound-last",
+            sessionTarget: `session:${targets.at(-1)!.key}`,
+          }),
+          job({
+            enabled: false,
+            id: "already-disabled",
+            sessionTarget: `session:${targets[3]!.key}`,
+          }),
+        ].map((cronJob) => [cronJob.id, cronJob] as const),
+      );
+      const cronList = vi.fn(async () => [...cronJobs.values()]);
+      type CronPrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;
+      const cronUpdateResults: Array<{ enabled: boolean; id: string }> = [];
+      const cronUpdate = vi.fn(
+        async (id: string, patch: Partial<CronJob>, precondition: CronPrecondition) => {
+          const current = cronJobs.get(id);
+          if (!current) {
+            throw new Error(`missing cron fixture: ${id}`);
+          }
+          await precondition(current, 0);
+          if (patch.enabled !== undefined) {
+            current.enabled = patch.enabled;
+          }
+          const result = { enabled: current.enabled, id };
+          cronUpdateResults.push(result);
+          return current;
+        },
+      );
       const context = {
         getRuntimeConfig: () => ({}),
         loadGatewayModelCatalog: vi.fn(async () => []),
@@ -117,7 +197,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         chatAbortControllers: new Map(),
         cron: {
           list: cronList,
-          updateWithPrecondition: vi.fn(),
+          updateWithPrecondition: cronUpdate,
           getDefaultAgentId: () => "main",
         },
       } as unknown as GatewayRequestContext;
@@ -131,6 +211,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       } as never);
       const elapsedMs = performance.now() - startedAt;
       console.info(`[perf] sessions.patchMany archive-30 ${elapsedMs.toFixed(2)}ms`);
+      expect(elapsedMs).toBeLessThan(1_000);
 
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -139,16 +220,32 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         },
         undefined,
       );
-      for (const target of targets) {
-        expect(loadSessionEntry({ agentId: "main", sessionKey: target.key })).toHaveProperty(
-          "archivedAt",
-        );
-      }
       expect(statements.counts["whole-store-projection"]).toBe(1);
       expect(statements.counts["transcript-full-hydration"]).toBe(0);
       // One session-store batch plus one parent-linked audit append per target.
       expect(transactionCounts).toEqual({ begin: 31, commit: 31 });
+      expect(
+        sqliteTransactionLabels.filter((label) => label === "session.entry-replacements"),
+      ).toHaveLength(1);
+      expect(sqliteTransactionLabels.filter((label) => label === "agent.write")).toHaveLength(30);
       expect(cronList).toHaveBeenCalledOnce();
+      expect(cronUpdate.mock.calls.map(([id, patch]) => [id, patch])).toEqual([
+        ["bound-first", { enabled: false }],
+        ["bound-shared", { enabled: false }],
+        ["bound-last", { enabled: false }],
+      ]);
+      expect(cronUpdateResults).toEqual([
+        { enabled: false, id: "bound-first" },
+        { enabled: false, id: "bound-shared" },
+        { enabled: false, id: "bound-last" },
+      ]);
+      expect([...cronJobs.values()].map(({ enabled, id }) => ({ enabled, id }))).toEqual([
+        { enabled: true, id: "unrelated" },
+        { enabled: false, id: "bound-first" },
+        { enabled: false, id: "bound-shared" },
+        { enabled: false, id: "bound-last" },
+        { enabled: false, id: "already-disabled" },
+      ]);
     } finally {
       execSpy.mockRestore();
       statements.restore();
@@ -178,6 +275,8 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         );
       });
       expect(auditNotes).toHaveLength(1);
+      expect(transcriptTails.get(target.key)).not.toBe(transcriptRoots.get(target.key));
+      expect(auditNotes[0]?.parentId).not.toBe(transcriptRoots.get(target.key));
       expect(auditNotes[0]).toMatchObject({
         parentId: transcriptTails.get(target.key),
         message: {

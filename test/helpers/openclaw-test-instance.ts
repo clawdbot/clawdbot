@@ -8,8 +8,8 @@ import type { Readable } from "node:stream";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata-paths.mjs";
-import { terminateManagedChild } from "../../scripts/lib/managed-child-process.mjs";
+} from "../../scripts/lib/local-build-metadata-paths.mts";
+import { terminateManagedChild } from "../../scripts/lib/managed-child-process.mts";
 import {
   createOpenClawTestState,
   type OpenClawTestState,

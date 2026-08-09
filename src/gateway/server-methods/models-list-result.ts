@@ -2,6 +2,7 @@
 // strips runtime-only provider params before sending the browse API payload.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credentials.js";
 import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
@@ -281,6 +282,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
   snapshot: ModelCatalogSnapshot;
   metadataSnapshot?: PluginMetadataSnapshot;
   preparedAuthStore?: AuthProfileStore;
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preferredProfileId?: string;
   lockedProfileId?: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
@@ -335,6 +337,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
       [...visibilityPolicy.configuredKeys].some((key) => key.startsWith("openai/")),
     metadataSnapshot,
     ...(params.preparedAuthStore ? { preparedAuthStore: params.preparedAuthStore } : {}),
+    preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
     workspaceDir,
     routeResolverFactory: params.routeResolverFactory,
   });

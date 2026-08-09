@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
+import { normalizeWebSocketProtocol } from "../gateway/net.js";
 import { resolveAdvertisedLanHost } from "../infra/advertised-lan-host.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import {
@@ -182,8 +183,7 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
   } catch {
     return "Resolved mobile pairing URL is invalid.";
   }
-  const protocol =
-    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  const protocol = normalizeWebSocketProtocol(parsed.protocol);
   if (protocol === "wss:") {
     return null;
   }
@@ -226,11 +226,11 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
     if (parsed.username || parsed.password) {
       return null;
     }
-    const scheme = parsed.protocol.replace(":", "");
-    if (!scheme) {
+    const protocol = normalizeWebSocketProtocol(parsed.protocol);
+    if (!protocol) {
       return null;
     }
-    const resolvedScheme = scheme === "http" ? "ws" : scheme === "https" ? "wss" : scheme;
+    const resolvedScheme = protocol.replace(":", "");
     if (resolvedScheme !== "ws" && resolvedScheme !== "wss") {
       return null;
     }

@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const scriptPath = path.join(repoRoot, "scripts/lib/openclaw-test-state.mjs");
+const scriptPath = path.join(repoRoot, "scripts/lib/openclaw-test-state.mts");
 const onboardDockerScriptPath = path.join(repoRoot, "scripts/e2e/onboard-docker.sh");
 
 function shellQuote(value: string): string {
@@ -35,6 +35,8 @@ describe("scripts/lib/openclaw-test-state", () => {
     const envFile = path.join(tempRoot, "env.sh");
     try {
       const { stdout } = await execFileAsync(process.execPath, [
+        "--import",
+        "tsx",
         scriptPath,
         "--",
         "create",
@@ -248,7 +250,12 @@ describe("scripts/lib/openclaw-test-state", () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-state-function-"));
     const snippetFile = path.join(tempRoot, "state-function.sh");
     try {
-      const { stdout } = await execFileAsync(process.execPath, [scriptPath, "shell-function"]);
+      const { stdout } = await execFileAsync(process.execPath, [
+        "--import",
+        "tsx",
+        scriptPath,
+        "shell-function",
+      ]);
       expect(stdout).toContain("openclaw_test_state_create()");
       expect(stdout).toContain("unset OPENCLAW_AGENT_DIR");
       expect(stdout).toContain("update-stable");

@@ -1632,7 +1632,7 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("trusted_source_id:");
     expect(workflow).toContain("TRUSTED_SOURCE_ID: ${{ inputs.trusted_source_id }}");
     expect(workflow).toContain('--trusted-source-id "$TRUSTED_SOURCE_ID"');
-    expect(workflow).toContain("scripts/resolve-openclaw-package-candidate.mjs");
+    expect(workflow).toContain("scripts/resolve-openclaw-package-candidate.mts");
     expect(workflow).toContain('--package-ref "$PACKAGE_REF"');
     expect(workflow).toContain("artifact-ids: ${{ inputs.artifact_id }}");
     expect(workflow).toContain("actions/artifacts/${ARTIFACT_ID}");
@@ -1662,7 +1662,7 @@ describe("package acceptance workflow", () => {
       workflow.indexOf("  package_integrity:"),
     );
 
-    expect(resolveJob).toContain("scripts/resolve-openclaw-package-candidate.mjs");
+    expect(resolveJob).toContain("scripts/resolve-openclaw-package-candidate.mts");
     expect(resolveJob).not.toContain("pnpm install");
   });
 
@@ -1680,7 +1680,7 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("last-stable-4");
     expect(workflow).toContain("all-since-2026.4.23");
     expect(workflow).toContain("published_upgrade_survivor_scenarios:");
-    expect(workflow).toContain("scripts/resolve-upgrade-survivor-baselines.mjs");
+    expect(workflow).toContain("scripts/resolve-upgrade-survivor-baselines.mts");
     expect(workflow).toContain("--history-count 6");
     expect(workflow).toContain("--include-version 2026.4.23");
     expect(workflow).toContain("--pre-date 2026-03-15T00:00:00Z");
@@ -1746,7 +1746,7 @@ describe("package acceptance workflow", () => {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
     });
     expectTextToIncludeAll(buildPrivateQa.run, [
-      "node scripts/build-all.mjs qaRuntime",
+      "node --import tsx scripts/build-all.mts qaRuntime",
       "test -f dist/plugin-sdk/qa-runtime.js",
       "test -f dist/extensions/qa-lab/runtime-api.js",
     ]);
@@ -2411,7 +2411,7 @@ describe("package artifact reuse", () => {
       on?: { workflow_call?: { inputs?: Record<string, unknown> } };
     };
     const packageJson = readFileSync(PACKAGE_JSON, "utf8");
-    const scheduler = readFileSync("scripts/test-docker-all.mjs", "utf8");
+    const scheduler = readFileSync("scripts/test-docker-all.mts", "utf8");
     const publishedUpgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
 
     expect(workflow).toContain("package_artifact_name:");
@@ -2643,7 +2643,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain('"blacksmith-16vcpu-ubuntu-2404"');
     expect(workflow).toContain("vitest_max_workers:");
     expect(workflow).toContain("OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}");
-    expect(readFileSync("scripts/lib/extension-test-plan.mjs", "utf8")).toContain(
+    expect(readFileSync("scripts/lib/extension-test-plan.mts", "utf8")).toContain(
       '"test/vitest/vitest.extension-memory.config.ts": 1',
     );
   });
@@ -2907,8 +2907,8 @@ describe("package artifact reuse", () => {
   it("runs Docker live harnesses from trusted helper scripts", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const providerSuites = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_docker_provider_suites");
-    const scenarios = readFileSync("scripts/lib/docker-e2e-scenarios.mjs", "utf8");
-    const scheduler = readFileSync("scripts/test-docker-all.mjs", "utf8");
+    const scenarios = readFileSync("scripts/lib/docker-e2e-scenarios.mts", "utf8");
+    const scheduler = readFileSync("scripts/test-docker-all.mts", "utf8");
     const harness = readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8");
     const codexLiveTest = readFileSync("src/gateway/gateway-codex-harness.live.test.ts", "utf8");
     const liveDockerAuth = readFileSync("scripts/lib/live-docker-auth.sh", "utf8");
@@ -3864,7 +3864,7 @@ describe("package artifact reuse", () => {
     expect(runtimePairValidation).toContain('--target-sha "$RELEASE_CHECK_TARGET_SHA"');
     expect(runtimePairValidation).toContain('--lane "$RUNTIME_PAIR_LANE"');
     expect(runtimePairValidation).toContain(
-      'node trusted-suite-validator/scripts/validate-qa-runtime-pair-summary.mjs "${validator_args[@]}"',
+      'node --import tsx trusted-suite-validator/scripts/validate-qa-runtime-pair-summary.mts "${validator_args[@]}"',
     );
     const coreRestartRun = workflowStep(laneJob, "Run OpenClaw core restart proof").run;
     expect(coreRestartRun).toContain("--scenario gateway-restart-inflight-run");
@@ -3894,7 +3894,7 @@ describe("package artifact reuse", () => {
     );
     expect(runtimePairReport).toContain("validator_args+=(--require-explicit-gap)");
     expect(runtimePairReport).toContain(
-      "node trusted-report-validator/scripts/validate-qa-runtime-pair-summary.mjs",
+      "node --import tsx trusted-report-validator/scripts/validate-qa-runtime-pair-summary.mts",
     );
     expect(runtimePairStepNames.indexOf("Generate runtime-pair lane report")).toBeLessThan(
       runtimePairStepNames.indexOf("Checkout trusted validator after candidate report"),
@@ -5602,8 +5602,8 @@ describe("package artifact reuse", () => {
 
     expect(packageJson.scripts).toMatchObject({
       "release:verify-beta": "node --import tsx scripts/release-verify-beta.ts",
-      "release:candidate": "node scripts/release-candidate-checklist.mjs",
-      "release:beta": "node scripts/release-candidate-checklist.mjs",
+      "release:candidate": "node --import tsx scripts/release-candidate-checklist.mts",
+      "release:beta": "node --import tsx scripts/release-candidate-checklist.mts",
       "release:fast-pretag-check": "bash scripts/release-fast-pretag-check.sh",
     });
     expect(workflowStep(releasePublishJob, "Setup Node environment").with).toMatchObject({

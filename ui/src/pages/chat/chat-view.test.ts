@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -791,16 +792,6 @@ function createBackgroundTasks(
     onOpenTranscript: () => undefined,
     ...overrides,
   };
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (error?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 describe("chat Swarm progress", () => {
@@ -3556,7 +3547,7 @@ describe("chat slash menu accessibility", () => {
 
   it("does not submit an incomplete skill reference while the catalog is loading", () => {
     replaceSlashCommands(buildFallbackSlashCommands());
-    const refresh = createDeferred<void>();
+    const refresh = createDeferred();
     let draft = "";
     const onSend = vi.fn();
     const { container } = createReactiveDraftHarness({
@@ -3603,7 +3594,7 @@ describe("chat slash menu accessibility", () => {
 
   it("does not reopen a dismissed skill picker after a slow refresh", async () => {
     replaceSkillCommands({ key: "prose", description: "Prose skill." });
-    const refresh = createDeferred<void>();
+    const refresh = createDeferred();
     const { container } = createReactiveDraftHarness({
       onSlashIntent: () => refresh.promise,
     });
@@ -3651,7 +3642,7 @@ describe("chat slash menu accessibility", () => {
   });
 
   it("does not reopen slash suggestions when command hydration finishes after plain typing", async () => {
-    const hydration = createDeferred<void>();
+    const hydration = createDeferred();
     const onSlashIntent = vi.fn(() => hydration.promise);
     const { container } = createReactiveDraftHarness({ onSlashIntent });
 
@@ -5840,8 +5831,8 @@ describe("chat model controls", () => {
   });
 
   it("keeps reconciliation inside the session settings lane", async () => {
-    const reconciliationStarted = createDeferred<void>();
-    const releaseReconciliation = createDeferred<void>();
+    const reconciliationStarted = createDeferred();
+    const releaseReconciliation = createDeferred();
     const patches: Array<Record<string, unknown>> = [];
     const patchResult = {
       ok: true,

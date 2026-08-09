@@ -25,9 +25,9 @@ import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   filterCodexDynamicTools,
-  filterCodexDynamicToolsWithOpenClawShell,
-  isSystemAgentOnlyCodexDynamicToolAllowlist,
+  filterCodexDynamicToolsForDisabledNativeSurface,
   isForcedPrivateQaCodexRuntime,
+  isSystemAgentOnlyCodexDynamicToolAllowlist,
   normalizeCodexDynamicToolName,
 } from "./dynamic-tool-profile.js";
 import { addCodexMessageToolOnlyFinalControl } from "./message-tool-final-control.js";
@@ -371,9 +371,12 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
   });
   const readableAllTools = [...readableAllToolProjection.tools];
-  const normallyProfiledTools = shouldKeepOpenClawShellDynamicTools(input, nativeExecutionPolicy)
-    ? filterCodexDynamicToolsWithOpenClawShell(readableAllTools, input.pluginConfig)
-    : filterCodexDynamicTools(readableAllTools, input.pluginConfig);
+  const normallyProfiledTools =
+    input.nativeToolSurfaceEnabled === false
+      ? filterCodexDynamicToolsForDisabledNativeSurface(readableAllTools, input.pluginConfig, {
+          preserveShell: shouldKeepOpenClawShellDynamicTools(input, nativeExecutionPolicy),
+        })
+      : filterCodexDynamicTools(readableAllTools, input.pluginConfig);
   const hostSystemAgentActive =
     input.isHostScopedToolActive?.("openclaw") ?? isHostScopedAgentToolActive("openclaw");
   const profileFilteredTools =
@@ -536,6 +539,9 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     sandboxExecServerEnabled?: boolean;
   } = {},
 ): boolean {
+  if (params.pluginHarnessToolPolicyRestricted === true) {
+    return false;
+  }
   if (isCodexMemoryFlushRun(params)) {
     return false;
   }

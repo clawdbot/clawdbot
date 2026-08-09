@@ -7,6 +7,7 @@ import {
   GatewayClientRequestTimeoutError,
   type GatewayClientOptions,
 } from "../../../../packages/gateway-client/src/index.js";
+import { createDeferred } from "../../../helpers/promise.js";
 
 type RequestFrame = {
   id: string;
@@ -29,20 +30,6 @@ function rawDataToString(data: RawData): string {
 
 function parseRequest(data: RawData): RequestFrame {
   return JSON.parse(rawDataToString(data)) as RequestFrame;
-}
-
-function createDeferred<T>(): {
-  promise: Promise<T>;
-  reject: (reason?: unknown) => void;
-  resolve: (value: T) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((onResolve, onReject) => {
-    resolve = onResolve;
-    reject = onReject;
-  });
-  return { promise, reject, resolve };
 }
 
 function enableFakeTimeAfterSocketEstablishment(): void {

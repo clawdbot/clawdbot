@@ -158,10 +158,11 @@ describe("configured plugin install health for explicit load paths", () => {
     expect(issues).toStrictEqual([]);
 
     const repair = await repairMissingConfiguredPluginInstalls({ cfg, env });
-    expect(repair).toStrictEqual({
+    expect(repair).toMatchObject({
       changes: [],
-      records: {},
       warnings: [],
     });
+    expect(Object.keys(repair.records)).toStrictEqual([]);
+    expect(Object.getPrototypeOf(repair.records)).toBeNull();
   });
 });

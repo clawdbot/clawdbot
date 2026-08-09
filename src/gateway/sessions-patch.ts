@@ -698,37 +698,3 @@ export async function projectSessionsPatchEntry(params: {
 
   return { ok: true, entry: next };
 }
-
-/** Apply a validated gateway session patch to an in-memory session store entry. */
-export async function applySessionsPatchToStore(params: {
-  cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  storeKey: string;
-  agentId?: string;
-  patch: SessionsPatchParams;
-  archivedBy?: SessionCreatedActor;
-  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
-  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
-  /** Exact harness owner authorized to project its new reserved session row. */
-  authorizedAgentHarnessId?: string;
-}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
-  const projected = await projectSessionsPatchEntry({
-    cfg: params.cfg,
-    existingEntry: params.store[params.storeKey],
-    isLabelInUse: (label) =>
-      Object.entries(params.store).some(
-        ([sessionKey, entry]) => sessionKey !== params.storeKey && entry.label === label,
-      ),
-    storeKey: params.storeKey,
-    agentId: params.agentId,
-    patch: params.patch,
-    archivedBy: params.archivedBy,
-    loadGatewayModelCatalog: params.loadGatewayModelCatalog,
-    providerAuthMetadataSnapshot: params.providerAuthMetadataSnapshot,
-    authorizedAgentHarnessId: params.authorizedAgentHarnessId,
-  });
-  if (projected.ok) {
-    params.store[params.storeKey] = projected.entry;
-  }
-  return projected;
-}

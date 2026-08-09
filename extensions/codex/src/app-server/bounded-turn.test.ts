@@ -126,7 +126,19 @@ function createClientFactory(
       return threadStartResult();
     }
     if (method === "mcpServerStatus/list") {
-      return { data: options.mcpServers ?? [], nextCursor: null };
+      return {
+        data: options.mcpServers ?? [
+          {
+            name: "inherited",
+            serverInfo: null,
+            tools: {},
+            resources: [],
+            resourceTemplates: [],
+            authStatus: "unsupported",
+          },
+        ],
+        nextCursor: null,
+      };
     }
     if (method === "thread/inject_items") {
       return {};
@@ -429,7 +441,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   });
 
   it("fails before history injection when the started thread exposes an MCP server", async () => {
-    const fake = createClientFactory({ mcpServers: [{ name: "unexpected" }] });
+    const fake = createClientFactory({
+      mcpServers: [{ name: "unexpected", serverInfo: null, tools: {} }],
+    });
 
     await expect(
       runBoundedCodexAppServerTurn({
@@ -444,7 +458,9 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         historyItems: [{ type: "function_call_output", call_id: "call-1", output: "sent" }],
         requireNoExternalCapabilities: true,
       }),
-    ).rejects.toThrow("Codex ring-zero MCP attestation found server unexpected");
+    ).rejects.toThrow(
+      "Codex restricted-tool-surface MCP attestation found unexpected server unexpected",
+    );
     expect(fake.methods).not.toContain("thread/inject_items");
     expect(fake.methods).not.toContain("turn/start");
   });

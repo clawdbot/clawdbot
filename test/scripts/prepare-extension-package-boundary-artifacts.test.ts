@@ -25,7 +25,7 @@ import {
   runNodeSteps,
   runNodeStepsInParallel,
   signalNodeStep,
-} from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
+} from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempRoots = new Set<string>();
@@ -443,7 +443,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const descendantPidPath = path.join(rootDir, "descendant.pid");
       let descendantPid = 0;
       const moduleHref = pathToFileURL(
-        path.resolve("scripts/prepare-extension-package-boundary-artifacts.mjs"),
+        path.resolve("scripts/prepare-extension-package-boundary-artifacts.mts"),
       ).href;
       const descendantScript = [
         "const fs = require('node:fs');",

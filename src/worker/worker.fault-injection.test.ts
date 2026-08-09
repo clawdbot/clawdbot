@@ -13,6 +13,7 @@ import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runWorkerProviderReplayRoundTrip } from "../../test/helpers/worker-provider-replay-roundtrip.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
@@ -110,16 +111,6 @@ type Deferred<T> = {
   resolve(value: T): void;
   reject(error: Error): void;
 };
-
-function createDeferred<T = void>(): Deferred<T> {
-  let resolvePromise!: (value: T) => void;
-  let rejectPromise!: (error: Error) => void;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
-  return { promise, resolve: resolvePromise, reject: rejectPromise };
-}
 
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
 

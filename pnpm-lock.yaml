@@ -278,6 +278,9 @@ importers:
       '@types/markdown-it':
         specifier: 14.1.2
         version: 14.1.2
+      '@types/mdast':
+        specifier: 4.0.4
+        version: 4.0.4
       '@types/ms':
         specifier: 2.1.0
         version: 2.1.0

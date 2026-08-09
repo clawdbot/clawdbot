@@ -14,6 +14,7 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   bindActiveCronCreatorAuthorityResolver,
   runWithCronCreatorAuthorityResolver,
@@ -49,7 +50,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";

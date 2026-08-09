@@ -1,5 +1,6 @@
 import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { CronJob } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -23,17 +24,6 @@ type TestGateway = ApplicationContext["gateway"] & {
   emitSnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
   emitRetiredEvent: (event: Parameters<GatewayEventListener>[0]) => void;
 };
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred callback to be initialized");
-  }
-  return { promise, resolve };
-}
 
 function createGateway(client: GatewayBrowserClient, connected: boolean): TestGateway {
   const snapshot: ApplicationGatewaySnapshot = {

@@ -59,6 +59,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
 
 jobs:
   # Preflight: establish routing truth and job matrices once, then let real
@@ -379,6 +380,19 @@ jobs:
             node scripts/ci-changed-scope.mjs --base "$BASE" --head "$HEAD_SHA"
           fi
 
+      - name: Setup manifest TypeScript runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup manifest pnpm
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install manifest dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Build CI manifest
         id: manifest
         env:
@@ -404,7 +418,7 @@ jobs:
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
         run: |
-          node --input-type=module <<'EOF'
+          node --import tsx --input-type=module <<'EOF'
           import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
           const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
@@ -423,7 +437,10 @@ jobs:
           const frozenTarget =
             eventName === "workflow_dispatch" && checkoutRevision !== workflowRevision;
 
-          const nodeTestPlan = await import("./scripts/lib/ci-node-test-plan.mjs");
+          const nodeTestPlanPath = existsSync("./scripts/lib/ci-node-test-plan.mts")
+            ? "./scripts/lib/ci-node-test-plan.mts"
+            : "./scripts/lib/ci-node-test-plan.mjs";
+          const nodeTestPlan = await import(nodeTestPlanPath);
           const createNodeTestPlan =
             typeof nodeTestPlan.createNodeTestShardBundles === "function"
               ? nodeTestPlan.createNodeTestShardBundles
@@ -435,9 +452,14 @@ jobs:
           }
 
           let changedNodeTestPlan = {};
-          if (existsSync("./scripts/lib/ci-changed-node-test-plan.mjs")) {
+          const changedNodeTestPlanPath = existsSync(
+            "./scripts/lib/ci-changed-node-test-plan.mts",
+          )
+            ? "./scripts/lib/ci-changed-node-test-plan.mts"
+            : "./scripts/lib/ci-changed-node-test-plan.mjs";
+          if (existsSync(changedNodeTestPlanPath)) {
             try {
-              changedNodeTestPlan = await import("./scripts/lib/ci-changed-node-test-plan.mjs");
+              changedNodeTestPlan = await import(changedNodeTestPlanPath);
             } catch (error) {
               console.warn(`Changed Node test planner import failed; using compact full suite: ${error}`);
             }
@@ -453,7 +475,9 @@ jobs:
             return {};
           };
           const channelContractPlan = await importTargetPlan(
-            "./scripts/lib/channel-contract-test-plan.mjs",
+            existsSync("./scripts/lib/channel-contract-test-plan.mts")
+              ? "./scripts/lib/channel-contract-test-plan.mts"
+              : "./scripts/lib/channel-contract-test-plan.mjs",
           );
           const createChannelContractTestShards =
             typeof channelContractPlan.createChannelContractTestShards === "function"
@@ -469,7 +493,9 @@ jobs:
           };
 
           const pluginContractPlan = await importTargetPlan(
-            "./scripts/lib/plugin-contract-test-plan.mjs",
+            existsSync("./scripts/lib/plugin-contract-test-plan.mts")
+              ? "./scripts/lib/plugin-contract-test-plan.mts"
+              : "./scripts/lib/plugin-contract-test-plan.mjs",
           );
           const createPluginContractTestShards =
             typeof pluginContractPlan.createPluginContractTestShards === "function"
@@ -1124,7 +1150,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .artifacts/build-all-cache
-          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mjs', 'scripts/runtime-postbuild.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
+          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mts', 'scripts/runtime-postbuild.mjs', 'scripts/runtime-postbuild.mts', 'scripts/lib/tsx-cli-shim.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
           restore-keys: |
             ${{ runner.os }}-build-all-v4-
 
@@ -1305,7 +1331,7 @@ jobs:
 
           if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" = "true" ]; then
             start_check "gateway-watch" \
-              node scripts/check-gateway-watch-regression.mjs --skip-build
+              node --import tsx scripts/check-gateway-watch-regression.mts --skip-build
           fi
 
           wait_checks
@@ -1314,7 +1340,7 @@ jobs:
           # starve the Gateway readiness deadline used by this regression gate.
           if [ "$RUN_GATEWAY_WATCH" = "true" ] && [ "$PARALLEL_GATEWAY_WATCH" != "true" ]; then
             start_check "gateway-watch" \
-              node scripts/check-gateway-watch-regression.mjs --skip-build
+              node --import tsx scripts/check-gateway-watch-regression.mts --skip-build
             wait_checks
           fi
 
@@ -1441,7 +1467,7 @@ jobs:
             # Install the managed browser revision pinned by the selected target instead.
             pnpm --dir ui exec playwright install chromium
           else
-            node scripts/ensure-playwright-chromium.mjs
+            node --import tsx scripts/ensure-playwright-chromium.mts
           fi
 
       - name: Lint Control UI window.open usage
@@ -1491,7 +1517,7 @@ jobs:
           use-actions-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
       - name: Install Playwright Chromium
-        run: node scripts/ensure-playwright-chromium.mjs
+        run: node --import tsx scripts/ensure-playwright-chromium.mts
 
       - name: Test Control UI end-to-end
         run: >-
@@ -1731,18 +1757,18 @@ jobs:
         run: |
           # Pack the public runtime before overlaying private QA artifacts so they cannot leak.
           unset OPENCLAW_BUILD_PRIVATE_QA
-          node scripts/build-all.mjs qaRuntime
+          node --import tsx scripts/build-all.mts qaRuntime
           pnpm ui:build
           package_args=(
             --skip-build
             --output-dir .artifacts/qa-e2e/smoke-ci-package
             --output-name openclaw-current.tgz
           )
-          if grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mjs; then
+          if grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mts; then
             package_args=(--allow-unreleased-changelog "${package_args[@]}")
           fi
           node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
-          OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs qaRuntime
+          OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts qaRuntime
 
       - name: Run smoke profile part
         env:
@@ -2061,13 +2087,13 @@ jobs:
         # Frozen release targets can predate the workflow-owned shard runner.
         # Keep its implementation pinned to this workflow revision, while tests
         # continue to run against the checked-out candidate.
-        if: ${{ hashFiles('scripts/ci-run-node-test-shard.mjs') == '' }}
+        if: ${{ hashFiles('scripts/ci-run-node-test-shard.mts') == '' }}
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-workflow
           sparse-checkout: |
-            scripts/ci-run-node-test-shard.mjs
+            scripts/ci-run-node-test-shard.mts
             scripts/lib/direct-run.mjs
             scripts/lib/local-heavy-check-runtime.mjs
           sparse-checkout-cone-mode: false
@@ -2092,12 +2118,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          runner="scripts/ci-run-node-test-shard.mjs"
+          runner="scripts/ci-run-node-test-shard.mts"
           if [[ ! -f "$runner" ]]; then
             runner=".ci-workflow/${runner}"
             [[ -f "$runner" ]]
           fi
-          node "$runner"
+          node --import tsx "$runner"
 
   # Types, lint, and format check shards.
   check-shard:
@@ -2175,7 +2201,7 @@ jobs:
         env:
           # Config/toolchain inputs the tree-OID gate below cannot see; must
           # stay identical to the boundary lane's fingerprint composition.
-          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
@@ -2218,14 +2244,6 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
-              if has_package_script "check:script-declarations"; then
-                pnpm check:script-declarations
-              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
-                echo "Current CI targets must provide the check:script-declarations package script." >&2
-                exit 1
-              else
-                echo "[skip] historical target predates the script declaration contract"
-              fi
               if [[ "$HISTORICAL_TARGET" == "true" ]]; then
                 echo "[skip] historical target skips the wall-clock doctor deprecation registry guard"
               elif has_package_script "check:doctor-deprecation-registry"; then
@@ -2278,7 +2296,7 @@ jobs:
                 pnpm lint "${lint_args[@]}"
               else
                 echo "[skip] changed scope cannot affect control-UI i18n catalogs"
-                node scripts/run-oxlint-shards.mjs "${lint_args[@]}"
+                node --import tsx scripts/run-oxlint-shards.mts "${lint_args[@]}"
               fi
               if [ "$FORMAT_CHECK" = "true" ]; then
                 pnpm format:check
@@ -2451,7 +2469,7 @@ jobs:
         env:
           # Config/toolchain inputs the tree-OID gate below cannot see; must
           # stay identical to the seed step and check-lint's restore gate.
-          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary
@@ -2489,7 +2507,7 @@ jobs:
             packages/plugin-sdk/dist
             extensions/*/dist/.boundary-tsc.tsbuildinfo
             extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'src/plugin-sdk/**', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'src/plugin-sdk/**', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-extension-package-boundary-v1-
 
@@ -2522,11 +2540,11 @@ jobs:
             packages/plugin-sdk/tsconfig.json \
             packages/llm-core/package.json \
             packages/model-catalog-core/package.json \
-            scripts/check-extension-package-tsc-boundary.mjs \
-            scripts/prepare-extension-package-boundary-artifacts.mjs \
+            scripts/check-extension-package-tsc-boundary.mts \
+            scripts/prepare-extension-package-boundary-artifacts.mts \
             scripts/write-plugin-sdk-entry-dts.ts \
             scripts/lib/plugin-sdk-entrypoints.json \
-            scripts/lib/plugin-sdk-entries.mjs \
+            scripts/lib/plugin-sdk-entries.mts \
             package.json \
             pnpm-lock.yaml
           )
@@ -2567,7 +2585,7 @@ jobs:
 
           case "$ADDITIONAL_CHECK_GROUP" in
             boundaries)
-              node scripts/run-additional-boundary-checks.mjs
+              node --import tsx scripts/run-additional-boundary-checks.mts
               ;;
             prompt-snapshots)
               # No presence fallback: the boundary runner previously invoked
@@ -2582,14 +2600,14 @@ jobs:
               fi
               ;;
             session-accessor-boundary)
-              if [ ! -f scripts/check-session-accessor-boundary.mjs ]; then
+              if [ ! -f scripts/check-session-accessor-boundary.mts ]; then
                 echo "[skip] session accessor boundary check is not present in this checkout"
               elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-accessor-boundary"] ? 0 : 1);'; then
                 echo "[skip] session accessor boundary script is not present in package.json"
               else
                 run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary
               fi
-              if [ ! -f scripts/check-sqlite-transaction-boundary.mjs ]; then
+              if [ ! -f scripts/check-sqlite-transaction-boundary.mts ]; then
                 echo "[skip] SQLite transaction boundary check is not present in this checkout"
               elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:sqlite-transaction-boundary"] ? 0 : 1);'; then
                 echo "[skip] SQLite transaction boundary script is not present in package.json"
@@ -2598,7 +2616,7 @@ jobs:
               fi
               ;;
             session-transcript-reader-boundary)
-              if [ ! -f scripts/check-session-transcript-reader-boundary.mjs ]; then
+              if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]; then
                 echo "[skip] session transcript reader boundary check is not present in this checkout"
               elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
                 echo "[skip] session transcript reader boundary script is not present in package.json"
@@ -2649,7 +2667,7 @@ jobs:
         shell: bash
         env:
           # Must stay identical to the restore gates above.
-          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'package.json', 'pnpm-lock.yaml') }}
+          BOUNDARY_CONFIG_HASH: ${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'package.json', 'pnpm-lock.yaml') }}
         run: |
           set -euo pipefail
           sticky_root=/var/tmp/openclaw-ext-boundary

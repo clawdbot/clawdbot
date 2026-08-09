@@ -619,7 +619,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node workflow/scripts/resolve-openclaw-package-candidate.mjs \
+          pnpm --dir workflow exec node --import tsx scripts/resolve-openclaw-package-candidate.mts \
             --source artifact \
             --artifact-dir "$INPUT_DIR" \
             --package-sha256 "$INPUT_CANDIDATE_SHA256" \
@@ -737,11 +737,11 @@ jobs:
         env:
           BASELINE_PACK_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/pack.json
         run: |
-          node --input-type=module <<'NODE' >>"$GITHUB_OUTPUT"
+          node --import tsx --input-type=module <<'NODE' >>"$GITHUB_OUTPUT"
           import crypto from "node:crypto";
           import fs from "node:fs";
           import path from "node:path";
-          import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mjs";
+          import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mts";
           function resolveTarballFileName(value, label) {
             const fileName = typeof value === "string" ? value.trim() : "";
             if (

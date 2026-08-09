@@ -14,6 +14,7 @@ import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
@@ -660,11 +661,14 @@ export async function tryDispatchAcpReply(params: {
       auditTerminalOutcome = "blocked";
       throw dispatchPolicyError;
     }
-    if (isRestrictiveRuntimeToolsAllow(params.toolsAllow)) {
+    if (
+      isRestrictiveRuntimeToolsAllow(params.toolsAllow) ||
+      toolPolicyRestrictsTools(params.ctx.ConversationToolPolicy)
+    ) {
       auditTerminalOutcome = "blocked";
       throw new AcpRuntimeError(
         "ACP_DISPATCH_DISABLED",
-        "ACP dispatch cannot enforce runtime toolsAllow for this session; use an embedded runtime for restricted tool policy.",
+        "This session's bound runtime cannot enforce its tool policy; use an embedded runtime for this restricted conversation.",
       );
     }
     if (acpResolution.kind === "stale") {

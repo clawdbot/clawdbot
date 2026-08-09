@@ -3,7 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {

@@ -6,13 +6,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { GatewayClient, type GatewayClientOptions } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
-import { createDeferred } from "../src/test-utils/deferred.js";
 import { GatewayChatClient } from "../src/tui/gateway-chat.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
+import { createDeferred } from "./helpers/promise.js";
 
 type FirstResponseKind = "final" | "sequential-tools" | "tool";
 type ModelRequest = { body: Record<string, unknown> };

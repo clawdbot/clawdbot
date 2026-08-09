@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { BROWSER_ANNOTATION_EVENT, type BrowserAnnotationEvent } from "./browser-annotation.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
   createBrowserPanelTestMetrics,
   createBrowserPanelTestTab,
-  createDeferred,
   createInspectedNode,
   createPointer,
   createView,

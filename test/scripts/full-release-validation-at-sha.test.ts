@@ -11,7 +11,7 @@ import {
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
   shouldDeleteTemporaryWorkflowRef,
-} from "../../scripts/full-release-validation-at-sha.mjs";
+} from "../../scripts/full-release-validation-at-sha.mts";
 
 const SCRIPT_PATH = resolve("scripts/full-release-validation-at-sha.mjs");
 
@@ -191,7 +191,7 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("keeps release context separate from the exact target SHA", () => {
-    const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
+    const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
     expect(source).toContain("ref: targetBranch");
     expect(source).toContain("target_context_ref: targetContextRef");
     expect(source).toContain(
@@ -279,7 +279,7 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("polls the exact workflow run without GraphQL quota use", () => {
-    const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
+    const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
     expect(source).toContain("actions/runs/${parentRunId}");
     expect(source).toContain("workflowRun.head_sha !== workflowSha");
     expect(source).toContain("return suite;");
@@ -288,7 +288,7 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("bounds GitHub reads without applying a timeout to workflow dispatch", () => {
-    const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
+    const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
     expect(source).toContain("timeout: GH_READ_TIMEOUT_MS");
     expect(source.match(/GH_READ_OPTIONS/gu)).toHaveLength(3);
     expect(source).toContain('const dispatchOutput = run("gh", dispatchArgs');
@@ -310,7 +310,7 @@ describe("full-release-validation-at-sha", () => {
       assertTrustedWorkflowHarness("a".repeat(40), (relativePath) => relativePath === workflowPath),
     ).toThrow("supported release evidence verifier");
 
-    const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
+    const source = readFileSync("scripts/full-release-validation-at-sha.mts", "utf8");
     expect(source.indexOf("assertTrustedWorkflowHarness(workflowSha);")).toBeLessThan(
       source.indexOf('run("git", ["push", "origin", `${workflowSha}:${remoteBranchRef}`]'),
     );
