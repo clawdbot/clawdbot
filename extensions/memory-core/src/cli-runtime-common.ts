@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
-import type { MemoryExtraPath } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  normalizeExtraMemoryPathEntries,
+  type MemoryExtraPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   defaultRuntime,
@@ -152,7 +155,10 @@ function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   return listAgentIds(cfg);
 }
 export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPath[]): string[] {
-  return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) => shortenHomePath(entry));
+  return normalizeExtraMemoryPathEntries(workspaceDir, extraPaths).map((entry) => {
+    const root = shortenHomePath(entry.path);
+    return entry.pattern ? `${root} (pattern: ${entry.pattern})` : root;
+  });
 }
 async function withMemoryManagerForAgent(params: {
   cfg: OpenClawConfig;
