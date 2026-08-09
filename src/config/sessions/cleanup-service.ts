@@ -156,15 +156,21 @@ function isTranscriptMessageRecord(entry: unknown): boolean {
   return record.type === undefined && isTranscriptMessageRole(record.role);
 }
 
-function sqliteTranscriptHasMessageRecords(params: {
+type SqliteTranscriptMessageProbe = "has-messages" | "empty" | "unavailable";
+
+function probeSqliteTranscriptMessageRecords(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
-}): boolean {
+}): SqliteTranscriptMessageProbe {
   try {
-    return loadTranscriptEventsSync(params).some(isTranscriptMessageRecord);
+    return loadTranscriptEventsSync(params).some(isTranscriptMessageRecord)
+      ? "has-messages"
+      : "empty";
   } catch {
-    return false;
+    // A failed read (corrupt database, SQLITE_BUSY against a live gateway,
+    // EACCES, ...) says nothing about whether the transcript holds messages.
+    return "unavailable";
   }
 }
 
@@ -310,13 +316,22 @@ function pruneMissingTranscriptEntries(params: {
       params.onPruned?.(key, entry);
       continue;
     }
-    if (
-      !sqliteTranscriptHasMessageRecords({
-        sessionId: entry.sessionId,
+    const transcriptProbe = probeSqliteTranscriptMessageRecords({
+      sessionId: entry.sessionId,
+      sessionKey: key,
+      storePath: params.storePath,
+    });
+    if (transcriptProbe === "unavailable") {
+      // Unreadable is not "missing": keep the entry and warn instead of
+      // deleting a session whose transcript may still be intact on disk.
+      // Same retain-on-unavailable convention as the sqlite history sweep.
+      getLogger().warn("sessions cleanup --fix-missing: transcript unreadable, keeping entry", {
         sessionKey: key,
-        storePath: params.storePath,
-      })
-    ) {
+        sessionId: entry.sessionId,
+      });
+      continue;
+    }
+    if (transcriptProbe === "empty") {
       delete params.store[key];
       removed += 1;
       params.onPruned?.(key, entry);
