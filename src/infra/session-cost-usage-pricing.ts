@@ -195,6 +195,21 @@ export const shouldRecomputeRecordedZeroCost = (params: {
   isModelPricingKnown(params.cost) &&
   computeUsageTokenTotals(params.usage).totalTokens > 0;
 
+// Unknown pricing plus an adapter-default recorded zero is not a confirmed
+// $0: the recorded total must be dropped so detail logs and rollups both omit
+// the cost instead of showing a confident $0. Kept as one shared predicate so
+// every session projection applies the same known-versus-unknown decision.
+export const shouldClearRecordedZeroCost = (params: {
+  cost: ReturnType<typeof resolveModelCostConfig>;
+  costBreakdown: CostBreakdown | undefined;
+  costTotal: number | undefined;
+  usage: NormalizedUsage;
+}): boolean =>
+  !isModelPricingKnown(params.cost) &&
+  !shouldPreserveRecordedZeroCost(params.costBreakdown) &&
+  (params.costTotal === undefined || params.costTotal === 0) &&
+  computeUsageTokenTotals(params.usage).totalTokens > 0;
+
 export type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
@@ -230,17 +245,17 @@ export function parseUsageCostTranscriptEntry(
     return entry;
   }
   const cost = resolveCost({ provider: entry.provider, model: entry.model });
-  const usageTotals = computeUsageTokenTotals(entry.usage);
-  const pricingKnown = isModelPricingKnown(cost);
   const preserveRecordedZeroCost = shouldPreserveRecordedZeroCost(entry.costBreakdown);
   if (cost?.tieredPricing && cost.tieredPricing.length > 0 && !preserveRecordedZeroCost) {
     entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
     entry.costBreakdown = undefined;
   } else if (
-    !pricingKnown &&
-    !preserveRecordedZeroCost &&
-    (entry.costTotal === undefined || entry.costTotal === 0) &&
-    usageTotals.totalTokens > 0
+    shouldClearRecordedZeroCost({
+      cost,
+      costBreakdown: entry.costBreakdown,
+      costTotal: entry.costTotal,
+      usage: entry.usage,
+    })
   ) {
     entry.costTotal = undefined;
     entry.costBreakdown = undefined;

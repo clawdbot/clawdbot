@@ -930,6 +930,81 @@ describe("session cost usage", () => {
     });
   });
 
+  it("omits adapter-default zero costs in session detail logs only for unknown pricing", async () => {
+    const root = await makeSessionCostRoot("cost-session-logs-unknown-pricing");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-pricing-origin.jsonl");
+    const assistantEntry = (
+      timestamp: string,
+      provider: string,
+      model: string,
+      totalOrigin?: string,
+    ) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        provider,
+        model,
+        message: {
+          role: "assistant",
+          content: "ok",
+          usage: {
+            input: 10_000,
+            output: 5_000,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 15_000,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+              ...(totalOrigin ? { totalOrigin } : {}),
+            },
+          },
+        },
+      });
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-pricing-origin" }),
+        assistantEntry("2026-02-05T12:00:00.000Z", "codex-like", "m-unknown"),
+        assistantEntry("2026-02-05T12:01:00.000Z", "free-provider", "m-free"),
+        assistantEntry("2026-02-05T12:02:00.000Z", "codex-like", "m-unknown", "provider-billed"),
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const config = {
+      models: {
+        providers: {
+          "codex-like": {
+            models: [{ id: "m-unknown", cost: { ...zeroCost, pricingUnavailable: true } }],
+          },
+          "free-provider": {
+            models: [{ id: "m-free", cost: { ...zeroCost } }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const logs = await loadSessionLogs({ sessionId: "sess-pricing-origin", config });
+      expect(logs).toHaveLength(3);
+      // Unknown pricing: the recorded adapter-default $0 is not a real price,
+      // so the detail log omits the cost like the session rollup does.
+      expect(logs?.[0]?.cost).toBeUndefined();
+      // Confirmed-free pricing keeps the numeric $0.
+      expect(logs?.[1]?.cost).toBe(0);
+      // A provider-billed recorded $0 stays authoritative even under the marker.
+      expect(logs?.[2]?.cost).toBe(0);
+    });
+  });
+
   it("excludes untimestamped entries from direct bounded session ranges", async () => {
     const root = await makeSessionCostRoot("cost-session-direct-range-untimestamped");
     const sessionFile = path.join(root, "session.jsonl");

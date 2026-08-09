@@ -365,7 +365,17 @@ function buildModelCostFingerprint(cost: RawModelCostConfig): string {
         return [tier.input, tier.output, tier.cacheRead, tier.cacheWrite, ...range];
       })
     : [];
-  return [cost.input, cost.output, cost.cacheRead, cost.cacheWrite, ...tierFingerprint].join("|");
+  // pricingUnavailable changes the meaning of a zero price (unknown vs
+  // confirmed free), so a marker-only mutation must invalidate the cached
+  // normalized entry just like a rate change does.
+  return [
+    cost.input,
+    cost.output,
+    cost.cacheRead,
+    cost.cacheWrite,
+    cost.pricingUnavailable === true,
+    ...tierFingerprint,
+  ].join("|");
 }
 
 function isProviderCostSourceCurrent(
