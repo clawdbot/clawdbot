@@ -1,24 +1,37 @@
+import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   toStaticCatalogEntry,
   type PreparedConfiguredRuntimeModel,
 } from "./prepared-model-runtime.configured.js";
-import type {
-  PreparedModelRuntimeAgentFacts,
-  PreparedModelRuntimeCatalogFacts,
-  PreparedModelRuntimeWorkspaceFacts,
-} from "./prepared-model-runtime.facts.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
+
+type ConfiguredCatalogAgentFacts = {
+  configuredModelRefs: readonly ConfiguredModelRef[];
+};
+
+type ConfiguredCatalogWorkspaceFacts = {
+  configuredCatalogEntries: readonly ModelCatalogEntry[];
+  inlineProviderModels: readonly InlineModelEntry[];
+};
+
+type ConfiguredRuntimeFacts = {
+  templateModelRegistry: ModelRegistry;
+  modelCatalog: ModelCatalogSnapshot;
+  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
+  inlineProviderModels: readonly InlineModelEntry[];
+};
 
 export function modelCatalogEntryKey(entry: Pick<ModelCatalogEntry, "id" | "provider">): string {
   return `${normalizeProviderId(entry.provider)}\0${entry.id.trim().toLowerCase()}`;
 }
 
 function createConfiguredModelCatalogSnapshot(params: {
-  agentFacts: PreparedModelRuntimeAgentFacts;
-  workspaceFacts: PreparedModelRuntimeWorkspaceFacts;
+  agentFacts: ConfiguredCatalogAgentFacts;
+  workspaceFacts: ConfiguredCatalogWorkspaceFacts;
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
 }): ModelCatalogSnapshot {
@@ -62,11 +75,11 @@ function createConfiguredModelCatalogSnapshot(params: {
 }
 
 export function prepareConfiguredRuntimeFacts(params: {
-  agentFacts: PreparedModelRuntimeAgentFacts;
-  workspaceFacts: PreparedModelRuntimeWorkspaceFacts;
+  agentFacts: ConfiguredCatalogAgentFacts;
+  workspaceFacts: ConfiguredCatalogWorkspaceFacts;
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-}): PreparedModelRuntimeCatalogFacts {
+}): ConfiguredRuntimeFacts {
   return {
     templateModelRegistry: params.templateModelRegistry,
     modelCatalog: createConfiguredModelCatalogSnapshot(params),
