@@ -258,7 +258,7 @@ describe("Where picker", () => {
     const titles = [...container.querySelectorAll(".new-session-page__menu-title")].map((element) =>
       element.textContent?.trim(),
     );
-    expect(titles).toEqual(["Folder", "Places", "This gateway", "Devices", "Cloud"]);
+    expect(titles).toEqual(["Folder", "Projects", "Places", "This gateway", "Devices", "Cloud"]);
     expect(container.querySelector('[data-value="node:macbook"]')).not.toBeNull();
     for (const nodeId of [
       "worker",

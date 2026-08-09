@@ -120,6 +120,8 @@ export type TestChatPane = HTMLElement & {
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
   ) => Promise<void>;
+  headerPlacementReclaimingKey: string | null;
+  reclaimHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
   renderPaneHeader: (
     workspace: ReturnType<typeof createSessionWorkspaceProps>,

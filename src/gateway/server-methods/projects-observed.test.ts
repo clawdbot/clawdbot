@@ -68,20 +68,16 @@ async function listObservedProjects(params: {
     }>;
   };
   client?: GatewayClient;
-  limit?: number;
 }) {
   const handlers = createProjectsHandlers(params.service as never);
   const responses: Parameters<RespondFn>[] = [];
   await handlers["projects.list"]?.({
-    params: {
-      includeObserved: true,
-      ...(params.limit === undefined ? {} : { limit: params.limit }),
-    },
+    params: { includeObserved: true },
     respond: (...response: Parameters<RespondFn>) => responses.push(response),
     context: {
       getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
     } as GatewayRequestContext,
-    client: params.client,
+    client: params.client ?? authenticatedClient("operator@example.com"),
   } as never);
   expect(responses).toHaveLength(1);
   const response = responses[0];
@@ -273,7 +269,7 @@ describe("projects.list observed projects", () => {
           fingerprint: "alpha-fingerprint",
         }),
       },
-      limit: 1,
+      client: authenticatedClient("admin@example.com", ["operator.admin"]),
     })) as Array<{ checkouts: Array<{ path: string }> }>;
 
     expect(projects[0]?.checkouts).toHaveLength(PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT);
@@ -281,9 +277,14 @@ describe("projects.list observed projects", () => {
     expect(projects[0]?.checkouts.at(-1)?.path).toBe("/worktrees/03");
   });
 
-  it("uses a fixed probe ceiling even when the caller requests the maximum response", async () => {
+  it("retains only the newest bounded candidates before identity resolution", async () => {
+    const rawCandidateLimit = Math.max(
+      PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT,
+      PROJECTS_LIST_MAX_IDENTITY_PROBES,
+      50,
+    );
     seededSessions.store = Object.fromEntries(
-      Array.from({ length: PROJECTS_LIST_MAX_IDENTITY_PROBES + 5 }, (_, index) => [
+      Array.from({ length: rawCandidateLimit + 5 }, (_, index) => [
         `agent:main:session-${index}`,
         { sessionId: `session-${index}`, updatedAt: index, execCwd: `/repos/${index}` },
       ]),
@@ -297,9 +298,11 @@ describe("projects.list observed projects", () => {
     await expect(
       listObservedProjects({
         service: { listRegistryRecords: () => [], resolveRepositoryIdentity },
-        limit: 200,
       }),
     ).resolves.toEqual([]);
     expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(PROJECTS_LIST_MAX_IDENTITY_PROBES);
+    expect(resolveRepositoryIdentity.mock.calls.length).toBeLessThanOrEqual(rawCandidateLimit);
+    expect(resolveRepositoryIdentity.mock.calls[0]?.[0]).toBe(`/repos/${rawCandidateLimit + 4}`);
+    expect(resolveRepositoryIdentity).not.toHaveBeenCalledWith("/repos/0");
   });
 });

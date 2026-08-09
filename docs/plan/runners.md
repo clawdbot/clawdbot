@@ -282,8 +282,8 @@ its origin repo. This component promotes that to a first-class observed read
 model alongside the registered projects already returned by `projects.list`,
 following the same computed pattern as `environments.list`:
 
-- **`projects.list.observedProjects` read model** (computed on demand with
-  `includeObserved: true`, no new store): group known checkouts by repo fingerprint → `{ name, originUrl, checkouts:
+- **`projects.list.observedProjects` read model** (computed for
+  write-capable callers, no new store): group known checkouts by repo fingerprint → `{ name, originUrl, checkouts:
 [{runnerId, path}], lastUsedAt }`. Sources: session rows
   (`execCwd`/`execNode`) and the managed-worktree registry. The observed
   paths and sanitized origins are returned only to `operator.write` callers;
@@ -295,19 +295,23 @@ following the same computed pattern as `environments.list`:
 Revision 1's design rule stands: normal state is silent; only exceptions
 speak. Additions:
 
-- The Where picker subscribes to `presence` and pairing events (the devices
-  page already does), so a freshly connected machine appears live while the
-  popover is open — the visible payoff of the one-paste flow.
-- Sections "This gateway / Your devices / Cloud"; session-capable connected
-  devices only (capability-gated); busy state from slot occupancy; presence
-  vocabulary distinguishes _never connected_ from _was connected, lost_
-  (the first-connect failure is the top onboarding support case).
-- `EnvironmentSummary` enriched additively: platform, session-host
-  capability, trust class, runner version.
-- Placement chip on the session header: current placement + state; reclaim
-  ("Bring home") for remote placements; stop-and-continue moves once
-  milestone 8 ships. `runner-offline` shows as a banner with the recorded
-  reason and the two recovery verbs.
+- **Use the existing environment type discriminant** for picker grouping:
+  local gateway, connected execution-capable nodes, worker environments, and
+  the separate cloud profiles list. `sessionHost` is deferred to milestone 6,
+  where device runners introduce the capability fact that needs it.
+- **Where picker regrouped** (`ui/src/pages/new-session/place-picker.ts`):
+  sections "This gateway" / "Devices" / "Cloud". Device rows intersect the
+  environment catalog with connected, execution-capable nodes; cloud
+  profiles remain their separate list. Folder and destination stay
+  orthogonal.
+- **Placement chip** on the session header: shows quiet current placement;
+  active cloud placements reclaim through `sessions.reclaim` with "Bring
+  home". Stop-and-continue moves arrive with milestone 8.
+- **Remaining milestone work**: live presence and pairing subscriptions, the
+  admin-gated "Connect a machine…" foot, busy and never-connected states,
+  and additive `EnvironmentSummary` platform, session-host, trust, and runner
+  version facts. `runner-offline` then shows a banner with the recorded reason
+  and its recovery verbs.
 
 ### Cloud convergence (milestone 10)
 
@@ -388,9 +392,10 @@ Independently mergeable PR series; 3–5 can interleave after 1c.
    shortcode mint + curl wrapper on the public site. Exit: a fresh machine
    pairs against a remote gateway with one pasted command and one admin
    click, no manual approval steps.
-4. **Picker**: live presence subscription; "Connect a machine…" foot
-   (admin-gated) showing the copyable one-liner; regrouped sections; additive
-   `EnvironmentSummary` enrichment; never-connected vs lost states.
+4. **Picker** (in progress): regrouped sections, quiet placement + reclaim,
+   and the observed projects read model land first; live presence subscription,
+   the admin-gated "Connect a machine…" foot, additive `EnvironmentSummary`
+   enrichment, and never-connected vs lost states complete the milestone.
 5. **Public worker ingress**: path-tagged worker upgrade on the main TLS
    endpoint; opaque admission failure; shared preauth budgets. Exit: a worker
    process on any internet host with a valid dispatch credential completes

@@ -495,7 +495,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.catalog.startTerminal", "session-catalog", "operator.admin", "2026.8"],
   ["worker.desktop.observe", "environments", "operator.admin", "2026.8", { startup: true }],
   // First-class project RPCs append so every older advertised index remains stable.
-  ["projects.list", "projects", "operator.write", "2026.8"],
+  ["projects.list", "projects", "operator.read", "2026.8"],
   ["projects.register", "projects", "operator.admin", "2026.8"],
   ["projects.remove", "projects", "operator.admin", "2026.8"],
   ["worker.desktop.launch", "environments", "operator.admin", "2026.8", { startup: true }],

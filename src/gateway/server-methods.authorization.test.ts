@@ -106,10 +106,8 @@ describe("gateway method authorization", () => {
     });
   });
 
-  it("rejects read-only projects.list before detailed checkout data reaches the handler", async () => {
-    const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
-      respond(true, { projects: [], observedProjects: [] }),
-    );
+  it("allows read-only projects.list to reach its redacting handler", async () => {
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { projects: [] }));
     const respond = vi.fn();
 
     await handleGatewayRequest({
@@ -132,16 +130,8 @@ describe("gateway method authorization", () => {
       extraHandlers: { "projects.list": handler },
     });
 
-    expect(handler).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: "FORBIDDEN",
-      message: "missing scope: operator.write",
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: "operator.write",
-        requiredScopes: ["operator.write"],
-      },
-    });
+    expect(handler).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, { projects: [] });
   });
 
   it("rejects every node RPC when its connection no longer owns the pairing generation", async () => {

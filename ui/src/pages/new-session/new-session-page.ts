@@ -370,6 +370,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       projectCloneError: this.browser.projectCloneError,
       projectId: this.place.projectId,
       execNodes: this.place.isAdmin() ? execNodes : [],
+      environments: this.place.isAdmin() ? this.gateway.environments : [],
       gatewayName: this.gateway.gatewayName,
       cloudProfiles: this.place.isAdmin() ? cloudProfiles : [],
       cloudProfileId: this.place.cloudProfileId,

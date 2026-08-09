@@ -169,6 +169,7 @@ data class WorkerDesktopLaunchResult(
 @Serializable
 data class ProjectsListResult(
   val projects: List<ProjectsListResultProjectsItem>,
+  val recents: List<JsonElement>? = null,
   val observedProjects: List<ProjectsListResultObservedProjectsItem>? = null,
 )
 

@@ -10,7 +10,13 @@ const suite = createNewSessionPageE2eSuite();
 
 async function openDraft(
   operatorScopes: string[],
-  featureMethods = ["chat.metadata", "chat.startup", "sessions.create", "sessions.dispatch"],
+  featureMethods = [
+    "chat.metadata",
+    "chat.startup",
+    "projects.list",
+    "sessions.create",
+    "sessions.dispatch",
+  ],
 ) {
   const context = await suite.browser.newContext({
     locale: "en-US",
@@ -22,6 +28,7 @@ async function openDraft(
     featureMethods,
     operatorScopes,
     methodResponses: {
+      "projects.list": { projects: [] },
       "sessions.create": { key: "agent:main:operator-scope-proof", runStarted: true },
     },
   });
@@ -48,7 +55,9 @@ suite.define(() => {
         "This action requires operator.admin access.",
       );
       await submit.click({ force: true });
-      expect(await gateway.getRequests("projects.list")).toHaveLength(0);
+      const projectRequests = await gateway.getRequests("projects.list");
+      expect(projectRequests).toHaveLength(1);
+      expect(projectRequests[0]?.params).toEqual({});
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     } finally {
       await context.close();
@@ -58,6 +67,9 @@ suite.define(() => {
   it("allows write-scoped normal creation while keeping incognito admin-only", async () => {
     const { context, gateway, page } = await openDraft(["operator.read", "operator.write"]);
     try {
+      await expect(gateway.waitForRequest("projects.list")).resolves.toMatchObject({
+        params: {},
+      });
       const submit = page.getByRole("button", { name: "Start session" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
 

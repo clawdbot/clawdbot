@@ -2183,6 +2183,50 @@ public struct WorkerDesktopLaunchResult: Codable, Sendable {
     }
 }
 
+public struct ProjectCheckout: Codable, Sendable {
+    public let runnerid: String
+    public let path: String
+
+    public init(
+        runnerid: String,
+        path: String)
+    {
+        self.runnerid = runnerid
+        self.path = path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runnerid = "runnerId"
+        case path
+    }
+}
+
+public struct ProjectSummary: Codable, Sendable {
+    public let name: String
+    public let originurl: String?
+    public let checkouts: [ProjectCheckout]
+    public let lastusedat: Double
+
+    public init(
+        name: String,
+        originurl: String? = nil,
+        checkouts: [ProjectCheckout],
+        lastusedat: Double)
+    {
+        self.name = name
+        self.originurl = originurl
+        self.checkouts = checkouts
+        self.lastusedat = lastusedat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case originurl = "originUrl"
+        case checkouts
+        case lastusedat = "lastUsedAt"
+    }
+}
+
 public struct SystemInfoParams: Codable, Sendable {}
 
 public struct SystemInfoResult: Codable, Sendable {
@@ -3165,23 +3209,39 @@ public struct ProjectRecentProject: Codable, Sendable {
     }
 }
 
-public struct ProjectsListParams: Codable, Sendable {}
+public struct ProjectsListParams: Codable, Sendable {
+    public let includeobserved: Bool?
+
+    public init(
+        includeobserved: Bool? = nil)
+    {
+        self.includeobserved = includeobserved
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case includeobserved = "includeObserved"
+    }
+}
 
 public struct ProjectsListResult: Codable, Sendable {
     public let projects: [ProjectsAddResult]
     public let recents: [ProjectRecent]?
+    public let observedprojects: [ProjectSummary]?
 
     public init(
         projects: [ProjectsAddResult],
-        recents: [ProjectRecent]? = nil)
+        recents: [ProjectRecent]? = nil,
+        observedprojects: [ProjectSummary]? = nil)
     {
         self.projects = projects
         self.recents = recents
+        self.observedprojects = observedprojects
     }
 
     private enum CodingKeys: String, CodingKey {
         case projects
         case recents
+        case observedprojects = "observedProjects"
     }
 }
 
