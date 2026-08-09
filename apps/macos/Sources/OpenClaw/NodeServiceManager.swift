@@ -51,7 +51,7 @@ enum NodeServiceManager {
     /// exists but could not be read, so callers must not treat it as external.
     static func launchdProgramArguments(profile: AppProfile = .current) -> [String]? {
         if self.skipUnderProfile(profile, action: "status") { return [] }
-        self.launchdProgramArguments(
+        return self.launchdProgramArguments(
             plistURL: self.launchdPlistURL,
             fileManager: .default)
     }
