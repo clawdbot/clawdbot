@@ -66,7 +66,7 @@ const FORBIDDEN_SPECIFIER_RULES = new Map<string, { reason: string; kinds: Set<C
     {
       reason:
         "the channel-outbound barrel makes doctor enumeration cold-load the reply-pipeline/channel-registry graph; " +
-        "use openclaw/plugin-sdk/channel-streaming for streaming config helpers",
+        "use openclaw/plugin-sdk/channel-streaming-config for streaming config helpers",
       kinds: new Set(["doctor-contract"]),
     },
   ],

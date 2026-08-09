@@ -13,6 +13,7 @@
   "setup-runtime",
   "channel-setup",
   "channel-streaming",
+  "channel-streaming-config",
   "setup-tools",
   "archive",
   "root-walk",

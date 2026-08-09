@@ -431,6 +431,10 @@
       "types": "./dist/plugin-sdk/channel-streaming.d.ts",
       "default": "./dist/plugin-sdk/channel-streaming.js"
     },
+    "./plugin-sdk/channel-streaming-config": {
+      "types": "./dist/plugin-sdk/channel-streaming-config.d.ts",
+      "default": "./dist/plugin-sdk/channel-streaming-config.js"
+    },
     "./plugin-sdk/setup-tools": {
       "types": "./dist/plugin-sdk/setup-tools.d.ts",
       "default": "./dist/plugin-sdk/setup-tools.js"
