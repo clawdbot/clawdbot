@@ -256,6 +256,7 @@ export type ChatProps = {
   taskSuggestionBusyIds?: ReadonlySet<string>;
   taskSuggestionCloudProfiles?: Array<{ id: string }>;
   canAcceptTaskSuggestions?: boolean;
+  canAcceptTaskSuggestionModes?: boolean;
   canDismissTaskSuggestions?: boolean;
   onAcceptTaskSuggestion?: Parameters<typeof renderChatTaskSuggestions>[0]["onAccept"];
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
@@ -647,6 +648,7 @@ export function renderChat(props: ChatProps) {
                   busyIds: props.taskSuggestionBusyIds ?? new Set(),
                   cloudProfiles: props.taskSuggestionCloudProfiles ?? [],
                   canAccept: props.canAcceptTaskSuggestions === true,
+                  canAcceptModes: props.canAcceptTaskSuggestionModes === true,
                   canDismiss: props.canDismissTaskSuggestions === true,
                   onAccept: (suggestion, mode, cloudProfileId) =>
                     props.onAcceptTaskSuggestion?.(suggestion, mode, cloudProfileId),

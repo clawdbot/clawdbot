@@ -61,7 +61,7 @@ function createHarness() {
   const onAccepted = vi.fn().mockResolvedValue(undefined);
   let agentId = "main";
   let sessionKey = "agent:main:main";
-  let actionCapabilities = { canAccept: true, canDismiss: true };
+  let actionCapabilities = { canAccept: true, canAcceptModes: true, canDismiss: true };
   const controller = createTuiTaskSuggestionController({
     client: {
       getTaskSuggestionActionCapabilities: () => actionCapabilities,
@@ -108,7 +108,11 @@ function createHarness() {
     setSessionKey: (value: string) => {
       sessionKey = value;
     },
-    setActionCapabilities: (value: { canAccept: boolean; canDismiss: boolean }) => {
+    setActionCapabilities: (value: {
+      canAccept: boolean;
+      canAcceptModes: boolean;
+      canDismiss: boolean;
+    }) => {
       actionCapabilities = value;
     },
   };
@@ -311,7 +315,11 @@ describe("TUI task suggestions", () => {
 
   it("offers only actions allowed by the connected operator scopes", () => {
     const writeHarness = createHarness();
-    writeHarness.setActionCapabilities({ canAccept: false, canDismiss: true });
+    writeHarness.setActionCapabilities({
+      canAccept: false,
+      canAcceptModes: true,
+      canDismiss: true,
+    });
     writeHarness.controller.handleEvent("task.suggestion", {
       action: "created",
       suggestion: suggestionPayload(),
@@ -320,12 +328,32 @@ describe("TUI task suggestions", () => {
     expect(writeHarness.selectors[0]?.setSelectedIndex).toHaveBeenCalledWith(0);
 
     const readHarness = createHarness();
-    readHarness.setActionCapabilities({ canAccept: false, canDismiss: false });
+    readHarness.setActionCapabilities({
+      canAccept: false,
+      canAcceptModes: true,
+      canDismiss: false,
+    });
     readHarness.controller.handleEvent("task.suggestion", {
       action: "created",
       suggestion: suggestionPayload(),
     });
     expect(readHarness.openOverlay).not.toHaveBeenCalled();
+  });
+
+  it("offers only worktree acceptance when modes are not advertised", () => {
+    const harness = createHarness();
+    harness.setActionCapabilities({
+      canAccept: true,
+      canAcceptModes: false,
+      canDismiss: true,
+    });
+
+    harness.controller.handleEvent("task.suggestion", {
+      action: "created",
+      suggestion: suggestionPayload(),
+    });
+
+    expect(harness.selectors[0]?.items.map((item) => item.value)).toEqual(["accept", "dismiss"]);
   });
 
   it("rebuilds an active selector when reconnect changes action scopes", async () => {
@@ -337,7 +365,11 @@ describe("TUI task suggestions", () => {
     });
     const staleSelector = harness.selectors[0];
 
-    harness.setActionCapabilities({ canAccept: false, canDismiss: true });
+    harness.setActionCapabilities({
+      canAccept: false,
+      canAcceptModes: true,
+      canDismiss: true,
+    });
     harness.listTaskSuggestions.mockResolvedValueOnce([suggestion]);
     await harness.controller.refresh();
 

@@ -280,9 +280,13 @@ export function createTuiTaskSuggestionController(deps: TaskSuggestionController
   const availableActions = () => {
     const capabilities = deps.client.getTaskSuggestionActionCapabilities?.() ?? {
       canAccept: Boolean(deps.client.acceptTaskSuggestion),
+      canAcceptModes: false,
       canDismiss: Boolean(deps.client.dismissTaskSuggestion),
     };
-    return taskActions(cloudProfileIds).filter((action) =>
+    const actions: TaskAction[] = capabilities.canAcceptModes
+      ? taskActions(cloudProfileIds)
+      : [TASK_ACTIONS.worktree, TASK_ACTIONS.dismiss];
+    return actions.filter((action) =>
       action.kind === "accept" ? capabilities.canAccept : capabilities.canDismiss,
     );
   };

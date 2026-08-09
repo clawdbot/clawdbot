@@ -12,6 +12,7 @@ import {
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   type HelloOk,
+  GATEWAY_SERVER_CAPS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type CommandEntry,
@@ -443,6 +444,7 @@ export class GatewayChatClient implements TuiBackend {
   getTaskSuggestionActionCapabilities() {
     const auth = this.hello?.auth;
     const methods = this.hello?.features?.methods;
+    const capabilities = this.hello?.features?.capabilities;
     const allows = (method: string, scope: "operator.admin" | "operator.write") =>
       Array.isArray(methods) &&
       methods.includes(method) &&
@@ -456,6 +458,9 @@ export class GatewayChatClient implements TuiBackend {
       );
     return {
       canAccept: allows("taskSuggestions.accept", "operator.admin"),
+      canAcceptModes:
+        Array.isArray(capabilities) &&
+        capabilities.includes(GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES),
       canDismiss: allows("taskSuggestions.dismiss", "operator.write"),
     };
   }

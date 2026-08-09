@@ -1689,6 +1689,10 @@ openclaw-chat-video-player {
   white-space: nowrap;
 }
 
+.task-suggestion__start:only-child {
+  border-radius: var(--radius-md);
+}
+
 .task-suggestion__menu-trigger {
   min-width: 34px;
   height: 100%;

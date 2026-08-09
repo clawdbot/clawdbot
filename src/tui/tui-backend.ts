@@ -34,6 +34,7 @@ export type TuiApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 type TuiTaskSuggestionActionCapabilities = {
   canAccept: boolean;
+  canAcceptModes: boolean;
   canDismiss: boolean;
 };
 

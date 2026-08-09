@@ -393,19 +393,19 @@ async function deliverSuggestedTaskToSourceSession(params: {
   } catch (error) {
     return fail(errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
   }
-  if (activeRunState.runIds.length > 1) {
+  if (activeRunState.active && activeRunState.runIds.length !== 1) {
+    const message =
+      activeRunState.runIds.length === 0
+        ? "active session run has no exact dispatch identity; refresh and retry"
+        : "session has multiple active runs; choose the target run before accepting the task suggestion";
     return fail(
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "session has multiple active runs; choose the target run before accepting the task suggestion",
-        {
-          retryable: false,
-          details: {
-            code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS",
-            sessionKey: params.suggestion.sessionKey,
-          },
+      errorShape(ErrorCodes.INVALID_REQUEST, message, {
+        retryable: false,
+        details: {
+          code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS",
+          sessionKey: params.suggestion.sessionKey,
         },
-      ),
+      }),
     );
   }
   let sendResponse: Parameters<RespondFn> | undefined;

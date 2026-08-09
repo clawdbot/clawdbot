@@ -27,6 +27,7 @@ function renderSuggestion(
       suggestions: [suggestion],
       busyIds: new Set(),
       canAccept: true,
+      canAcceptModes: true,
       canDismiss: true,
       cloudProfiles: [],
       onAccept,
@@ -102,6 +103,17 @@ describe("chat task suggestions", () => {
       [suggestion, "cloud", "build"],
       [suggestion, "cloud", "review"],
     ]);
+  });
+
+  it("renders a worktree-only action when acceptance modes are not advertised", () => {
+    const { container, onAccept } = renderSuggestion({ canAcceptModes: false });
+
+    expect(container.querySelector(".task-suggestion__start")).not.toBeNull();
+    expect(container.querySelector(".task-suggestion__menu")).toBeNull();
+    expect(container.querySelector(".task-suggestion__menu-trigger")).toBeNull();
+
+    container.querySelector<HTMLButtonElement>(".task-suggestion__start")?.click();
+    expect(onAccept).toHaveBeenCalledWith(suggestion, "worktree", undefined);
   });
 
   it("uses a generic single-cloud label and a disabled hint when none are configured", () => {

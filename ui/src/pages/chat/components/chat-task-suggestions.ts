@@ -27,6 +27,7 @@ export function renderChatTaskSuggestions(props: {
     cloudProfileId?: string,
   ) => void;
   onDismiss: (suggestion: TaskSuggestion) => void;
+  canAcceptModes: boolean;
 }) {
   if (props.suggestions.length === 0 || (!props.canAccept && !props.canDismiss)) {
     return nothing;
@@ -95,65 +96,73 @@ export function renderChatTaskSuggestions(props: {
                     ? t("chat.taskSuggestions.starting")
                     : t("chat.taskSuggestions.startWorktree")}
                 </button>
-                <wa-dropdown
-                  class="task-suggestion__menu"
-                  placement="bottom-end"
-                  @wa-select=${(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
-                    const item = event.detail.item;
-                    if (item.value === "local") {
-                      accept("local");
-                    } else if (item.value === "session") {
-                      accept("session");
-                    } else if (item.value === "cloud") {
-                      const profileId = item.dataset.cloudProfile;
-                      if (profileId) {
-                        accept("cloud", profileId);
-                      }
-                    }
-                  }}
-                >
-                  <button
-                    slot="trigger"
-                    class="btn primary task-suggestion__menu-trigger"
-                    type="button"
-                    ?disabled=${busy || !props.canAccept}
-                    title=${props.canAccept ? "" : t("chat.taskSuggestions.adminRequired")}
-                    aria-label=${t("chat.taskSuggestions.moreActions")}
-                    aria-haspopup="menu"
-                    aria-expanded="false"
-                  >
-                    ${icons.chevronDown}
-                  </button>
-                  <wa-dropdown-item value="local" ?disabled=${busy || !props.canAccept}>
-                    ${t("chat.taskSuggestions.startLocal")}
-                  </wa-dropdown-item>
-                  ${cloudProfiles.length === 0
-                    ? html`
-                        <wa-dropdown-item
-                          value="cloud"
-                          disabled
-                          title=${t("chat.taskSuggestions.noCloudConfigured")}
+                ${props.canAcceptModes
+                  ? html`
+                      <wa-dropdown
+                        class="task-suggestion__menu"
+                        placement="bottom-end"
+                        @wa-select=${(
+                          event: CustomEvent<{ item: HTMLElement & { value?: string } }>,
+                        ) => {
+                          const item = event.detail.item;
+                          if (item.value === "local") {
+                            accept("local");
+                          } else if (item.value === "session") {
+                            accept("session");
+                          } else if (item.value === "cloud") {
+                            const profileId = item.dataset.cloudProfile;
+                            if (profileId) {
+                              accept("cloud", profileId);
+                            }
+                          }
+                        }}
+                      >
+                        <button
+                          slot="trigger"
+                          class="btn primary task-suggestion__menu-trigger"
+                          type="button"
+                          ?disabled=${busy || !props.canAccept}
+                          title=${props.canAccept ? "" : t("chat.taskSuggestions.adminRequired")}
+                          aria-label=${t("chat.taskSuggestions.moreActions")}
+                          aria-haspopup="menu"
+                          aria-expanded="false"
                         >
-                          ${t("chat.taskSuggestions.startCloudGeneric")}
+                          ${icons.chevronDown}
+                        </button>
+                        <wa-dropdown-item value="local" ?disabled=${busy || !props.canAccept}>
+                          ${t("chat.taskSuggestions.startLocal")}
                         </wa-dropdown-item>
-                      `
-                    : cloudProfiles.map(
-                        (profile) => html`
-                          <wa-dropdown-item
-                            value="cloud"
-                            data-cloud-profile=${profile.id}
-                            ?disabled=${busy || !props.canAccept}
-                          >
-                            ${cloudProfiles.length > 1
-                              ? t("chat.taskSuggestions.startCloud", { profile: profile.label })
-                              : t("chat.taskSuggestions.startCloudGeneric")}
-                          </wa-dropdown-item>
-                        `,
-                      )}
-                  <wa-dropdown-item value="session" ?disabled=${busy || !props.canAccept}>
-                    ${t("chat.taskSuggestions.fixInSession")}
-                  </wa-dropdown-item>
-                </wa-dropdown>
+                        ${cloudProfiles.length === 0
+                          ? html`
+                              <wa-dropdown-item
+                                value="cloud"
+                                disabled
+                                title=${t("chat.taskSuggestions.noCloudConfigured")}
+                              >
+                                ${t("chat.taskSuggestions.startCloudGeneric")}
+                              </wa-dropdown-item>
+                            `
+                          : cloudProfiles.map(
+                              (profile) => html`
+                                <wa-dropdown-item
+                                  value="cloud"
+                                  data-cloud-profile=${profile.id}
+                                  ?disabled=${busy || !props.canAccept}
+                                >
+                                  ${cloudProfiles.length > 1
+                                    ? t("chat.taskSuggestions.startCloud", {
+                                        profile: profile.label,
+                                      })
+                                    : t("chat.taskSuggestions.startCloudGeneric")}
+                                </wa-dropdown-item>
+                              `,
+                            )}
+                        <wa-dropdown-item value="session" ?disabled=${busy || !props.canAccept}>
+                          ${t("chat.taskSuggestions.fixInSession")}
+                        </wa-dropdown-item>
+                      </wa-dropdown>
+                    `
+                  : nothing}
               </div>
             </div>
           </article>

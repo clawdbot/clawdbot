@@ -1,5 +1,6 @@
-// Covers gateway-backed chat behavior used by the TUI backend.
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Covers gateway-backed chat behavior used by the TUI backend.
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/index.js";
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
 const { GatewayClientRequestError } = await import("../gateway/client.js");
@@ -432,6 +433,7 @@ describe("GatewayChatClient", () => {
           "taskSuggestions.accept",
           "taskSuggestions.dismiss",
         ],
+        capabilities: [GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES],
       },
       auth: { role: "operator", scopes: ["operator.admin"] },
     } as never;
@@ -486,6 +488,20 @@ describe("GatewayChatClient", () => {
 
     expect(client.getTaskSuggestionActionCapabilities()).toEqual({
       canAccept: false,
+      canAcceptModes: false,
+      canDismiss: true,
+    });
+
+    client.hello = {
+      features: {
+        methods: ["taskSuggestions.accept", "taskSuggestions.dismiss"],
+        capabilities: [GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES],
+      },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    } as never;
+    expect(client.getTaskSuggestionActionCapabilities()).toEqual({
+      canAccept: true,
+      canAcceptModes: true,
       canDismiss: true,
     });
   });

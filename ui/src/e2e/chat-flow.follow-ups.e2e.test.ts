@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -79,6 +80,9 @@ suite.define(() => {
 
       const startButton = page.getByRole("button", { name: "Start with worktree" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await page.getByRole("button", { name: "More ways to start this task" }).count()).toBe(
+        0,
+      );
       await page.getByText("Show instructions", { exact: true }).click();
       await page
         .getByText("/projects/example", { exact: true })
@@ -115,6 +119,7 @@ suite.define(() => {
       createdAt: Date.now(),
     };
     const gateway = await installMockGateway(page, {
+      featureCapabilities: [GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES],
       featureMethods: [
         "chat.metadata",
         "chat.startup",
