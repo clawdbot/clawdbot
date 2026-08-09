@@ -109,9 +109,6 @@ async function processEvent(params: {
   if (message.author_id === params.botUserId) {
     return;
   }
-  if (message.author?.kind === "bot") {
-    return;
-  }
   const access = await resolveClickClackInboundAccess({
     account: params.account,
     config: params.config,

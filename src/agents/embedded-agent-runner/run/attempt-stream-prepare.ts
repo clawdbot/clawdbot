@@ -403,7 +403,11 @@ export function prepareEmbeddedAttemptStream(input: {
     input.abortRun(false, abortReason);
   };
   const queueMessage: AttemptStreamQueueHandle["queueMessage"] = async (text, options) => {
-    if (!acceptingSteerMessages) {
+    const canInject = () =>
+      acceptingSteerMessages &&
+      !input.getRunState().aborted &&
+      !input.runAbortController.signal.aborted;
+    if (!canInject()) {
       throw new Error("active session is finalizing");
     }
     activeQueueAdmissions++;
@@ -416,6 +420,7 @@ export function prepareEmbeddedAttemptStream(input: {
         text,
         options,
         attempt.sessionKey,
+        canInject,
       );
     } finally {
       activeQueueAdmissions--;

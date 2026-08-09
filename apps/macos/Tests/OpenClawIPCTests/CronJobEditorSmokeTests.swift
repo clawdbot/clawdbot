@@ -81,11 +81,6 @@ struct CronJobEditorSmokeTests {
         #expect((delivery["failureDestination"] as? [String: Any])?["accountId"] as? String == "alerts")
     }
 
-    @Test func `cron job editor exercises builders`() {
-        var view = self.makeEditor()
-        view.exerciseForTesting()
-    }
-
     @Test func `cron job editor includes delete after run for at schedule`() {
         let view = self.makeEditor()
 

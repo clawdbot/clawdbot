@@ -4,6 +4,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type {
   FsListDirResult,
+  SessionsCatalogStartTerminalResult,
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
@@ -20,9 +21,12 @@ import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { openTerminalSessionInTerminal } from "../../lib/sessions/catalog-terminal.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
+import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
@@ -116,6 +120,7 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private openedFor: string | null = null;
   private openedAgentId = "";
+  private messageOwnerKey = "";
   private agentsHydrated = false;
   private nodesHydrated = false;
   // Discovery retry provenance separates user choices from Gateway-derived defaults.
@@ -499,13 +504,21 @@ class NewSessionPage extends OpenClawLightDomElement {
       agentState.client === this.gatewayClient &&
       this.agents().length > 0,
     );
-    const openKey = catalog.routeKey(this.data);
+    const openKey = this.data
+      ? catalog.routeKey(this.data)
+      : catalog.routeKeyFromSearch(window.location.search);
     const resolvedAgentId = this.data?.agentId ?? "";
     if (this.openedFor !== openKey) {
+      // Route changes reset every source-owned control. Only text typed after
+      // the URL changed belongs to the destination and may survive that reset.
+      const ownedMessage = this.messageOwnerKey === openKey ? this.message : "";
       this.openedFor = openKey;
       this.openedAgentId = resolvedAgentId;
       this.agentsHydrated = agentsReady;
       this.resetDraft();
+      if (ownedMessage) {
+        this.setMessage(ownedMessage, openKey);
+      }
       return;
     }
     if (this.openedAgentId !== resolvedAgentId) {
@@ -563,6 +576,20 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private isAdmin(): boolean {
     return hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null);
+  }
+
+  private showStartInTerminal(): boolean {
+    const context = this.context;
+    return Boolean(
+      context &&
+      catalog.isTarget(this.data) &&
+      this.data?.startTerminal &&
+      context.config.current.cliAgentsEnabled === true &&
+      isTerminalAvailable(
+        context.gateway.snapshot,
+        context.config.current.terminalEnabled ?? false,
+      ),
+    );
   }
 
   private canStartAsDraft(): boolean {
@@ -624,6 +651,26 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private submitDisabledReason(): string | undefined {
     const access = this.submissionAccess();
+    return access.allowed ? undefined : access.reason;
+  }
+
+  private terminalStartAccess(): SessionMethodAccess {
+    const gateway = this.context?.gateway.snapshot;
+    const terminalAccess = readSessionMethodAccess(gateway, {
+      method: "sessions.catalog.startTerminal",
+      requiredScope: "operator.admin",
+    });
+    if (!terminalAccess.allowed || !this.worktree) {
+      return terminalAccess;
+    }
+    return readSessionMethodAccess(gateway, {
+      method: "worktrees.create",
+      requiredScope: "operator.admin",
+    });
+  }
+
+  private terminalStartDisabledReason(): string | undefined {
+    const access = this.terminalStartAccess();
     return access.allowed ? undefined : access.reason;
   }
 
@@ -803,11 +850,11 @@ class NewSessionPage extends OpenClawLightDomElement {
       // Show the staged repo (not the agent workspace) while the draft is locked.
       this.folder = this.pendingCloud.createParams?.cwd ?? "";
       this.pendingCloud.restored = false;
-      this.message = this.pendingCloud.message;
+      this.setMessage(this.pendingCloud.message);
       this.attachmentDraft.replace(restoreChatApiAttachments(this.pendingCloud.attachments));
     } else {
       this.clearPendingCloudRecovery();
-      this.message = "";
+      this.setMessage("");
     }
     this.error = null;
     this.placePopoverHiding = false;
@@ -817,6 +864,17 @@ class NewSessionPage extends OpenClawLightDomElement {
     void this.updateComplete.then(() => {
       this.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.focus();
     });
+  }
+
+  private setMessage(message: string, ownerKey = catalog.routeKey(this.data)) {
+    this.message = message;
+    this.messageOwnerKey = ownerKey;
+  }
+
+  private setMessageFromUser(message: string) {
+    // History changes before an async route loader settles. Input accepted from
+    // the retained composer belongs to the browser destination, not stale data.
+    this.setMessage(message, catalog.routeKeyFromSearch(window.location.search));
   }
 
   private invalidateSubmission(outcomeUnknown: SubmissionOutcomeReason | null = null) {
@@ -861,7 +919,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.visibility = recovery.createParams?.incognito === true ? "incognito" : "normal";
     // Show the staged repo (not the agent workspace) while the draft is locked.
     this.folder = recovery.createParams?.cwd ?? "";
-    this.message = recovery.message;
+    this.setMessage(recovery.message);
     this.attachmentDraft.replace(restoreChatApiAttachments(recovery.attachments));
   }
 
@@ -1043,7 +1101,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     return this.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
   }
 
-  private canSubmit(): boolean {
+  private canSubmit(kind: "session" | "terminal" = "session"): boolean {
     const pendingCloud = Boolean(this.pendingCloud.sessionKey);
     const cloudProfileId = this.cloudProfileForSubmission();
     const message = pendingCloud ? this.pendingCloud.message : this.message.trim();
@@ -1056,13 +1114,14 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.requiresModelSetup() ||
       this.attachmentDraft.pendingReads > 0 ||
       (!pendingCloud && this.submissionOutcomeUnknown) ||
-      (!message && !hasAttachments) ||
+      (kind === "session" && !message && !hasAttachments) ||
       gateway?.snapshot.phase !== "connected" ||
       !gateway.snapshot.client
     ) {
       return false;
     }
-    if (!this.submissionAccess().allowed) {
+    const access = kind === "terminal" ? this.terminalStartAccess() : this.submissionAccess();
+    if (!access.allowed) {
       return false;
     }
     if (this.restoredFolderValidation !== "none") {
@@ -1124,6 +1183,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     if (this.worktree && !isWorktreeNameValid(this.worktreeName)) {
       return false;
     }
+    if (kind === "terminal" && !(this.folder.trim() || this.workspacePath())) {
+      return false;
+    }
     return true;
   }
 
@@ -1139,6 +1201,14 @@ class NewSessionPage extends OpenClawLightDomElement {
       selectedAgentFound: selectedAgent !== undefined,
       agentModel: selectedAgent?.model?.primary,
     });
+  }
+
+  private closeOpenDropdowns() {
+    for (const dropdown of this.querySelectorAll<HTMLElement & { open: boolean }>(
+      "wa-dropdown[open]",
+    )) {
+      dropdown.open = false;
+    }
   }
 
   private async submit() {
@@ -1171,11 +1241,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.error = null;
     // Retire hidden pickers before their late requests can mutate this submitted draft.
     this.closeBrowser();
-    for (const dropdown of this.querySelectorAll<HTMLElement & { open: boolean }>(
-      "wa-dropdown[open]",
-    )) {
-      dropdown.open = false;
-    }
+    this.closeOpenDropdowns();
     try {
       const cloudProfileId = this.cloudProfileForSubmission();
       // Draft mode can go stale if sharing policy changed since it was selected.
@@ -1326,7 +1392,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           const retryAllowed = requestId === this.submitRequestToken;
           this.pendingCloud.retryAllowed = retryAllowed;
           this.submissionOutcomeUnknown = retryAllowed ? null : "cloud-interrupted";
-          this.message = this.pendingCloud.message;
+          this.setMessage(this.pendingCloud.message);
           this.error = t("newSession.cloudStartFailed", { error: cloudStart.error });
           return;
         }
@@ -1417,6 +1483,59 @@ class NewSessionPage extends OpenClawLightDomElement {
           agentId: this.agentId,
         }).options,
       );
+    } finally {
+      if (requestId === this.submitRequestToken) {
+        this.submitting = false;
+      }
+    }
+  }
+
+  private async startInTerminal() {
+    const context = this.context;
+    const client = context?.gateway.snapshot.client;
+    const catalogId = this.data?.catalogId.trim() ?? "";
+    const agentId = normalizeAgentId(this.agentId);
+    if (!context || !client || !catalogId || !agentId || !this.canSubmit("terminal")) {
+      return;
+    }
+    const requestId = ++this.submitRequestToken;
+    const initialMessage = this.message.trim();
+    this.submitting = true;
+    this.error = null;
+    this.closeBrowser();
+    this.closeOpenDropdowns();
+    try {
+      let cwd = this.folder.trim() || this.workspacePath();
+      if (this.worktree) {
+        const created = await createManagedWorktree(client, {
+          repoRoot: cwd,
+          name: this.worktreeName,
+          baseRef: this.baseRef,
+        });
+        if (requestId !== this.submitRequestToken || this.gatewayClient !== client) {
+          return;
+        }
+        cwd = created.path;
+      }
+      const result = await client.request<SessionsCatalogStartTerminalResult>(
+        "sessions.catalog.startTerminal",
+        {
+          catalogId,
+          ...(this.execNode ? { hostId: `node:${this.execNode}` } : {}),
+          agentId,
+          cwd,
+          ...(initialMessage ? { initialMessage } : {}),
+        },
+      );
+      if (requestId !== this.submitRequestToken || this.gatewayClient !== client) {
+        return;
+      }
+      this.setMessage("");
+      openTerminalSessionInTerminal(result.sessionId);
+    } catch (error) {
+      if (requestId === this.submitRequestToken && this.gatewayClient === client) {
+        this.error = error instanceof Error ? error.message : String(error);
+      }
     } finally {
       if (requestId === this.submitRequestToken) {
         this.submitting = false;
@@ -1832,9 +1951,16 @@ class NewSessionPage extends OpenClawLightDomElement {
           textareaController: this.composerTextarea,
           messageLocked: Boolean(this.pendingCloud.sessionKey),
           incognitoDisabledReason: this.incognitoDisabledReason(),
+          terminalAction: this.showStartInTerminal()
+            ? {
+                canStart: this.canSubmit("terminal"),
+                disabledReason: this.terminalStartDisabledReason(),
+                onStart: () => void this.startInTerminal(),
+              }
+            : undefined,
           onInput: (message) => {
             if (!this.submitting && !this.pendingCloud.sessionKey) {
-              this.message = message;
+              this.setMessageFromUser(message);
             }
           },
           onVisibilityChange: (visibility) => {
@@ -1873,7 +1999,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       },
       onDraftChange: (next) => {
         if (!this.submitting && !this.pendingCloud.sessionKey) {
-          this.message = next;
+          this.setMessageFromUser(next);
         }
       },
       onSend: () => void this.submit(),

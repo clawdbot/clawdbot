@@ -34,9 +34,7 @@ import {
 } from "./chat-restart-recovery.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
-  ACTIVE_RUN_CHANGED_ERROR_REASON,
   respondChatActiveLeafChanged,
-  respondChatActiveRunChanged,
   respondChatSessionRoutingChanged,
 } from "./chat-send-pre-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -217,10 +215,13 @@ export async function admitChatSend(params: {
     if (commitOutcome && resolvedInjectionTarget) {
       messageInjectionTarget = resolvedInjectionTarget;
     }
-    if (commitOutcome && p.queueMode === "steer" && !resolvedInjectionTarget) {
-      throw new Error(
-        expectedRunId ? ACTIVE_RUN_CHANGED_ERROR_REASON : ACTIVE_LEAF_CHANGED_ERROR_REASON,
-      );
+    if (
+      commitOutcome &&
+      p.queueMode === "steer" &&
+      expectedRunId === undefined &&
+      !resolvedInjectionTarget
+    ) {
+      throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
     }
     if (commitOutcome && expectedLeafEntryId !== undefined && !resolvedInjectionTarget) {
       // Runtime session identity resolves through the canonical SQLite accessor;
@@ -338,10 +339,6 @@ export async function admitChatSend(params: {
     }
     if (err instanceof Error && err.message === ACTIVE_LEAF_CHANGED_ERROR_REASON) {
       respondChatActiveLeafChanged(respond);
-      return { ok: false as const };
-    }
-    if (err instanceof Error && err.message === ACTIVE_RUN_CHANGED_ERROR_REASON) {
-      respondChatActiveRunChanged(respond);
       return { ok: false as const };
     }
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));

@@ -145,6 +145,7 @@ export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
         dispatcher: params.dispatcher,
         replyOptions: params.replyOptions,
         configOverride: params.configOverride,
+        usePublishedModelRuntime: true,
       }),
   });
 }
