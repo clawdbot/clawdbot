@@ -577,6 +577,7 @@ export class NewSessionModelControl {
     const snapshot = options.context?.gateway.snapshot;
     const sessionKey = `new-session:${normalizeAgentId(options.agentId)}`;
     const sourceResult = options.context?.sessions.state.result ?? null;
+    const agentDefaultsAvailable = options.agent !== undefined;
     const agentDefaultModel = options.agent?.model?.primary;
     const defaultTarget = resolveDraftModelTarget(
       agentDefaultModel ?? sourceResult?.defaults.model,
@@ -601,7 +602,8 @@ export class NewSessionModelControl {
       agentRuntime: options.agent?.agentRuntime ?? sourceResult?.defaults.agentRuntime,
       thinkingLevels: options.agent?.thinkingLevels ?? sourceResult?.defaults.thinkingLevels,
       thinkingOptions: options.agent?.thinkingOptions ?? sourceResult?.defaults.thinkingOptions,
-      thinkingDefault: options.agent?.thinkingDefault ?? sourceResult?.defaults.thinkingDefault,
+      thinkingDefault:
+        options.agent?.thinkingDefault ?? sourceResult?.defaults.thinkingDefault ?? "medium",
     };
     return renderChatModelControls({
       activeRunId: null,
@@ -611,9 +613,14 @@ export class NewSessionModelControl {
       loading: false,
       modelCatalog: this.catalog,
       modelCatalogState: {
-        hasSnapshot: this.metadataState.hasSnapshot,
+        // chat.metadata and agents.list hydrate independently. Do not expose a
+        // ready catalog until the selected agent can supply its concrete defaults.
+        hasSnapshot: agentDefaultsAvailable && this.metadataState.hasSnapshot,
         ...(this.metadataState.status === "error" ? { onRetry: this.retryMetadata } : {}),
-        status: this.metadataState.status,
+        status:
+          !agentDefaultsAvailable && this.metadataState.status !== "error"
+            ? "loading"
+            : this.metadataState.status,
       },
       modelOverrides: { [sessionKey]: this.selected },
       modelPickerTargetGroups:
