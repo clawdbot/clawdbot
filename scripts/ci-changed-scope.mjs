@@ -742,7 +742,12 @@ export function parseArgs(argv) {
     }
     if (argv[i] === "--merge-head-first-parent") {
       args.mergeHeadFirstParent = true;
+      continue;
     }
+    throw new Error(`Unknown argument: ${argv[i]}`);
+  }
+  if (!args.base) {
+    throw new Error("--base is required");
   }
   return args;
 }

@@ -90,11 +90,14 @@ describe("parseArgs", () => {
   });
 
   it("rejects missing CI diff refs", () => {
+    expect(() => parseArgs([])).toThrow("--base is required");
+    expect(() => parseArgs(["--head", "HEAD"])).toThrow("--base is required");
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
     expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow("--base requires a value");
     expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--head", "-h"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");
+    expect(() => parseArgs(["--base", "HEAD", "--mystery"])).toThrow("Unknown argument: --mystery");
   });
 });
 
@@ -1012,12 +1015,11 @@ describe("detectChangedScope", () => {
     expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8")).changed_paths_json).toBe("null");
   });
 
-  it("loads from a zero-install tree and keeps empty diffs as no-op scope", () => {
+  it("loads from a zero-install tree and fails safe for invalid arguments", () => {
     const repoDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-")),
     );
     tempDirs.push(repoDir);
-    const outputPath = path.join(repoDir, "github-output.txt");
     const scriptPath = path.join(repoDir, "scripts/ci-changed-scope.mjs");
 
     execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
@@ -1036,21 +1038,43 @@ describe("detectChangedScope", () => {
     execFileSync("git", ["commit", "-m", "test"], { cwd: repoDir });
 
     expect(fs.existsSync(path.join(repoDir, "node_modules"))).toBe(false);
-    execFileSync(process.execPath, [scriptPath, "--base", "HEAD", "--head", "HEAD"], {
-      cwd: repoDir,
-      env: { ...process.env, GITHUB_OUTPUT: outputPath },
-    });
+    for (const testCase of [
+      {
+        label: "valid empty diff",
+        args: ["--base", "HEAD", "--head", "HEAD"],
+        changedPaths: "[]",
+        scopeValue: "false",
+      },
+      {
+        label: "missing base",
+        args: ["--head", "HEAD"],
+        changedPaths: "null",
+        scopeValue: "true",
+      },
+      {
+        label: "unknown argument",
+        args: ["--base", "HEAD", "--head", "HEAD", "--mystery"],
+        changedPaths: "null",
+        scopeValue: "true",
+      },
+    ]) {
+      const outputPath = path.join(repoDir, `${testCase.label.replaceAll(" ", "-")}.txt`);
+      execFileSync(process.execPath, [scriptPath, ...testCase.args], {
+        cwd: repoDir,
+        env: { ...process.env, GITHUB_OUTPUT: outputPath },
+      });
 
-    const output = parseGitHubOutput(fs.readFileSync(outputPath, "utf8"));
-    expect(Object.keys(output).toSorted()).toEqual(
-      "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
-        " ",
-      ),
-    );
-    expect(output.changed_paths_json).toBe("[]");
-    for (const [key, value] of Object.entries(output)) {
-      if (key !== "changed_paths_json") {
-        expect(value, key).toBe("false");
+      const output = parseGitHubOutput(fs.readFileSync(outputPath, "utf8"));
+      expect(Object.keys(output).toSorted()).toEqual(
+        "changed_paths_json run_android run_changed_smoke run_control_ui_i18n run_fast_install_smoke run_full_install_smoke run_ios_build run_ios_screenshots run_macos run_native_i18n run_node run_node_fast_ci_routing run_node_fast_only run_node_fast_plugin_contracts run_skills_python run_ui_tests run_windows strict_control_ui_i18n strict_native_i18n".split(
+          " ",
+        ),
+      );
+      expect(output.changed_paths_json, testCase.label).toBe(testCase.changedPaths);
+      for (const [key, value] of Object.entries(output)) {
+        if (key !== "changed_paths_json") {
+          expect(value, `${testCase.label}: ${key}`).toBe(testCase.scopeValue);
+        }
       }
     }
   });
