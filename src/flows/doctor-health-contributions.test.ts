@@ -13,6 +13,7 @@ import { resolveDoctorContributionHealthChecks } from "./doctor-health-contribut
 import {
   createDoctorHealthContribution,
   resolveDoctorHealthContributions,
+  runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
@@ -804,6 +805,43 @@ describe("doctor health contributions", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("continues after one doctor contribution throws", async () => {
+    const laterRun = vi.fn(async () => undefined);
+    const contributions = [
+      createDoctorHealthContribution({
+        id: "doctor:test-failure",
+        label: "Test failure",
+        run: async () => {
+          throw new Error("media migration required");
+        },
+      }),
+      createDoctorHealthContribution({
+        id: "doctor:test-later",
+        label: "Test later",
+        run: laterRun,
+      }),
+    ];
+    const ctx = {
+      cfg: {},
+      cfgForPersistence: {},
+      configResult: { cfg: {} },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+
+    await runDoctorHealthContributionList(ctx, contributions);
+
+    expect(laterRun).toHaveBeenCalledOnce();
+    expect(mocks.note).toHaveBeenCalledWith(
+      "doctor:test-failure run failed: media migration required",
+      "Doctor warnings",
+    );
   });
 
   it("keeps legacy plugin manifest lint opt-in for structured findings", async () => {
