@@ -4,15 +4,12 @@ import {
   normalizeQaProviderMode,
   type QaProviderMode,
 } from "./model-selection.js";
+import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
-import { defaultQaModelForMode } from "./run-config.js";
-import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import { resolveQaScenarioRequiredProviderMode } from "./scenario-lane.js";
-
-function normalizeQaSuiteModelRef(input: string | undefined, fallback: string) {
-  const model = input?.trim();
-  return model && model.length > 0 ? model : fallback;
-}
+import {
+  resolveQaScenarioRequiredProviderMode,
+  type QaSeedScenarioWithSource,
+} from "./scenario-catalog.js";
 
 export function resolveRequestedQaSuiteModels(params: {
   alternateModel?: string;
@@ -34,14 +31,11 @@ export function resolveRequestedQaSuiteModels(params: {
   const providerMode = normalizeQaProviderMode(
     params.providerMode ?? selectedProviderMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
   );
-  const primaryModel = normalizeQaSuiteModelRef(
-    params.primaryModel,
-    defaultQaModelForMode(providerMode),
-  );
-  const alternateModel = normalizeQaSuiteModelRef(
-    params.alternateModel,
-    defaultQaModelForMode(providerMode, true),
-  );
+  const { primaryModel, alternateModel } = resolveQaRuntimeModelPair({
+    providerMode,
+    primaryModel: params.primaryModel,
+    alternateModel: params.alternateModel,
+  });
   return {
     alternateModel,
     fastMode: params.fastMode ?? isQaFastModeEnabled({ primaryModel, alternateModel }),

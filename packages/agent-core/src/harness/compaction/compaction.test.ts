@@ -178,6 +178,38 @@ describe("calculateContextTokens", () => {
     expect(estimate.lastUsageIndex).toBe(0);
   });
 
+  it("does not scan past a zero unavailable context marker", () => {
+    const messages: AgentMessage[] = [
+      createAssistant("old cumulative turn", createUsage(950), 0),
+      {
+        ...createAssistant("usage unavailable", createUsage(0), 1),
+        usage: {
+          ...createUsage(0),
+          contextUsage: { state: "unavailable" },
+        },
+      },
+    ];
+    const estimate = estimateContextTokens(messages);
+
+    expect(estimate.usageTokens).toBe(0);
+    expect(estimate.lastUsageIndex).toBeNull();
+    expect(estimate.tokens).toBeGreaterThan(0);
+    expect(estimate.tokens).toBeLessThan(950);
+    expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBeUndefined();
+  });
+
+  it("treats legacy CLI usage without context provenance as a barrier", () => {
+    const legacyCli = {
+      ...createAssistant("legacy CLI", createUsage(950), 1),
+      api: "cli",
+      usage: { ...createUsage(950), contextUsage: undefined },
+    };
+    const messages = [createAssistant("old", createUsage(900), 0), legacyCli];
+
+    expect(estimateContextTokens(messages).usageTokens).toBe(0);
+    expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBeUndefined();
+  });
+
   it("ignores an all-zero terminal usage block", () => {
     const validUsage = createUsage(20);
     const messages: AgentMessage[] = [
@@ -398,6 +430,56 @@ describe("session-entry compaction budgeting", () => {
     expect(JSON.stringify(result.value.messagesToSummarize)).not.toContain("hidden tool result");
     expect(JSON.stringify(result.value.turnPrefixMessages)).not.toContain("hidden tool result");
     expect(["entry-5", "entry-6"]).toContain(result.value.firstKeptEntryId);
+  });
+
+  it("retains only occurrence-paired reset tool results in compaction input", () => {
+    const assistantToolCall = (timestamp: number): AssistantMessage => ({
+      ...createAssistant("", createUsage(2), timestamp),
+      content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+      stopReason: "toolUse",
+    });
+    const toolResult = (timestamp: number, text: string): AgentMessage => ({
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "read",
+      content: [{ type: "text", text }],
+      isError: false,
+      timestamp,
+    });
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "discarded", timestamp: 1 }, 0),
+      createMessageEntry({ role: "user", content: "kept", timestamp: 2 }, 1),
+      createMessageEntry(assistantToolCall(3), 2),
+      createMessageEntry(toolResult(4, "first result"), 3),
+      createMessageEntry(assistantToolCall(5), 4),
+      createMessageEntry(toolResult(6, "second result"), 5),
+      createMessageEntry(toolResult(7, "orphan result"), 6),
+      {
+        type: "reset",
+        id: "entry-7",
+        parentId: "entry-6",
+        timestamp: new Date(8).toISOString(),
+        reason: "new",
+        firstKeptEntryId: "entry-1",
+      },
+      createMessageEntry({ role: "user", content: "post reset", timestamp: 9 }, 8),
+      createMessageEntry(createAssistant("new answer", createUsage(2), 10), 9),
+    ];
+
+    const result = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 0,
+      keepRecentTokens: 1,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.value) {
+      throw new Error("expected reset transcript to be compactable");
+    }
+    const summarized = JSON.stringify(result.value.messagesToSummarize);
+    expect(summarized).toContain("first result");
+    expect(summarized).toContain("second result");
+    expect(summarized).not.toContain("orphan result");
   });
 
   it("moves the cut earlier when a reset kept-tail prelude consumes the compaction budget", () => {

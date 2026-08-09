@@ -16,6 +16,10 @@ import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
 import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
   resolvePostInstallDoctorEnv,
+  resolveOwnedManagedUpdateEnv,
+  resolveUpdatedInstallCommandEnv,
+} from "./update-command-service-env.js";
+import {
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
   maybeRestartService,
@@ -289,6 +293,54 @@ describe("resolvePostInstallDoctorEnv", () => {
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe("/caller/state");
     expect(env.OPENCLAW_PROFILE).toBe("caller");
+  });
+});
+
+describe("resolveUpdatedInstallCommandEnv", () => {
+  it("keeps runtime SecretRef inputs while applying managed service overrides", () => {
+    const env = resolveUpdatedInstallCommandEnv({
+      invocationCwd: "/srv/openclaw",
+      processEnv: {
+        OPENCLAW_GATEWAY_AUTH_TOKEN: "runtime-token",
+        OPENCLAW_STATE_DIR: "/wrong/state",
+        PATH: "/caller/bin",
+      },
+      serviceEnv: {
+        OPENCLAW_STATE_DIR: "daemon-state",
+        PATH: "/daemon/bin",
+      },
+    });
+
+    expect(env.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("runtime-token");
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
+    expect(env.PATH).toBe("/daemon/bin");
+    expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+  });
+
+  it("clears caller selectors omitted by the managed service definition", () => {
+    const env = resolveOwnedManagedUpdateEnv({
+      processEnv: {
+        HOME: "/home/operator",
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
+        OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "19111",
+      },
+      serviceEnv: {
+        HOME: "/home/operator",
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
+        OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "19111",
+      },
+      serviceDefinitionEnv: {},
+    });
+
+    expect(env.HOME).toBe("/home/operator");
+    expect(env.OPENCLAW_PROFILE).toBeUndefined();
+    expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
+    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
   });
 });
 

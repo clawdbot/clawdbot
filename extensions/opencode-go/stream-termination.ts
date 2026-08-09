@@ -66,7 +66,10 @@ function isProviderProgressEvent(event: AssistantMessageEvent): boolean {
 const STALLED_STREAM_ERROR_MESSAGE =
   "opencode-go stream timed out after provider-owned SSE boundary stalled";
 
-function buildStalledErrorEvent(partial: AssistantMessage | undefined): AssistantMessageEvent {
+function buildStalledErrorEvent(
+  partial: AssistantMessage | undefined,
+  model: Parameters<ProviderStreamFn>[0],
+): AssistantMessageEvent {
   if (partial) {
     return {
       type: "error",
@@ -81,11 +84,14 @@ function buildStalledErrorEvent(partial: AssistantMessage | undefined): Assistan
   return {
     type: "error",
     reason: "error",
-    error: synthesizeMinimalAssistantMessage(STALLED_STREAM_ERROR_MESSAGE, "error"),
+    error: synthesizeMinimalAssistantMessage(STALLED_STREAM_ERROR_MESSAGE, "error", model),
   };
 }
 
-function buildUnterminatedErrorEvent(partial: AssistantMessage | undefined): AssistantMessageEvent {
+function buildUnterminatedErrorEvent(
+  partial: AssistantMessage | undefined,
+  model: Parameters<ProviderStreamFn>[0],
+): AssistantMessageEvent {
   if (partial) {
     return {
       type: "error",
@@ -103,6 +109,7 @@ function buildUnterminatedErrorEvent(partial: AssistantMessage | undefined): Ass
     error: synthesizeMinimalAssistantMessage(
       "opencode-go stream ended without a terminal event",
       "error",
+      model,
     ),
   };
 }
@@ -110,6 +117,7 @@ function buildUnterminatedErrorEvent(partial: AssistantMessage | undefined): Ass
 function buildCaughtErrorEvent(
   partial: AssistantMessage | undefined,
   error: unknown,
+  model: Parameters<ProviderStreamFn>[0],
 ): AssistantMessageEvent {
   const message = error instanceof Error ? error.message : String(error);
   if (partial) {
@@ -126,20 +134,21 @@ function buildCaughtErrorEvent(
   return {
     type: "error",
     reason: "error",
-    error: synthesizeMinimalAssistantMessage(message, "error"),
+    error: synthesizeMinimalAssistantMessage(message, "error", model),
   };
 }
 
 function synthesizeMinimalAssistantMessage(
   errorMessage: string,
   stopReason: AssistantMessage["stopReason"],
+  model: Parameters<ProviderStreamFn>[0],
 ): AssistantMessage {
   return {
     role: "assistant",
     content: [],
-    api: "openai-completions",
-    provider: "opencode-go",
-    model: "",
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
     usage: {
       input: 0,
       output: 0,
@@ -251,7 +260,7 @@ export function createOpencodeGoStalledStreamWrapper(
       clearIdleTimer();
       controller.abort(new Error("opencode-go stream stalled"));
       releaseBaseStream();
-      output.push(buildStalledErrorEvent(lastSeenPartial));
+      output.push(buildStalledErrorEvent(lastSeenPartial, model));
       output.end();
     };
 
@@ -306,7 +315,7 @@ export function createOpencodeGoStalledStreamWrapper(
             return;
           }
           if (result.done) {
-            finishWith(buildUnterminatedErrorEvent(lastSeenPartial));
+            finishWith(buildUnterminatedErrorEvent(lastSeenPartial, model));
             return;
           }
           const event = result.value;
@@ -323,7 +332,7 @@ export function createOpencodeGoStalledStreamWrapper(
         }
       } catch (error) {
         if (!settled) {
-          finishWith(buildCaughtErrorEvent(lastSeenPartial, error));
+          finishWith(buildCaughtErrorEvent(lastSeenPartial, error, model));
         }
       } finally {
         cleanup();

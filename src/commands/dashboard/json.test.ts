@@ -144,7 +144,8 @@ describe("dashboardCommand --json", () => {
         wsUrl: "ws://127.0.0.1:18789",
         port: 18789,
         tokenIncluded: true,
-        browserUrl: "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap",
+        browserUrl:
+          "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner",
         browserBootstrapExpiresAtMs: 123_456,
       },
       0,
@@ -159,13 +160,15 @@ describe("dashboardCommand --json", () => {
       profile: {
         roles: ["operator"],
         scopes: [
+          "operator.admin",
           "operator.approvals",
+          "operator.pairing",
           "operator.questions",
           "operator.read",
           "operator.talk.secrets",
           "operator.write",
         ],
-        purpose: "control-ui",
+        purpose: "control-ui-owner",
       },
     });
   });

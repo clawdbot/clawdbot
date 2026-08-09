@@ -20,6 +20,7 @@ vi.mock("../plugins/providers.js", () => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
   getPreparedModelCatalogSnapshot: vi.fn(() => undefined),
   loadPreparedModelCatalog: vi.fn(async () => []),

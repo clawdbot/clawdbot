@@ -81,6 +81,7 @@ function createEmptyPreparedModelRuntimeSnapshot(
     ...(input.workspaceDir !== undefined ? { workspaceDir: input.workspaceDir } : {}),
     activeProjectKeys: [],
     config: input.config,
+    authModes: {},
     metadataSnapshot: createEmptyPluginMetadataSnapshot(input.workspaceDir),
     pluginRegistry: createEmptyPluginRegistry(),
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
@@ -120,6 +121,23 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       dispose: async () => undefined,
     })),
     resolveContextEngineOwnerPluginId: vi.fn(() => undefined),
+    resolveLogicalTurnContextEngines: vi.fn(async () => {
+      const engine = {
+        info: { id: "legacy", name: "Legacy Context Engine" },
+        async ingest() {
+          return { ingested: false };
+        },
+        async assemble({ messages }: { messages: unknown[] }) {
+          return { messages, estimatedTokens: 0 };
+        },
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+        async dispose() {},
+      };
+      const ref = { engine, registeredId: "legacy" };
+      return { configured: ref, configuredId: "legacy", fallback: ref };
+    }),
   }));
   vi.doMock("../runtime-plugins.js", () => ({
     loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()),

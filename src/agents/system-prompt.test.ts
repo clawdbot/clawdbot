@@ -406,6 +406,64 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it.each(["full", "minimal"] as const)(
+    "keeps credential collection out of transcript-bearing %s prompts",
+    (promptMode) => {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        promptMode,
+      });
+      const credentialGuidance = prompt
+        .split("\n")
+        .filter((line) => /credentials?|secrets?|authentication|pairing codes?/iu.test(line));
+
+      expect(
+        credentialGuidance.some(
+          (line) =>
+            /(?:never|do not)/iu.test(line) &&
+            /(?:ask for|request)/iu.test(line) &&
+            /(?:chat|conversation|message|reply|transcript)/iu.test(line),
+        ),
+      ).toBe(true);
+      expect(
+        credentialGuidance.some(
+          (line) =>
+            /(?:never|do not)/iu.test(line) &&
+            /(?:echo|repeat)/iu.test(line) &&
+            /(?:chat|conversation|message|reply|transcript)/iu.test(line),
+        ),
+      ).toBe(true);
+      expect(
+        credentialGuidance.some(
+          (line) =>
+            /(?:never|do not)/iu.test(line) &&
+            /(?:place|put|include)/iu.test(line) &&
+            /(?:recommend|suggest)/iu.test(line) &&
+            /(?:command(?:-line)?|arguments?)/iu.test(line) &&
+            /urls?/iu.test(line) &&
+            /shell/iu.test(line) &&
+            /(?:variable|interpolat)/iu.test(line),
+        ),
+      ).toBe(true);
+      expect(
+        credentialGuidance.some(
+          (line) =>
+            /(?:never|do not)/iu.test(line) &&
+            /(?:ask|request)/iu.test(line) &&
+            /(?:report|share|provide)/iu.test(line) &&
+            /(?:authentication|pairing)/iu.test(line) &&
+            /codes?/iu.test(line) &&
+            /(?:chat|conversation|message|reply|transcript)/iu.test(line),
+        ),
+      ).toBe(true);
+      expect(
+        credentialGuidance.some(
+          (line) => /(?:masked|secure)/iu.test(line) && /(?:entry|input|setup|wizard)/iu.test(line),
+        ),
+      ).toBe(true);
+    },
+  );
+
   it("includes voice hint when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1361,8 +1419,10 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("buttons=[[{text,callback_data,style?}]]");
-    expect(prompt).toContain("style primary|success|danger");
+    expect(prompt).toContain('presentation={"blocks":[{"type":"buttons"');
+    expect(prompt).toContain(
+      '"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"',
+    );
   });
 
   it("does not embed Telegram rich-text authoring guidance in core messaging", () => {
@@ -1449,7 +1509,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`presentation` buttons/selects");
     expect(prompt).not.toContain("Inline buttons not enabled for slack");
     expect(prompt).not.toContain("slack.capabilities.inlineButtons");
-    expect(prompt).not.toContain("buttons=[[{text,callback_data,style?}]]");
+    expect(prompt).not.toContain('presentation={"blocks":[{"type":"buttons"');
   });
 
   it.each(["group", "channel"] as const)(

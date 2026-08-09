@@ -1,25 +1,19 @@
 // Control UI tests cover the responsive disconnected login gate.
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext, Page } from "playwright";
+import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-let browser: Browser;
-let server: ControlUiE2eServer;
+const suite = createControlUiE2eSuite({
+  name: "Control UI responsive login gate E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
 
 async function renderLoginGate(page: Page): Promise<void> {
-  const response = await page.goto(server.baseUrl);
+  const response = await page.goto(suite.server.baseUrl);
   expect(response?.status()).toBe(200);
 
   await mountLoginGate(page);
@@ -64,30 +58,15 @@ async function closeContext(context: BrowserContext): Promise<void> {
   await context.close().catch(() => {});
 }
 
-describeControlUiE2e("Control UI responsive login gate E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("shows a protocol mismatch without reconnecting", async () => {
-    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
     await page.clock.install();
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
 
     try {
-      await page.goto(server.baseUrl);
+      await page.goto(suite.server.baseUrl);
       await gateway.waitForRequest("connect");
       await gateway.rejectDeferred("connect", {
         code: "INVALID_REQUEST",
@@ -107,8 +86,58 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
     }
   });
 
+  it.each([
+    {
+      name: "missing token",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      },
+      expectedKind: "auth-required",
+      expectedTitle: "Auth required",
+    },
+    {
+      name: "pairing approval",
+      error: {
+        code: "NOT_PAIRED",
+        message: "device is not approved",
+        details: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
+      },
+      expectedKind: "pairing-required",
+      expectedTitle: "Device pairing required",
+    },
+    {
+      name: "generic transport",
+      error: {
+        code: "UNAVAILABLE",
+        message: "WebSocket connection failed",
+      },
+      expectedKind: "network",
+      expectedTitle: "Could not connect",
+    },
+  ])("renders $name guidance from the application gateway snapshot", async (fixture) => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", fixture.error);
+
+      const failure = page.locator(`.login-gate__failure[data-kind="${fixture.expectedKind}"]`);
+      await failure.waitFor({ timeout: 10_000 });
+      expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(
+        fixture.expectedTitle,
+      );
+    } finally {
+      await closeContext(context);
+    }
+  });
+
   it("keeps mobile controls compact, touchable, and keyboard-friendly", async () => {
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       hasTouch: true,
       isMobile: true,
       viewport: { height: 500, width: 375 },
@@ -183,7 +212,7 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
   });
 
   it("keeps failure recovery visible while generic help stays collapsed", async () => {
-    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
 
     try {
@@ -204,7 +233,7 @@ describeControlUiE2e("Control UI responsive login gate E2E", () => {
   });
 
   it("applies standalone safe-area insets exactly once", async () => {
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       hasTouch: true,
       isMobile: true,
       viewport: { height: 500, width: 375 },

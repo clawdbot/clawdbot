@@ -1,9 +1,10 @@
-// Telegram tests cover action runtime plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
+// Telegram tests cover action runtime plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -256,12 +257,7 @@ type MockCallSource = {
   };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function mockCall(source: MockCallSource, callIndex: number, label: string) {
   const call = source.mock.calls[callIndex];
@@ -2559,6 +2555,19 @@ describe("handleTelegramAction", () => {
       ),
     ).rejects.toThrow(expectedMessage);
   });
+
+  it.each([[[{ text: "Yes", callback_data: "yes" }]], '[[{"text":"Yes","callback_data":"yes"}]]'])(
+    "rejects retired native button input before delivery",
+    async (buttons) => {
+      await expect(
+        handleTelegramAction(
+          { action: "sendMessage", to: "123456", content: "Choose", buttons },
+          telegramConfig({ capabilities: { inlineButtons: "all" } }),
+        ),
+      ).rejects.toThrow(/native "buttons" is unsupported.*Use presentation/);
+      expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+    },
+  );
 
   it("allows inline buttons in DMs with tg: prefixed targets", async () => {
     await sendInlineButtonsMessage({

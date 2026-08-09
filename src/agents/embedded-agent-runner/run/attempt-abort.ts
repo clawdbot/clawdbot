@@ -105,7 +105,7 @@ export function createEmbeddedAttemptExternalAbortController(input: {
     if (!input.runAbortController.signal.aborted) {
       input.runAbortController.abort(isTimeout ? (reason ?? createTimeoutAbortReason()) : reason);
     }
-    void abortActiveSession?.();
+    void abortActiveSession?.(input.runAbortController.signal.reason);
   };
 
   return {
@@ -173,6 +173,7 @@ export function createEmbeddedAttemptRunAbort(input: {
     | "readTimedOutDuringCompaction"
   >;
 }): RunAbort {
+  let abortAccepted = false;
   const abortCompaction = () => {
     if (!input.activeSession.isCompacting) {
       return;
@@ -189,6 +190,12 @@ export function createEmbeddedAttemptRunAbort(input: {
   };
 
   return (isTimeout = false, reason?: unknown) => {
+    // Reply-operation cancellation can synchronously re-enter through its abort signal.
+    // The attempt owner accepts the first reason so session and lock cleanup run once.
+    if (abortAccepted) {
+      return;
+    }
+    abortAccepted = true;
     input.state.markAborted();
     let effectiveReason = reason;
     if (isTimeout) {
@@ -207,7 +214,7 @@ export function createEmbeddedAttemptRunAbort(input: {
       input.runAbortController.abort(reason);
     }
     abortCompaction();
-    void input.abortActiveSession();
+    void input.abortActiveSession(input.runAbortController.signal.reason);
     const queueHandle = input.getQueueHandle();
     if (isTimeout && queueHandle) {
       markActiveEmbeddedRunAbandoned({

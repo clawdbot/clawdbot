@@ -52,7 +52,7 @@ import type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
-import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
+import { loadGatewaySessionLifecycleSnapshot } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import {
@@ -221,6 +221,7 @@ function normalizeHeartbeatChatFinalText(params: {
  * do not finalize a run before fallback or retry reuses the same runId.
  */
 const AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+const CHAT_DELTA_THROTTLE_MS = 150;
 
 export type ChatEventBroadcast = GatewayBroadcastFn;
 
@@ -320,7 +321,7 @@ export type AgentEventHandlerOptions = {
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
-  loadGatewaySessionRowForSnapshot?: typeof loadGatewaySessionRow;
+  loadGatewaySessionLifecycleSnapshotForEvent?: typeof loadGatewaySessionLifecycleSnapshot;
   lifecycleErrorRetryGraceMs?: number;
   isChatSendRunActive?: (runId: string) => boolean;
   clearTrackedActiveRun?: (params: {
@@ -359,6 +360,16 @@ type AgentEventHandler = ((event: AgentEventPayload) => void) & {
   dispose: () => void;
 };
 
+type InternalChatRunRecord = ReturnType<ChatRunState["getOrCreate"]> & {
+  pendingDeltaFlush?: { timer: NodeJS.Timeout; flush: () => void };
+};
+
+function internalChatRunRecord(
+  record: ReturnType<ChatRunState["getOrCreate"]>,
+): InternalChatRunRecord {
+  return record;
+}
+
 function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
 }
@@ -374,7 +385,7 @@ export function createAgentEventHandler({
   toolEventRecipients,
   sessionEventSubscribers,
   sessionMessageSubscribers,
-  loadGatewaySessionRowForSnapshot = loadGatewaySessionRow,
+  loadGatewaySessionLifecycleSnapshotForEvent = loadGatewaySessionLifecycleSnapshot,
   lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
   clearTrackedActiveRun,
@@ -420,6 +431,16 @@ export function createAgentEventHandler({
   type AgentTextThrottleStream = "assistant" | "thinking";
 
   const agentTextThrottleStreams = ["assistant", "thinking"] as const;
+
+  const cancelPendingChatDeltaFlush = (clientRunId: string) => {
+    const record = chatRunState.runs.get(clientRunId);
+    const pending = record ? internalChatRunRecord(record).pendingDeltaFlush : undefined;
+    if (!pending || !record) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    delete internalChatRunRecord(record).pendingDeltaFlush;
+  };
 
   const clearBufferedChatState = (clientRunId: string) => {
     chatRunState.clearRun(clientRunId);
@@ -476,7 +497,7 @@ export function createAgentEventHandler({
     }
     let result: string | null = null;
     try {
-      result = loadGatewaySessionRow(sessionKey)?.spawnedBy ?? null;
+      result = loadGatewaySessionLifecycleSnapshotForEvent(sessionKey).row?.spawnedBy ?? null;
     } catch {
       // result stays null
     }
@@ -490,13 +511,20 @@ export function createAgentEventHandler({
     agentId?: string,
     includeActiveRunState = false,
   ) => {
-    const row = loadGatewaySessionRowForSnapshot(sessionKey, agentId ? { agentId } : undefined);
+    const snapshotOptions = agentId ? { agentId } : undefined;
+    const lifecycleSnapshot = loadGatewaySessionLifecycleSnapshotForEvent(
+      sessionKey,
+      snapshotOptions,
+    );
+    const { lifecycleRunId, row } = lifecycleSnapshot;
     const omitUnscopedGlobalGoal = sessionKey === "global" && !agentId;
     const lifecyclePatch =
       evt &&
       !isStaleLifecycleEventForSession({
         owningSessionId: evt.sessionId,
         currentSessionId: row?.sessionId,
+        eventRunId: evt.runId,
+        currentRunId: lifecycleRunId,
         eventStartedAt: evt.data?.startedAt,
         currentStartedAt: row?.startedAt,
       })
@@ -880,6 +908,89 @@ export function createAgentEventHandler({
     pendingTerminalLifecycleErrors.set(evt.runId, { timer, event: evt, opts });
   };
 
+  const broadcastChatDelta = (
+    sessionKey: string,
+    agentId: string | undefined,
+    clientRunId: string,
+    sourceRunId: string,
+    seq: number,
+    text: string,
+    opts?: { controlUiVisible?: boolean; firstAssistantTimingEntry?: ChatRunEntry },
+  ) => {
+    cancelPendingChatDeltaFlush(clientRunId);
+    const run = chatRunState.getOrCreate(clientRunId);
+    const broadcastDelta = resolveBroadcastDelta({
+      text,
+      previousBroadcastText: run.deltaLastBroadcastText,
+    });
+    if (!broadcastDelta) {
+      return;
+    }
+    const now = Date.now();
+    run.deltaSentAt = now;
+    run.deltaLastBroadcastText = text;
+    const spawnedBy = resolveSpawnedBy(sessionKey);
+    const payload = {
+      runId: clientRunId,
+      sessionKey,
+      ...(agentId ? { agentId } : {}),
+      ...(spawnedBy && { spawnedBy }),
+      seq,
+      state: "delta" as const,
+      deltaText: broadcastDelta.deltaText,
+      ...(broadcastDelta.replace ? { replace: true as const } : {}),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        timestamp: now,
+      },
+    };
+    emitFirstAssistantChatSendTiming(
+      opts?.firstAssistantTimingEntry ?? chatRunState.registry.peek(sourceRunId),
+    );
+    sendChatPayload(sessionKey, payload, {
+      agentId,
+      controlUiVisible: opts?.controlUiVisible ?? true,
+      dropIfSlow: true,
+    });
+  };
+
+  const scheduleChatDeltaFlush = (
+    sessionKey: string,
+    agentId: string | undefined,
+    clientRunId: string,
+    sourceRunId: string,
+    seq: number,
+    delayMs: number,
+    controlUiVisible: boolean | undefined,
+  ) => {
+    const run = internalChatRunRecord(chatRunState.getOrCreate(clientRunId));
+    const flush = () => {
+      const projected = chatRunState.resolveBuffer(clientRunId);
+      if (projected.suppress || shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
+        return;
+      }
+      broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, projected.text, {
+        controlUiVisible,
+      });
+    };
+    const existing = run.pendingDeltaFlush;
+    if (existing) {
+      existing.flush = flush;
+      return;
+    }
+    const timer = setSafeTimeout(() => {
+      const pending = run.pendingDeltaFlush;
+      if (!pending || pending.timer !== timer) {
+        return;
+      }
+      cancelPendingChatDeltaFlush(clientRunId);
+      pending.flush();
+    }, delayMs);
+    timer.unref?.();
+    run.pendingDeltaFlush = { timer, flush };
+  };
+
   const emitChatDelta = (
     sessionKey: string,
     agentId: string | undefined,
@@ -903,8 +1014,17 @@ export function createAgentEventHandler({
     const now = Date.now();
     run.rawBuffer = mergedRawText;
     run.bufferUpdatedAt = now;
-    const last = run.deltaSentAt ?? 0;
-    if (now - last < 150) {
+    const waitedMs = now - (run.deltaSentAt ?? 0);
+    if (waitedMs < CHAT_DELTA_THROTTLE_MS) {
+      scheduleChatDeltaFlush(
+        sessionKey,
+        agentId,
+        clientRunId,
+        sourceRunId,
+        seq,
+        CHAT_DELTA_THROTTLE_MS - waitedMs,
+        opts?.controlUiVisible,
+      );
       return;
     }
     const projected = chatRunState.resolveBuffer(clientRunId);
@@ -912,38 +1032,7 @@ export function createAgentEventHandler({
     if (projected.suppress || shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
-    const broadcastDelta = resolveBroadcastDelta({
-      text: mergedText,
-      previousBroadcastText: run.deltaLastBroadcastText,
-    });
-    if (!broadcastDelta) {
-      return;
-    }
-    run.deltaSentAt = now;
-    run.deltaLastBroadcastLen = mergedText.length;
-    run.deltaLastBroadcastText = mergedText;
-    const spawnedBy = resolveSpawnedBy(sessionKey);
-    const payload = {
-      runId: clientRunId,
-      sessionKey,
-      ...(agentId ? { agentId } : {}),
-      ...(spawnedBy && { spawnedBy }),
-      seq,
-      state: "delta" as const,
-      deltaText: broadcastDelta.deltaText,
-      ...(broadcastDelta.replace ? { replace: true as const } : {}),
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: mergedText }],
-        timestamp: now,
-      },
-    };
-    emitFirstAssistantChatSendTiming(chatRunState.registry.peek(sourceRunId));
-    sendChatPayload(sessionKey, payload, {
-      agentId,
-      controlUiVisible: opts?.controlUiVisible ?? true,
-      dropIfSlow: true,
-    });
+    broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, mergedText, opts);
   };
 
   const resolveBufferedChatTextState = (
@@ -974,6 +1063,7 @@ export function createAgentEventHandler({
     seq: number,
     opts?: { controlUiVisible?: boolean; firstAssistantTimingEntry?: ChatRunEntry },
   ) => {
+    cancelPendingChatDeltaFlush(clientRunId);
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
       suppressLeadFragments: true,
     });
@@ -985,42 +1075,7 @@ export function createAgentEventHandler({
       return;
     }
 
-    const now = Date.now();
-    const run = chatRunState.getOrCreate(clientRunId);
-    const delta = resolveBroadcastDelta({
-      text,
-      previousBroadcastText: run.deltaLastBroadcastText,
-    });
-    if (!delta) {
-      return;
-    }
-    const spawnedBy = resolveSpawnedBy(sessionKey);
-    const flushPayload = {
-      runId: clientRunId,
-      sessionKey,
-      ...(agentId ? { agentId } : {}),
-      ...(spawnedBy && { spawnedBy }),
-      seq,
-      state: "delta" as const,
-      deltaText: delta.deltaText,
-      ...(delta.replace ? { replace: true as const } : {}),
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text }],
-        timestamp: now,
-      },
-    };
-    emitFirstAssistantChatSendTiming(
-      opts?.firstAssistantTimingEntry ?? chatRunState.registry.peek(sourceRunId),
-    );
-    sendChatPayload(sessionKey, flushPayload, {
-      agentId,
-      controlUiVisible: opts?.controlUiVisible ?? true,
-      dropIfSlow: true,
-    });
-    run.deltaLastBroadcastLen = text.length;
-    run.deltaLastBroadcastText = text;
-    run.deltaSentAt = now;
+    broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, text, opts);
   };
 
   const sendChatPayload = (
@@ -1636,15 +1691,31 @@ export function createAgentEventHandler({
     }
 
     if (lifecyclePhase === "error") {
-      clearBufferedChatState(clientRunId);
       const skipChatErrorFinal = isChatSendRunActive(evt.runId) && !chatLink;
       const isFallbackExhaustedFailure = evt.data?.fallbackExhaustedFailure === true;
       // Per-attempt provider errors keep the retry grace so fallback can reuse
       // the runId. Once the runner marks fallback as exhausted, clear chat state
       // immediately so webchat sessions do not stay in progress until the timer.
       if (isAborted || isFallbackExhaustedFailure || lifecycleErrorRetryGraceMs <= 0) {
+        // finalizeLifecycleEvent clears the buffer itself, after emitChatTerminal
+        // has flushed the throttled tail and resolved the terminal message.
         finalizeLifecycleEvent(evt, { skipChatErrorFinal, restartRecoveryState });
       } else {
+        // Deliver the throttled tail before isolating the buffer so a fallback
+        // attempt cannot merge onto the failed attempt's text.
+        if (sessionKey) {
+          flushBufferedChatDeltaIfNeeded(
+            sessionKey,
+            sessionAgentId,
+            clientRunId,
+            evt.runId,
+            evt.seq,
+            {
+              controlUiVisible: isControlUiVisible,
+            },
+          );
+        }
+        clearBufferedChatState(clientRunId);
         scheduleTerminalLifecycleError(evt, { skipChatErrorFinal, restartRecoveryState });
       }
       return;

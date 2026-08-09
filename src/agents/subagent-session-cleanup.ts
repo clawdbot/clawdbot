@@ -3,13 +3,13 @@
  * the gateway and preserves lifecycle-hook behavior for session-mode spawns.
  */
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../config/sessions/lifecycle.js";
-import type { callGateway as defaultCallGateway } from "../gateway/call.js";
+import type { callGateway } from "../gateway/call.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
-type CallGateway = typeof defaultCallGateway;
+type CallGateway = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
 type SubagentSessionCleanupOutcome = "deleted" | "changed" | "failed";
 
-export function isSessionLifecycleChangedGatewayError(error: unknown): boolean {
+function isSessionLifecycleChangedGatewayError(error: unknown): boolean {
   if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
     return false;
   }
@@ -28,8 +28,11 @@ export async function deleteSubagentSessionForCleanup(params: {
   callGateway: CallGateway;
   childSessionKey: string;
   spawnMode?: SpawnSubagentMode;
+  emitLifecycleHooks?: boolean;
+  deleteTranscript?: boolean;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
+  timeoutMs?: number;
   onError?: (error: unknown) => void;
 }): Promise<SubagentSessionCleanupOutcome> {
   if (!params.expectedSessionId || !params.expectedLifecycleRevision) {
@@ -40,14 +43,12 @@ export async function deleteSubagentSessionForCleanup(params: {
       method: "sessions.delete",
       params: {
         key: params.childSessionKey,
-        deleteTranscript: true,
-        emitLifecycleHooks: params.spawnMode === "session",
-        ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
-        ...(params.expectedLifecycleRevision
-          ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
-          : {}),
+        deleteTranscript: params.deleteTranscript ?? true,
+        emitLifecycleHooks: params.emitLifecycleHooks ?? params.spawnMode === "session",
+        expectedSessionId: params.expectedSessionId,
+        expectedLifecycleRevision: params.expectedLifecycleRevision,
       },
-      timeoutMs: 10_000,
+      timeoutMs: params.timeoutMs ?? 10_000,
     });
     return "deleted";
   } catch (error) {

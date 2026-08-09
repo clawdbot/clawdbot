@@ -4,6 +4,7 @@ import {
   normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "@openclaw/model-catalog-core/provider-id";
+import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,6 +17,7 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credentials.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import { resolveExternalCliAuthProfiles } from "./auth-profiles/external-cli-sync.js";
 import {
@@ -118,6 +120,8 @@ type CreateModelAuthAvailabilityResolverParams = {
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   allowPreparedRuntimeAuth?: boolean;
+  preparedRuntimeAuthStore?: AuthProfileStore;
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
 };
 
 type AuthTarget = ModelAuthAvailabilityRef & {
@@ -127,10 +131,6 @@ type AuthSourceEvaluation = Pick<
   ModelAuthAvailabilityEvaluation,
   "availability" | "selectedAuthMode" | "evidence" | "selectedProfileId"
 >;
-
-function hasSecret(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 function modeAllowed(provider: string, target: AuthTarget, mode: string | undefined): boolean {
   const requirement = resolveProviderModelRouteAuthRequirement(mode);
@@ -178,9 +178,10 @@ export function createModelAuthAvailabilityResolver(
       }
     : params.authStore;
   const runtimeStore =
-    params.allowPreparedRuntimeAuth !== false
+    params.preparedRuntimeAuthStore ??
+    (params.allowPreparedRuntimeAuth !== false
       ? getRuntimeAuthProfileStoreSnapshot(params.agentDir)
-      : undefined;
+      : undefined);
   const hydratedProfileIds = new Set<string>();
   const sameSecretRef = (
     left: ReturnType<typeof coerceSecretRef>,
@@ -595,6 +596,14 @@ export function createModelAuthAvailabilityResolver(
         availability: modeAllowed(provider, target, "aws-sdk"),
         selectedAuthMode: "aws-sdk",
         evidence: "aws-sdk",
+      };
+    }
+    const preparedRuntimeAuthMode = params.preparedRuntimeAuthModes?.[normalizeProvider(provider)];
+    if (preparedRuntimeAuthMode) {
+      return {
+        availability: modeAllowed(provider, target, preparedRuntimeAuthMode),
+        selectedAuthMode: preparedRuntimeAuthMode,
+        evidence: "runtime",
       };
     }
     const environment = envAuth(provider);

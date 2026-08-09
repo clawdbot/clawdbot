@@ -1,9 +1,9 @@
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   appendSqliteTranscriptEvent as appendTranscriptEvent,
-  appendSqliteTranscriptEventSync as appendTranscriptEventSync,
+  appendSqliteTranscriptEventSync,
   appendSqliteTranscriptMessage as appendTranscriptMessage,
-  appendSqliteTranscriptMessageSync as appendTranscriptMessageSync,
+  appendSqliteTranscriptMessageSync,
   findSqliteTranscriptEvent,
   loadLatestSqliteAssistantText as readLatestTranscriptAssistantText,
   loadSqliteTranscriptEventRowsAfterSeqSync as loadTranscriptEventRowsAfterSeqSync,
@@ -16,7 +16,7 @@ import {
   readSqliteTranscriptRawDelta as readTranscriptRawDelta,
   publishSqliteTranscriptUpdate as publishTranscriptUpdate,
   replaceSqliteTranscriptEvents as replaceTranscriptEvents,
-  replaceSqliteTranscriptEventsSync as replaceTranscriptEventsSync,
+  replaceSqliteTranscriptEventsSync,
   rewriteSqliteTranscriptEventRowsExact as rewriteTranscriptEventRowsExact,
   resolveSqliteSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId,
   trimSqliteTranscriptForManualCompact,
@@ -26,6 +26,7 @@ import {
 import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptReadScope,
+  SessionTranscriptWriteScope,
   TranscriptEvent,
   SessionTranscriptManualTrimResult,
   SessionTranscriptManualTrimPreflightResult,
@@ -34,14 +35,13 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
+import { assertOwnedSessionTranscriptWrite } from "./transcript-write-context.js";
 
-// Persisted transcripts have one SQLite owner. Preserve public operation names
-// as direct exports so append, idempotency, locks, and events cannot drift.
+// Persisted transcripts have one SQLite owner. Async operations keep direct
+// exports; sync runtime writes use the ownership-fenced wrappers below.
 export {
   appendTranscriptEvent,
-  appendTranscriptEventSync,
   appendTranscriptMessage,
-  appendTranscriptMessageSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
@@ -53,11 +53,43 @@ export {
   readTranscriptRawDelta,
   readTranscriptStatsSync,
   replaceTranscriptEvents,
-  replaceTranscriptEventsSync,
   rewriteTranscriptEventRowsExact,
   resolveTranscriptSessionKeyBySessionId,
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
+};
+
+function assertOwnedTranscriptScope(scope: SessionTranscriptWriteScope): void {
+  assertOwnedSessionTranscriptWrite({
+    sessionFile: scope.sessionFile,
+    sessionKey: scope.sessionKey,
+    sessionTarget: scope,
+  });
+}
+
+export const appendTranscriptEventSync: typeof appendSqliteTranscriptEventSync = (
+  scope,
+  event,
+  options,
+) => {
+  assertOwnedTranscriptScope(scope);
+  return appendSqliteTranscriptEventSync(scope, event, options);
+};
+
+export const appendTranscriptMessageSync: typeof appendSqliteTranscriptMessageSync = (
+  scope,
+  options,
+) => {
+  assertOwnedTranscriptScope(scope);
+  return appendSqliteTranscriptMessageSync(scope, options);
+};
+
+export const replaceTranscriptEventsSync: typeof replaceSqliteTranscriptEventsSync = (
+  scope,
+  events,
+) => {
+  assertOwnedTranscriptScope(scope);
+  return replaceSqliteTranscriptEventsSync(scope, events);
 };
 
 /** Keeps transcript event delivery behind the transcript owner boundary. */

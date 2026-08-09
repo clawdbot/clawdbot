@@ -39,13 +39,15 @@ export function sessionRow(
     pinned?: boolean;
     pinnedAt?: number;
     hasActiveRun?: boolean;
+    unread?: boolean;
     status?: string;
     spawnedBy?: string;
     startedAt?: number;
     endedAt?: number;
     childSessions?: string[];
     execNode?: string;
-    worktree?: { branch?: string; repoRoot?: string };
+    forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
+    worktree?: { id?: string; branch?: string; repoRoot?: string };
   } = {},
 ) {
   return {

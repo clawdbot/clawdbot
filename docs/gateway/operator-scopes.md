@@ -58,6 +58,11 @@ dispatch so authorization failures have one canonical structured response:
   `operator.talk.secrets`.
 - `talk.client.*`, `talk.session.*`, `talk.speak`, and `talk.mode` need
   `operator.talk` (or the compatible broader `operator.write`).
+- `sessions.patch` needs `operator.write` for session organization fields and
+  the per-session `model` override. Other runtime overrides, including
+  thinking, fast, verbose, trace, and reasoning levels, need `operator.admin`.
+  Persisting a selected model as the configured agent default is also
+  admin-only.
 
 Some handlers then apply stricter checks based on the concrete thing being
 approved or mutated:
@@ -91,6 +96,14 @@ Device pairing records are the durable source of approved roles and scopes.
 An already-paired device does not get broader access silently: a reconnect
 that asks for a broader role or broader scopes creates a new pending upgrade
 request.
+
+The explicit exception is the administrator-capable Control UI owner profile
+issued directly on the Gateway host by `openclaw dashboard` or graphical
+onboarding. Its short-lived, single-use bootstrap can approve the exact closed
+scope set for a fresh browser or upgrade an existing limited credential only
+when it binds to that same signed browser keypair. Generic Control UI and
+Telegram handoffs, mobile setup profiles, shared credentials, locality, and
+caller-selected scopes do not receive this exception.
 
 Approving a device request:
 

@@ -1,4 +1,5 @@
 /** Connected node-hosted plugin tools available to agent tool resolution. */
+import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -42,12 +43,6 @@ function bumpSnapshotVersion(): void {
 
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function defaultParameters(): Record<string, unknown> {

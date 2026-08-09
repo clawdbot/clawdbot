@@ -1,5 +1,6 @@
 // Telegram plugin module implements delivery.send behavior.
 import type { Bot } from "grammy";
+import type { Message } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -29,6 +30,7 @@ import {
   warnTelegramRichBlocksDegradations,
 } from "../rich-plain-fallback.js";
 import { withTelegramNativeQuoteFallback } from "../send-context.js";
+import { reportTelegramProviderDelivery } from "../send-outbound.js";
 import { buildInlineKeyboard } from "../send.js";
 import type { TelegramThreadSpec } from "./helpers.js";
 
@@ -109,6 +111,17 @@ export async function sendTelegramText(
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   const fallbackText = opts?.plainText ?? text;
   const hasFallbackText = fallbackText.trim().length > 0;
+  const acceptProviderMessage = async (message: Message) => {
+    if (opts?.thread?.id !== undefined) {
+      await reportTelegramProviderDelivery({
+        message,
+        messageId: message.message_id,
+        fallbackChatId: chatId,
+        successfulSendThread: opts.thread,
+      });
+    }
+    return message.message_id;
+  };
   const sendPlainFallback = async (plainText: string = fallbackText) => {
     const res = await sendTelegramWithThreadFallback({
       operation: "sendMessage",
@@ -121,8 +134,9 @@ export async function sendTelegramText(
           ...effectiveParams,
         }),
     });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
-    return res.message_id;
+    const messageId = await acceptProviderMessage(res);
+    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${messageId} (plain)`);
+    return messageId;
   };
 
   // Caller-authored HTML keeps legacy parse_mode HTML semantics (literal
@@ -150,8 +164,9 @@ export async function sendTelegramText(
       runtime.log?.("telegram sendRichMessage rendered empty; falling back to plain text");
       return await sendPlainFallback();
     }
+    let res: Message;
     try {
-      const res = await sendTelegramWithThreadFallback({
+      res = await sendTelegramWithThreadFallback({
         operation: "sendRichMessage",
         runtime,
         requestParams: toTelegramRichMessageContextParams(baseParams),
@@ -164,8 +179,6 @@ export async function sendTelegramText(
             ...effectiveParams,
           }),
       });
-      runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
-      return res.message_id;
     } catch (err) {
       const fallbackPlan = buildTelegramPlainFallbackPlan({
         plainText: richPlan.plainText || fallbackText,
@@ -178,6 +191,9 @@ export async function sendTelegramText(
       }
       return await sendPlainFallback(fallbackPlan.plainText);
     }
+    const messageId = await acceptProviderMessage(res);
+    runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${messageId}`);
+    return messageId;
   }
 
   // Markdown can render to empty HTML for syntax-only chunks; recover with plain text.
@@ -203,8 +219,9 @@ export async function sendTelegramText(
           ...effectiveParams,
         }),
     });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
-    return res.message_id;
+    const messageId = await acceptProviderMessage(res);
+    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${messageId}`);
+    return messageId;
   } catch (err) {
     const errText = formatErrorMessage(err);
     if (isTelegramHtmlParseError(err) || isTelegramEmptyContentError(err)) {

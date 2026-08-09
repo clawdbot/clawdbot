@@ -6,7 +6,6 @@ import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/i
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { shouldHandleNavigationClick } from "../../components/app-sidebar-nav-menus.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
@@ -20,10 +19,13 @@ import {
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { repoName } from "../../lib/session-display.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 
@@ -36,10 +38,6 @@ type WorktreeBranchesResult = {
   defaultBranch?: string;
   headBranch?: string;
 };
-
-function repoName(repoRoot: string): string {
-  return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
-}
 
 class WorktreesPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -279,10 +277,10 @@ class WorktreesPage extends OpenClawLightDomElement {
     this.creating = true;
     this.error = null;
     try {
-      await scope.client.request("worktrees.create", {
+      await createManagedWorktree(scope.client, {
         repoRoot,
-        ...(this.createName.trim() ? { name: this.createName.trim() } : {}),
-        ...(this.createBaseRef.trim() ? { baseRef: this.createBaseRef.trim() } : {}),
+        name: this.createName,
+        baseRef: this.createBaseRef,
       });
       if (this.gateway.isCurrent(scope)) {
         this.createOpen = false;

@@ -48,6 +48,7 @@ function resolveBoardFrameFailureMessage(
 type FrameRefresh = (name: string) => Promise<void>;
 
 type BoardWidgetFrameLifecycleHost = {
+  active: () => boolean;
   connected: () => boolean;
   context: () => ApplicationContext | undefined;
   refreshFrame: () => FrameRefresh | undefined;
@@ -55,7 +56,6 @@ type BoardWidgetFrameLifecycleHost = {
   reportContentHeight: (name: string, height: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
   root: () => ParentNode;
-  ticketRefreshEnabled: () => boolean;
   widget: () => BoardViewWidget | undefined;
 };
 
@@ -137,34 +137,60 @@ export class BoardWidgetFrameLifecycle {
   private frameRefreshAttempts = 0;
   private frameProbeGeneration = 0;
   private lastFrameUrl = "";
-  private listening = false;
+  private messageListening = false;
+  private visibilityListening = false;
   private sandboxOrigin = "";
   private sandboxHost: BoardWidgetSandboxHost | null = null;
   private readonly ticketRefresh = new BoardWidgetTicketRefresh(
     () => this.host.widget()?.viewTicket,
-    () => this.host.ticketRefreshEnabled() && !documentHidden(),
+    () => this.host.active() && !documentHidden(),
   );
 
   constructor(private readonly host: BoardWidgetFrameLifecycleHost) {}
 
   connect(): void {
-    if (this.listening) {
-      return;
+    if (!this.messageListening) {
+      window.addEventListener("message", this.handleWindowMessage);
+      this.messageListening = true;
     }
-    window.addEventListener("message", this.handleWindowMessage);
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    this.listening = true;
+    if (this.host.active() && !this.visibilityListening) {
+      document.addEventListener("visibilitychange", this.handleVisibilityChange);
+      this.visibilityListening = true;
+    }
   }
 
   disconnect(): void {
-    if (this.listening) {
+    this.stopWork();
+    if (this.messageListening) {
       window.removeEventListener("message", this.handleWindowMessage);
-      document.removeEventListener("visibilitychange", this.handleVisibilityChange);
-      this.listening = false;
+      this.messageListening = false;
     }
-    this.ticketRefresh.reset();
     this.sandboxHost?.dispose();
     this.sandboxHost = null;
+  }
+
+  private suspend(): void {
+    this.stopWork();
+    this.sandboxHost?.setActive(false);
+  }
+
+  private stopWork(): void {
+    if (this.visibilityListening) {
+      document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+      this.visibilityListening = false;
+    }
+    this.ticketRefresh.reset();
+  }
+
+  activityChanged(): void {
+    if (this.host.active()) {
+      this.connect();
+      this.sandboxHost?.setActive(true);
+    } else {
+      // Hidden dashboard cells retain their iframe and sandbox handshake;
+      // terminal disconnect is the only lifecycle edge that disposes them.
+      this.suspend();
+    }
   }
 
   widgetChanged(previous: BoardViewWidget, current: BoardViewWidget | undefined): void {
@@ -184,8 +210,18 @@ export class BoardWidgetFrameLifecycle {
   }
 
   update(): void {
+    if (!this.host.active()) {
+      this.suspend();
+      return;
+    }
+    this.resume();
+  }
+
+  private resume(): void {
+    this.connect();
     this.ticketRefresh.schedule(this.host.widget(), this.host.refreshFrame());
     this.updateSandboxHost();
+    this.sandboxHost?.setActive(true);
   }
 
   render(widget: BoardViewWidget): TemplateResult {
@@ -253,6 +289,9 @@ export class BoardWidgetFrameLifecycle {
   }
 
   private refreshFailedFrame(widget: BoardViewWidget): void {
+    if (!this.host.active()) {
+      return;
+    }
     this.frameProbeGeneration += 1;
     const failureKey = `${widget.name}:${widget.revision}`;
     if (this.frameFailureKey !== failureKey) {
@@ -290,6 +329,7 @@ export class BoardWidgetFrameLifecycle {
       frame.isConnected &&
       frame.getAttribute("src") === src &&
       this.frameProbeGeneration === probeGeneration &&
+      this.host.active() &&
       this.host.widget()?.name === widget.name &&
       this.host.widget()?.revision === widget.revision;
     // View tickets are reusable HMAC bindings until expiry. Iframe load events
@@ -410,6 +450,12 @@ export class BoardWidgetFrameLifecycle {
     }
     const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
     const widget = this.host.widget();
+    if (!this.host.active()) {
+      if (frame && event.source === frame.contentWindow && event.origin === this.sandboxOrigin) {
+        this.sandboxHost?.handleMessage(event);
+      }
+      return;
+    }
     const data = event.data as { type?: unknown; height?: unknown } | null;
     if (
       frame &&

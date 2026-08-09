@@ -14,10 +14,37 @@ const injectedBuildInfo = globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO;
 
 export const CONTROL_UI_BUILD_INFO = normalizeControlUiBuildInfo(injectedBuildInfo);
 
-export function controlUiVersionDiffersFrom(gatewayVersion: string | undefined): boolean {
+export function reloadControlUiIfStale(identity: {
+  version: string | null;
+  sha: string | null;
+}): void {
+  if (
+    typeof window !== "undefined" &&
+    controlUiVersionDiffersFrom(identity.version ?? undefined, identity.sha ?? undefined)
+  ) {
+    window.location.reload();
+  }
+}
+
+export function controlUiVersionDiffersFrom(
+  gatewayVersion: string | undefined,
+  gatewayCommit?: string,
+): boolean {
   const controlUiVersion = CONTROL_UI_BUILD_INFO.version?.trim();
   const normalizedGatewayVersion = gatewayVersion?.trim();
+  if (
+    controlUiVersion &&
+    normalizedGatewayVersion &&
+    controlUiVersion !== normalizedGatewayVersion
+  ) {
+    return true;
+  }
+  const controlUiCommit = CONTROL_UI_BUILD_INFO.commit?.trim().toLowerCase();
+  const normalizedGatewayCommit = gatewayCommit?.trim().toLowerCase();
   return Boolean(
-    controlUiVersion && normalizedGatewayVersion && controlUiVersion !== normalizedGatewayVersion,
+    controlUiCommit &&
+    normalizedGatewayCommit &&
+    !controlUiCommit.startsWith(normalizedGatewayCommit) &&
+    !normalizedGatewayCommit.startsWith(controlUiCommit),
   );
 }

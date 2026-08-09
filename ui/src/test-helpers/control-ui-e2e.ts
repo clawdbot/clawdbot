@@ -10,6 +10,7 @@ import type { Locator, Page } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
+import type { ModelCatalogEntry } from "../api/types.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 
 export function controlUiSessionPath(sessionKey: string, basePath = ""): string {
@@ -159,6 +160,7 @@ const defaultControlUiFeatureMethods = [
   "session.members.remove",
   "session.visibility.set",
   "sessions.abort",
+  "sessions.patchMany",
   "sessions.branches.switch",
   "sessions.compact",
   "sessions.compaction.branch",
@@ -175,6 +177,9 @@ const defaultControlUiFeatureMethods = [
   "sessions.reclaim",
   "sessions.reset",
   "sessions.rewind",
+  "update.hold",
+  "update.run",
+  "update.status",
 ] as const;
 
 export type MockGatewayRequest = {
@@ -217,7 +222,13 @@ export type ControlUiMockGatewayScenario = {
   /** Static payloads, parameter-matched cases, or call-ordered sequences. */
   methodResponses?: Record<string, unknown>;
   /** Replayed in-flight run snapshot served by chat.history and chat.startup. */
-  inFlightRun?: { runId: string; text?: string; events?: unknown[]; plan?: unknown } | null;
+  inFlightRun?: {
+    runId: string;
+    text?: string;
+    startedAt?: number;
+    events?: unknown[];
+    plan?: unknown;
+  } | null;
   /** Online users included in the connect snapshot's presence list. The entry
    * flagged `self` adopts the connecting client's instanceId so presence
    * surfaces (footer facepile, who's-online roster) resolve "you". */
@@ -238,20 +249,14 @@ export type ControlUiMockGatewayScenario = {
   sessionInfo?: Record<string, unknown> | null;
   /** Partition sessions.list fixtures by archived state after applying patches. */
   sessionArchiveFiltering?: boolean;
-  models?: Array<{
-    id: string;
-    name: string;
-    provider: string;
-    available?: boolean;
-    contextWindow?: number;
-    supportsTools?: boolean;
-  }>;
+  models?: ModelCatalogEntry[];
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
   sessionKey?: string;
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
   terminalEnabled?: boolean;
+  cliAgentsEnabled?: boolean;
   workspace?: string;
   workspaceGit?: boolean;
 };
@@ -299,6 +304,7 @@ export type MockGatewayControls = {
   ) => Promise<void>;
   resolveDeferred: (method: string, payload?: unknown) => Promise<void>;
   setOnline: (online: boolean) => Promise<void>;
+  setOperatorScopes: (scopes: string[]) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
   setMethodResponse: (method: string, payload: unknown) => Promise<void>;
   setSessionSharingPolicy: (policy: {
@@ -649,6 +655,7 @@ function normalizeScenario(
     sessionKey,
     sessionGroups: scenario.sessionGroups ?? [],
     terminalEnabled: scenario.terminalEnabled ?? false,
+    cliAgentsEnabled: scenario.cliAgentsEnabled ?? false,
     workspace: scenario.workspace ?? "",
     workspaceGit: scenario.workspaceGit ?? false,
   };
@@ -667,6 +674,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     localMediaPreviewRoots: [],
     serverVersion: "e2e",
     terminalEnabled: normalizedScenario.terminalEnabled,
+    cliAgentsEnabled: normalizedScenario.cliAgentsEnabled,
   };
 }
 
@@ -724,6 +732,7 @@ function installControlUiMockGateway(
     requests: BrowserRequest[];
     resolveDeferred: (method: string, payload?: unknown) => void;
     setOnline: (online: boolean) => void;
+    setOperatorScopes: (scopes: string[]) => void;
     setHistoryMessages: (messages: unknown[]) => void;
     setMethodResponse: (method: string, payload: unknown) => void;
     setSessionSharingPolicy: (policy: {
@@ -1061,8 +1070,12 @@ function installControlUiMockGateway(
       "model",
       "thinkingLevel",
       "fastMode",
+      "label",
       "category",
+      "icon",
+      "boardFace",
       "pinned",
+      "unread",
       "toolOverrides",
     ] as const) {
       if (hasOwn(params, key)) {
@@ -1073,6 +1086,21 @@ function installControlUiMockGateway(
       patch.archived = params.archived;
     }
     sessionPatches.set(params.key, patch);
+  }
+
+  function recordSessionsPatchMany(params: unknown, response: unknown): void {
+    if (!isRecord(params) || !Array.isArray(params.targets) || !isRecord(params.patch)) {
+      return;
+    }
+    const outcomes =
+      isRecord(response) && Array.isArray(response.outcomes) ? response.outcomes : [];
+    for (const [index, target] of params.targets.entries()) {
+      const outcome = outcomes[index];
+      if (!isRecord(target) || !isRecord(outcome) || outcome.ok !== true) {
+        continue;
+      }
+      recordSessionPatch({ ...target, ...params.patch });
+    }
   }
 
   function recordMaterializedSession(params: unknown, response: unknown): void {
@@ -1348,6 +1376,9 @@ function installControlUiMockGateway(
       if (method === "sessions.create" || method === "sessions.catalog.continue") {
         recordMaterializedSession(params, configuredValue);
       }
+      if (method === "sessions.patchMany") {
+        recordSessionsPatchMany(params, configuredValue);
+      }
       return method === "sessions.list"
         ? applySessionPatches(configuredValue, params)
         : configuredValue;
@@ -1523,6 +1554,20 @@ function installControlUiMockGateway(
           },
           params,
         );
+      case "sessions.patchMany": {
+        const targets = isRecord(params) && Array.isArray(params.targets) ? params.targets : [];
+        const result = {
+          outcomes: targets.map((target) => {
+            const key = isRecord(target) && typeof target.key === "string" ? target.key : "unknown";
+            if (isRecord(target) && typeof target.agentId === "string") {
+              return { ok: true, key, agentId: target.agentId };
+            }
+            return { ok: true, key };
+          }),
+        };
+        recordSessionsPatchMany(params, result);
+        return result;
+      }
       case "sessions.groups.list":
         return groupsPayload();
       case "sessions.groups.put": {
@@ -1819,6 +1864,9 @@ function installControlUiMockGateway(
       }
       MockWebSocket.latest?.openConnection();
     },
+    setOperatorScopes(scopes) {
+      scenario.operatorScopes = [...scopes];
+    },
     setMethodResponse(method, payload) {
       scenario.methodResponses[method] = payload;
       methodResponseSequenceIndexes.delete(method);
@@ -2054,6 +2102,21 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
         }
         gateway.setOnline(nextOnline);
       }, online);
+    },
+    async setOperatorScopes(scopes) {
+      await page.evaluate((nextScopes) => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              setOperatorScopes: (scopes: string[]) => void;
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setOperatorScopes(nextScopes);
+      }, scopes);
     },
     async setHistoryMessages(messages) {
       await page.evaluate((nextMessages) => {

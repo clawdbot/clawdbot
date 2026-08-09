@@ -7,7 +7,9 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-const setupInferenceMocks = vi.hoisted(() => ({ verifySetupInference: vi.fn() }));
+const inferenceFallbackMocks = vi.hoisted(() => ({
+  verifySystemAgentInferenceWithFallback: vi.fn(),
+}));
 const transcriptStoreMocks = vi.hoisted(() => ({
   appendTranscriptReset: vi.fn(),
   appendTranscriptTurn: vi.fn(),
@@ -21,8 +23,9 @@ const greetingMocks = vi.hoisted(() => ({
 }));
 const onboardingWelcomeMocks = vi.hoisted(() => ({ buildOnboardingWelcome: vi.fn() }));
 
-vi.mock("../../system-agent/setup-inference.js", () => ({
-  verifySetupInference: setupInferenceMocks.verifySetupInference,
+vi.mock("../../system-agent/inference-fallback.js", () => ({
+  verifySystemAgentInferenceWithFallback:
+    inferenceFallbackMocks.verifySystemAgentInferenceWithFallback,
 }));
 vi.mock("../../system-agent/transcript-store.js", () => ({
   appendTranscriptReset: transcriptStoreMocks.appendTranscriptReset,
@@ -121,7 +124,10 @@ const quickActions = {
 
 beforeEach(() => {
   createdEngines.length = 0;
-  setupInferenceMocks.verifySetupInference.mockResolvedValue({ ok: true, binding: {} });
+  inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValue({
+    ok: true,
+    binding: {},
+  });
   greetingMocks.loadSystemAgentGreetingFacts.mockReturnValue({
     updateAvailable: null,
     channelHealth: { available: true, degraded: [] },

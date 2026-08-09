@@ -13,7 +13,7 @@ import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type PendingDispatchLifecycleError = {
   endedAt: number;
@@ -21,6 +21,63 @@ type PendingDispatchLifecycleError = {
   sessionId: string;
   startedAt: number;
 };
+
+/** Finalize a chat.send that throws before detached dispatch owns cleanup. */
+export async function handleChatSendSetupError(params: {
+  admission: Pick<
+    AdmittedChatSend,
+    "cleanupAdmittedRun" | "lifecycleGeneration" | "restartSafeAdmission"
+  >;
+  context: GatewayRequestContext;
+  error: unknown;
+  respond: RespondFn;
+  session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey">;
+  terminalizeRestartSafeAdmission: (state: {
+    retryable: boolean;
+    status: "failed" | "killed";
+  }) => Promise<boolean>;
+}): Promise<void> {
+  const { cleanupAdmittedRun, lifecycleGeneration, restartSafeAdmission } = params.admission;
+  const { agentId, clientRunId, sessionKey } = params.session;
+  if (restartSafeAdmission) {
+    const terminalized = await params
+      .terminalizeRestartSafeAdmission({ retryable: true, status: "failed" })
+      .catch((terminalizeError: unknown) => {
+        params.context.logGateway.warn(
+          `failed to release restart-safe chat admission after setup error: ${formatForLog(
+            terminalizeError,
+          )}`,
+        );
+        return false;
+      });
+    if (terminalized) {
+      emitSessionsChanged(params.context, {
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+        reason: "chat.dispatch-error",
+      });
+    }
+  }
+  cleanupAdmittedRun({ force: true });
+  clearAgentRunContext(clientRunId, lifecycleGeneration);
+  params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
+  const errorMessage = String(params.error);
+  const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
+  const payload = { runId: clientRunId, status: "error" as const, summary: errorMessage };
+  setGatewayDedupeEntry({
+    dedupe: params.context.dedupe,
+    key: `chat:${clientRunId}`,
+    entry: { ts: Date.now(), ok: false, payload, error },
+  });
+  params.respond(false, payload, error, { runId: clientRunId, error: formatForLog(params.error) });
+  broadcastChatError({
+    context: params.context,
+    runId: clientRunId,
+    sessionKey,
+    agentId,
+    errorMessage,
+  });
+}
 
 /** Own dispatch rejection projection and post-cleanup lifecycle persistence. */
 export function createChatSendDispatchErrorLifecycle(params: {

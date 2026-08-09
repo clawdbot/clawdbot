@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
   createBrowserPanelTestMetrics,
   createBrowserPanelTestTab,
-  createDeferred,
   createView,
   flushBrowserResponses,
   setupBrowserPanelTestCleanup,

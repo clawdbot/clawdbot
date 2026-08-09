@@ -70,6 +70,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
 
     .search {
       flex: 1;
+      min-width: 0;
       background: transparent;
       border: none;
       outline: none;
@@ -435,6 +436,33 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       font-size: 13px;
       color: var(--muted);
       max-width: 380px;
+    }
+
+    @media (max-width: 640px) {
+      .head {
+        padding: 12px;
+      }
+
+      .body {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(0, min(180px, 30dvh)) minmax(0, 1fr);
+      }
+
+      .list {
+        min-width: 0;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+        padding: 10px 8px;
+      }
+
+      .item {
+        min-width: 0;
+      }
+
+      .foot {
+        gap: 8px;
+        padding: 10px 12px;
+      }
     }
   `;
 

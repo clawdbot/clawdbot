@@ -38,7 +38,7 @@ export function respondChatActiveLeafChanged(respond: GatewayRequestHandlerOptio
   respond(
     false,
     undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "active branch changed; review and resend", {
+    errorShape(ErrorCodes.INVALID_REQUEST, "active branch changed; review and retry", {
       details: { reason: ACTIVE_LEAF_CHANGED_ERROR_REASON },
     }),
   );

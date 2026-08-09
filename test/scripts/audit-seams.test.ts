@@ -4,7 +4,7 @@ import {
   HELP_TEXT,
   describeSeamKinds,
   determineSeamTestStatus,
-} from "../../scripts/audit-seams.mjs";
+} from "../../scripts/audit-seams.mts";
 
 describe("audit-seams cron seam classification", () => {
   it("detects cron agent handoff and outbound delivery boundaries", () => {
@@ -93,6 +93,20 @@ describe("audit-seams subagent seam classification", () => {
     expect(describeSeamKinds("src/agents/subagent-registry.ts", source)).toEqual([
       "subagent-announce-delivery",
       "subagent-lifecycle-registry",
+    ]);
+  });
+
+  it("detects the shared delivery-context announce seam", () => {
+    const source = `
+      import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+
+      export function createBoundDeliveryRouter(context) {
+        return normalizeDeliveryContext(context);
+      }
+    `;
+
+    expect(describeSeamKinds("src/agents/subagent-announce-origin.ts", source)).toEqual([
+      "subagent-announce-delivery",
     ]);
   });
 

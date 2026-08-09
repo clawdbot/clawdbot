@@ -15,9 +15,6 @@ type ChatQueueProps = {
 };
 
 function sendStateLabel(item: ChatQueueItem): string | null {
-  if (isInflightSteer(item)) {
-    return t("chat.queue.states.steering");
-  }
   switch (item.sendState) {
     case "waiting-model":
       // Persisted state name predates reasoning and speed picker gating.
@@ -51,8 +48,8 @@ export function renderChatQueue(props: ChatQueueProps) {
 
 function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
   const stateLabel = sendStateLabel(item);
-  const steered = isSteeredQueueItem(item);
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
+  const steered = isSteeredQueueItem(item) && !failed;
   const reconnecting = item.sendState === "waiting-reconnect";
   const busy = item.sendState === "executing-command" || isInflightSteer(item);
   const canSteer =
@@ -80,7 +77,7 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
       ${renderChatAuthorAvatar(item.sender)}
       ${steered
         ? html`<span class="chat-queue__badge chat-queue__badge--steered"
-            >${t("chat.queue.steered")}</span
+            >${t("chat.queue.states.steering")}</span
           >`
         : nothing}
       ${stateLabel

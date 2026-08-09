@@ -14,13 +14,13 @@ import {
   restoreRuntimePack,
   rewriteWorkspaceDependencyVersions,
   runPreparedRuntimePack,
-} from "../../scripts/ocm-npm-workspace-deps.mjs";
+} from "../../scripts/ocm-npm-workspace-deps.mts";
 import { restorePrepackArtifacts } from "../../scripts/openclaw-postpack.mjs";
 import { preparePackageChangelog } from "../../scripts/package-changelog.mjs";
 import { preparePackageDocsMap } from "../../scripts/package-docs-map.mjs";
 
 const adapterPath = fileURLToPath(
-  new URL("../../scripts/ocm-npm-workspace-deps.mjs", import.meta.url),
+  new URL("../../scripts/ocm-npm-workspace-deps.mts", import.meta.url),
 );
 const packageDocsMapPath = fileURLToPath(
   new URL("../../scripts/package-docs-map.mjs", import.meta.url),

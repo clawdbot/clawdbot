@@ -73,6 +73,7 @@ export type {
   SessionParentForkDecision,
   SessionPatchProjectionContext,
   SessionPatchProjectionFailure,
+  SessionPatchProjectionOperation,
   SessionPatchProjectionResult,
   SessionPatchProjectionSnapshot,
   SessionPatchProjectionTarget,
@@ -115,11 +116,17 @@ export type {
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 export type {
+  TranscriptEntryAnchor,
+  TranscriptTurnAdmission,
+  TranscriptTurnBoundary,
+} from "./transcript-entry-anchor.js";
+export type {
   RecordInboundSessionMetaParams,
   UpdateSessionLastRouteParams,
 } from "./session-accessor.entry-mutation.js";
 export {
   countSessionEntryRowsReadOnly,
+  ensureSessionEntrySync,
   copySessionOwnedStateForCanonicalRepair,
   hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,
@@ -163,6 +170,7 @@ export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
   applySessionPatchProjection,
+  applySessionPatchProjections,
   applySessionStoreProjection,
   branchSessionFromCompactionCheckpoint,
   cleanupPluginHostSessionStore,
@@ -217,6 +225,11 @@ export {
   appendTranscriptMessages,
   persistSessionTranscriptTurn,
 } from "./session-accessor.transcript-turn.js";
+export {
+  readClosedTranscriptTurn,
+  type ClosedTranscriptTurnReadResult,
+} from "./session-accessor.transcript-range.js";
+export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptActiveEvents,

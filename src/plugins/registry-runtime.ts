@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
@@ -6,17 +7,13 @@ import {
   parseSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesTarget,
 } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createPluginBlobStore,
   type OpenBlobStoreOptions,
   type PluginBlobStore,
 } from "../plugin-state/plugin-blob-store.js";
-import { withPluginStateLease } from "../plugin-state/plugin-state-lease.js";
-import type {
-  PluginStateLeaseContext,
-  PluginStateLeaseOptions,
-} from "../plugin-state/plugin-state-lease.types.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -24,6 +21,7 @@ import {
   type PluginStateKeyedStore,
   type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
@@ -53,6 +51,7 @@ const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
   "sessions.fork",
   "sessions.create",
   "sessions.delete",
+  "sessions.patchMany",
   "sessions.patch",
   "sessions.pluginPatch",
   "sessions.reset",
@@ -379,6 +378,24 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       const sessionKey = targetSessionKey ?? directSessionKey;
       const storePath = normalizeOptionalString(target?.storePath);
       const agentId = normalizeOptionalString(target?.agentId ?? params.agentId);
+      const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+      const normalizedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
+      if (sessionKeyAgentId && normalizedAgentId && normalizedAgentId !== sessionKeyAgentId) {
+        throw new Error(
+          `Plugin session ownership agent "${normalizedAgentId}" does not match session key agent "${sessionKeyAgentId}".`,
+        );
+      }
+      const ownershipAgentId = sessionKeyAgentId ?? normalizedAgentId;
+      // Embedded runs accept one exact key. Carry its resolved store into the
+      // keyless ID/file scan so incognito ownership stays in the process-held DB.
+      const ownershipStorePath =
+        sessionKey && sessionKeyAgentId
+          ? resolveSessionStorePathForScope({
+              agentId: sessionKeyAgentId,
+              sessionKey,
+              ...(storePath ? { storePath } : {}),
+            })
+          : storePath;
       const entry = sessionKey
         ? registryParams.runtime.agent.session.getSessionEntry({
             sessionKey,
@@ -453,11 +470,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       }
       assertSessionIdentitiesOwned({
         action: "run",
-        agentId: target?.agentId ?? params.agentId,
+        agentId: ownershipAgentId,
         sessionFiles: [params.sessionFile],
         sessionIds: [target?.sessionId ?? params.sessionId],
         sessionKeys: [target?.sessionKey ?? params.sessionKey],
-        storePath: target?.storePath,
+        storePath: ownershipStorePath,
       });
       return undefined;
     };
@@ -472,6 +489,19 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         return;
       }
       const request = params ?? {};
+      if (method === "sessions.patchMany" && Array.isArray(request.targets)) {
+        for (const target of request.targets) {
+          if (!isRecord(target)) {
+            continue;
+          }
+          assertSessionIdentitiesOwned({
+            action: `request gateway method "${method}" for`,
+            agentId: target.agentId,
+            sessionKeys: [target.key],
+          });
+        }
+        return;
+      }
       const sessionKeys = [request.sessionKey, request.key, request.parentSessionKey];
       const sessionIds = [request.sessionId];
       assertSessionIdentitiesOwned({
@@ -541,7 +571,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               | "openBlobStore"
               | "openKeyedStore"
               | "openSyncKeyedStore"
-              | "withLease"
               | "openChannelIngressQueue"
               | "openChannelIngressDrain",
           ) => {
@@ -573,13 +602,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             ): PluginStateSyncKeyedStore<T> => {
               assertPluginStateAllowed("openSyncKeyedStore");
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
-            },
-            withLease: <T>(
-              options: PluginStateLeaseOptions,
-              run: (lease: PluginStateLeaseContext) => Promise<T>,
-            ): Promise<T> => {
-              assertPluginStateAllowed("withLease");
-              return withPluginStateLease(pluginId, options, run);
             },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,

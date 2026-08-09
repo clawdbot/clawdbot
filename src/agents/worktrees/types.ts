@@ -1,5 +1,19 @@
 export type ManagedWorktreeOwnerKind = "manual" | "workboard" | "session";
 
+export type ManagedWorktreeRunEndCleanupOutcome =
+  | "removed-lossless"
+  | "retained-busy"
+  | "retained-dirty"
+  | "retained-unpushed"
+  | "retained-provisioned-drift"
+  | "failed";
+
+export type ManagedWorktreeRunEndCleanup = {
+  outcome: ManagedWorktreeRunEndCleanupOutcome;
+  at: number;
+  reason?: string;
+};
+
 export type ProvisionedFileState = {
   path: string;
   mode: number | null;
@@ -20,6 +34,7 @@ export type ManagedWorktreeRecord = {
   createdAt: number;
   lastActiveAt: number;
   removedAt?: number;
+  runEndCleanup?: ManagedWorktreeRunEndCleanup;
 };
 
 export type CreateManagedWorktreeParams = {

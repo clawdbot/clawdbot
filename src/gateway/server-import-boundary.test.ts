@@ -63,6 +63,9 @@ describe("gateway startup import boundaries", () => {
       /import\s+\{[^}]*attachGatewayWsMessageHandler[^}]*\}\s+from "\.\/ws-connection\/message-handler\.js"/s,
     );
     expect(wsConnection).toContain('import("./ws-connection/message-handler.js")');
+    expect(wsConnection).not.toContain('from "../talk-realtime-relay.js"');
+    expect(wsConnection).not.toContain('from "../talk-transcription-relay.js"');
+    expect(wsConnection).toContain('from "../talk-session-registry.js"');
     expect(readSource("src/gateway/server-aux-handlers.ts")).not.toMatch(
       /import\s+\{[^}]*create(?:Exec|Plugin|Secrets)[^}]*\}\s+from "\.\/server-methods\//s,
     );
@@ -75,6 +78,9 @@ describe("gateway startup import boundaries", () => {
       expect(workerStartup).toContain(`import("./worker-environments/${workerModule}.js")`);
     }
     expect(serverImpl).not.toContain('from "../plugins/worker-provider-registry.js"');
+    expect(readSource("src/gateway/server-restart-readiness.ts")).toContain(
+      'import("../state/openclaw-database-preflight.js")',
+    );
     expect(workerStartup).toContain('import("../plugins/worker-provider-registry.js")');
     expect(serverImpl).not.toContain(
       'from "../../packages/gateway-protocol/src/schema/worker-admission.js"',

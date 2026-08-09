@@ -6,6 +6,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -21,6 +22,7 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+const consumeSelectedSystemEventEntriesMock = vi.hoisted(() => vi.fn(() => []));
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
@@ -31,6 +33,16 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: enqueueSystemEventMock,
+  enqueueSystemEventEntry: (text: string, options: { deliveryContext?: unknown }) => {
+    enqueueSystemEventMock(text, options);
+    return {
+      text,
+      ts: Date.now(),
+      contextKey: null,
+      deliveryContext: options.deliveryContext,
+    };
+  },
+  consumeSelectedSystemEventEntries: consumeSelectedSystemEventEntriesMock,
 }));
 
 vi.mock("../process/supervisor/index.js", () => ({
@@ -66,22 +78,13 @@ beforeEach(() => {
   resetProcessRegistryForTests();
   requestHeartbeatMock.mockClear();
   enqueueSystemEventMock.mockClear();
+  consumeSelectedSystemEventEntriesMock.mockClear();
   supervisorMock.spawn.mockReset();
 });
 
 afterEach(() => {
   resetProcessRegistryForTests();
 });
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 async function runExecWithExit(params: {
   exit: RunExit;
@@ -642,7 +645,7 @@ describe("sandbox exec finalization suspension", () => {
     "keeps suspension busy until asynchronous finalization settles after $scenario",
     async ({ finalizeRejects, processTimesOut, expectedFailureKind, expectedStatus }) => {
       const exit = createDeferred<RunExit>();
-      const finalization = createDeferred<void>();
+      const finalization = createDeferred();
       const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(
         async () => await finalization.promise,
       );

@@ -78,7 +78,6 @@ type SessionManagerMocks = {
   flushPendingPersistence: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
-  mergePromptReleasedSessionEntries: UnknownMock;
   reloadPersistedTranscript: UnknownMock;
   clearNextUserMessagePersistenceSuppression: UnknownMock;
   removeTrailingEntries: UnknownMock;
@@ -250,7 +249,6 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     flushPendingPersistence: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
-    mergePromptReleasedSessionEntries: vi.fn(),
     reloadPersistedTranscript: vi.fn(),
     clearNextUserMessagePersistenceSuppression: vi.fn(),
     removeTrailingEntries: vi.fn(() => 0),
@@ -969,6 +967,9 @@ type MutableSession = {
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: unknown[]) => Promise<unknown>;
     transport?: string;
+    subscribe?: (
+      listener: (event: unknown, signal: AbortSignal) => Promise<void> | void,
+    ) => () => void;
     reset: () => void;
     state: {
       messages: unknown[];
@@ -1136,7 +1137,6 @@ export function resetEmbeddedAttemptHarness(
   hoisted.sessionManager.appendSessionInfo.mockReset();
   hoisted.sessionManager.appendLabelChange.mockReset();
   hoisted.sessionManager.flushPendingPersistence.mockReset();
-  hoisted.sessionManager.mergePromptReleasedSessionEntries.mockReset();
   hoisted.sessionManager.reloadPersistedTranscript.mockReset();
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
@@ -1195,6 +1195,9 @@ export function createDefaultEmbeddedSession(params?: {
       reset: () => {
         session.messages = [];
       },
+      // Production cleanup hooks subscribe for lifecycle events; the default
+      // session double never emits them.
+      subscribe: () => () => {},
       state: {
         get messages() {
           return session.messages;

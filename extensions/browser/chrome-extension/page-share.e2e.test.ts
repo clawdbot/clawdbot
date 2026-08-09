@@ -1,26 +1,54 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
+import path from "node:path";
 import { chromium, type CDPSession } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocketServer } from "ws";
 import {
+  EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
   startExtensionRelayServer,
   type ExtensionRelayHandle,
 } from "../src/browser/extension-relay/relay-server.js";
 import { useAutoCleanupTempDirTracker } from "../test-support.js";
 import {
   copyCopilotSidepanelExtension,
+  createRelayHarness,
+  rawDataText,
+  waitForContextExtensionId,
   waitForLoadedExtensionId,
 } from "./sidepanel.e2e-support.js";
 
 declare const chrome: {
   runtime: {
     sendMessage(message: Record<string, unknown>): Promise<{
+      accessMode?: "all" | "selected";
+      accessible?: boolean;
+      denied?: boolean;
       ok?: boolean;
       error?: string;
     }>;
   };
+  storage: {
+    local: {
+      get(keys: string[]): Promise<Record<string, unknown>>;
+      set(values: Record<string, unknown>): Promise<void>;
+    };
+  };
+  tabGroups: {
+    get(groupId: number): Promise<{ title?: string }>;
+  };
   tabs: {
-    get(tabId: number): Promise<{ id?: number; url?: string; windowId?: number }>;
+    get(tabId: number): Promise<{
+      active?: boolean;
+      groupId?: number;
+      id?: number;
+      url?: string;
+      windowId?: number;
+    }>;
     query(query: Record<string, unknown>): Promise<Array<{ id?: number; url?: string }>>;
+    remove(tabId: number): Promise<void>;
+    ungroup(tabIds: number[]): Promise<void>;
     update(tabId: number, update: { active: boolean }): Promise<unknown>;
   };
   windows: {
@@ -29,6 +57,7 @@ declare const chrome: {
 };
 
 const runE2E = process.env.OPENCLAW_BROWSER_COPILOT_E2E === "1";
+const PAGE_SHARE_RELAY_SECRET = "c".repeat(64);
 const cleanups: Array<() => Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let nextPopupCommandId = 0;
@@ -51,6 +80,24 @@ async function listen(server: Server): Promise<number> {
     throw new Error("page-share test server did not bind a TCP port");
   }
   return address.port;
+}
+
+async function configureRelayCredential(token: string): Promise<void> {
+  const priorStateDir = process.env.OPENCLAW_STATE_DIR;
+  const stateDir = tempDirs.make("openclaw-extension-relay-state-");
+  const credentialsDir = path.join(stateDir, "credentials");
+  await fs.mkdir(credentialsDir, { recursive: true });
+  await fs.writeFile(path.join(credentialsDir, "browser-extension-relay.secret"), `${token}\n`, {
+    mode: 0o600,
+  });
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  cleanups.push(async () => {
+    if (priorStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = priorStateDir;
+    }
+  });
 }
 
 async function evaluateToolbarPopup<T>(
@@ -104,6 +151,357 @@ async function evaluateToolbarPopup<T>(
   }
 }
 
+describe.runIf(runE2E)("Chrome extension relay authorization", () => {
+  it("sends no client proof or raw key to a malicious loopback listener", async () => {
+    const server = createServer();
+    const port = await listen(server);
+    const wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
+      handleProtocols: (protocols) =>
+        protocols.has("openclaw-extension-relay.v2") ? "openclaw-extension-relay.v2" : false,
+    });
+    const protocolHeaders: string[] = [];
+    const receivedTypes: string[] = [];
+    server.on("upgrade", (request, socket, head) => {
+      const protocolHeader = request.headers["sec-websocket-protocol"];
+      protocolHeaders.push(
+        Array.isArray(protocolHeader) ? protocolHeader.join(", ") : (protocolHeader ?? ""),
+      );
+      wss.handleUpgrade(request, socket, head, (client) => wss.emit("connection", client, request));
+    });
+    wss.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const message = JSON.parse(rawDataText(data)) as Record<string, unknown>;
+        receivedTypes.push(String(message.type));
+        if (message.type !== "auth.hello") {
+          return;
+        }
+        const issuedAtMs = Date.now();
+        socket.send(
+          JSON.stringify({
+            type: "auth.challenge",
+            v: 2,
+            keyId: createHash("sha256")
+              .update(Buffer.from(PAGE_SHARE_RELAY_SECRET, "hex"))
+              .digest("base64url")
+              .slice(0, 22),
+            instanceId: "ICEiIyQlJicoKSorLC0uLw",
+            sessionId: "MDEyMzQ1Njc4OTo7PD0-Pw",
+            clientNonce: message.clientNonce,
+            serverNonce: "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8",
+            issuedAtMs,
+            expiresAtMs: issuedAtMs + 10_000,
+            role: "extension",
+            transport: "websocket",
+            method: "GET",
+            resource: "/extension",
+            flow: "extension",
+            serverProof: "A".repeat(43),
+          }),
+        );
+      });
+    });
+    cleanups.push(async () => {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    });
+
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const context = await chromium.launchPersistentContext(
+      tempDirs.make("openclaw-extension-malicious-relay-profile-"),
+      {
+        channel: "chromium",
+        headless: true,
+        ignoreDefaultArgs: ["--disable-extensions"],
+        args: [
+          "--enable-unsafe-extension-debugging",
+          `--disable-extensions-except=${unpackedExtension}`,
+          `--load-extension=${unpackedExtension}`,
+        ],
+      },
+    );
+    cleanups.push(async () => await context.close());
+    const extensionId = await waitForContextExtensionId(context, unpackedExtension);
+    const launcher = context.pages()[0] ?? (await context.newPage());
+    await launcher.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+    await launcher.evaluate(
+      async (pairingString) => await chrome.runtime.sendMessage({ type: "pair", pairingString }),
+      `ws://127.0.0.1:${port}/extension#${PAGE_SHARE_RELAY_SECRET}`,
+    );
+
+    await expect.poll(() => receivedTypes.length, { timeout: 10_000 }).toBeGreaterThan(0);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 750);
+    });
+    expect(new Set(receivedTypes)).toEqual(new Set(["auth.hello"]));
+    expect(new Set(protocolHeaders)).toEqual(new Set(["openclaw-extension-relay.v2"]));
+    expect(protocolHeaders.join("\n")).not.toContain(PAGE_SHARE_RELAY_SECRET);
+  }, 60_000);
+
+  it("clears an invalid persisted pairing before reconnecting after restart", async () => {
+    const relay = await createRelayHarness(PAGE_SHARE_RELAY_SECRET);
+    cleanups.push(relay.close);
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const userDataDir = tempDirs.make("openclaw-extension-persisted-auth-profile-");
+    const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
+      channel: "chromium",
+      headless: true,
+      ignoreDefaultArgs: ["--disable-extensions"],
+      args: [
+        "--enable-unsafe-extension-debugging",
+        `--disable-extensions-except=${unpackedExtension}`,
+        `--load-extension=${unpackedExtension}`,
+      ],
+    };
+    const initialContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    cleanups.push(async () => await initialContext.close());
+    const initialExtensionId = await waitForContextExtensionId(initialContext, unpackedExtension);
+    const initialLauncher = initialContext.pages()[0] ?? (await initialContext.newPage());
+    await initialLauncher.goto(`chrome-extension://${initialExtensionId}/e2e-launcher.html`);
+    await initialLauncher.evaluate(
+      async ({ relayPort }) =>
+        await chrome.storage.local.set({
+          relayUrl: `ws://127.0.0.1:${relayPort}/extension`,
+          token: "legacy-unsafe-token",
+          gatewayUrl: "",
+          groupColor: "orange",
+        }),
+      { relayPort: relay.port },
+    );
+    await initialContext.close();
+
+    const reloadedContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    cleanups.push(async () => await reloadedContext.close());
+    const extensionId = await waitForContextExtensionId(reloadedContext, unpackedExtension);
+    expect(extensionId).toBe(initialExtensionId);
+    const launcher = reloadedContext.pages()[0] ?? (await reloadedContext.newPage());
+    await launcher.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+
+    await expect
+      .poll(
+        async () =>
+          await launcher.evaluate(
+            async () =>
+              await chrome.storage.local.get(["relayUrl", "gatewayUrl", "token", "authVersion"]),
+          ),
+        { timeout: 10_000 },
+      )
+      .toEqual({});
+    expect(
+      await launcher.evaluate(async () => await chrome.runtime.sendMessage({ type: "getStatus" })),
+    ).toMatchObject({ paired: false, relayUrl: "", state: "off" });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1_500);
+    });
+    expect(relay.connectionCount).toBe(0);
+  }, 60_000);
+
+  it("migrates an existing pairing to selected access after a browser restart", async () => {
+    const relay = await createRelayHarness(PAGE_SHARE_RELAY_SECRET);
+    cleanups.push(relay.close);
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const userDataDir = tempDirs.make("openclaw-extension-selected-migration-profile-");
+    const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
+      channel: "chromium",
+      headless: true,
+      ignoreDefaultArgs: ["--disable-extensions"],
+      args: [
+        "--enable-unsafe-extension-debugging",
+        `--disable-extensions-except=${unpackedExtension}`,
+        `--load-extension=${unpackedExtension}`,
+      ],
+    };
+    const initialContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    cleanups.push(async () => await initialContext.close());
+    const initialExtensionId = await waitForContextExtensionId(initialContext, unpackedExtension);
+    const initialLauncher = initialContext.pages()[0] ?? (await initialContext.newPage());
+    await initialLauncher.goto(`chrome-extension://${initialExtensionId}/e2e-launcher.html`);
+    await initialLauncher.evaluate(
+      async ({ relayPort, token }) =>
+        await chrome.storage.local.set({
+          relayUrl: `ws://127.0.0.1:${relayPort}/extension`,
+          token,
+          gatewayUrl: "",
+          groupColor: "orange",
+        }),
+      { relayPort: relay.port, token: PAGE_SHARE_RELAY_SECRET },
+    );
+    await initialContext.close();
+
+    const context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+    cleanups.push(async () => await context.close());
+    const extensionId = await waitForContextExtensionId(context, unpackedExtension);
+    const launcher = context.pages()[0] ?? (await context.newPage());
+    await launcher.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+    await expect.poll(() => relay.connectionCount, { timeout: 10_000 }).toBe(1);
+    await expect
+      .poll(
+        async () =>
+          await launcher.evaluate(
+            async () => await chrome.storage.local.get(["authVersion", "accessMode"]),
+          ),
+        { timeout: 10_000 },
+      )
+      .toEqual({ authVersion: 2, accessMode: "selected" });
+
+    const ordinary = await context.newPage();
+    await ordinary.goto("data:text/html,<title>Selected migration fixture</title>");
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+    const tabId = await worker.evaluate(async (expectedUrl) => {
+      const tab = (await chrome.tabs.query({})).find((candidate) => candidate.url === expectedUrl);
+      if (typeof tab?.id !== "number") {
+        throw new Error("Chromium did not expose the migration fixture tab");
+      }
+      return tab.id;
+    }, ordinary.url());
+    await expect(relay.command({ type: "attach", tabId })).rejects.toThrow(
+      `tab ${tabId} is not in the OpenClaw tab group`,
+    );
+  }, 60_000);
+
+  it("controls and pauses an ungrouped ordinary tab in new all-tabs mode", async () => {
+    const relay = await createRelayHarness(PAGE_SHARE_RELAY_SECRET);
+    cleanups.push(relay.close);
+    const fixture = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end("<!doctype html><title>Authorization fixture</title>");
+    });
+    const fixturePort = await listen(fixture);
+    cleanups.push(
+      async () =>
+        await new Promise<void>((resolve, reject) => {
+          fixture.close((error) => (error ? reject(error) : resolve()));
+        }),
+    );
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const context = await chromium.launchPersistentContext(
+      tempDirs.make("openclaw-extension-auth-profile-"),
+      {
+        channel: "chromium",
+        headless: true,
+        ignoreDefaultArgs: ["--disable-extensions"],
+        args: [
+          "--enable-unsafe-extension-debugging",
+          `--disable-extensions-except=${unpackedExtension}`,
+          `--load-extension=${unpackedExtension}`,
+        ],
+      },
+    );
+    cleanups.push(async () => await context.close());
+    const extensionId = await waitForContextExtensionId(context, unpackedExtension);
+    const launcher = context.pages()[0] ?? (await context.newPage());
+    await launcher.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+
+    const invalidPairing = await launcher.evaluate(
+      async (pairingString) => await chrome.runtime.sendMessage({ type: "pair", pairingString }),
+      `ws://gateway.example.com/extension#${PAGE_SHARE_RELAY_SECRET}`,
+    );
+    expect(invalidPairing).toEqual({ ok: false, error: "Invalid pairing string." });
+    expect(relay.connectionCount).toBe(0);
+
+    const validPairing = await launcher.evaluate(
+      async (pairingString) =>
+        await chrome.runtime.sendMessage({ type: "pair", pairingString, accessMode: "all" }),
+      `ws://127.0.0.1:${relay.port}/extension#${PAGE_SHARE_RELAY_SECRET}`,
+    );
+    expect(validPairing).toEqual({ ok: true });
+    await expect.poll(() => relay.connectionCount, { timeout: 10_000 }).toBe(1);
+
+    const ordinary = await context.newPage();
+    await ordinary.goto(`http://127.0.0.1:${fixturePort}/authorization`);
+    const tabId = await worker.evaluate(async (expectedUrl) => {
+      const tab = (await chrome.tabs.query({})).find((candidate) => candidate.url === expectedUrl);
+      if (typeof tab?.id !== "number") {
+        throw new Error("Chromium did not expose the all-tabs fixture tab");
+      }
+      return tab.id;
+    }, ordinary.url());
+    expect(
+      (await worker.evaluate(async (targetTabId) => await chrome.tabs.get(targetTabId), tabId))
+        .groupId,
+    ).toBe(-1);
+    await expect
+      .poll(
+        () =>
+          relay.tabRefreshes.some(
+            (refresh) =>
+              Array.isArray(refresh.tabs) &&
+              refresh.tabs.some(
+                (target) =>
+                  typeof target === "object" &&
+                  target !== null &&
+                  (target as { tabId?: unknown }).tabId === tabId,
+              ),
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+    await relay.command({ type: "attach", tabId });
+    await expect(
+      relay.command({
+        type: "cdp",
+        tabId,
+        method: "Runtime.evaluate",
+        params: { expression: "document.title", returnByValue: true },
+      }),
+    ).resolves.toMatchObject({ result: { value: "Authorization fixture" } });
+
+    expect(
+      await launcher.evaluate(
+        async (targetTabId) =>
+          await chrome.runtime.sendMessage({
+            type: "toggleTabAccess",
+            tabId: targetTabId,
+            accessMode: "all",
+            grant: false,
+          }),
+        tabId,
+      ),
+    ).toMatchObject({ ok: true, accessible: false, denied: true });
+    await expect
+      .poll(
+        () => {
+          const latest = relay.tabRefreshes.at(-1);
+          return (
+            Array.isArray(latest?.tabs) &&
+            latest.tabs.some(
+              (target) =>
+                typeof target === "object" &&
+                target !== null &&
+                (target as { tabId?: unknown }).tabId === tabId,
+            )
+          );
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(false);
+    await expect(
+      relay.command({ type: "cdp", tabId, method: "Runtime.evaluate", params: {} }),
+    ).rejects.toThrow(`tab ${tabId} is paused for OpenClaw`);
+    await expect(relay.command({ type: "activateTab", tabId })).rejects.toThrow(
+      `tab ${tabId} is paused for OpenClaw`,
+    );
+    await expect(relay.command({ type: "closeTab", tabId })).rejects.toThrow(
+      `tab ${tabId} is paused for OpenClaw`,
+    );
+    expect(
+      await worker.evaluate(async (targetTabId) => await chrome.tabs.get(targetTabId), tabId),
+    ).toMatchObject({ id: tabId });
+
+    await expect(relay.command({ type: "detach", tabId })).resolves.toEqual({});
+    await ordinary.close();
+  }, 60_000);
+});
+
 describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay", () => {
   it.each([
     { label: "relay disconnection", unpair: false },
@@ -114,9 +512,10 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
     const delivery = new Promise<void>((resolve) => {
       releaseDelivery = resolve;
     });
+    await configureRelayCredential(PAGE_SHARE_RELAY_SECRET);
     const relay = await startExtensionRelayServer({
       port: 0,
-      token: "openclaw-autoqa-page-share-relay-placeholder",
+      token: PAGE_SHARE_RELAY_SECRET,
       onPageShare: async (payload) => {
         receivedShares.push({ url: payload.url, content: payload.content });
         await delivery;
@@ -335,5 +734,194 @@ describe.runIf(runE2E)("Chrome page sharing with a real Gateway extension relay"
       ),
     ).toBe(true);
     releaseDelivery();
+  });
+
+  it("keeps a real stale-tab sharing error visible across the popup status poll", async () => {
+    await configureRelayCredential(PAGE_SHARE_RELAY_SECRET);
+    const relay = await startExtensionRelayServer({
+      port: 0,
+      token: PAGE_SHARE_RELAY_SECRET,
+    });
+    cleanups.push(async () => await relay.close());
+
+    const unpackedExtension = await copyCopilotSidepanelExtension(tempDirs);
+    const context = await chromium.launchPersistentContext(
+      tempDirs.make("openclaw-popup-consent-profile-"),
+      {
+        channel: "chromium",
+        headless: true,
+        ignoreDefaultArgs: ["--disable-extensions"],
+        args: [
+          "--enable-unsafe-extension-debugging",
+          `--disable-extensions-except=${unpackedExtension}`,
+          `--load-extension=${unpackedExtension}`,
+        ],
+      },
+    );
+    cleanups.push(async () => await context.close());
+
+    const browser = context.browser();
+    if (!browser) {
+      throw new Error("Chromium browser connection unavailable");
+    }
+    const browserCdp = await browser.newBrowserCDPSession();
+    const extensionId = await waitForLoadedExtensionId(browserCdp, unpackedExtension);
+    const pairingPage = context.pages()[0] ?? (await context.newPage());
+    await pairingPage.goto(`chrome-extension://${extensionId}/popup.html`);
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+
+    const pairing = await pairingPage.evaluate(
+      async (pairingString) => await chrome.runtime.sendMessage({ type: "pair", pairingString }),
+      `ws://127.0.0.1:${relay.port}/extension#${relay.token}`,
+    );
+    expect(pairing).toEqual({ ok: true });
+    await expect.poll(() => relay.bridge.extensionConnected, { timeout: 10_000 }).toBe(true);
+
+    const missingTabId = 999_999_999;
+    const expectedError = await worker.evaluate(async (tabId) => {
+      try {
+        await chrome.tabs.get(tabId);
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    }, missingTabId);
+    expect(expectedError).toContain(String(missingTabId));
+
+    const activePage = await context.newPage();
+    await activePage.goto("data:text/html,<title>OpenClaw popup consent fixture</title>");
+    await activePage.bringToFront();
+    const prior = (await browserCdp.send("Target.getTargets", {
+      filter: [{}],
+    })) as { targetInfos: ChromeTarget[] };
+    const activeTarget = prior.targetInfos.find(
+      (target) => target.type === "tab" && target.url === activePage.url(),
+    );
+    if (!activeTarget) {
+      throw new Error("Chromium did not expose the actual popup consent tab target");
+    }
+    const priorTargetIds = new Set(prior.targetInfos.map((target) => target.targetId));
+
+    await browserCdp.send("Extensions.triggerAction", {
+      id: extensionId,
+      targetId: activeTarget.targetId,
+    });
+    await expect
+      .poll(
+        async () => {
+          const targets = (await browserCdp.send("Target.getTargets", {
+            filter: [{}],
+          })) as { targetInfos: ChromeTarget[] };
+          return targets.targetInfos.find(
+            (target) =>
+              !priorTargetIds.has(target.targetId) &&
+              target.url === `chrome-extension://${extensionId}/popup.html`,
+          );
+        },
+        { timeout: 10_000 },
+      )
+      .toBeTruthy();
+
+    const targets = (await browserCdp.send("Target.getTargets", {
+      filter: [{}],
+    })) as { targetInfos: ChromeTarget[] };
+    const target = targets.targetInfos.find(
+      (candidate) =>
+        !priorTargetIds.has(candidate.targetId) &&
+        candidate.url === `chrome-extension://${extensionId}/popup.html`,
+    );
+    if (!target) {
+      throw new Error("Chromium did not open the actual OpenClaw toolbar popup");
+    }
+    const attached = (await browserCdp.send("Target.attachToTarget", {
+      targetId: target.targetId,
+      flatten: false,
+    })) as { sessionId: string };
+    await expect
+      .poll(
+        async () =>
+          await evaluateToolbarPopup<string>(
+            browserCdp,
+            attached.sessionId,
+            'document.querySelector("#statusLine")?.textContent',
+          ),
+        { timeout: 10_000 },
+      )
+      .toContain("Connected");
+    await evaluateToolbarPopup<void>(
+      browserCdp,
+      attached.sessionId,
+      `(() => {
+        const relayValue = document.querySelector("#relayValue");
+        const button = document.querySelector("#shareButton");
+        if (!relayValue || !button) throw new Error("Chrome popup action controls are missing");
+        window.__openclawPopupRefreshes = 0;
+        new MutationObserver(() => { window.__openclawPopupRefreshes += 1; })
+          .observe(relayValue, { childList: true });
+        button.dataset.tabId = ${JSON.stringify(String(missingTabId))};
+        button.dataset.accessMode = "all";
+        button.dataset.grant = "false";
+        button.classList.remove("hidden");
+        button.disabled = false;
+        button.click();
+      })()`,
+    );
+
+    await expect
+      .poll(
+        async () =>
+          await evaluateToolbarPopup<string>(
+            browserCdp,
+            attached.sessionId,
+            'document.querySelector("#statusLine")?.textContent',
+          ),
+        { timeout: 1_500, interval: 25 },
+      )
+      .toBe(expectedError);
+
+    await expect
+      .poll(
+        async () =>
+          await evaluateToolbarPopup<number>(
+            browserCdp,
+            attached.sessionId,
+            "window.__openclawPopupRefreshes",
+          ),
+        { timeout: 5_000, interval: 50 },
+      )
+      .toBeGreaterThan(0);
+    const actionRefreshes = await evaluateToolbarPopup<number>(
+      browserCdp,
+      attached.sessionId,
+      "window.__openclawPopupRefreshes",
+    );
+    await expect
+      .poll(
+        async () =>
+          await evaluateToolbarPopup<number>(
+            browserCdp,
+            attached.sessionId,
+            "window.__openclawPopupRefreshes",
+          ),
+        { timeout: 5_000, interval: 50 },
+      )
+      .toBeGreaterThan(actionRefreshes);
+    const observed = await evaluateToolbarPopup<{
+      refreshes: number;
+      status: string;
+      visible: boolean;
+    }>(
+      browserCdp,
+      attached.sessionId,
+      `({
+        refreshes: window.__openclawPopupRefreshes,
+        status: document.querySelector("#statusLine")?.textContent,
+        visible: document.querySelector("#statusLine")?.closest(".hidden") === null,
+      })`,
+    );
+
+    expect(observed.refreshes).toBeGreaterThan(actionRefreshes);
+    expect(observed.status).toBe(expectedError);
+    expect(observed.visible).toBe(true);
   });
 });

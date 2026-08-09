@@ -3,17 +3,13 @@ import {
   type ChatAbortControllerEntry,
   type ChatAbortOps,
 } from "../chat-abort.js";
-import {
-  abortQueuedChatTurns,
-  listQueuedChatTurnsForSession,
-  type QueuedChatTurnMap,
-} from "../chat-queued-turns.js";
+import { abortQueuedChatTurns, listQueuedChatTurnsForSession } from "../chat-queued-turns.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 // Cancellation orchestration across active, queued, pending, and worker runs.
 import { loadSessionEntry } from "../session-utils.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import {
-  canRequesterAbortQueuedChatTurn,
+  canRequesterAbortChatRun,
   resolveAuthorizedPreRegisteredRunsForSessionKeys,
   resolveAuthorizedRunsForSessionKeys,
   writePreRegisteredAgentAbort,
@@ -29,6 +25,8 @@ import type { GatewayRequestContext } from "./types.js";
 
 type AbortOrigin = "rpc" | "stop-command";
 
+const SESSION_LIFECYCLE_ABORT_REQUESTER: ChatAbortRequester = { isAdmin: true };
+
 type AbortedPartialSnapshot = {
   runId: string;
   sessionId: string;
@@ -38,24 +36,20 @@ type AbortedPartialSnapshot = {
 };
 
 function collectSessionAbortPartials(params: {
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunState: GatewayRequestContext["chatRunState"];
-  runIds: ReadonlySet<string>;
+  runs: ReadonlyArray<{ runId: string; entry: ChatAbortControllerEntry }>;
   abortOrigin: AbortOrigin;
 }): AbortedPartialSnapshot[] {
   const out: AbortedPartialSnapshot[] = [];
-  for (const [runId, active] of params.chatAbortControllers) {
-    if (!params.runIds.has(runId)) {
-      continue;
-    }
+  for (const { runId, entry } of params.runs) {
     const text = params.chatRunState.resolveBuffer(runId).text;
     if (!text || !text.trim()) {
       continue;
     }
     out.push({
       runId,
-      sessionId: active.sessionId,
-      agentId: active.agentId,
+      sessionId: entry.sessionId,
+      agentId: entry.agentId,
       text,
       abortOrigin: params.abortOrigin,
     });
@@ -114,10 +108,6 @@ export function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps
   };
 }
 
-export function ensureChatQueuedTurns(context: GatewayRequestContext): QueuedChatTurnMap {
-  return context.chatQueuedTurns;
-}
-
 function resolveAuthorizedQueuedTurnsForSession(params: {
   context: GatewayRequestContext;
   sessionKeys: string[];
@@ -126,24 +116,70 @@ function resolveAuthorizedQueuedTurnsForSession(params: {
   defaultAgentId: string;
   requester: ChatAbortRequester;
 }) {
-  const chatQueuedTurns = ensureChatQueuedTurns(params.context);
   const matches = listQueuedChatTurnsForSession({
-    chatQueuedTurns,
+    chatQueuedTurns: params.context.chatQueuedTurns,
     sessionKeys: params.sessionKeys,
     sessionIds: [params.sessionId],
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
   });
-  if (matches.length === 0) {
-    return { authorized: [], hasUnauthorizedRuns: false };
-  }
-  const authorized = matches.filter((m) =>
-    canRequesterAbortQueuedChatTurn(m.entry, params.requester),
+  const authorized = matches.filter((match) =>
+    canRequesterAbortChatRun(match.entry, params.requester),
   );
   return {
     authorized,
     hasUnauthorizedRuns: authorized.length < matches.length,
   };
+}
+
+type SessionAbortOwnerParams = {
+  context: GatewayRequestContext;
+  sessionKeys: string[];
+  sessionId?: string;
+  agentId?: string;
+  defaultAgentId: string;
+};
+
+/** Authoritative active, pending, or queued Gateway owner for an exact session. */
+export function hasGatewaySessionAbortOwner(params: SessionAbortOwnerParams): boolean {
+  const active = resolveAuthorizedRunsForSessionKeys({
+    chatAbortControllers: params.context.chatAbortControllers,
+    sessionKeys: params.sessionKeys,
+    sessionIds: [params.sessionId],
+    agentId: params.agentId,
+    defaultAgentId: params.defaultAgentId,
+    requester: SESSION_LIFECYCLE_ABORT_REQUESTER,
+    includeProtectedRuns: true,
+  });
+  if (active.authorizedRuns.length > 0) {
+    return true;
+  }
+  const queued = resolveAuthorizedQueuedTurnsForSession({
+    context: params.context,
+    sessionKeys: params.sessionKeys,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+    defaultAgentId: params.defaultAgentId,
+    requester: SESSION_LIFECYCLE_ABORT_REQUESTER,
+  });
+  if (queued.authorized.length > 0) {
+    return true;
+  }
+  for (const keyPrefix of ["agent:", PENDING_CHAT_SEND_DEDUPE_PREFIX]) {
+    const pending = resolveAuthorizedPreRegisteredRunsForSessionKeys({
+      context: params.context,
+      sessionKeys: params.sessionKeys,
+      agentId: params.agentId,
+      defaultAgentId: params.defaultAgentId,
+      requester: SESSION_LIFECYCLE_ABORT_REQUESTER,
+      keyPrefix,
+      includeProtectedRuns: true,
+    });
+    if (pending.authorizedRuns.length > 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function cancelWorkerInferenceForSession(params: {
@@ -176,7 +212,13 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   stopReason?: string;
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
+  /** Exact lifecycle owners may include hidden and side runs for this one session. */
+  includeProtectedRuns?: boolean;
   excludeRunIds?: ReadonlySet<string>;
+  /** Captures exact registrations before cancellation can remove them. */
+  onControllerTargets?: (
+    targets: Array<{ runId: string; entry: ChatAbortControllerEntry }>,
+  ) => void;
   /** Internal session-wide cleanup after exact resolution and all matching owner checks. */
   onAuthorizedAfterQueuedAbort?: () => boolean;
 }): Promise<{ aborted: boolean; runIds: string[]; unauthorized: boolean }> {
@@ -203,6 +245,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
     preserveSideRuns: params.preserveSideRuns,
+    includeProtectedRuns: params.includeProtectedRuns,
     excludeRunIds: params.excludeRunIds,
   });
   const {
@@ -218,6 +261,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     requester: params.requester,
     keyPrefix: "agent:",
     preserveSideRuns: params.preserveSideRuns,
+    includeProtectedRuns: params.includeProtectedRuns,
     excludeRunIds: params.excludeRunIds,
   });
   const {
@@ -233,6 +277,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     requester: params.requester,
     keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     preserveSideRuns: params.preserveSideRuns,
+    includeProtectedRuns: params.includeProtectedRuns,
     excludeRunIds: params.excludeRunIds,
   });
   const hasAuthorizedGatewayRuns =
@@ -276,6 +321,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   // Keep ordinary chat.abort's admin worker behavior; only the injected broad
   // lifecycle path must preserve hidden or explicitly preserved Gateway runs.
   const canCancelWorkerSession = !params.onAuthorizedAfterQueuedAbort || !hasProtectedLifecycleRuns;
+  params.onControllerTargets?.(authorizedRuns);
   if (!hasAuthorizedGatewayRuns) {
     // The injected lifecycle callback must not turn a persisted session id into
     // a bypass around a matching connection or protected run owner.
@@ -300,17 +346,15 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
       unauthorized: false,
     };
   }
-  const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
   const snapshots = collectSessionAbortPartials({
-    chatAbortControllers: params.context.chatAbortControllers,
     chatRunState: params.context.chatRunState,
-    runIds: authorizedRunIdSet,
+    runs: authorizedRuns,
     abortOrigin: params.abortOrigin,
   });
   // Abort queued owners before any active-work signal can promote a successor.
   // Keep them first in the response to preserve the established runIds ordering.
   const runIds: string[] = abortQueuedChatTurns(
-    ensureChatQueuedTurns(params.context),
+    params.context.chatQueuedTurns,
     queuedPlan.authorized,
     params.stopReason,
   );

@@ -4,6 +4,7 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import { runWithCronCreatorAuthority } from "../../agents/cron-creator-authority-context.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
@@ -16,6 +17,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
+import type { AgentTurnContext, AgentTurnIo } from "../agent-turn/types.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
@@ -23,7 +25,7 @@ import {
   tryFinalizeTrackedAgentTask,
   type GatewayAgentTaskTrackingMode,
 } from "./agent-task-tracking.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
 
 function resolveResolvedAgentTimeoutStopReason(
   meta: unknown,
@@ -81,7 +83,11 @@ const RESOLVED_GATEWAY_STATUS_BY_TERMINAL_CLASSIFICATION = {
 function projectRejectedGatewayStatus(outcome: AgentRunTerminalOutcome): "error" | "timeout" {
   // The shipped wire keeps raw provider/AbortError rejections as errors. Only
   // signal-owned cancellation/timeout metadata promotes a rejection to timeout.
-  return outcome.reason === "cancelled" || outcome.stopReason === "timeout" ? "timeout" : "error";
+  return outcome.reason === "cancelled" ||
+    outcome.reason === "superseded" ||
+    outcome.stopReason === "timeout"
+    ? "timeout"
+    : "error";
 }
 
 export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
@@ -89,7 +95,7 @@ export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry):
 }
 
 export function deleteGatewayDedupeEntries(params: {
-  dedupe: GatewayRequestContext["dedupe"];
+  dedupe: AgentTurnContext["dedupe"];
   keys: readonly string[];
 }) {
   for (const key of params.keys) {
@@ -100,6 +106,7 @@ export function deleteGatewayDedupeEntries(params: {
 export function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
   runId: string;
+  cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   dedupeKeys: readonly string[];
   /**
    * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
@@ -108,8 +115,8 @@ export function dispatchAgentRunFromGateway(params: {
    */
   abortController: AbortController;
   cleanupAbortController: () => void;
-  respond: GatewayRequestHandlerOptions["respond"];
-  context: GatewayRequestHandlerOptions["context"];
+  io: AgentTurnIo;
+  context: AgentTurnContext;
   taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
   restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   onSettled?: (outcome: {
@@ -161,9 +168,18 @@ export function dispatchAgentRunFromGateway(params: {
       return false;
     }
   };
-  void agentCommandFromGatewayIngress(params.ingressOpts, defaultRuntime, params.context.deps, {
-    restoreAdmittedRecovery: params.restoreAdmittedRecovery,
-  })
+  const runAgent = () =>
+    agentCommandFromGatewayIngress(params.ingressOpts, defaultRuntime, params.context.deps, {
+      restoreAdmittedRecovery: params.restoreAdmittedRecovery,
+    });
+  const agentRun = params.cronCreatorAuthority
+    ? runWithCronCreatorAuthority(
+        params.cronCreatorAuthority.runId,
+        runAgent,
+        params.abortController.signal,
+      )
+    : runAgent();
+  void agentRun
     .then(async (result) => {
       const signalStopReason = resolveResolvedAgentTimeoutStopReason(
         result?.meta,
@@ -247,13 +263,16 @@ export function dispatchAgentRunFromGateway(params: {
           keys: params.dedupeKeys,
           entry: { ts: Date.now(), ok: false, payload: failedPayload, error },
         });
-        params.respond(false, failedPayload, error, { runId: params.runId, error: summary });
+        params.io.emitFinal([false, failedPayload, error], {
+          runId: params.runId,
+          error: summary,
+        });
         return;
       }
       persistTerminalDedupe();
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
-      params.respond(true, payload, undefined, { runId: params.runId });
+      params.io.emitFinal([true, payload, undefined], { runId: params.runId });
     })
     .catch(async (err: unknown) => {
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
@@ -310,7 +329,7 @@ export function dispatchAgentRunFromGateway(params: {
         onRecovered: () => persistTerminalDedupe(true),
       });
       persistTerminalDedupe(settled);
-      params.respond(aborted && settled, payload, aborted && settled ? undefined : error, {
+      params.io.emitFinal([aborted && settled, payload, aborted && settled ? undefined : error], {
         runId: params.runId,
         ...(aborted ? {} : { error: formatForLog(err) }),
       });

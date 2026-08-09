@@ -813,7 +813,7 @@ export function buildGatewayCronService(params: {
             accountId: plan.accountId,
             sessionKey: resolveCronDeliverySessionKey(job),
           },
-          message,
+          payload: { text: message },
           abortSignal: abortSignal ?? new AbortController().signal,
         });
         return {
@@ -939,7 +939,7 @@ export function buildGatewayCronService(params: {
             accountId: plan.accountId,
             sessionKey: resolveCronDeliverySessionKey(job),
           },
-          message: notify,
+          payload: { text: notify },
           abortSignal: abortSignal ?? new AbortController().signal,
         });
         return {
@@ -1005,21 +1005,14 @@ export function buildGatewayCronService(params: {
         "cron: isolated agent setup timed out before runner start; backing off job without gateway restart",
       );
     },
-    sendCronFailureAlert: async ({ job, text, runAtMs, channel, to, mode, accountId, threadId }) =>
+    sendCronFailureAlert: async (alert) =>
       await sendGatewayCronFailureAlert({
+        ...alert,
         deps: params.deps,
         logger: cronLogger,
         resolveCronAgent,
         webhookToken: params.cfg.cron?.webhookToken,
         ssrfPolicy: webhookSsrfPolicy,
-        job,
-        text,
-        runAtMs,
-        channel,
-        to,
-        mode,
-        accountId,
-        threadId,
       }),
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {
@@ -1154,6 +1147,26 @@ export function buildGatewayCronService(params: {
         }),
       );
     },
+    updateWatcherState: async (job, patch) =>
+      await runWithGatewayIndependentRootWorkAdmission(async () => {
+        try {
+          // Same identity guard as persistCompletion: a watcher whose job was
+          // edited/replaced must not write failure state onto the successor
+          // (which could push it into failure backoff or auto-disable).
+          return await cron.updateWithPrecondition(job.id, { state: patch }, (current) => {
+            if (
+              !current.enabled ||
+              current.schedule.kind !== "on-exit" ||
+              current.updatedAtMs !== job.updatedAtMs
+            ) {
+              throw new Error("cron on-exit job changed before watcher-state write");
+            }
+          });
+        } catch {
+          // Stale watcher identity is a no-op, not an error to surface.
+          return undefined;
+        }
+      }),
     logger: cronLogger,
   });
   const updateCron = cron.update.bind(cron);

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveMediaBufferPath, saveMediaBuffer, type SavedMedia } from "../../media/store.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   findSessionTranscriptReaderBoundaryViolations,
   migratedSessionTranscriptReaderFiles,
-} from "../../scripts/check-session-transcript-reader-boundary.mjs";
+} from "../../scripts/check-session-transcript-reader-boundary.mts";
 
 describe("session transcript reader boundary guard", () => {
   it("ratchets only the files migrated by the transcript reader slice", () => {

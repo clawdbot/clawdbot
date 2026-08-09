@@ -662,4 +662,31 @@ describe("trySendViaHostRead error handling", () => {
       }),
     );
   });
+
+  it.each([
+    ["single-encoded", "%2e%2e%2f".repeat(5) + "escape.mp3"],
+    ["double-encoded", "%252e%252e%252f".repeat(5) + "escape.mp3"],
+  ])("confines %s host-read voice filenames to the staging root", async (_label, fileName) => {
+    mockedLoadOutboundMediaFromUrl.mockResolvedValue({
+      buffer: Buffer.from("audio bytes"),
+      kind: "audio",
+      fileName,
+      contentType: "audio/mpeg",
+    });
+    mockedSenderSendMedia.mockResolvedValue({ id: "voice-1", timestamp: 123 });
+
+    const result = await sendVoice(makeCtx(), "clip.mp3", [".mp3"], true);
+
+    expect(result).toMatchObject({ channel: "qqbot", messageId: "voice-1" });
+    const stagedPath = mockedSenderSendMedia.mock.calls[0]?.[0].localPathForMeta;
+    expect(stagedPath).toEqual(expect.any(String));
+    const stagedDir = path.join(openclawHome, ".openclaw", "media", "qqbot", "host-read", "voice");
+    const relativePath = path.relative(stagedDir, stagedPath as string);
+    expect(relativePath).not.toMatch(/^\.\.(?:[\\/]|$)/);
+    expect(path.isAbsolute(relativePath)).toBe(false);
+    await expect(fs.readFile(stagedPath as string)).resolves.toEqual(Buffer.from("audio bytes"));
+    await expect(fs.readdir(openclawHome)).resolves.not.toContain(
+      expect.stringMatching(/^escape-.*\.mp3$/),
+    );
+  });
 });

@@ -71,6 +71,7 @@ export type WorkerEnvironmentMetadata = {
   idleMs?: number;
   attachedSessionIds: string[];
   tunnelStatus: WorkerTunnelStatus;
+  error?: string;
 };
 
 export type EnvironmentSummary = {

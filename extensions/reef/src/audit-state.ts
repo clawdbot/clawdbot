@@ -3,12 +3,14 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes } from "@noble/hashes/utils.js";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+// Import from the defining module, not the protocol barrel: index.js re-exports
+// guard-adapters, whose provider-http graph doctor enumeration must not cold-load.
 import {
   createAuditEntry,
   verifyChainSegment,
   type AuditEntry,
   type AuditStore,
-} from "../protocol/index.js";
+} from "../protocol/audit.js";
 
 export const REEF_AUDIT_NAMESPACE = "audit";
 export const REEF_AUDIT_HEAD_NAMESPACE = "audit-head";

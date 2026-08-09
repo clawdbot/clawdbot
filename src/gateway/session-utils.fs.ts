@@ -13,6 +13,7 @@ import {
   hasNonzeroUsage,
   normalizeUsage,
   type ContextUsage,
+  type UsageLike,
 } from "../agents/usage.js";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
@@ -1078,8 +1079,14 @@ function extractUsageSnapshotFromTranscriptLine(
         : parsed.usage && typeof parsed.usage === "object" && !Array.isArray(parsed.usage)
           ? parsed.usage
           : undefined;
-    const usage = normalizeUsage(usageRaw);
-    const totalTokens = resolvePositiveUsageNumber(deriveSessionTotalTokens({ usage }));
+    const usageRecord = usageRaw as UsageLike | undefined;
+    const usage = normalizeUsage(usageRecord);
+    const api = typeof message.api === "string" ? message.api.trim() : undefined;
+    const legacyCliUsage =
+      api === "cli" && usageRecord !== undefined && usageRecord.contextUsage === undefined;
+    const totalTokens = legacyCliUsage
+      ? undefined
+      : resolvePositiveUsageNumber(deriveSessionTotalTokens({ usage }));
     const costUsd = extractTranscriptUsageCost(usageRaw);
     const modelProvider =
       typeof message.provider === "string"
@@ -1127,7 +1134,9 @@ function extractUsageSnapshotFromTranscriptLine(
     if (typeof usage?.cacheWrite === "number" && Number.isFinite(usage.cacheWrite)) {
       snapshot.cacheWrite = usage.cacheWrite;
     }
-    if (usage?.contextUsage) {
+    if (legacyCliUsage) {
+      snapshot.contextUsage = { state: "unavailable" };
+    } else if (usage?.contextUsage) {
       snapshot.contextUsage = usage.contextUsage;
     }
     if (typeof totalTokens === "number") {
@@ -1198,10 +1207,12 @@ function extractAggregateUsageFromTranscriptLines(
     }
     if (current.contextUsage) {
       snapshot.contextUsage = current.contextUsage;
-    } else {
+    } else if (typeof current.totalTokens === "number") {
       delete snapshot.contextUsage;
     }
     if (current.contextUsage?.state === "unavailable") {
+      // Unavailable invalidates every older total; only a later numeric snapshot
+      // may restore freshness as the forward scan continues.
       delete snapshot.totalTokens;
       delete snapshot.totalTokensFresh;
     } else if (typeof current.totalTokens === "number") {
@@ -1234,6 +1245,7 @@ function extractAggregateUsageFromTranscriptLines(
   }
   if (
     typeof snapshot.totalTokens !== "number" &&
+    snapshot.contextUsage?.state !== "unavailable" &&
     sawEstimatedTranscriptContent &&
     sawEstimateModelIdentity
   ) {

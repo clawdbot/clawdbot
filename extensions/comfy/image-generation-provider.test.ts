@@ -922,6 +922,54 @@ describe("comfy image-generation provider", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds oversized local workflow submit responses and releases the request", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    const chunk = new Uint8Array(1024 * 1024);
+    const totalBytes = 32 * chunk.length;
+    let bytesPulled = 0;
+    let canceled = false;
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (bytesPulled >= totalBytes) {
+              controller.close();
+              return;
+            }
+            bytesPulled += chunk.length;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+      release,
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "9": { inputs: {} },
+          },
+          promptNodeId: "6",
+          outputNodeId: "9",
+        }),
+      }),
+    ).rejects.toThrow("Comfy workflow submit failed: JSON response exceeds 16777216 bytes");
+    expect(canceled).toBe(true);
+    expect(bytesPulled).toBeLessThan(totalBytes);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("uploads reference images for local edit workflows", async () => {
     setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock

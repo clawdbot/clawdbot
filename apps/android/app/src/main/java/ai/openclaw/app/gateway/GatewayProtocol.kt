@@ -140,6 +140,21 @@ data class SessionObserverDigest(
 )
 
 @Serializable
+data class WorkerDesktopObserveParams(
+  val environmentId: String,
+  val control: Boolean? = null,
+)
+
+@Serializable
+data class WorkerDesktopObserveResult(
+  val transport: String = "rfb",
+  val wsPath: String,
+  val expiresAtMs: Long,
+  val control: Boolean,
+  val vncPassword: String? = null,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -508,6 +523,10 @@ enum class GatewayMethod(
   TasksRetry("tasks.retry"),
   TasksDismiss("tasks.dismiss"),
   AuditRunInspect("audit.run.inspect"),
+  SessionsPatchMany("sessions.patchMany"),
+  UpdateHold("update.hold"),
+  SessionsCatalogStartTerminal("sessions.catalog.startTerminal"),
+  WorkerDesktopObserve("worker.desktop.observe"),
 }
 
 enum class GatewayEvent(

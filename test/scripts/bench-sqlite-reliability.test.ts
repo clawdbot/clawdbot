@@ -1,7 +1,6 @@
 // SQLite reliability proof tests cover CLI safety and one real snapshot round trip.
 import { fork, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseSqliteReliabilityCli } from "../../scripts/lib/sqlite-reliability-cli.js";
@@ -12,20 +11,15 @@ import {
   isPendingPathInRepository,
 } from "../../scripts/lib/sqlite-reliability-worker-paths.js";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // Windows repeats ACL checks and >64 MiB crash/restore copies across two full runs.
 const RELIABILITY_PROOF_TIMEOUT_MS = process.platform === "win32" ? 480_000 : 240_000;
 const RELIABILITY_SMOKE_TEST_TIMEOUT_MS = process.platform === "win32" ? 1_200_000 : 300_000;
 
 function reliabilitySmokeTest(name: string, test: () => void): void {
   it(name, test, RELIABILITY_SMOKE_TEST_TIMEOUT_MS);
-}
-
-function makeTempDir(): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-reliability-test-"));
-  tempDirs.push(tempDir);
-  return tempDir;
 }
 
 function runProof(args: string[]) {
@@ -107,15 +101,12 @@ async function waitForChildExit(child: ChildProcess): Promise<{
   });
 }
 
-afterEach(() => {
-  for (const tempDir of tempDirs.splice(0)) {
-    fs.rmSync(tempDir, { force: true, recursive: true });
-  }
-});
-
 describe("scripts/bench-sqlite-reliability", () => {
   it("detects a transient WAL overrun before the file shrinks", async () => {
-    const walPath = path.join(makeTempDir(), "database.sqlite-wal");
+    const walPath = path.join(
+      tempDirs.make("openclaw-sqlite-reliability-test-"),
+      "database.sqlite-wal",
+    );
     let stopRequests = 0;
 
     await expect(
@@ -157,7 +148,7 @@ describe("scripts/bench-sqlite-reliability", () => {
   });
 
   reliabilitySmokeTest("reuses a state directory without stale rows or restore collisions", () => {
-    const stateDir = makeTempDir();
+    const stateDir = tempDirs.make("openclaw-sqlite-reliability-test-");
     const firstOutput = path.join(stateDir, "report-first.json");
     const firstResult = runProof([
       "--profile",
@@ -414,8 +405,8 @@ describe("scripts/bench-sqlite-reliability", () => {
   });
 
   it("matches crash barriers across filesystem path aliases", () => {
-    const realRoot = makeTempDir();
-    const aliasRoot = path.join(makeTempDir(), "alias");
+    const realRoot = tempDirs.make("openclaw-sqlite-reliability-test-");
+    const aliasRoot = path.join(tempDirs.make("openclaw-sqlite-reliability-test-"), "alias");
     fs.symlinkSync(realRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
     const repositoryPath = path.join(realRoot, "snapshots");
     const snapshotPath = path.join(repositoryPath, "snapshot");
@@ -440,7 +431,10 @@ describe("scripts/bench-sqlite-reliability", () => {
   });
 
   it("stops the writer when its parent IPC channel disconnects", async () => {
-    const databasePath = path.join(makeTempDir(), "writer.sqlite");
+    const databasePath = path.join(
+      tempDirs.make("openclaw-sqlite-reliability-test-"),
+      "writer.sqlite",
+    );
     const child = fork(
       path.resolve("scripts/lib/sqlite-reliability-writer.ts"),
       [databasePath, "8", "64", "4", "256", String(64 * 1024 * 1024), "1"],

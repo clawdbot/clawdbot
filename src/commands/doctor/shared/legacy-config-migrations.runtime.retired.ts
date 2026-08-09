@@ -21,6 +21,7 @@ import {
   moveVoice,
   stripRetiredTuningKnobs,
 } from "./legacy-config-migrations.runtime.retired-media.js";
+import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
 import { visitChannelEntries } from "./legacy-config-record-shared.js";
 
@@ -419,6 +420,42 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
+  LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
+  defineLegacyConfigMigration({
+    id: "runtime.retired-internal-hook-handlers",
+    describe: "Remove retired internal hook handler registrations",
+    legacyRules: [
+      {
+        path: ["hooks", "internal", "handlers"],
+        message:
+          'hooks.internal.handlers is retired. Move each module to a managed/workspace hook directory with HOOK.md + handler file before running "openclaw doctor --fix"; the fix removes retired registrations and does not materialize executable files.',
+      },
+    ],
+    apply: (raw, changes) => {
+      const internal = getRecord(getRecord(raw.hooks)?.internal);
+      if (!internal || !Object.hasOwn(internal, "handlers")) {
+        return;
+      }
+
+      delete internal.handlers;
+      changes.push(
+        "Removed retired hooks.internal.handlers registrations; hook files must be migrated separately.",
+      );
+
+      const entries = getRecord(internal.entries);
+      const extraDirs = getRecord(internal.load)?.extraDirs;
+      const hasNamedEntries = Boolean(entries && Object.keys(entries).length > 0);
+      const hasExtraDirs =
+        Array.isArray(extraDirs) &&
+        extraDirs.some((dir) => typeof dir === "string" && dir.trim().length > 0);
+      if (internal.enabled === true && !hasNamedEntries && !hasExtraDirs) {
+        delete internal.enabled;
+        changes.push(
+          "Removed legacy-only hooks.internal.enabled to avoid enabling broad hook discovery.",
+        );
+      }
+    },
+  }),
   defineLegacyConfigMigration({
     id: "runtime.doctor-tier-eval-tranche",
     describe: "Consolidate approved tier-eval configuration surfaces",

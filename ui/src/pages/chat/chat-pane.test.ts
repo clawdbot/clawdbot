@@ -11,10 +11,13 @@ import type {
   TaskSuggestionsAcceptResult,
   TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createBrowserAnnotationHandoff } from "../../app/browser-annotation-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
+import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -43,14 +46,6 @@ const suggestion: TaskSuggestion = {
   agentId: "main",
   createdAt: 1,
 };
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
 
 function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
   const event = new KeyboardEvent("keydown", {
@@ -102,6 +97,7 @@ function createInitializationContext(): ApplicationContext {
     agentSelection: { state: { selectedId: "main" } },
     agents: { state: { agentsList: null } },
     initialUserMessage: createInitialUserMessageHandoff(),
+    browserAnnotationHandoff: createBrowserAnnotationHandoff(),
     sessions: {},
   } as unknown as ApplicationContext;
 }
@@ -708,7 +704,7 @@ describe("chat pane catalog session lifecycle", () => {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state, { onOpenSession: () => {} }),
+        createBackgroundTasksProps(state),
         undefined,
         true,
         undefined,
@@ -720,11 +716,11 @@ describe("chat pane catalog session lifecycle", () => {
     const listener = (event: Event) => {
       detail = (event as CustomEvent).detail;
     };
-    window.addEventListener("openclaw:terminal-toggle", listener);
+    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
     try {
       (container.querySelector('[aria-label="Open in terminal"]') as HTMLElement).click();
     } finally {
-      window.removeEventListener("openclaw:terminal-toggle", listener);
+      window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, listener);
     }
     expect(detail).toEqual({ open: true, catalog: key });
   });
@@ -1048,7 +1044,7 @@ describe("chat pane task suggestion lifecycle", () => {
     const navigate = vi.fn();
     pane.onPaneSessionChange = navigate;
 
-    const pending = pane.acceptTaskSuggestion(suggestion);
+    const pending = pane.acceptTaskSuggestion(suggestion, "worktree");
     pane.handleTaskSuggestionEvent({
       action: "resolved",
       taskId: suggestion.id,
@@ -1070,11 +1066,27 @@ describe("chat pane task suggestion lifecycle", () => {
     const navigate = vi.fn();
     pane.onPaneSessionChange = navigate;
 
-    const pending = pane.acceptTaskSuggestion(suggestion);
+    const pending = pane.acceptTaskSuggestion(suggestion, "worktree");
     pane.connectionGeneration += 1;
     accepted.resolve({ taskId: suggestion.id, key: "agent:main:stale" });
 
     await pending;
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("keeps session-mode acceptance in the source pane", async () => {
+    const request = vi.fn().mockResolvedValue({ taskId: suggestion.id, key: "agent:main:task" });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+
+    await pane.acceptTaskSuggestion(suggestion, "session");
+
+    expect(request).toHaveBeenCalledWith("taskSuggestions.accept", {
+      taskId: suggestion.id,
+      mode: "session",
+    });
     expect(navigate).not.toHaveBeenCalled();
   });
 

@@ -54,6 +54,10 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
+import {
+  normalizeMcpCodexToolAnnotations,
+  resolveMcpCodexToolApprovalMode,
+} from "./mcp-codex-tool-approval.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
 import {
   applyMcpConnectionOverride,
@@ -684,9 +688,13 @@ export function createSessionMcpRuntime(params: {
           const transportSource = override
             ? applyMcpConnectionOverride(rawServer, override)
             : rawServer;
+          const dataDirOwnership = Object.hasOwn(loaded.prepareDataDirsByServer ?? {}, serverName)
+            ? loaded.prepareDataDirsByServer?.[serverName]
+            : undefined;
           const resolved = resolveMcpTransport(serverName, transportSource, {
             cfg: params.cfg,
             agentDir: params.agentDir,
+            prepareDataDir: dataDirOwnership?.dataDir,
           });
           if (!resolved) {
             continue;
@@ -869,6 +877,7 @@ export function createSessionMcpRuntime(params: {
                   ...(deniedToolNames.size > 0
                     ? { deniedToolNames: [...deniedToolNames].toSorted() }
                     : {}),
+                  codexApprovalMode: resolveMcpCodexToolApprovalMode(serverName, rawServer),
                 };
                 const toolEntries: McpCatalogTool[] = [];
                 for (const tool of policyEligibleTools) {
@@ -898,6 +907,7 @@ export function createSessionMcpRuntime(params: {
                     ...(uiResourceUri ? { uiResourceUri } : {}),
                     ...(uiVisibility ? { uiVisibility } : {}),
                     ...(deniedToolNames.has(toolName) ? { deniedBySession: true } : {}),
+                    codexAnnotations: normalizeMcpCodexToolAnnotations(tool.annotations),
                   });
                 }
                 return {

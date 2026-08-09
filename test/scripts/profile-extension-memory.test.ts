@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parseArgs, runCase } from "../../scripts/profile-extension-memory.mjs";
+import { parseArgs, runCase } from "../../scripts/profile-extension-memory.mts";
 
-const SCRIPT_PATH = path.resolve("scripts/profile-extension-memory.mjs");
+const SCRIPT_PATH = path.resolve("scripts/profile-extension-memory.mts");
 
 async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
@@ -77,7 +77,9 @@ describe("scripts/profile-extension-memory", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: node scripts/profile-extension-memory.mjs");
+    expect(result.stdout).toContain(
+      "Usage: node --import tsx scripts/profile-extension-memory.mts",
+    );
   });
 
   it("stops parsing options after the argument terminator", () => {
@@ -364,7 +366,7 @@ describe("scripts/profile-extension-memory", () => {
           runnerPath,
           [
             `const { runCase } = await import(${JSON.stringify(
-              pathToFileURL(path.resolve("scripts/profile-extension-memory.mjs")).href,
+              pathToFileURL(path.resolve("scripts/profile-extension-memory.mts")).href,
             )});`,
             "void runCase({",
             `  body: ${JSON.stringify(body)},`,

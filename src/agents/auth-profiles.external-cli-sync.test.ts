@@ -444,6 +444,47 @@ describe("external cli oauth resolution", () => {
     });
   });
 
+  it("keeps provider discovery when requested profiles belong to another provider", () => {
+    const expires = Date.now() + 5 * 24 * 60 * 60_000;
+    const claudeCredential: ClaudeCliCredential = {
+      type: "oauth",
+      provider: "anthropic",
+      access: "claude-cli-access",
+      refresh: "claude-cli-refresh",
+      expires,
+    };
+    const codexCredential = makeOAuthCredential({
+      provider: "openai",
+      access: "codex-cli-access",
+      refresh: "codex-cli-refresh",
+      expires,
+    });
+    mocks.readClaudeCliCredentialsCached.mockReturnValue(claudeCredential);
+    mocks.readCodexCliCredentialsCached.mockReturnValue(codexCredential);
+
+    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
+      providerIds: ["claude-cli", "openai"],
+      profileIds: [CLAUDE_CLI_PROFILE_ID],
+      allowKeychainPrompt: false,
+    });
+
+    expect(profiles).toStrictEqual([
+      {
+        profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        credential: codexCredential,
+        persistence: "runtime-only",
+      },
+      {
+        profileId: CLAUDE_CLI_PROFILE_ID,
+        credential: { ...claudeCredential, provider: "claude-cli" },
+        persistence: "persisted",
+      },
+    ]);
+    expectReaderPolicyCall(mocks.readCodexCliCredentialsCached);
+    expectReaderPolicyCall(mocks.readClaudeCliCredentialsCached);
+    expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
   it("skips external cli readers outside the scoped provider set", () => {
     const profiles = resolveExternalCliAuthProfiles(makeStore(), {
       providerIds: ["opencode-go"],

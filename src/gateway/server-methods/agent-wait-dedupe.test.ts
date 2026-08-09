@@ -5,7 +5,10 @@ import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { agentHandlers } from "./agent.js";
 
-function waitThroughGateway(params: { runId: string; timeoutMs: number }) {
+function waitThroughGateway(
+  params: { runId: string; timeoutMs: number },
+  activeKind?: "agent" | "chat",
+) {
   const respond = vi.fn();
   const handler = expectDefined(
     agentHandlers["agent.wait"],
@@ -15,7 +18,11 @@ function waitThroughGateway(params: { runId: string; timeoutMs: number }) {
     handler({
       params,
       respond,
-      context: { chatAbortControllers: new Map() },
+      context: {
+        chatAbortControllers: activeKind
+          ? new Map([[params.runId, { kind: activeKind }]])
+          : new Map(),
+      },
     } as unknown as Parameters<typeof handler>[0]),
   );
   return { promise, respond };
@@ -33,11 +40,50 @@ function completeRun(dedupe: Map<string, DedupeEntry>, runId: string): void {
   });
 }
 
+function terminalReceipt(runId: string) {
+  return {
+    runId,
+    sessionId: "session-1",
+    turnId: "turn-1",
+    requested: { provider: "openai", model: "gpt-primary" },
+    effective: { provider: "openai", model: "gpt-alternate", responseModel: "gpt-alternate" },
+    successfulToolNames: ["read"],
+    rerouted: true,
+    terminalDisposition: "visible",
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("agent.wait gateway dedupe observations", () => {
+  it.each([
+    ["agent", "timeout"],
+    ["chat", "ok"],
+  ] as const)("uses the %s abort entry to select the run observation", async (kind, status) => {
+    const runId = `run-kind-${kind}`;
+    const dedupe = new Map<string, DedupeEntry>();
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: 100,
+        ok: false,
+        payload: { runId, status: "timeout", endedAt: 100, timeoutPhase: "provider" },
+      },
+    });
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `chat:${runId}`,
+      entry: { ts: 200, ok: true, payload: { runId, status: "ok", endedAt: 200 } },
+    });
+
+    const waiter = waitThroughGateway({ runId, timeoutMs: 0 }, kind);
+    await waiter.promise;
+    expect(waiter.respond).toHaveBeenCalledWith(true, expect.objectContaining({ runId, status }));
+  });
+
   it("resolves concurrent waiters when the terminal dedupe entry lands", async () => {
     const runId = "run-public-concurrent-waiters";
     const dedupe = new Map<string, DedupeEntry>();
@@ -105,6 +151,11 @@ describe("agent.wait gateway dedupe observations", () => {
       payload: { status: "error", startedAt: 100, endedAt: 150, stopReason: "rpc" },
       expected: { status: "error", endedAt: 150, stopReason: "rpc" },
     },
+    {
+      name: "earlier writer supersession",
+      payload: { status: "error", startedAt: 100, endedAt: 150, stopReason: "superseded" },
+      expected: { status: "error", endedAt: 150, stopReason: "superseded" },
+    },
   ])("merges $name across agent and chat observations", async ({ name, payload, expected }) => {
     for (const timeoutFirst of [true, false]) {
       const runId = `run-cross-source-${name.replaceAll(" ", "-")}-${timeoutFirst}`;
@@ -144,7 +195,7 @@ describe("agent.wait gateway dedupe observations", () => {
   });
 
   it.each(["lifecycle-first", "dedupe-first"] as const)(
-    "keeps reply evidence when sticky status arrives $0",
+    "keeps terminal evidence when sticky status arrives $0",
     async (order) => {
       const runId = `run-reply-merge-${order}`;
       const dedupe = new Map<string, DedupeEntry>();
@@ -161,6 +212,12 @@ describe("agent.wait gateway dedupe observations", () => {
             phase: "end",
             startedAt: 100,
             endedAt: 300,
+            terminalDelivery: {
+              status: "sent",
+              resultCount: 1,
+              target: "private-target",
+            },
+            terminalReceipt: terminalReceipt(runId),
             terminalReply: { disposition: "visible", text: "canonical reply" },
           },
         });
@@ -194,9 +251,12 @@ describe("agent.wait gateway dedupe observations", () => {
         expect.objectContaining({
           runId,
           status: "timeout",
+          terminalDelivery: { status: "sent", resultCount: 1 },
+          terminalReceipt: terminalReceipt(runId),
           terminalReply: { disposition: "visible", text: "canonical reply" },
         }),
       );
+      expect(JSON.stringify(waiter.respond.mock.calls[0]?.[1])).not.toContain("private-target");
     },
   );
 });

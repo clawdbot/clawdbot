@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
-const scriptPath = path.resolve("scripts/check-workflows.mjs");
+const scriptPath = path.resolve("scripts/check-workflows.mts");
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe("check-workflows", () => {
   it("prints an actionable diagnostic when actionlint and go are unavailable", () => {
-    const result = spawnSync(process.execPath, [scriptPath], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -59,7 +59,7 @@ describe("check-workflows", () => {
       writeFileSync(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     }
 
-    const result = spawnSync(process.execPath, [scriptPath], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -111,7 +111,7 @@ describe("check-workflows", () => {
       { mode: 0o755 },
     );
 
-    const result = spawnSync(process.execPath, [scriptPath], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -152,7 +152,7 @@ describe("check-workflows", () => {
       { mode: 0o755 },
     );
 
-    const result = spawnSync(process.execPath, [scriptPath], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -196,7 +196,7 @@ describe("check-workflows", () => {
       { mode: 0o755 },
     );
 
-    const result = spawnSync(process.execPath, [scriptPath], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       encoding: "utf8",
       env: {
         ...process.env,

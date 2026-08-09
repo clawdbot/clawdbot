@@ -1,0 +1,25 @@
+title: Official plugin version drift doctor diagnostics
+
+scenario:
+  id: official-plugin-version-drift-doctor
+  surface: plugins
+  coverage:
+    primary:
+      - openai.doctor-diagnostics
+  objective: Verify the real generic version-drift and doctor owners diagnose active official Codex package pins without treating package-host equality as a hard compatibility gate.
+  successCriteria:
+    - Older and newer exact Codex npm pins produce an advisory plugin-version-drift warning through the generic official-plugin detector.
+    - Doctor identifies plugins.entries.codex and recommends the exact @openclaw/codex Gateway version followed by a Gateway restart.
+    - A trailing numeric correction suffix on either the Codex package or Gateway version is treated as equivalent and produces no drift warning.
+  docsRefs:
+    - docs/cli/doctor.md
+    - docs/cli/plugins.md
+    - docs/cli/status.md
+  codeRefs:
+    - src/plugins/plugin-version-drift.ts
+    - src/commands/doctor-workspace-status.ts
+    - src/commands/doctor-workspace-status.plugin-version-drift.test.ts
+  execution:
+    kind: vitest
+    path: src/commands/doctor-workspace-status.plugin-version-drift.test.ts
+    summary: Run the focused product-owner test from official Codex install metadata through generic drift detection and doctor diagnostics.

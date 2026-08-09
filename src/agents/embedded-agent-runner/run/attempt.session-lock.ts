@@ -8,10 +8,7 @@ import type {
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
-import type {
-  PromptReleasedSessionEntry,
-  PromptReleasedSessionMergeResult,
-} from "../../sessions/session-manager.js";
+import { log } from "../logger.js";
 
 type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
 type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
@@ -23,6 +20,8 @@ type LockOptions = Omit<SessionKeyLockOptions, "targetKind"> & {
   targetKind?: "session-key";
 };
 const PROMPT_DISPOSE_SETTLE_TIMEOUT_MS = 5_000;
+// Teardown must release the process-owned lease even when an admitted writer never settles.
+const SESSION_LOCK_TEARDOWN_BUDGET_MS = 30_000;
 
 function createPromptSubmissionAbortError(reason: unknown): Error {
   if (reason instanceof Error) {
@@ -58,6 +57,7 @@ export class EmbeddedAttemptSessionTakeoverError extends Error {
 }
 
 export type EmbeddedAttemptSessionLockController = {
+  assertOwned(): void;
   canAdvanceSessionEntryCache(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
   publishOwnedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
   publishValidatedSessionFileSnapshot(snapshot: OwnedSessionTranscriptCacheSnapshot): boolean;
@@ -80,9 +80,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   acquireSessionWriteLock: AcquireSessionWriteLock;
   initialAcquireSignal?: AbortSignal;
   lockOptions: LockOptions;
-  mergePromptReleasedSessionEntries?: (
-    entries: readonly PromptReleasedSessionEntry[],
-  ) => Promise<PromptReleasedSessionMergeResult | void> | PromptReleasedSessionMergeResult | void;
+  runId?: string;
+  sessionId?: string;
   reloadPromptReleasedSessionFile?: () => Promise<void> | void;
 }): Promise<EmbeddedAttemptSessionLockController> {
   // The runtime caller supplies resolveSessionWriteLockTargetKey(sessionTarget),
@@ -124,7 +123,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
   };
   let promptReleaseNeedsReload = false;
-  let cleanupStarted = false;
+  let cleanupRequested = false;
   let promptSettled = Promise.resolve();
   let settlePrompt: (() => void) | undefined;
   let lifecycle = Promise.resolve();
@@ -156,6 +155,57 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     pendingOperations: new Set(),
   });
   const lifecycleOwner = new AsyncLocalStorage<LifecycleOwner>();
+  let teardownBudgetLogged = false;
+  const createTeardownDeadline = (budgetMs = SESSION_LOCK_TEARDOWN_BUDGET_MS): number =>
+    performance.now() + budgetMs;
+  const pendingWriteCount = (): number => activeWriteOperations.size;
+  const logTeardownBudgetExpiry = (phase: string): void => {
+    if (teardownBudgetLogged) {
+      return;
+    }
+    teardownBudgetLogged = true;
+    log.error(
+      `session lock teardown budget expired; releasing ownership: ` +
+        `phase=${phase} runId=${params.runId ?? "unknown"} ` +
+        `sessionId=${params.sessionId ?? "unknown"} ` +
+        `pendingWrites=${pendingWriteCount()} timeoutMs=${SESSION_LOCK_TEARDOWN_BUDGET_MS}`,
+    );
+  };
+  const settleWithinTeardownDeadline = async (
+    operation: Promise<void>,
+    deadline: number,
+  ): Promise<boolean> => {
+    const waitMs = Math.max(0, deadline - performance.now());
+    if (waitMs <= 0) {
+      void operation.catch(() => {});
+      return false;
+    }
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        operation.then(() => true),
+        new Promise<false>((resolve) => {
+          timeout = setTimeout(() => resolve(false), waitMs);
+          timeout.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  };
+  const drainActiveWrites = async (startedOnly: boolean): Promise<void> => {
+    while (true) {
+      const pendingWrites = [...activeWriteOperations]
+        .filter((operation) => !startedOnly || operation.started)
+        .flatMap((operation) => (operation.settlement ? [operation.settlement] : []));
+      if (pendingWrites.length === 0) {
+        return;
+      }
+      await Promise.all(pendingWrites);
+    }
+  };
   const drainLifecycleOwner = async (owner: LifecycleOwner): Promise<void> => {
     let failed = false;
     let firstError: unknown;
@@ -275,6 +325,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     settlePrompt = undefined;
   };
   return {
+    assertOwned: assertInitialLockOwned,
     canAdvanceSessionEntryCache: () => false,
     publishOwnedSessionFileSnapshot: () => false,
     publishValidatedSessionFileSnapshot: () => false,
@@ -290,7 +341,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         if (promptSubmissionBlockedError) {
           throw promptSubmissionBlockedError;
         }
-        if (cleanupStarted) {
+        if (cleanupRequested) {
           throw new Error("attempt cleanup started before prompt submission");
         }
         assertInitialLockOwned();
@@ -319,7 +370,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
       await serializeLifecycle(async () => {
         try {
-          if (disposed || cleanupStarted || (promptAborted && !promptReleaseNeedsReload)) {
+          if (disposed || cleanupRequested || (promptAborted && !promptReleaseNeedsReload)) {
             return;
           }
           await reloadPromptReleasedState();
@@ -341,7 +392,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (disposed && !activeDescendant) {
         return rejectWrite(new Error("attempt disposed before transcript write"));
       }
-      if (cleanupStarted) {
+      if (cleanupRequested && !activeDescendant) {
         return rejectWrite(new Error("attempt cleanup started before transcript write"));
       }
       const writeOperation: ActiveWriteOperation = { active: true, started: false };
@@ -349,7 +400,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         if (disposed && !activeDescendant) {
           throw new Error("attempt disposed before transcript write");
         }
-        if (cleanupStarted) {
+        if (cleanupRequested && !activeDescendant) {
           throw new Error("attempt cleanup started before transcript write");
         }
         if (reloadFailed) {
@@ -380,25 +431,46 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       if (disposed) {
         throw new Error("attempt disposed before cleanup");
       }
-      await serializeLifecycle(async () => {
-        if (disposed) {
-          throw new Error("attempt disposed before cleanup");
-        }
-        if (cleanupStarted) {
-          throw new Error("attempt cleanup already started");
-        }
-        cleanupStarted = true;
-        if (promptReleaseNeedsReload) {
-          try {
-            if (!disposed) {
-              await reloadPromptReleasedState();
-            }
-          } finally {
-            settlePromptRelease();
+      if (cleanupRequested) {
+        throw new Error("attempt cleanup already started");
+      }
+      cleanupRequested = true;
+      const deadline = createTeardownDeadline();
+      const cleanupAdmission = (async () => {
+        await serializeLifecycle(async () => {
+          if (disposed) {
+            throw new Error("attempt disposed before cleanup");
           }
-        }
-      });
-      await serializeLifecycle(() => {});
+          if (promptReleaseNeedsReload) {
+            try {
+              if (!disposed) {
+                await reloadPromptReleasedState();
+              }
+            } finally {
+              settlePromptRelease();
+            }
+          }
+        });
+        await serializeLifecycle(() => {});
+      })();
+      if (!(await settleWithinTeardownDeadline(cleanupAdmission, deadline))) {
+        disposed = true;
+        promptAborted = true;
+        takeoverDetected = true;
+        settlePromptRelease();
+        logTeardownBudgetExpiry("cleanup-acquire");
+        await releaseInitialLock();
+        cleanupLockGranted = true;
+        cleanupOwnershipReleased = new Promise<void>((resolve) => {
+          resolveCleanupOwnershipReleased = resolve;
+        });
+        return {
+          release: () => {
+            resolveCleanupOwnershipReleased?.();
+            return Promise.resolve();
+          },
+        } as SessionLock;
+      }
       if (disposed) {
         throw new Error("attempt disposed before cleanup");
       }
@@ -413,12 +485,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         release: () => {
           cleanupReleasePromise ??= (async () => {
             try {
-              while (activeWriteOperations.size > 0) {
-                await Promise.all(
-                  [...activeWriteOperations].flatMap((operation) =>
-                    operation.settlement ? [operation.settlement] : [],
-                  ),
-                );
+              const writesSettled = await settleWithinTeardownDeadline(
+                drainActiveWrites(false),
+                createTeardownDeadline(),
+              );
+              if (!writesSettled) {
+                logTeardownBudgetExpiry("cleanup-release");
               }
               await releaseInitialLock();
               resolveCleanupOwnershipReleased?.();
@@ -450,38 +522,20 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           }
           return;
         }
-        let timeout: ReturnType<typeof setTimeout> | undefined;
         try {
-          await Promise.race([
+          await settleWithinTeardownDeadline(
             (async () => {
               await Promise.all([promptSettled, serializeLifecycle(() => {})]);
-              while (true) {
-                const pendingWrites = [...activeWriteOperations].flatMap((operation) =>
-                  operation.settlement ? [operation.settlement] : [],
-                );
-                if (pendingWrites.length === 0) {
-                  break;
-                }
-                await Promise.all(pendingWrites);
-              }
+              await drainActiveWrites(false);
             })(),
-            new Promise<void>((resolve) => {
-              timeout = setTimeout(resolve, PROMPT_DISPOSE_SETTLE_TIMEOUT_MS);
-            }),
-          ]);
-          while (true) {
-            const startedWrites = [...activeWriteOperations]
-              .filter((operation) => operation.started)
-              .flatMap((operation) => (operation.settlement ? [operation.settlement] : []));
-            if (startedWrites.length === 0) {
-              break;
-            }
-            await Promise.all(startedWrites);
+            createTeardownDeadline(PROMPT_DISPOSE_SETTLE_TIMEOUT_MS),
+          );
+          if (
+            !(await settleWithinTeardownDeadline(drainActiveWrites(true), createTeardownDeadline()))
+          ) {
+            logTeardownBudgetExpiry("dispose");
           }
         } finally {
-          if (timeout) {
-            clearTimeout(timeout);
-          }
           await releaseInitialLock();
         }
       })().catch((error: unknown) => {
@@ -532,6 +586,7 @@ export function installPromptSubmissionLockRelease(params: {
     run: () => Promise<T> | T,
     options?: OwnedSessionTranscriptWriteOptions<T>,
   ) => Promise<T>;
+  assertSessionWriteLockOwned?: () => void;
   canAdvanceSessionEntryCache?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
   publishSessionFileSnapshot?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
 }): void {
@@ -553,11 +608,15 @@ export function installPromptSubmissionLockRelease(params: {
     let promptResult: unknown;
     try {
       if (params.sessionFile && params.withSessionWriteLock) {
+        if (!params.assertSessionWriteLockOwned) {
+          throw new Error("owned transcript write context requires a session lock ownership fence");
+        }
         promptResult = await withOwnedSessionTranscriptWrites(
           {
             sessionFile: params.sessionFile,
             sessionKey: params.sessionKey,
             sessionTarget: params.sessionTarget,
+            assertOwned: params.assertSessionWriteLockOwned,
             withSessionWriteLock: params.withSessionWriteLock,
             canAdvanceSessionEntryCache: params.canAdvanceSessionEntryCache,
             publishSessionFileSnapshot: params.publishSessionFileSnapshot,

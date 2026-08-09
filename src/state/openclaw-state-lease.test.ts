@@ -206,7 +206,10 @@ describe("OpenClaw state lease", () => {
 
         await expect(
           withOpenClawStateLease({ ...options, waitMs: 5 }, async () => undefined),
-        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_TIMEOUT" });
+        ).rejects.toMatchObject({
+          code: "OPENCLAW_STATE_LEASE_TIMEOUT",
+          ownerPayload: { pid: process.pid },
+        });
         expect(() => owner.assertOwned()).not.toThrow();
       });
     });

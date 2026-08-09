@@ -1,27 +1,11 @@
 import { promises as fs } from "node:fs";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../config/sessions/lifecycle.js";
 import type { callGateway } from "../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
+import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 type GatewayCall = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
-type SessionCleanupOutcome = "deleted" | "changed" | "failed";
-
-function isSessionLifecycleChangedGatewayError(error: unknown): boolean {
-  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
-    return false;
-  }
-  const requestError = error as Error & { gatewayCode?: unknown; details?: unknown };
-  const details = requestError.details;
-  return (
-    requestError.gatewayCode === "INVALID_REQUEST" &&
-    typeof details === "object" &&
-    details !== null &&
-    (details as { reason?: unknown }).reason === SESSION_LIFECYCLE_CHANGED_ERROR_REASON
-  );
-}
-
 function isMatchingAbortResponse(response: unknown, gatewayRunId: string): boolean {
   if (!response || typeof response !== "object") {
     return false;
@@ -65,35 +49,17 @@ type SessionCleanupOptions = {
   timeoutMs?: number;
 };
 
-async function requestProvisionalSessionCleanup(
+function requestProvisionalSessionCleanup(
   childSessionKey: string,
   options?: SessionCleanupOptions,
-): Promise<SessionCleanupOutcome> {
-  if (!options?.expectedSessionId || !options.expectedLifecycleRevision) {
-    return "failed";
-  }
-  try {
-    await (options?.callGateway ?? callSubagentGateway)({
-      method: "sessions.delete",
-      params: {
-        key: childSessionKey,
-        emitLifecycleHooks: options?.emitLifecycleHooks === true,
-        deleteTranscript: options?.deleteTranscript === true,
-        ...(options?.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
-        ...(options?.expectedLifecycleRevision
-          ? { expectedLifecycleRevision: options.expectedLifecycleRevision }
-          : {}),
-      },
-      timeoutMs: options?.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-    });
-    return "deleted";
-  } catch (error) {
-    if (isSessionLifecycleChangedGatewayError(error)) {
-      return "changed";
-    }
-    // Best-effort cleanup only.
-    return "failed";
-  }
+) {
+  return deleteSubagentSessionForCleanup({
+    ...options,
+    childSessionKey,
+    callGateway: options?.callGateway ?? callSubagentGateway,
+    deleteTranscript: options?.deleteTranscript === true,
+    timeoutMs: options?.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
+  });
 }
 
 export async function cleanupProvisionalSession(
@@ -125,30 +91,21 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
 }): Promise<{ attachmentsRemoved: boolean; sessionDeleted: boolean }> {
+  const { childSessionKey, attachmentAbsDir, waitForSessionDeletion, ...sessionCleanupOptions } =
+    params;
   let attachmentsRemoved = true;
-  if (params.attachmentAbsDir) {
+  if (attachmentAbsDir) {
     try {
-      await fs.rm(params.attachmentAbsDir, { recursive: true, force: true });
+      await fs.rm(attachmentAbsDir, { recursive: true, force: true });
     } catch {
       attachmentsRemoved = false;
     }
   }
-  const sessionCleanupOptions = {
-    emitLifecycleHooks: params.emitLifecycleHooks,
-    deleteTranscript: params.deleteTranscript,
-    expectedSessionId: params.expectedSessionId,
-    expectedLifecycleRevision: params.expectedLifecycleRevision,
-  };
-  if (params.waitForSessionDeletion) {
-    const sessionDeleted = await waitForProvisionalSessionDeletion(
-      params.childSessionKey,
-      sessionCleanupOptions,
-    );
-    return { attachmentsRemoved, sessionDeleted };
-  }
   return {
     attachmentsRemoved,
-    sessionDeleted: await cleanupProvisionalSession(params.childSessionKey, sessionCleanupOptions),
+    sessionDeleted: await (
+      waitForSessionDeletion ? waitForProvisionalSessionDeletion : cleanupProvisionalSession
+    )(childSessionKey, sessionCleanupOptions),
   };
 }
 

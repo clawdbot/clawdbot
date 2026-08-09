@@ -46,6 +46,8 @@ export const WorkerEnvironmentMetadataSchema = closedObject({
   idleMs: Type.Optional(Type.Integer({ minimum: 0 })),
   attachedSessionIds: Type.Array(NonEmptyString),
   tunnelStatus: WorkerTunnelStatusSchema,
+  error: Type.Optional(NonEmptyString),
+  desktop: Type.Optional(Type.Boolean()),
 });
 
 function createEnvironmentSummarySchema() {
@@ -101,6 +103,21 @@ export const EnvironmentsDestroyParamsSchema = closedObject({
 /** Destroy result exposes the terminal worker lifecycle state. */
 export const EnvironmentsDestroyResultSchema = createEnvironmentSummarySchema();
 
+export const WorkerDesktopObserveParamsSchema = closedObject({
+  environmentId: NonEmptyString,
+  control: Type.Optional(Type.Boolean()),
+});
+
+// Transport is an open enum-string; future transports may add split streamPath/controlPath
+// fields additively without replacing the phase-1 RFB contract.
+export const WorkerDesktopObserveResultSchema = closedObject({
+  transport: Type.String({ enum: ["rfb"] }),
+  wsPath: NonEmptyString,
+  expiresAtMs: Type.Integer({ minimum: 0 }),
+  control: Type.Boolean(),
+  vncPassword: Type.Optional(NonEmptyString),
+});
+
 export type EnvironmentStatus = Static<typeof EnvironmentStatusSchema>;
 export type WorkerEnvironmentState = Static<typeof WorkerEnvironmentStateSchema>;
 export type WorkerTunnelStatus = Static<typeof WorkerTunnelStatusSchema>;
@@ -114,3 +131,5 @@ export type EnvironmentsListParams = Static<typeof EnvironmentsListParamsSchema>
 export type EnvironmentsListResult = Static<typeof EnvironmentsListResultSchema>;
 export type EnvironmentsStatusParams = Static<typeof EnvironmentsStatusParamsSchema>;
 export type EnvironmentsStatusResult = Static<typeof EnvironmentsStatusResultSchema>;
+export type WorkerDesktopObserveParams = Static<typeof WorkerDesktopObserveParamsSchema>;
+export type WorkerDesktopObserveResult = Static<typeof WorkerDesktopObserveResultSchema>;

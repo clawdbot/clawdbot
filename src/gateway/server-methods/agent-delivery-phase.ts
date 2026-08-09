@@ -1,8 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  GATEWAY_CLIENT_CAPS,
-  hasGatewayClientCap,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
@@ -20,6 +16,7 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import type { AgentTurnContext, AgentTurnPrincipal } from "../agent-turn/types.js";
 import { formatForLog } from "../ws-log.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -53,10 +50,11 @@ export async function resolveAgentDeliveryPhase(params: {
   recipientThreadId?: string | number;
   bestEffortDeliver: boolean;
   runId: string;
-  client: GatewayRequestHandlerOptions["client"];
-  context: GatewayRequestHandlerOptions["context"];
+  client: AgentTurnPrincipal | null;
+  context: AgentTurnContext;
   respond: GatewayRequestHandlerOptions["respond"];
   isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
+  onRunObserved?: (runId: string) => void;
 }): Promise<AgentDeliveryPhaseResult | undefined> {
   const activeSessionAgentId =
     params.resolvedSessionKey === "global" && params.resolvedSessionAgentId
@@ -65,18 +63,14 @@ export async function resolveAgentDeliveryPhase(params: {
         ? resolveAgentIdFromSessionKey(params.resolvedSessionKey)
         : (params.agentId ?? resolveDefaultAgentId(params.cfgForAgent ?? params.cfg));
 
-  const connId = typeof params.client?.connId === "string" ? params.client.connId : undefined;
-  if (
-    connId &&
-    hasGatewayClientCap(params.client?.connect?.caps, GATEWAY_CLIENT_CAPS.TOOL_EVENTS)
-  ) {
-    params.context.registerToolEventRecipient(params.runId, connId);
+  if (params.onRunObserved) {
+    params.onRunObserved(params.runId);
     for (const [activeRunId, active] of params.context.chatAbortControllers) {
       const sameSession = active.sessionKey === params.resolvedSessionKey;
       const sameSelectedGlobalAgent =
         params.resolvedSessionKey === "global" ? active.agentId === activeSessionAgentId : true;
       if (activeRunId !== params.runId && sameSession && sameSelectedGlobalAgent) {
-        params.context.registerToolEventRecipient(activeRunId, connId);
+        params.onRunObserved(activeRunId);
       }
     }
   }
@@ -110,13 +104,15 @@ export async function resolveAgentDeliveryPhase(params: {
 
   if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
     try {
-      resolvedChannel = (
-        await resolveMessageChannelSelection({ cfg: params.cfgForAgent ?? params.cfg })
-      ).channel;
+      const selection = await resolveMessageChannelSelection({
+        cfg: params.cfgForAgent ?? params.cfg,
+      });
+      resolvedChannel = selection.channel;
       deliveryTargetMode = deliveryTargetMode ?? "implicit";
       effectivePlan = {
         ...deliveryPlan,
         resolvedChannel,
+        plugin: selection.plugin,
         deliveryTargetMode,
         resolvedAccountId,
       };
@@ -148,7 +144,8 @@ export async function resolveAgentDeliveryPhase(params: {
     resolvedChannel = INTERNAL_MESSAGE_CHANNEL;
     deliveryTargetMode = undefined;
     resolvedTo = undefined;
-    effectivePlan = { ...deliveryPlan, resolvedChannel, resolvedTo, deliveryTargetMode };
+    const { plugin: _plugin, ...pluginFreePlan } = deliveryPlan;
+    effectivePlan = { ...pluginFreePlan, resolvedChannel, resolvedTo, deliveryTargetMode };
   }
 
   if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
@@ -220,7 +217,7 @@ export async function resolveAgentDeliveryPhase(params: {
       : undefined;
   return {
     activeSessionAgentId,
-    deliveryPlan,
+    deliveryPlan: effectivePlan,
     resolvedChannel,
     deliveryTargetMode,
     resolvedAccountId,

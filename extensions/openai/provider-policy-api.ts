@@ -8,6 +8,7 @@ import type {
   ProviderModelRouteResolution,
   ProviderModelRouteSource,
   ProviderNormalizeModelCatalogIdContext,
+  ProviderResponseModelEquivalenceContext,
   ProviderResolveModelRoutesContext,
 } from "openclaw/plugin-sdk/provider-model-types";
 import {
@@ -21,6 +22,8 @@ import {
   isOpenAIPlatformOnlyRouteModelId,
   isOpenAISubscriptionOnlyRouteModelId,
   normalizeOpenAIModelRouteId,
+  OPENAI_GPT_56_MODEL_ID,
+  OPENAI_GPT_56_SOL_MODEL_ID,
 } from "./model-route-contract.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
@@ -53,6 +56,14 @@ export function normalizeModelCatalogId(params: ProviderNormalizeModelCatalogIdC
   return params.provider.trim().toLowerCase() === OPENAI_PROVIDER_ID
     ? normalizeOpenAIModelRouteId(params.modelId)
     : null;
+}
+
+export function isResponseModelEquivalent(params: ProviderResponseModelEquivalenceContext) {
+  return (
+    params.provider.trim().toLowerCase() === OPENAI_PROVIDER_ID &&
+    params.requestedModelId === OPENAI_GPT_56_MODEL_ID &&
+    params.responseModelId === OPENAI_GPT_56_SOL_MODEL_ID
+  );
 }
 
 /** Resolves authored OpenAI provider config without activating the runtime plugin. */

@@ -309,7 +309,7 @@ describe("release validation no-push transport", () => {
     expect(releaseHelper.with?.["persist-credentials"]).toBe(false);
   });
 
-  it("rejects every child whose workflow SHA differs from the parent workflow SHA", () => {
+  it("owns identified children before rejecting a mismatched workflow SHA", () => {
     const full = readWorkflow(FULL_RELEASE);
     for (const [jobName, stepName] of [
       ["normal_ci", "Dispatch and monitor CI"],
@@ -319,9 +319,31 @@ describe("release validation no-push transport", () => {
       ["performance", "Dispatch and monitor OpenClaw Performance"],
     ] as const) {
       const dispatch = step(job(full, jobName), stepName);
+      const dispatchRun = dispatch.run ?? "";
       expect(dispatch.env?.PARENT_WORKFLOW_SHA, jobName).toBe("${{ github.sha }}");
-      expect(dispatch.run, jobName).toContain('"$child_head_sha" != "$PARENT_WORKFLOW_SHA"');
-      expect(dispatch.run, jobName).toContain("expected parent workflow SHA");
+      expect(dispatchRun, jobName).toContain(
+        'if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then',
+      );
+      expect(dispatchRun.match(/\.head_sha == \$head_sha/gu), jobName).toBeNull();
+      expect(dispatchRun, jobName).toContain('run_json="$(validate_child_run "$run_id")"');
+      expect(dispatchRun, jobName).toContain('active_child_run_id="$run_id"');
+      expect(dispatchRun, jobName).toContain("trap cancel_child EXIT INT TERM");
+      expect(
+        dispatchRun.indexOf('run_json="$(validate_child_run "$run_id")"'),
+        jobName,
+      ).toBeLessThan(dispatchRun.indexOf('active_child_run_id="$run_id"'));
+      expect(dispatchRun.indexOf('active_child_run_id="$run_id"'), jobName).toBeLessThan(
+        dispatchRun.indexOf("trap cancel_child EXIT INT TERM"),
+      );
+      expect(dispatchRun.indexOf("trap cancel_child EXIT INT TERM"), jobName).toBeLessThan(
+        dispatchRun.indexOf('if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]'),
+      );
+      const shaMismatch = dispatchRun.slice(
+        dispatchRun.indexOf('if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]'),
+        dispatchRun.indexOf("fail_fast_failed_jobs()"),
+      );
+      expect(shaMismatch, jobName).toContain("cancel_child");
+      expect(shaMismatch, jobName).toContain("trap - EXIT INT TERM");
     }
 
     const verify = step(job(full, "summary"), "Verify child workflow results");
@@ -671,19 +693,11 @@ describe("release validation no-push transport", () => {
     );
     expect(packDockerArtifact.run).toContain("archive_sha256=");
     const validatePackage = step(dockerProducer, "Validate OpenClaw Docker E2E package");
-    expect(step(dockerProducer, "Setup artifact package validation environment")).toMatchObject({
-      if: "steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''",
-      uses: "./.release-harness/.github/actions/setup-pnpm-store-cache",
-      with: {
-        "package-manager-file": ".release-harness/package.json",
-        "use-actions-cache": "false",
-      },
+    expect(step(dockerProducer, "Setup trusted release harness")).toMatchObject({
+      uses: "./.release-harness/.github/actions/setup-release-harness",
+      with: { "node-version": "${{ env.NODE_VERSION }}" },
     });
-    expect(step(dockerProducer, "Install trusted package validation dependencies")).toMatchObject({
-      if: "steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''",
-      "working-directory": ".release-harness",
-      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
-    });
+    expect(step(dockerProducer, "Setup trusted release harness").if).toBeUndefined();
     expect(validatePackage.env).toMatchObject({
       EXPECTED_PACKAGE_FILE_NAME: "${{ inputs.package_file_name }}",
       EXPECTED_PACKAGE_SHA256: "${{ inputs.package_sha256 }}",
@@ -696,9 +710,7 @@ describe("release validation no-push transport", () => {
     );
     expect(validatePackage.run).toContain("package/dist/build-info.json");
     expect(validatePackage.run).toContain('[[ "$package_source_sha" == "$SELECTED_SHA" ]]');
-    expect(validatePackage.run).toContain(
-      'validator=".release-harness/scripts/check-openclaw-package-tarball.mjs"',
-    );
+    expect(validatePackage.run).toContain("scripts/check-openclaw-package-tarball.mjs");
     const targetedRun = step(
       job(workflow, "validate_docker_lanes"),
       "Run targeted Docker E2E lanes",

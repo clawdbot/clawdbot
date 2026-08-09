@@ -17,7 +17,6 @@ describe("createChatRunState", () => {
       planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
       bufferUpdatedAt: 1,
       deltaSentAt: 2,
-      deltaLastBroadcastLen: 9,
       deltaLastBroadcastText: "projected",
       agentText: { assistant: { lastSentAt: 3 } },
       abortMarker: createChatAbortMarker(4),

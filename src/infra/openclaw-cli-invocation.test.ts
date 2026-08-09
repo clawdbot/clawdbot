@@ -16,7 +16,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
   it("uses the source entry for a Node-hosted checkout harness", () => {
     expect(
       resolveCurrentOpenClawCliInvocation(commandArgs, {
-        argv1: path.join(repoRoot, "scripts", "test-live.mjs"),
+        argv1: path.join(repoRoot, "scripts", "test-live.mts"),
         cwd: repoRoot,
         execArgv: [],
         execPath: "/usr/bin/node",
@@ -31,7 +31,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
   it("uses the source entry directly under Bun", () => {
     expect(
       resolveCurrentOpenClawCliInvocation(commandArgs, {
-        argv1: path.join(repoRoot, "scripts", "test-live.mjs"),
+        argv1: path.join(repoRoot, "scripts", "test-live.mts"),
         cwd: repoRoot,
         execPath: "/usr/local/bin/bun",
       }),

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -390,6 +391,7 @@ export type ClawHubSkillSecurityVerdictItem = {
   decision: ClawHubSkillVerificationDecision;
   reasons: string[];
   requestedSlug: string;
+  requestedOwnerHandle?: string;
   requestedVersion: string;
   slug?: string | null;
   version?: string | null;
@@ -849,10 +851,6 @@ function createClawHubBodyLimitError(
   return new Error(
     `ClawHub ${resourceLabel} exceeded ${maxBytes} bytes (${size} bytes ${measurement})`,
   );
-}
-
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function optionalStringField(
@@ -1320,6 +1318,7 @@ export async function fetchClawHubSkillVerification(params: {
   tag?: string;
   baseUrl?: string;
   token?: string;
+  skipAuth?: boolean;
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubSkillVerificationResponse> {
@@ -1327,6 +1326,7 @@ export async function fetchClawHubSkillVerification(params: {
     baseUrl: params.baseUrl,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}/verify`,
     token: params.token,
+    skipAuth: params.skipAuth,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
     search: {

@@ -3,6 +3,8 @@ import Foundation
 enum CommandResolver {
     private static let projectRootDefaultsKey = "openclaw.gatewayProjectRootPath"
     private static let helperName = "openclaw"
+    /// Version probes may queue under machine load; keep command resolution tolerant but bounded.
+    static let versionProbeTimeout: TimeInterval = 10
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
@@ -249,6 +251,27 @@ enum CommandResolver {
         // globally installed binary with a different private command surface.
         let sourceEntrypoint = root.appendingPathComponent("openclaw.mjs").path
         return FileManager().isExecutableFile(atPath: sourceEntrypoint) ? sourceEntrypoint : nil
+        #else
+        return nil
+        #endif
+    }
+
+    static func projectNodeHostWorkerLaunch(
+        projectRoot: URL? = nil,
+        searchPaths: [String]? = nil) async throws -> MacNodeHostWorkerLaunch?
+    {
+        #if DEBUG
+        let root = projectRoot ?? self.projectRoot()
+        let sourceRunner = root.appendingPathComponent("scripts/run-node.mjs")
+        guard FileManager().isReadableFile(atPath: sourceRunner.path) else { return nil }
+        switch await self.runtimeResolution(searchPaths: searchPaths) {
+        case let .success(runtime):
+            return MacNodeHostWorkerLaunch(
+                command: [runtime.path, sourceRunner.path, "node", "worker"],
+                currentDirectoryURL: root)
+        case let .failure(error):
+            throw error
+        }
         #else
         return nil
         #endif

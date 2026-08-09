@@ -1,6 +1,9 @@
 // Secret input parsing shared by memory provider config and gateway-resolved snapshots.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import {
+  hasNonEmptyString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 
 /** Supported secret reference backing stores. */
 type SecretRefSource = "env" | "file" | "exec";
@@ -17,15 +20,6 @@ const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 const LEGACY_SECRETREF_ENV_MARKER_PREFIX = "secretref-env:";
 const ENV_SECRET_TEMPLATE_RE = /^\$\{([A-Z][A-Z0-9_]{0,127})\}$/;
 const SECRET_REF_SOURCES = new Set<SecretRefSource>(["env", "file", "exec"]);
-
-/** Normalize literal secret strings and reject empty placeholders. */
-function normalizeSecretInputString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 /** Narrow a string to a supported SecretRef source. */
 function hasSecretRefSource(value: unknown): value is SecretRefSource {
@@ -111,7 +105,7 @@ function coerceSecretRef(value: unknown): SecretRef | null {
 
 /** Return true when a secret input has either a literal value or resolvable reference shape. */
 export function hasConfiguredMemorySecretInputValue(value: unknown): boolean {
-  if (normalizeSecretInputString(value)) {
+  if (normalizeOptionalString(value)) {
     return true;
   }
   return coerceSecretRef(value) !== null;
@@ -139,7 +133,7 @@ export function normalizeResolvedMemorySecretInputString(params: {
   value: unknown;
   path: string;
 }): string | undefined {
-  const normalized = normalizeSecretInputString(params.value);
+  const normalized = normalizeOptionalString(params.value);
   if (normalized) {
     return normalized;
   }
@@ -152,5 +146,5 @@ export function normalizeResolvedMemorySecretInputString(params: {
 
 /** Normalize env-provided secret values before use. */
 export function normalizeEnvSecretInputString(value: unknown): string | undefined {
-  return normalizeSecretInputString(value);
+  return normalizeOptionalString(value);
 }

@@ -5,7 +5,7 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mjs";
+import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mts";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
 import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
 import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";

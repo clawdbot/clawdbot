@@ -86,4 +86,20 @@ describe("createDockPanelLayout", () => {
 
     expect(layout.load()).toEqual({ open: true, dock: "bottom", height: 400, width: 600 });
   });
+
+  it("round-trips an opted-in main placement", () => {
+    const layout = createDockPanelLayout({
+      storageKey: "test.dock-panel.main",
+      minHeight: 140,
+      minWidth: 320,
+      defaultDock: "bottom",
+      supportedDocks: ["bottom", "right", "main"],
+      defaultHeight: 320,
+      defaultWidth: 520,
+    });
+
+    layout.save({ open: true, dock: "main", height: 320, width: 520 });
+
+    expect(layout.load()).toEqual({ open: true, dock: "main", height: 320, width: 520 });
+  });
 });

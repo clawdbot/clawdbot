@@ -42,7 +42,7 @@ import {
   runUpdateStep,
 } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
-import { resolvePostInstallDoctorEnv } from "./update-command-service.js";
+import { resolvePostInstallDoctorEnv } from "./update-command-service-env.js";
 
 const CLI_NAME = resolveCliName();
 
