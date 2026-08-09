@@ -2,22 +2,16 @@ const RFB_3_8_VERSION = Buffer.from("RFB 003.008\n", "ascii");
 const MAX_PENDING_BYTES = 64 * 1024;
 
 type RfbClientPhase = "version" | "security" | "authResponse" | "clientInit" | "messages";
+const FIXED_PHASE_LENGTHS: Record<Exclude<RfbClientPhase, "messages">, number> = {
+  version: RFB_3_8_VERSION.length,
+  security: 1,
+  authResponse: 16,
+  clientInit: 1,
+};
 
-export type RfbClientMessageFilterResult =
+type RfbClientMessageFilterResult =
   | { forward: Buffer; error?: never }
   | { forward?: never; error: string };
-
-function fixedPhaseLength(phase: Exclude<RfbClientPhase, "messages">): number {
-  switch (phase) {
-    case "version":
-      return RFB_3_8_VERSION.length;
-    case "security":
-    case "clientInit":
-      return 1;
-    case "authResponse":
-      return 16;
-  }
-}
 
 /** Filters one view-only RFB client byte stream without trusting WebSocket frame boundaries. */
 export function createRfbClientMessageFilter() {
@@ -33,7 +27,7 @@ export function createRfbClientMessageFilter() {
 
   const pendingTargetLength = (): number | string => {
     if (phase !== "messages") {
-      return fixedPhaseLength(phase);
+      return FIXED_PHASE_LENGTHS[phase];
     }
     if (pending.length === 0) {
       return 1;
