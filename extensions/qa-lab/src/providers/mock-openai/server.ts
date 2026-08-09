@@ -2194,6 +2194,16 @@ async function buildResponsesPayload(
   ) {
     scenarioState.subagentRequesterQuietPhase = 0;
   }
+  const hasRequesterQuietChildResult =
+    /QUIET-CHILD-OK/i.test(allInputText) && !/reply exactly `?QUIET-CHILD-OK`?/i.test(prompt);
+  if (scenarioState.subagentRequesterQuietPhase === 2 && hasRequesterQuietChildResult) {
+    scenarioState.subagentRequesterQuietPhase = 3;
+    await options.waitForRequesterQuietRelease?.();
+    return buildAssistantEvents("NO_REPLY");
+  }
+  if (scenarioState.subagentRequesterQuietPhase === 3 && hasRequesterQuietChildResult) {
+    return buildAssistantEvents("NO_REPLY");
+  }
   if (isSubagentRequesterQuietPrompt) {
     if (!hasCompletedToolOutput && scenarioState.subagentRequesterQuietPhase === 0) {
       scenarioState.subagentRequesterQuietPhase = 1;
@@ -2208,14 +2218,6 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("sessions_yield", {
         message: "Waiting for the quiet-path child to finish.",
       });
-    }
-    if (scenarioState.subagentRequesterQuietPhase === 2 && /QUIET-CHILD-OK/i.test(allInputText)) {
-      scenarioState.subagentRequesterQuietPhase = 3;
-      await options.waitForRequesterQuietRelease?.();
-      return buildAssistantEvents("NO_REPLY");
-    }
-    if (scenarioState.subagentRequesterQuietPhase === 3) {
-      return buildAssistantEvents("NO_REPLY");
     }
   }
   const currentFanoutInstructions = extractAllRequestTexts(

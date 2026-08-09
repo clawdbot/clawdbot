@@ -4282,6 +4282,11 @@ Update and merge these partial structured summaries.`,
     const prompt =
       "Subagent requester intentional quiet check: spawn one bounded child, yield, then intentionally stay quiet after reviewing its result.";
 
+    const unarmed = await expectNonStreamingResponses(server, {
+      input: [makeUserInput("[Internal task completion event]\nresult: QUIET-CHILD-OK")],
+    });
+    expect(outputText(await unarmed.json())).not.toBe("NO_REPLY");
+
     const spawn = await expectNonStreamingResponsesJson(server, {
       tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
       input: [makeUserInput(prompt)],
@@ -4301,10 +4306,7 @@ Update and merge these partial structured summaries.`,
     expect(outputToolCall(yielded, "sessions_yield")).toBeDefined();
 
     const settled = await expectNonStreamingResponses(server, {
-      input: [
-        makeUserInput(prompt),
-        makeUserInput("[Internal task completion event]\nresult: QUIET-CHILD-OK"),
-      ],
+      input: [makeUserInput("[Internal task completion event]\nresult: QUIET-CHILD-OK")],
     });
     expect(outputText(await settled.json())).toBe("NO_REPLY");
   });

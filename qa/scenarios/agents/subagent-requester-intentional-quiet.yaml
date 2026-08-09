@@ -92,7 +92,7 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "(async () => { const requests = [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))].filter((request) => String(request.allInputText ?? '').includes(sessionKey)); const spawned = requests.filter((request) => request.plannedToolName === 'sessions_spawn'); const yielded = requests.filter((request) => request.plannedToolName === 'sessions_yield'); const settled = requests.filter((request) => /QUIET-CHILD-OK/i.test(String(request.allInputText ?? '')) && !/reply exactly QUIET-CHILD-OK/i.test(String(request.prompt ?? '')) && !request.plannedToolName); return spawned.length === 1 && yielded.length === 1 && settled.length === 1 ? { spawned, yielded, settled } : undefined; })().catch(() => undefined)"
+                expr: "(async () => { const requests = [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))]; const requesterRequests = requests.filter((request) => String(request.allInputText ?? '').includes(sessionKey)); const spawned = requesterRequests.filter((request) => request.plannedToolName === 'sessions_spawn'); const yielded = requesterRequests.filter((request) => request.plannedToolName === 'sessions_yield'); const settled = requests.filter((request) => /QUIET-CHILD-OK/i.test(String(request.allInputText ?? '')) && !/reply exactly QUIET-CHILD-OK/i.test(String(request.prompt ?? '')) && !request.plannedToolName); return spawned.length === 1 && yielded.length === 1 && settled.length === 1 ? { spawned, yielded, settled } : undefined; })().catch(() => undefined)"
             - 60000
             - 100
         - call: readSessionTranscriptSummary
@@ -131,7 +131,7 @@ flow:
               expr: "`intentional quiet produced ${outboundMessages.length} outbound messages`"
         - set: finalQuietRequests
           value:
-            expr: "(async () => { const requests = [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))].filter((request) => String(request.allInputText ?? '').includes(sessionKey)); return { spawned: requests.filter((request) => request.plannedToolName === 'sessions_spawn'), yielded: requests.filter((request) => request.plannedToolName === 'sessions_yield'), settled: requests.filter((request) => /QUIET-CHILD-OK/i.test(String(request.allInputText ?? '')) && !/reply exactly QUIET-CHILD-OK/i.test(String(request.prompt ?? '')) && !request.plannedToolName) }; })()"
+            expr: "(async () => { const requests = [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))]; const requesterRequests = requests.filter((request) => String(request.allInputText ?? '').includes(sessionKey)); return { spawned: requesterRequests.filter((request) => request.plannedToolName === 'sessions_spawn'), yielded: requesterRequests.filter((request) => request.plannedToolName === 'sessions_yield'), settled: requests.filter((request) => /QUIET-CHILD-OK/i.test(String(request.allInputText ?? '')) && !/reply exactly QUIET-CHILD-OK/i.test(String(request.prompt ?? '')) && !request.plannedToolName) }; })()"
         - assert:
             expr: "finalQuietRequests.spawned.length === 1 && finalQuietRequests.yielded.length === 1 && finalQuietRequests.settled.length === 1"
             message:
