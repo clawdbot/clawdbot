@@ -439,6 +439,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private closePromise: Promise<void> | null = null;
   private closeTeardownComplete = false;
   private closing = false;
+  private readonly batchAbortController = new AbortController();
+  protected readonly batchAbortSignal = this.batchAbortController.signal;
   private activeManagerOperations = 0;
   private managerIdleWaiters = new Set<() => void>();
   protected override fallbackFrom?: EmbeddingProviderId;
@@ -2351,6 +2353,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   private async closeOnce(): Promise<void> {
     this.closing = true;
+    this.batchAbortController.abort(new Error("memory manager closing"));
     this.queuedArchiveFiles.clear();
     this.queuedSessions.clear();
     this.queuedForce = false;

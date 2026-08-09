@@ -185,12 +185,6 @@ function resolveChunkRecallMetadata(params: {
   };
 }
 
-// Retry attempts are host control state. Provider-thrown values stay opaque so
-// they cannot override the counter or break accounting when they are immutable.
-type MemoryBatchRetryResult<T> =
-  | { kind: "success"; value: T }
-  | { kind: "failure"; error: unknown; attempts: 1 | 2 };
-
 function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const item of items) {
@@ -303,6 +297,7 @@ async function runEmbeddingOperationWithTimeout<T>(params: {
 }
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
+  protected abstract readonly batchAbortSignal: AbortSignal;
   protected abstract batchFailureCount: number;
   protected abstract batchFailureLastError?: string;
   protected abstract batchFailureLastProvider?: string;
@@ -542,6 +537,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const missingChunks = missing.map((item) => item.chunk);
     const batchResult = await this.runBatchWithFallback({
       provider: provider.id,
+      failureMode: generation.runtime?.batchFailureMode ?? "fallback",
       run: async () =>
         await batchEmbed({
           agentId: this.agentId,
@@ -550,6 +546,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           concurrency: this.batch.concurrency,
           pollIntervalMs: this.batch.pollIntervalMs,
           timeoutMs: this.batch.timeoutMs,
+          signal: this.batchAbortSignal,
           debug: this.buildBatchDebug(source, chunks, debugContext),
         }),
       fallback: async () => await this.embedChunksInBatches(missingChunks, generation),
@@ -838,8 +835,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   private async recordBatchFailure(params: {
     provider: string;
     message: string;
-    attempts: 1 | 2;
+    attempts: 1;
     forceDisable?: boolean;
+    preserveBatchSelection?: boolean;
   }): Promise<{ disabled: boolean; count: number }> {
     return await this.withBatchFailureLock(async () => {
       if (!this.batch.enabled) {
@@ -854,64 +852,52 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         },
         params,
       );
-      this.batch.enabled = nextState.enabled;
+      // A fail-closed native provider must remain selected after failures.
+      // Disabling it here would silently route the next sync through inline
+      // paid embeddings, violating the provider's declared safety contract.
+      this.batch.enabled = params.preserveBatchSelection ? true : nextState.enabled;
       this.batchFailureCount = nextState.count;
       this.batchFailureLastError = nextState.lastError;
       this.batchFailureLastProvider = nextState.lastProvider;
-      return { disabled: !nextState.enabled, count: nextState.count };
+      return { disabled: !this.batch.enabled, count: nextState.count };
     });
-  }
-
-  private async runBatchWithTimeoutRetry<T>(params: {
-    provider: string;
-    run: () => Promise<T>;
-  }): Promise<MemoryBatchRetryResult<T>> {
-    try {
-      return { kind: "success", value: await params.run() };
-    } catch (error) {
-      if (!/timed out|timeout/i.test(formatErrorMessage(error))) {
-        return { kind: "failure", error, attempts: 1 };
-      }
-    }
-
-    log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
-    try {
-      return { kind: "success", value: await params.run() };
-    } catch (error) {
-      return { kind: "failure", error, attempts: 2 };
-    }
   }
 
   private async runBatchWithFallback<T>(params: {
     provider: string;
+    failureMode: "fallback" | "error";
     run: () => Promise<T>;
     fallback: () => Promise<number[][]>;
   }): Promise<T | number[][]> {
     if (!this.batch.enabled) {
       return await params.fallback();
     }
-    const result = await this.runBatchWithTimeoutRetry({
-      provider: params.provider,
-      run: params.run,
-    });
-    if (result.kind === "success") {
+    try {
+      const result = await params.run();
       await this.resetBatchFailureCount();
-      return result.value;
+      return result;
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      const forceDisable = isEmbeddingBatchUnavailableError(error);
+      const failure = await this.recordBatchFailure({
+        provider: params.provider,
+        message,
+        attempts: 1,
+        forceDisable,
+        preserveBatchSelection: params.failureMode === "error",
+      });
+      const suffix = failure.disabled ? "disabling batch" : "keeping batch enabled";
+      if (params.failureMode === "error") {
+        log.warn(
+          `memory embeddings: ${params.provider} batch failed (${failure.count}/${MEMORY_BATCH_FAILURE_LIMIT}); ${suffix}; inline fallback prohibited: ${message}`,
+        );
+        throw error;
+      }
+      log.warn(
+        `memory embeddings: ${params.provider} batch failed (${failure.count}/${MEMORY_BATCH_FAILURE_LIMIT}); ${suffix}; falling back to non-batch embeddings: ${message}`,
+      );
+      return await params.fallback();
     }
-
-    const message = formatErrorMessage(result.error);
-    const forceDisable = isEmbeddingBatchUnavailableError(result.error);
-    const failure = await this.recordBatchFailure({
-      provider: params.provider,
-      message,
-      attempts: result.attempts,
-      forceDisable,
-    });
-    const suffix = failure.disabled ? "disabling batch" : "keeping batch enabled";
-    log.warn(
-      `memory embeddings: ${params.provider} batch failed (${failure.count}/${MEMORY_BATCH_FAILURE_LIMIT}); ${suffix}; falling back to non-batch embeddings: ${message}`,
-    );
-    return await params.fallback();
   }
 
   protected getIndexConcurrency(): number {

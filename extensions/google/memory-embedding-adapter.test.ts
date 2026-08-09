@@ -95,4 +95,25 @@ describe("Gemini memory embedding adapter", () => {
 
     expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
   });
+
+  it("declares native batch failures fail-closed and forwards cancellation", async () => {
+    const result = await createAdapterWithHeaders({});
+    const controller = new AbortController();
+
+    expect(result.runtime?.batchFailureMode).toBe("error");
+    await result.runtime?.batchEmbed?.({
+      agentId: "main",
+      chunks: [{ text: "alpha" }],
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 1_000,
+      timeoutMs: 60_000,
+      signal: controller.signal,
+      debug: () => {},
+    });
+
+    expect(mocks.runGeminiEmbeddingBatches).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
 });

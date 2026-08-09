@@ -63,6 +63,8 @@ export type MemoryEmbeddingBatchOptions = {
   concurrency: number;
   pollIntervalMs: number;
   timeoutMs: number;
+  /** Cancels local batch work; a submitted remote job may continue running. */
+  signal?: AbortSignal;
   debug: (message: string, data?: Record<string, unknown>) => void;
 };
 
@@ -70,6 +72,8 @@ export type MemoryEmbeddingProviderCallOptions = Pick<EmbeddingProviderCallOptio
 
 export type MemoryEmbeddingProviderRuntime = EmbeddingProviderRuntime & {
   sourceWideBatchEmbed?: boolean;
+  /** Whether native batch failures may fall back to inline paid embeddings. */
+  batchFailureMode?: "fallback" | "error";
   batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
 };
 
