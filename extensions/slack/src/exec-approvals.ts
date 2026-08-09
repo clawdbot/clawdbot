@@ -8,7 +8,6 @@ import { doesApprovalRequestMatchChannelAccount } from "openclaw/plugin-sdk/appr
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeStringifiedOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount } from "./accounts.js";
-import { formatSlackTarget, parseSlackTarget } from "./target-parsing.js";
 
 function normalizeSlackUserLikeId(value: string): string | undefined {
   const upper = value.toUpperCase();
@@ -31,29 +30,6 @@ export function normalizeSlackApproverId(value: string | number): string | undef
   return normalizeSlackUserLikeId(trimmed);
 }
 
-function normalizeSlackEnterpriseApprover(value: string | number): string | undefined {
-  const trimmed = normalizeStringifiedOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  // Enterprise approval identity must remain workspace-qualified; raw values
-  // cannot be rebound to the workspace that happens to emit a callback.
-  try {
-    const target = parseSlackTarget(trimmed);
-    const userId = target?.kind === "user" ? normalizeSlackUserLikeId(target.id) : undefined;
-    if (!target?.teamId || !userId) {
-      return undefined;
-    }
-    return formatSlackTarget({
-      teamId: target.teamId.toUpperCase(),
-      kind: "user",
-      id: userId,
-    });
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveSlackOwnerApprovers(cfg: OpenClawConfig): string[] {
   const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
   if (!Array.isArray(ownerAllowFrom) || ownerAllowFrom.length === 0) {
@@ -69,30 +45,9 @@ export function getSlackExecApprovalApprovers(params: {
   accountId?: string | null;
 }): string[] {
   const account = resolveSlackAccount(params).config;
-  if (account.enterpriseOrgInstall === true) {
-    return resolveApprovalApprovers({
-      explicit: account.execApprovals?.approvers,
-      normalizeApprover: normalizeSlackEnterpriseApprover,
-    });
-  }
   return resolveApprovalApprovers({
     explicit: account.execApprovals?.approvers ?? resolveSlackOwnerApprovers(params.cfg),
     normalizeApprover: normalizeSlackApproverId,
-  });
-}
-
-export function getSlackTeamApprovers(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  teamId: string;
-}): string[] {
-  const teamId = params.teamId.trim().toUpperCase();
-  if (!/^T[A-Z0-9]+$/.test(teamId)) {
-    return [];
-  }
-  return getSlackExecApprovalApprovers(params).filter((approver) => {
-    const target = parseSlackTarget(approver);
-    return target?.kind === "user" && target.teamId?.toUpperCase() === teamId;
   });
 }
 
@@ -125,25 +80,7 @@ const slackExecApprovalProfile = createChannelExecApprovalProfile({
 });
 
 export const isSlackExecApprovalClientEnabled = slackExecApprovalProfile.isClientEnabled;
-export function isSlackExecApprovalAuthorizedSender(params: {
-  cfg: OpenClawConfig;
-  senderId?: string | null;
-  accountId?: string | null;
-  teamId?: string | null;
-}): boolean {
-  if (resolveSlackAccount(params).config.enterpriseOrgInstall !== true) {
-    return slackExecApprovalProfile.isAuthorizedSender(params);
-  }
-  const senderId = params.senderId ? normalizeSlackApproverId(params.senderId) : undefined;
-  const teamId = params.teamId?.trim().toUpperCase();
-  if (!senderId || !teamId || !/^T[A-Z0-9]+$/.test(teamId)) {
-    return false;
-  }
-  const senderTarget = normalizeSlackEnterpriseApprover(
-    formatSlackTarget({ teamId, kind: "user", id: senderId }),
-  );
-  return Boolean(senderTarget && getSlackExecApprovalApprovers(params).includes(senderTarget));
-}
+export const isSlackExecApprovalAuthorizedSender = slackExecApprovalProfile.isAuthorizedSender;
 export const resolveSlackExecApprovalTarget = slackExecApprovalProfile.resolveTarget;
 export const shouldSuppressLocalSlackExecApprovalPrompt =
   slackExecApprovalProfile.shouldSuppressLocalPrompt;

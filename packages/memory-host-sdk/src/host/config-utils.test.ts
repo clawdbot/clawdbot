@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveRememberAcrossConversations } from "./config-utils.js";
+import {
+  normalizeConfiguredMemoryExtraPaths,
+  resolveRememberAcrossConversations,
+} from "./config-utils.js";
 
 describe("resolveRememberAcrossConversations", () => {
   it("honors keyed per-agent memory overrides", () => {
@@ -13,5 +16,23 @@ describe("resolveRememberAcrossConversations", () => {
     };
 
     expect(resolveRememberAcrossConversations(config, "support")).toBe(false);
+  });
+});
+
+describe("normalizeConfiguredMemoryExtraPaths", () => {
+  it("preserves distinct patterns and canonicalizes unpatterned objects", () => {
+    expect(
+      normalizeConfiguredMemoryExtraPaths([
+        " notes ",
+        { path: "notes" },
+        { path: " notes ", pattern: " runbooks/**/*.md " },
+        { path: "notes", pattern: "runbooks/**/*.md" },
+        { path: "notes", pattern: "decisions/**/*.md" },
+      ]),
+    ).toEqual([
+      "notes",
+      { path: "notes", pattern: "runbooks/**/*.md" },
+      { path: "notes", pattern: "decisions/**/*.md" },
+    ]);
   });
 });

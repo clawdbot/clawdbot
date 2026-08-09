@@ -21,24 +21,19 @@ import { logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  decodeSlackApprovalAction,
-  encodeSlackEnterpriseApprovalAction,
-} from "./approval-actions.js";
-import {
   isSlackAnyNativeApprovalClientEnabled,
   shouldHandleSlackNativeApprovalRequest,
 } from "./approval-native-gates.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";
-import { isSlackApprovalActionId, SLACK_APPROVAL_BUTTON_ACTION_ID } from "./reply-action-ids.js";
+import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
-import { sendMessageSlack, updateMessageSlack } from "./send.js";
-import { parseSlackTarget } from "./target-parsing.js";
+import { sendMessageSlack } from "./send.js";
+import { truncateSlackTextByUtf8Bytes } from "./truncate.js";
 
 type SlackBlock = Block | KnownBlock;
 type SlackPendingApproval = {
   channelId: string;
   messageTs: string;
-  teamId?: string;
 };
 type SlackPendingDelivery = {
   text: string;
@@ -63,7 +58,6 @@ type SlackExecApprovalConfig = NonNullable<
 type SlackApprovalHandlerContext = {
   app: App;
   config: SlackExecApprovalConfig;
-  approvalSigningKey: string;
 };
 
 function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext): {
@@ -72,7 +66,7 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
 } | null {
   const context = params.context as SlackApprovalHandlerContext | undefined;
   const accountId = normalizeOptionalString(params.accountId) ?? "";
-  if (!context?.app || !context.approvalSigningKey || !accountId) {
+  if (!context?.app || !accountId) {
     return null;
   }
   return { accountId, context };
@@ -271,44 +265,6 @@ function buildSlackPendingApprovalBlocks(view: PendingApprovalView): SlackBlock[
     : buildSlackExecPendingApprovalBlocks(view);
 }
 
-function signSlackEnterpriseApprovalBlock(
-  block: SlackBlock,
-  teamId: string,
-  signingKey: string,
-): SlackBlock {
-  const record = block as { type?: unknown; elements?: unknown };
-  if (record.type !== "actions" || !Array.isArray(record.elements)) {
-    return block;
-  }
-  let changed = false;
-  const elements = record.elements.map((element) => {
-    if (!element || typeof element !== "object" || Array.isArray(element)) {
-      return element;
-    }
-    const button = element as { action_id?: unknown; type?: unknown; value?: unknown };
-    if (typeof button.action_id !== "string" || !isSlackApprovalActionId(button.action_id)) {
-      return element;
-    }
-    const action = decodeSlackApprovalAction(button.value);
-    if (
-      button.type !== "button" ||
-      !button.action_id.startsWith(SLACK_APPROVAL_BUTTON_ACTION_ID) ||
-      !action
-    ) {
-      throw new Error("Slack native approval renderer produced an invalid approval action");
-    }
-    changed = true;
-    return Object.assign({}, button, {
-      value: encodeSlackEnterpriseApprovalAction({
-        action,
-        teamId,
-        signingKey,
-      }),
-    });
-  });
-  return changed ? ({ ...block, elements } as SlackBlock) : block;
-}
-
 function buildSlackExecResolvedText(view: ExecApprovalResolvedView): string {
   const resolvedBy = formatSlackApprover(view.resolvedBy);
   const lines = [
@@ -451,9 +407,28 @@ function buildSlackExpiredBlocks(view: ExpiredApprovalView): SlackBlock[] {
     : buildSlackExecExpiredBlocks(view);
 }
 
+async function updateMessage(params: {
+  app: App;
+  channelId: string;
+  messageTs: string;
+  text: string;
+  blocks: SlackBlock[];
+}): Promise<void> {
+  try {
+    await params.app.client.chat.update({
+      channel: params.channelId,
+      ts: params.messageTs,
+      text: truncateSlackTextByUtf8Bytes(params.text, SLACK_EDIT_TEXT_MAX_BYTES),
+      blocks: params.blocks,
+    });
+  } catch (err) {
+    logError(`slack approvals: failed to update message: ${String(err)}`);
+  }
+}
+
 export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
   SlackPendingDelivery,
-  { to: string; threadTs?: string; teamId?: string },
+  { to: string; threadTs?: string },
   SlackPendingApproval,
   never,
   SlackPendingDelivery
@@ -503,42 +478,29 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
     }),
   },
   transport: {
-    prepareTarget: ({ plannedTarget }) => {
-      const teamId = parseSlackTarget(plannedTarget.target.to, { defaultKind: "channel" })?.teamId;
-      return {
-        dedupeKey: buildChannelApprovalNativeTargetKey(plannedTarget.target),
-        target: {
-          to: plannedTarget.target.to,
-          threadTs:
-            plannedTarget.target.threadId != null
-              ? String(plannedTarget.target.threadId)
-              : undefined,
-          ...(teamId ? { teamId } : {}),
-        },
-      };
-    },
+    prepareTarget: ({ plannedTarget }) => ({
+      dedupeKey: buildChannelApprovalNativeTargetKey(plannedTarget.target),
+      target: {
+        to: plannedTarget.target.to,
+        threadTs:
+          plannedTarget.target.threadId != null ? String(plannedTarget.target.threadId) : undefined,
+      },
+    }),
     deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return null;
       }
-      const teamId = preparedTarget.teamId;
-      const blocks = teamId
-        ? pendingPayload.blocks.map((block) =>
-            signSlackEnterpriseApprovalBlock(block, teamId, resolved.context.approvalSigningKey),
-          )
-        : pendingPayload.blocks;
       const message = await sendMessageSlack(preparedTarget.to, pendingPayload.text, {
         cfg,
         accountId: resolved.accountId,
         threadTs: preparedTarget.threadTs,
-        blocks,
+        blocks: pendingPayload.blocks,
         client: resolved.context.app.client,
       });
       return {
         channelId: message.channelId,
         messageTs: message.messageId,
-        ...(preparedTarget.teamId ? { teamId: preparedTarget.teamId } : {}),
       };
     },
     updateEntry: async ({ cfg, accountId, context, entry, payload }) => {
@@ -547,19 +509,13 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
         return;
       }
       const nextPayload = payload;
-      try {
-        await updateMessageSlack({
-          cfg,
-          accountId: resolved.accountId,
-          teamId: entry.teamId,
-          channelId: entry.channelId,
-          messageTs: entry.messageTs,
-          text: nextPayload.text,
-          blocks: nextPayload.blocks,
-        });
-      } catch (err) {
-        logError(`slack approvals: failed to update message: ${String(err)}`);
-      }
+      await updateMessage({
+        app: resolved.context.app,
+        channelId: entry.channelId,
+        messageTs: entry.messageTs,
+        text: nextPayload.text,
+        blocks: nextPayload.blocks,
+      });
     },
   },
   observe: {
