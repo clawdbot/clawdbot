@@ -18,18 +18,18 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import type { AgentTurnContext } from "../agent-turn/types.js";
-import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
-import { formatForLog } from "../ws-log.js";
-import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import {
   validateExpectedExistingSessionTarget,
   type ExpectedExistingSessionConstraint,
-} from "./agent-expected-session.js";
+} from "../server-methods/agent-expected-session.js";
+import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "../server-methods/attachment-normalize.js";
+import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
+import { formatForLog } from "../ws-log.js";
+import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { respondUnavailableAgentSessionForKey } from "./agent-handler-helpers.js";
-import type { AgentRunRequest } from "./agent-request-types.js";
-import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import type { AgentTurnContext } from "./types.js";
 
 type ExplicitRecipientSession = Awaited<ReturnType<typeof resolveAgentExplicitRecipientSession>>;
 

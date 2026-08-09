@@ -17,15 +17,15 @@ import { defaultRuntime } from "../../runtime.js";
 import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import type { AgentTurnContext, AgentTurnIo } from "../agent-turn/types.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
-import { formatForLog } from "../ws-log.js";
-import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import {
   tryFinalizeTrackedAgentTask,
   type GatewayAgentTaskTrackingMode,
-} from "./agent-task-tracking.js";
-import type { GatewayCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
+} from "../server-methods/agent-task-tracking.js";
+import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
+import { formatForLog } from "../ws-log.js";
+import { setGatewayDedupeEntries } from "./agent-dedupe.js";
+import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 function resolveResolvedAgentTimeoutStopReason(
   meta: unknown,

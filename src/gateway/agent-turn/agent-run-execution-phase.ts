@@ -40,7 +40,11 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "../agent-turn/types.js";
+import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
+import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
+import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
+import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -52,7 +56,6 @@ import {
   yieldAfterAgentAcceptedAck,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
-import type { AgentRunRequest } from "./agent-request-types.js";
 import {
   resolveAgentRestartRecoveryChannelContext,
   resolveAgentRestartRecoveryExecutionIdentityAdmission,
@@ -62,10 +65,7 @@ import {
   resolveAbortedAgentStopReason,
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
-import { createAgentRunModelSelectionHandler } from "./agent-run-model-selection.js";
-import { resolveSessionRuntimeCwd } from "./agent-session-reset.js";
-import { gatewayClientSenderFields } from "./gateway-client-identity.js";
-import { emitSessionsChanged } from "./session-change-event.js";
+import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export function startAgentRunExecution(params: {
   prepared: PreparedAgentRunDispatch;

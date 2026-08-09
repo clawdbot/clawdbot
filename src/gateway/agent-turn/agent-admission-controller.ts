@@ -11,8 +11,12 @@ import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
-import type { AgentTurnContext, AgentTurnIo } from "../agent-turn/types.js";
 import { registerChatAbortController } from "../chat-abort.js";
+import {
+  assertExpectedExistingSession,
+  consumeExpectedSessionWorkAdmission,
+  type ExpectedExistingSessionConstraint,
+} from "../server-methods/agent-expected-session.js";
 import { loadSessionEntry } from "../session-utils.js";
 import type { AgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
 import {
@@ -21,11 +25,7 @@ import {
   readGatewayDedupeEntry,
   setAbortedAgentDedupeEntries,
 } from "./agent-dedupe.js";
-import {
-  assertExpectedExistingSession,
-  consumeExpectedSessionWorkAdmission,
-  type ExpectedExistingSessionConstraint,
-} from "./agent-expected-session.js";
+import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export function createAgentAdmissionController(params: {
   cfg: OpenClawConfig;

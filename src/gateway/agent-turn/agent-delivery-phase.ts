@@ -16,10 +16,10 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import type { AgentTurnContext, AgentTurnPrincipal } from "../agent-turn/types.js";
+import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { formatForLog } from "../ws-log.js";
-import type { AgentRunRequest } from "./agent-request-types.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
 
 type DeliveryPlan = Awaited<ReturnType<typeof resolveAgentDeliveryPlanWithSessionRoute>>;
 
