@@ -631,7 +631,7 @@ jobs:
           if [[ -n "${ARTIFACT_URL:-}" ]]; then
             artifact_url_args=(--artifact-url "$ARTIFACT_URL")
           fi
-          node --import tsx scripts/mantis/publish-pr-evidence.mts \
+          node scripts/mantis/publish-pr-evidence.mjs \
             --manifest "$root/mantis-evidence.json" \
             --target-pr "$TARGET_PR" \
             --artifact-root "mantis/telegram-desktop/pr-${TARGET_PR}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
@@ -728,7 +728,7 @@ jobs:
             echo "Downloaded artifact does not contain ${root}/mantis-evidence.json." >&2
             exit 1
           fi
-          node --import tsx scripts/mantis/publish-pr-evidence.mts \
+          node scripts/mantis/publish-pr-evidence.mjs \
             --manifest "$root/mantis-evidence.json" \
             --target-pr "$TARGET_PR" \
             --artifact-root "mantis/telegram-desktop/pr-${TARGET_PR}/published-${PUBLISH_RUN_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \

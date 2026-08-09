@@ -8,7 +8,7 @@ import {
   parsePrNumberList,
   parseUnifiedDiffRanges,
   runDuplicateCloseWorkflow,
-} from "../../scripts/close-duplicate-prs-after-merge.mts";
+} from "../../scripts/close-duplicate-prs-after-merge.mjs";
 
 function pr(params: {
   body?: string;

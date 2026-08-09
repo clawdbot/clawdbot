@@ -1714,6 +1714,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-npm-package-manifest-args.test.ts",
         "test/plugin-npm-package-manifest.test.ts",
       ],
+      "scripts/lib/arg-utils.runtime.mjs": [
+        "test/scripts/arg-utils.test.ts",
+        "test/scripts/android-release-signing.test.ts",
+      ],
       "scripts/lib/arg-utils.mts": ["test/scripts/arg-utils.test.ts"],
       "scripts/lib/android-version.ts": [
         "test/scripts/android-version.test.ts",
@@ -1953,7 +1957,10 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/lib/ts-topology/analyze.ts": ["test/scripts/ts-topology.test.ts"],
       "scripts/lib/ts-topology/reports.ts": ["test/scripts/ts-topology.test.ts"],
       "scripts/lib/ts-topology/scope.ts": ["test/scripts/ts-topology.test.ts"],
-      "scripts/lib/repo-root.mjs": ["test/scripts/ts-guard-utils.test.ts"],
+      "scripts/lib/repo-root.mjs": [
+        "test/scripts/ts-guard-utils.test.ts",
+        "test/scripts/android-release-signing.test.ts",
+      ],
       "scripts/lib/ts-guard-utils.mts": ["test/scripts/ts-guard-utils.test.ts"],
       "scripts/lib/tsgo-sparse-guard.mts": [
         "test/scripts/run-tsgo.test.ts",

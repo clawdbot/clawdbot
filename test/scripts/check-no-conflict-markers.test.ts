@@ -7,7 +7,7 @@ import {
   findConflictMarkerLines,
   findConflictMarkersInFiles,
   findConflictMarkersInTrackedFiles,
-} from "../../scripts/check-no-conflict-markers.mts";
+} from "../../scripts/check-no-conflict-markers.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();

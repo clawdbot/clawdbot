@@ -9,93 +9,69 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
-type CliArgs = Record<string, string>;
-type EvidenceLane = Record<string, unknown> & {
-  expected?: string;
-  fixed?: boolean;
-  ref?: string;
-  sha?: string;
-  status?: string;
-};
-export type EvidenceArtifact = {
-  alt?: string;
-  inline?: boolean;
-  kind: string;
-  label: string;
-  lane: string;
-  path?: string;
-  required?: boolean;
-  source: string;
-  targetPath: string;
-  width?: number;
-};
-export type EvidenceManifest = {
-  artifacts: EvidenceArtifact[];
-  comparison: {
-    baseline?: EvidenceLane;
-    candidate: EvidenceLane;
-    pass?: boolean;
-  };
-  id: string;
-  manifestDir: string;
-  scenario: string;
-  schemaVersion: number;
-  summary?: string;
-  title: string;
-};
-type ManifestArtifactEntry = {
-  alt?: string;
-  inline?: boolean;
-  kind?: string;
-  label?: string;
-  lane?: string;
-  path?: string;
-  required?: boolean;
-  targetPath?: string;
-  width?: number;
-};
-type EvidenceManifestFile = Omit<EvidenceManifest, "artifacts" | "manifestDir"> & {
-  artifacts?: ManifestArtifactEntry[];
-};
-type ObjectStorageConfig = {
-  accessKeyId: string;
-  bucket: string;
-  endpoint: string;
-  publicBaseUrl: string;
-  region: string;
-  secretAccessKey: string;
-};
-type ArtifactFetch = (
-  url: URL,
-  init: { body: Buffer; headers: HeadersInit; method: string; signal: AbortSignal },
-) => Promise<Response>;
-type SignedPutRequest = {
-  body: Buffer;
-  headers: HeadersInit;
-  method: string;
-  url: URL;
-};
-type EvidencePair = { left: EvidenceArtifact; right: EvidenceArtifact };
-type RenderEvidenceCommentOptions = {
-  artifactUrl?: string;
-  artifactRoot?: string;
-  manifest: EvidenceManifest;
-  marker: string;
-  rawBase: string;
-  requestSource?: string;
-  runUrl?: string;
-  treeUrl?: string;
-};
+/** @typedef {Record<string, unknown> & { expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
+/**
+ * @typedef {{
+ *   alt?: string,
+ *   inline?: boolean,
+ *   kind: string,
+ *   label: string,
+ *   lane: string,
+ *   path?: string,
+ *   required?: boolean,
+ *   source: string,
+ *   targetPath: string,
+ *   width?: number,
+ * }} EvidenceArtifact
+ */
+/**
+ * @typedef {{
+ *   artifacts: EvidenceArtifact[],
+ *   comparison: { baseline?: EvidenceLane, candidate: EvidenceLane, pass?: boolean },
+ *   id: string,
+ *   manifestDir: string,
+ *   scenario: string,
+ *   schemaVersion: number,
+ *   summary?: string,
+ *   title: string,
+ * }} EvidenceManifest
+ */
+/**
+ * @typedef {{
+ *   alt?: string,
+ *   inline?: boolean,
+ *   kind?: string,
+ *   label?: string,
+ *   lane?: string,
+ *   path?: string,
+ *   required?: boolean,
+ *   targetPath?: string,
+ *   width?: number,
+ * }} ManifestArtifactEntry
+ */
+/** @typedef {Omit<EvidenceManifest, "artifacts" | "manifestDir"> & { artifacts?: ManifestArtifactEntry[] }} EvidenceManifestFile */
+/** @typedef {{ accessKeyId: string, bucket: string, endpoint: string, publicBaseUrl: string, region: string, secretAccessKey: string }} ObjectStorageConfig */
+/** @typedef {(url: URL, init: { body: Buffer, headers: HeadersInit, method: string, signal: AbortSignal }) => Promise<Response>} ArtifactFetch */
+/** @typedef {{ body: Buffer, headers: HeadersInit, method: string, url: URL }} SignedPutRequest */
+/** @typedef {{ left: EvidenceArtifact, right: EvidenceArtifact }} EvidencePair */
+/**
+ * @typedef {{
+ *   artifactUrl?: string,
+ *   manifest: EvidenceManifest,
+ *   marker: string,
+ *   rawBase: string,
+ *   requestSource?: string,
+ *   runUrl?: string,
+ *   treeUrl?: string,
+ * }} RenderEvidenceCommentOptions
+ */
 
 // Evidence bundles can include full videos, so allow slow transfers while bounding each PUT.
 const MANTIS_ARTIFACT_UPLOAD_TIMEOUT_MS = 300_000;
 // Untrusted storage error bodies are for diagnostics only; keep them small.
 const MANTIS_UPLOAD_ERROR_BODY_MAX_BYTES = 64 * 1024;
-type HashInput = Parameters<ReturnType<typeof createHash>["update"]>[0];
-type HmacKey = Parameters<typeof createHmac>[1];
-
-function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = {};
+function parseArgs(argv) {
+  const args = {};
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
     if (!key?.startsWith("--")) {
@@ -111,29 +87,26 @@ function parseArgs(argv: string[]): CliArgs {
   }
   return args;
 }
-
-function requireArg(args: CliArgs, name: string): string {
+function requireArg(args, name) {
   const value = args[name];
   if (!value) {
     throw new Error(`Missing --${name.replaceAll("_", "-")}.`);
   }
   return value;
 }
-
-function readJson(filePath: string): EvidenceManifestFile {
+/** @returns {EvidenceManifestFile} */
+function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
 }
-
-function assertInside(parentDir: string, candidatePath: string, label: string) {
+function assertInside(parentDir, candidatePath, label) {
   const relative = path.relative(parentDir, candidatePath);
   if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
     return candidatePath;
   }
   throw new Error(`${label} escapes manifest directory: ${candidatePath}`);
 }
-
-function normalizeTargetPath(targetPath: string) {
-  const normalized = path.posix.normalize(targetPath.replaceAll("\\", "/"));
+function normalizeTargetPath(targetPath) {
+  const normalized = path.posix.normalize(String(targetPath).replaceAll("\\", "/"));
   if (
     normalized === "." ||
     normalized === "" ||
@@ -146,18 +119,18 @@ function normalizeTargetPath(targetPath: string) {
   }
   return normalized;
 }
-
-function resolveArtifact(
-  manifestDir: string,
-  artifact: ManifestArtifactEntry,
-): EvidenceArtifact | null {
+/**
+ * @param {string} manifestDir
+ * @param {ManifestArtifactEntry} artifact
+ * @returns {EvidenceArtifact | null}
+ */
+function resolveArtifact(manifestDir, artifact) {
   if (!artifact || typeof artifact !== "object") {
     throw new Error("Manifest artifact entries must be objects.");
   }
   if (!artifact.path) {
     throw new Error("Manifest artifact entry is missing path.");
   }
-
   const source = assertInside(
     manifestDir,
     path.resolve(manifestDir, artifact.path),
@@ -173,7 +146,6 @@ function resolveArtifact(
   if (!statSync(source).isFile()) {
     throw new Error(`Artifact is not a file: ${artifact.path}`);
   }
-
   return {
     ...artifact,
     kind: artifact.kind ?? "attachment",
@@ -184,11 +156,13 @@ function resolveArtifact(
     targetPath: normalizeTargetPath(artifact.targetPath ?? path.basename(artifact.path)),
   };
 }
-
 /**
  * Loads and validates an evidence manifest from disk.
+ *
+ * @param {string} manifestPath
+ * @returns {EvidenceManifest}
  */
-export function loadEvidenceManifest(manifestPath: string): EvidenceManifest {
+export function loadEvidenceManifest(manifestPath) {
   const resolvedManifest = path.resolve(manifestPath);
   const manifestDir = path.dirname(resolvedManifest);
   const manifest = readJson(resolvedManifest);
@@ -200,7 +174,7 @@ export function loadEvidenceManifest(manifestPath: string): EvidenceManifest {
   }
   const artifacts = (manifest.artifacts ?? [])
     .map((artifact) => resolveArtifact(manifestDir, artifact))
-    .filter((artifact): artifact is EvidenceArtifact => artifact !== null);
+    .filter((artifact) => artifact !== null);
   artifacts.push({
     kind: "metadata",
     lane: "run",
@@ -214,28 +188,25 @@ export function loadEvidenceManifest(manifestPath: string): EvidenceManifest {
     manifestDir,
   };
 }
-
-function encodePathForUrl(input: string) {
+function encodePathForUrl(input) {
   return input
     .split("/")
     .filter(Boolean)
     .map((part) => encodeURIComponent(part))
     .join("/");
 }
-
-function artifactUrl(rawBase: string, artifact: Pick<EvidenceArtifact, "targetPath">) {
+function artifactUrl(rawBase, artifact) {
   return `${rawBase}/${encodePathForUrl(artifact.targetPath)}`;
 }
-
-function requireEnv(env: NodeJS.ProcessEnv, name: string) {
+function requireEnv(env, name) {
   const value = env[name]?.trim();
   if (!value) {
     throw new Error(`Missing ${name}.`);
   }
   return value;
 }
-
-function objectStorageConfig(env: NodeJS.ProcessEnv = process.env): ObjectStorageConfig {
+/** @returns {ObjectStorageConfig} */
+function objectStorageConfig(env = process.env) {
   return {
     accessKeyId: requireEnv(env, "MANTIS_ARTIFACT_R2_ACCESS_KEY_ID"),
     bucket: requireEnv(env, "MANTIS_ARTIFACT_R2_BUCKET"),
@@ -245,39 +216,25 @@ function objectStorageConfig(env: NodeJS.ProcessEnv = process.env): ObjectStorag
     secretAccessKey: requireEnv(env, "MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY"),
   };
 }
-
-function digestHex(value: HashInput) {
+function digestHex(value) {
   return createHash("sha256").update(value).digest("hex");
 }
-
-function hmacBuffer(key: HmacKey, value: string) {
+function hmacBuffer(key, value) {
   return createHmac("sha256", key).update(value).digest();
 }
-
-function hmacHex(key: HmacKey, value: string) {
+function hmacHex(key, value) {
   return createHmac("sha256", key).update(value).digest("hex");
 }
-
-function signingKey({
-  date,
-  region,
-  secretAccessKey,
-}: {
-  date: string;
-  region: string;
-  secretAccessKey: string;
-}) {
+function signingKey({ date, region, secretAccessKey }) {
   const dateKey = hmacBuffer(`AWS4${secretAccessKey}`, date);
   const regionKey = hmacBuffer(dateKey, region);
   const serviceKey = hmacBuffer(regionKey, "s3");
   return hmacBuffer(serviceKey, "aws4_request");
 }
-
-function s3Path({ bucket, key }: { bucket: string; key: string }) {
+function s3Path({ bucket, key }) {
   return `/${encodePathForUrl(bucket)}/${encodePathForUrl(key)}`;
 }
-
-function contentType(filePath: string) {
+function contentType(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   return (
     {
@@ -291,20 +248,8 @@ function contentType(filePath: string) {
     }[extension] ?? "application/octet-stream"
   );
 }
-
-function signedPutRequest({
-  artifact,
-  body,
-  config,
-  key,
-  now = new Date(),
-}: {
-  artifact: Pick<EvidenceArtifact, "targetPath">;
-  body: Buffer;
-  config: ObjectStorageConfig;
-  key: string;
-  now?: Date;
-}): SignedPutRequest {
+/** @returns {SignedPutRequest} */
+function signedPutRequest({ artifact, body, config, key, now = new Date() }) {
   const url = new URL(`${config.endpoint}${s3Path({ bucket: config.bucket, key })}`);
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/gu, "");
   const date = amzDate.slice(0, 8);
@@ -346,9 +291,8 @@ function signedPutRequest({
     url,
   };
 }
-
-function byLane(artifacts: EvidenceArtifact[], kind: string) {
-  const lanes = new Map<string, EvidenceArtifact>();
+function byLane(artifacts, kind) {
+  const lanes = new Map();
   for (const artifact of artifacts) {
     if (artifact.kind !== kind) {
       continue;
@@ -357,20 +301,13 @@ function byLane(artifacts: EvidenceArtifact[], kind: string) {
   }
   return lanes;
 }
-
-function findPair(
-  artifacts: EvidenceArtifact[],
-  kind: string,
-  leftLane: string,
-  rightLane: string,
-): EvidencePair | null {
+function findPair(artifacts, kind, leftLane, rightLane) {
   const lanes = byLane(artifacts, kind);
   const left = lanes.get(leftLane);
   const right = lanes.get(rightLane);
   return left && right ? { left, right } : null;
 }
-
-function renderPairTable({ pair, rawBase }: { pair: EvidencePair; rawBase: string }) {
+function renderPairTable({ pair, rawBase }) {
   const { left, right } = pair;
   if (!left || !right) {
     return "";
@@ -393,23 +330,14 @@ function renderPairTable({ pair, rawBase }: { pair: EvidencePair; rawBase: strin
     "",
   ].join("\n");
 }
-
-function renderSingleImageTables({
-  artifacts,
-  rawBase,
-  pairedKeys,
-}: {
-  artifacts: EvidenceArtifact[];
-  rawBase: string;
-  pairedKeys: string[];
-}) {
+function renderSingleImageTables({ artifacts, rawBase, pairedKeys }) {
   const renderedPairs = new Set(pairedKeys);
   return artifacts
     .filter(
       (artifact) => artifact.inline && !renderedPairs.has(`${artifact.kind}:${artifact.lane}`),
     )
     .map((artifact) => {
-      const width = Math.min(artifact.width ?? 720, 900);
+      const width = Math.min(Number(artifact.width ?? 720) || 720, 900);
       return [
         `**${artifact.label}**`,
         "",
@@ -419,18 +347,7 @@ function renderSingleImageTables({
     })
     .join("\n");
 }
-
-function renderLinkList({
-  artifacts,
-  kind,
-  rawBase,
-  title,
-}: {
-  artifacts: EvidenceArtifact[];
-  kind: string;
-  rawBase: string;
-  title: string;
-}) {
+function renderLinkList({ artifacts, kind, rawBase, title }) {
   const links = artifacts
     .filter((artifact) => artifact.kind === kind)
     .map((artifact) => `- [${artifact.label}](${artifactUrl(rawBase, artifact)})`);
@@ -439,8 +356,7 @@ function renderLinkList({
   }
   return [`${title}:`, ...links, ""].join("\n");
 }
-
-function laneLine(label: string, lane?: EvidenceLane) {
+function laneLine(label, lane) {
   if (!lane) {
     return "";
   }
@@ -455,32 +371,28 @@ function laneLine(label: string, lane?: EvidenceLane) {
   }
   return pieces.join("");
 }
-
-function hasVisibleProofArtifacts(manifest: EvidenceManifest) {
+function hasVisibleProofArtifacts(manifest) {
   return manifest.artifacts.some((artifact) =>
     ["desktopScreenshot", "fullVideo", "motionClip", "motionPreview", "timeline"].includes(
       artifact.kind,
     ),
   );
 }
-
-function isTelegramDesktopProof(manifest: EvidenceManifest) {
+function isTelegramDesktopProof(manifest) {
   return manifest.id === "telegram-desktop-proof" || manifest.scenario === "telegram-desktop-proof";
 }
-
-function publicSummary(manifest: EvidenceManifest) {
+function publicSummary(manifest) {
   return manifest.summary ?? "Mantis captured QA evidence for this scenario.";
 }
-
-function overallStatus(manifest: EvidenceManifest) {
+function overallStatus(manifest) {
   const pass = manifest.comparison?.pass;
   return typeof pass === "boolean" ? String(pass) : "";
 }
-
-export function shouldPublishPrComment(
-  manifest: EvidenceManifest,
-  { requestSource }: { requestSource?: string } = {},
-) {
+/**
+ * @param {EvidenceManifest} manifest
+ * @param {{ requestSource?: string }} [options]
+ */
+export function shouldPublishPrComment(manifest, { requestSource } = {}) {
   if (!isTelegramDesktopProof(manifest) || hasVisibleProofArtifacts(manifest)) {
     return true;
   }
@@ -489,7 +401,7 @@ export function shouldPublishPrComment(
   }
   return manifest.comparison?.pass === true;
 }
-
+/** @param {RenderEvidenceCommentOptions} options */
 export function renderEvidenceComment({
   artifactUrl: actionsArtifactUrl,
   manifest,
@@ -498,7 +410,7 @@ export function renderEvidenceComment({
   requestSource,
   runUrl,
   treeUrl,
-}: RenderEvidenceCommentOptions): string {
+}) {
   const comparison = manifest.comparison ?? {};
   const baseline = comparison.baseline;
   const candidate = comparison.candidate;
@@ -506,7 +418,7 @@ export function renderEvidenceComment({
     findPair(manifest.artifacts, "timeline", "baseline", "candidate"),
     findPair(manifest.artifacts, "desktopScreenshot", "baseline", "candidate"),
     findPair(manifest.artifacts, "motionPreview", "baseline", "candidate"),
-  ].filter((pair): pair is EvidencePair => pair !== null);
+  ].filter((pair) => pair !== null);
   const pairedKeys = pairs.flatMap((pair) => [
     `${pair.left.kind}:${pair.left.lane}`,
     `${pair.right.kind}:${pair.right.lane}`,
@@ -541,9 +453,7 @@ export function renderEvidenceComment({
     lines.push(`- Overall: \`${overall}\``);
   }
   lines.push("");
-
   const pairedSections = pairs.map((pair) => renderPairTable({ pair, rawBase }));
-
   lines.push(...pairedSections);
   const singleTables = renderSingleImageTables({
     artifacts: manifest.artifacts,
@@ -574,29 +484,13 @@ export function renderEvidenceComment({
   lines.push(`Raw QA files: ${treeUrl ?? rawBase}`);
   return `${lines.join("\n").replace(/\n{3,}/gu, "\n\n")}\n`;
 }
-
-function run(
-  command: string,
-  args: string[],
-  options: { stdio?: "inherit" | ["ignore", "pipe", "inherit"] } = {},
-) {
+function run(command, args, options = {}) {
   return execFileSync(command, args, {
     encoding: "utf8",
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
   });
 }
-
-async function uploadArtifact({
-  artifact,
-  fetchImpl,
-  request,
-  timeoutMs,
-}: {
-  artifact: Pick<EvidenceArtifact, "targetPath">;
-  fetchImpl: ArtifactFetch;
-  request: SignedPutRequest;
-  timeoutMs: number;
-}) {
+async function uploadArtifact({ artifact, fetchImpl, request, timeoutMs }) {
   const signal = AbortSignal.timeout(timeoutMs);
   try {
     const response = await fetchImpl(request.url, {
@@ -609,7 +503,6 @@ async function uploadArtifact({
       await response.body?.cancel().catch(() => undefined);
       return;
     }
-
     const failurePrefix = `Failed to upload Mantis artifact ${artifact.targetPath}: ${response.status} ${response.statusText}`;
     const responseText = await readBoundedResponseText(
       response,
@@ -617,7 +510,7 @@ async function uploadArtifact({
       MANTIS_UPLOAD_ERROR_BODY_MAX_BYTES,
       {
         signal,
-        formatTooLargeMessage: (_label: string, maxBytes: number) =>
+        formatTooLargeMessage: (_label, maxBytes) =>
           `${failurePrefix}\nMantis upload error response body exceeded ${maxBytes} bytes`,
       },
     );
@@ -632,28 +525,25 @@ async function uploadArtifact({
     throw error;
   }
 }
-
-const defaultArtifactFetch: ArtifactFetch = (url, init) => {
+/** @type {ArtifactFetch} */
+const defaultArtifactFetch = (url, init) => {
   const body =
     init.body.buffer instanceof ArrayBuffer
       ? new Uint8Array(init.body.buffer, init.body.byteOffset, init.body.byteLength)
       : Uint8Array.from(init.body);
   return fetch(url, { ...init, body });
 };
-
+/**
+ * @param {{ artifactRoot: string, fetchImpl?: ArtifactFetch, manifest: EvidenceManifest, storageConfig?: ObjectStorageConfig, timeoutMs?: number }} options
+ * @returns {Promise<{ artifactRoot: string, rawBase: string, treeUrl: string }>}
+ */
 export async function publishArtifactFiles({
   artifactRoot,
   fetchImpl = defaultArtifactFetch,
   manifest,
   storageConfig = objectStorageConfig(),
   timeoutMs = MANTIS_ARTIFACT_UPLOAD_TIMEOUT_MS,
-}: {
-  artifactRoot: string;
-  fetchImpl?: ArtifactFetch;
-  manifest: EvidenceManifest;
-  storageConfig?: ObjectStorageConfig;
-  timeoutMs?: number;
-}): Promise<{ artifactRoot: string; rawBase: string; treeUrl: string }> {
+}) {
   const safeArtifactRoot = normalizeTargetPath(artifactRoot);
   const publicRoot = `${storageConfig.publicBaseUrl}/${encodePathForUrl(safeArtifactRoot)}`;
   for (const artifact of manifest.artifacts) {
@@ -702,18 +592,7 @@ export async function publishArtifactFiles({
     treeUrl: artifactUrl(publicRoot, indexArtifact),
   };
 }
-
-function upsertPrComment({
-  body,
-  marker,
-  prNumber,
-  repo,
-}: {
-  body: string;
-  marker: string;
-  prNumber: string;
-  repo: string;
-}) {
+function upsertPrComment({ body, marker, prNumber, repo }) {
   run("gh", ["api", `repos/${repo}/pulls/${prNumber}`, "--jq", ".number"]);
   const commentId = run("gh", [
     "api",
@@ -754,8 +633,8 @@ function upsertPrComment({
     rmSync(path.dirname(bodyFile), { force: true, recursive: true });
   }
 }
-
-export async function publishEvidence(rawArgs: string[] = process.argv.slice(2)): Promise<void> {
+/** @param {string[]} [rawArgs] */
+export async function publishEvidence(rawArgs = process.argv.slice(2)) {
   const args = parseArgs(rawArgs);
   const manifestPath = requireArg(args, "manifest");
   const targetPr = requireArg(args, "target_pr");
@@ -772,7 +651,6 @@ export async function publishEvidence(rawArgs: string[] = process.argv.slice(2))
   if (!ghToken) {
     throw new Error("Missing GH_TOKEN or GITHUB_TOKEN.");
   }
-
   const manifest = loadEvidenceManifest(manifestPath);
   const published = await publishArtifactFiles({
     artifactRoot,
@@ -798,7 +676,6 @@ export async function publishEvidence(rawArgs: string[] = process.argv.slice(2))
     repo,
   });
 }
-
 const executedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
 if (executedPath === fileURLToPath(import.meta.url)) {
   try {

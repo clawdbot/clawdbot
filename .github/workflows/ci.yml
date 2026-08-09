@@ -59,6 +59,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
 
 jobs:
   # Preflight: establish routing truth and job matrices once, then let real

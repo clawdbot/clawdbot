@@ -515,7 +515,7 @@ jobs:
         run: |
           set -euo pipefail
           root="${{ steps.run_mantis.outputs.output_dir }}"
-          node --import tsx scripts/mantis/publish-pr-evidence.mts \
+          node scripts/mantis/publish-pr-evidence.mjs \
             --manifest "$root/mantis-evidence.json" \
             --target-pr "$TARGET_PR" \
             --artifact-root "mantis/slack-desktop-smoke/pr-${TARGET_PR}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
