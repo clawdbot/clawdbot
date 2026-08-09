@@ -180,14 +180,13 @@ export function createChannelIngressDrain<
   const ownerId = options.ownerId ?? createIngressDrainOwnerId();
   registerLiveIngressDrainInstance(ownerId);
   const adoptionStallMs = options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS;
-  const deferredStallMs = options.deferredAdoptionStallTimeoutMs;
   const claimLeaseMs = options.claimLeaseMs ?? INGRESS_CLAIM_LEASE_MS;
   const now = options.now ?? Date.now;
   const formatError = options.formatError ?? formatErrorMessage;
   const orderBy = options.orderBy ?? "received";
   const scanLimit = options.scanLimit ?? 100;
   const startLimit = options.startLimit ?? 32;
-  const deferredLaneOccupancy = options.deferredLaneOccupancy ?? "hold";
+  const { deferredAdoptionStallTimeoutMs: deferredStallMs, deferredLaneOccupancy } = options;
   const activeByClaim = new Map<string, ActiveHandlerState<TPayload, TMetadata>>();
   const laneOwnerByKey = new Map<string, ActiveHandlerState<TPayload, TMetadata>>();
   let disposed = false;
