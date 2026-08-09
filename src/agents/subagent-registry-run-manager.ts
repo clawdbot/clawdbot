@@ -48,8 +48,8 @@ import {
 } from "./subagent-registry-completion.js";
 import {
   persistSubagentSessionTiming,
-  resolveSubagentArchiveAtMs,
   safeRemoveAttachmentsDir,
+  updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import type {
   RequesterSettleWakeState,
@@ -191,6 +191,10 @@ export function markSubagentRunPausedAfterYield(params: {
   }
   if (entry.pauseReason !== "sessions_yield") {
     entry.pauseReason = "sessions_yield";
+    mutated = true;
+  }
+  if (entry.archiveAtMs !== undefined) {
+    delete entry.archiveAtMs;
     mutated = true;
   }
   if (entry.endedReason !== undefined) {
@@ -726,13 +730,6 @@ export function createSubagentRunManager(params: {
     );
     const cfg = params.getRuntimeConfig();
     const spawnMode = source.spawnMode === "session" ? "session" : "run";
-    const archiveAtMs = resolveSubagentArchiveAtMs({
-      cfg,
-      now,
-      spawnMode,
-      cleanup: source.cleanup,
-      collect: source.collect,
-    });
     const runTimeoutSeconds = replaceParams.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const preserveFrozenResultFallback = replaceParams.preserveFrozenResultFallback === true;
@@ -821,7 +818,7 @@ export function createSubagentRunManager(params: {
         status: source.expectsCompletionMessage === false ? "not_required" : "pending",
       },
       spawnMode,
-      archiveAtMs,
+      archiveAtMs: undefined,
       runTimeoutSeconds,
     });
     clearDeliveryState(next);
@@ -1189,13 +1186,6 @@ export function createSubagentRunManager(params: {
     );
     const cfg = params.getRuntimeConfig();
     const spawnMode = registerParams.spawnMode === "session" ? "session" : "run";
-    const archiveAtMs = resolveSubagentArchiveAtMs({
-      cfg,
-      now,
-      spawnMode,
-      cleanup: registerParams.cleanup,
-      collect: registerParams.collect,
-    });
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
@@ -1256,7 +1246,6 @@ export function createSubagentRunManager(params: {
       },
       sessionStartedAt: queued ? undefined : now,
       accumulatedRuntimeMs: 0,
-      archiveAtMs,
       cleanupHandled: false,
       wakeOnDescendantSettle: undefined,
       requesterSettleWake: undefined,
@@ -1771,6 +1760,8 @@ export function createSubagentRunManager(params: {
       };
       if (wasQueuedCollector && !collectorLaunchInFlight) {
         updateSwarmCollectorCompletion(entry, params.getRuntimeConfig());
+      } else if (!entry.collect) {
+        updateSubagentArchiveAtMs(entry, params.getRuntimeConfig());
       }
       pendingTaskFinalizations.push({ entry, endedAt: taskEndedAt });
       if (!entriesByChildSessionKey.has(entry.childSessionKey)) {

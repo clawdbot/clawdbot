@@ -182,13 +182,13 @@ vi.mock("./subagent-registry-helpers.js", () => ({
   ANNOUNCE_EXPIRY_MS: 5 * 60_000,
   MIN_ANNOUNCE_RETRY_DELAY_MS: 1_000,
   PROVISIONAL_KILL_RECONCILIATION_MS: 5 * 60_000,
-  backfillCollectorArchiveAtMs: () => false,
   capFrozenResultText: (text: string) => text.trim(),
   logAnnounceGiveUp: helperMocks.logAnnounceGiveUp,
   persistSubagentSessionTiming: helperMocks.persistSubagentSessionTiming,
   resolveAnnounceRetryDelayMs: (retryCount: number) =>
     Math.min(1_000 * 2 ** Math.max(0, retryCount - 1), 8_000),
   safeRemoveAttachmentsDir: helperMocks.safeRemoveAttachmentsDir,
+  updateSubagentArchiveAtMs: () => false,
 }));
 
 type RunEntryOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
