@@ -24,4 +24,8 @@ export {
   buildThreadResumeParams,
   buildThreadStartParams,
 } from "./thread-requests.js";
-export { buildTurnCollaborationMode, buildTurnStartParams } from "./turn-params.js";
+export {
+  assertCodexFactoryNativeTurnRequestAuthority,
+  buildTurnCollaborationMode,
+  buildTurnStartParams,
+} from "./turn-params.js";

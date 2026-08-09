@@ -1,6 +1,7 @@
 import {
   assertFactoryNativeLaunchAuthority,
   type EmbeddedRunAttemptParams,
+  type SwarmLaunchAuthority,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { GPT5_HEARTBEAT_PROMPT_OVERLAY as CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "openclaw/plugin-sdk/provider-model-shared";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
@@ -52,9 +53,11 @@ export function buildTurnStartParams(
   return {
     threadId: options.threadId,
     input: buildCodexUserInput(options.promptText ?? params.prompt, params.images),
-    cwd: options.cwd,
+    cwd: factoryAuthority ? factoryAuthority.cwd : options.cwd,
     approvalPolicy: factoryAuthority ? "never" : options.appServer.approvalPolicy,
-    approvalsReviewer: options.appServer.approvalsReviewer,
+    approvalsReviewer: factoryAuthority
+      ? factoryAuthority.approvalsReviewer
+      : options.appServer.approvalsReviewer,
     ...(useThreadPermissionProfile
       ? factoryAuthority
         ? { permissions: factoryAuthority.permissionProfile.id }
@@ -83,7 +86,9 @@ export function buildTurnStartParams(
           ),
         }
       : {}),
-    ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
+    ...(!factoryAuthority && options.environmentSelection
+      ? { environments: options.environmentSelection }
+      : {}),
     ...(modelSelection
       ? {
           collaborationMode: buildTurnCollaborationMode(params, {
@@ -95,6 +100,24 @@ export function buildTurnStartParams(
         }
       : {}),
   };
+}
+
+export function assertCodexFactoryNativeTurnRequestAuthority(
+  authority: SwarmLaunchAuthority,
+  request: CodexTurnStartParams,
+): void {
+  const checked = assertFactoryNativeLaunchAuthority(authority);
+  if (
+    request.approvalPolicy !== checked.approvalPolicy ||
+    request.approvalsReviewer !== checked.approvalsReviewer ||
+    request.permissions !== checked.permissionProfile.id ||
+    request.cwd !== checked.cwd ||
+    Object.hasOwn(request, "sandboxPolicy") ||
+    Object.hasOwn(request, "environments") ||
+    Object.hasOwn(request, "runtimeWorkspaceRoots")
+  ) {
+    throw new Error("factory native Codex turn request drifted from its launch authority");
+  }
 }
 
 type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaborationMode"]>;

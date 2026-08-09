@@ -484,6 +484,7 @@ export function buildFactoryNativeLaunchAuthority(params: {
     executor: "codex-app-server",
     backend: "macos-seatbelt",
     approvalPolicy: "never",
+    approvalsReviewer: "auto_review",
     permissionProfile: {
       id: FACTORY_AUTHORITY_PROFILE_ID,
       definition,
@@ -537,6 +538,7 @@ export function assertFactoryNativeLaunchAuthority(value: unknown): SwarmLaunchA
     value.executor !== "codex-app-server" ||
     value.backend !== "macos-seatbelt" ||
     value.approvalPolicy !== "never" ||
+    value.approvalsReviewer !== "auto_review" ||
     typeof value.cwd !== "string" ||
     typeof value.workspaceRoot !== "string" ||
     typeof value.worktreeFenceToken !== "string" ||
@@ -598,6 +600,7 @@ export function buildFactoryNativeRuntimePolicyHash(
 ): `sha256:${string}` {
   return hashFactoryNativeAuthorityValue({
     approvalPolicy: runtime.approvalPolicy,
+    approvalsReviewer: runtime.approvalsReviewer,
     permissionSelection: runtime.permissionSelection,
     activePermissionProfile: runtime.activePermissionProfile,
     sandbox: runtime.sandbox,
@@ -648,6 +651,7 @@ export function assertFactoryNativeAuthorityProof(params: {
     proof.runtime.profileDefinitionHash !== authority.permissionProfile.definitionHash ||
     proof.runtime.shellEnvironmentPolicyHash !== authority.shellEnvironmentPolicy.definitionHash ||
     proof.runtime.approvalPolicy !== authority.approvalPolicy ||
+    proof.runtime.approvalsReviewer !== authority.approvalsReviewer ||
     proof.runtime.permissionSelection !== authority.permissionProfile.id ||
     proof.runtime.cwd !== authority.cwd ||
     stableStringify([...proof.runtime.runtimeWorkspaceRoots].toSorted()) !==

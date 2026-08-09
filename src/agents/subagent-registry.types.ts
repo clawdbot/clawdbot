@@ -130,6 +130,7 @@ export type SwarmLaunchAuthority = {
   executor: "codex-app-server";
   backend: "macos-seatbelt";
   approvalPolicy: "never";
+  approvalsReviewer: "auto_review";
   permissionProfile: {
     id: "factory_native_build_v1";
     definition: FactoryNativePermissionProfileDefinition;
@@ -223,6 +224,7 @@ export type SwarmEffectiveAuthorityProof = {
     cwd: string;
     runtimeWorkspaceRoots: string[];
     approvalPolicy: "never";
+    approvalsReviewer: "auto_review";
     permissionSelection: "factory_native_build_v1";
     threadStartRequestHash: `sha256:${string}`;
     turnStartRequestHash: `sha256:${string}`;

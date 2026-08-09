@@ -48,6 +48,7 @@ describe("factory native authority profile", () => {
     ]);
     expect(authority.shellEnvironmentPolicy.effectivePath).not.toContain("/usr/local/bin");
     expect(authority.network).toBe("none");
+    expect(authority.approvalsReviewer).toBe("auto_review");
     expect(authority.permissionProfile.definition.network).toEqual({ enabled: false });
     expect(authority.permissionProfile.platformDefaultTempAccess).toBe("read_write");
   });
@@ -108,6 +109,12 @@ describe("factory native authority profile", () => {
     expect(() => assertFactoryNativeLaunchAuthority(drifted)).toThrow(
       "does not match the enforced profile",
     );
+
+    const reviewerDrifted = structuredClone(authority) as unknown as Record<string, unknown>;
+    reviewerDrifted.approvalsReviewer = "user";
+    expect(() => assertFactoryNativeLaunchAuthority(reviewerDrifted)).toThrow(
+      /contract is invalid|does not match the enforced profile/u,
+    );
   });
 
   it("accepts an exact runtime proof and rejects active-profile inheritance", () => {
@@ -124,6 +131,7 @@ describe("factory native authority profile", () => {
 
     expect(assertFactoryNativeAuthorityProof({ binding, proof })).toEqual(proof);
     expect(proof.runtime.runtimeWorkspaceRoots).toEqual(authority.filesystem.writableRoots);
+    expect(proof.runtime.approvalsReviewer).toBe("auto_review");
     expect(proof.runtime.sandbox.writableRoots).toEqual(
       authority.filesystem.writableRoots.filter((root) => root !== authority.cwd),
     );
@@ -158,6 +166,27 @@ describe("factory native authority profile", () => {
     });
     expect(() =>
       assertFactoryNativeAuthorityProof({ binding, proof: legacyProjectionDrifted }),
+    ).toThrow("does not match the launch contract");
+
+    const reviewerDrifted = structuredClone(proof) as unknown as Omit<typeof proof, "runtime"> & {
+      runtime: Omit<typeof proof.runtime, "approvalsReviewer"> & { approvalsReviewer: string };
+    };
+    reviewerDrifted.runtime.approvalsReviewer = "user";
+    reviewerDrifted.runtime.policyHash = buildFactoryNativeRuntimePolicyHash(
+      reviewerDrifted.runtime as typeof proof.runtime,
+    );
+    reviewerDrifted.proofHash = buildFactoryNativeProofHash({
+      proofContractVersion: reviewerDrifted.proofContractVersion,
+      contractHash: reviewerDrifted.contractHash,
+      launchIdentityDigest: reviewerDrifted.launchIdentityDigest,
+      runtime: reviewerDrifted.runtime as typeof proof.runtime,
+      observedAt: reviewerDrifted.observedAt,
+    });
+    expect(() =>
+      assertFactoryNativeAuthorityProof({
+        binding,
+        proof: reviewerDrifted as typeof proof,
+      }),
     ).toThrow("does not match the launch contract");
   });
 });

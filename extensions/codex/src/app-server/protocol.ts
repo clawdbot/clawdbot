@@ -183,6 +183,7 @@ export type CodexThreadStartParams = JsonObject & {
 
 export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
+  cwd?: string;
   runtimeWorkspaceRoots?: string[] | null;
   model?: string;
   modelProvider?: string | null;
@@ -384,6 +385,7 @@ export type CodexTurnStartParams = JsonObject & {
   threadId: string;
   input: CodexUserInput[];
   cwd?: string;
+  runtimeWorkspaceRoots?: string[] | null;
   model?: string;
   approvalPolicy?: CodexApprovalPolicy | null;
   approvalsReviewer?: CodexApprovalsReviewer | null;

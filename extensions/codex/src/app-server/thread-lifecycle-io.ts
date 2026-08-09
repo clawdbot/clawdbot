@@ -13,7 +13,10 @@ import {
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
 import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
-import { assertCodexFactoryNativeThreadAttestation } from "./factory-native-attestation.js";
+import {
+  assertCodexFactoryNativeThreadAttestation,
+  assertCodexFactoryNativeThreadRequestAuthority,
+} from "./factory-native-attestation.js";
 import {
   applyCodexNativeSkillIsolation,
   type CodexNativeSkillIsolation,
@@ -59,6 +62,7 @@ import {
   attestCodexRingZeroThreadHasNoMcpServers,
   buildThreadResumeParams,
   buildThreadStartParams,
+  resolveCodexFactoryNativeMcpServerNames,
 } from "./thread-requests.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 
@@ -194,6 +198,16 @@ export async function resumeExistingCodexThread(
         ringZeroInheritedMcpServerNames,
       }),
     );
+    const expectedFactoryMcpServerNames = params.params.factoryNativeAuthority
+      ? resolveCodexFactoryNativeMcpServerNames(resumeConfig, ringZeroInheritedMcpServerNames)
+      : [];
+    if (params.params.factoryNativeAuthority) {
+      assertCodexFactoryNativeThreadRequestAuthority({
+        binding: params.params.factoryNativeAuthority,
+        request: resumeParams,
+        expectedMcpServerNames: expectedFactoryMcpServerNames,
+      });
+    }
     const requestModelProvider =
       typeof resumeParams.modelProvider === "string" && resumeParams.modelProvider.trim()
         ? resumeParams.modelProvider
@@ -233,6 +247,7 @@ export async function resumeExistingCodexThread(
           binding: params.params.factoryNativeAuthority,
           request: resumeParams,
           response,
+          expectedMcpServerNames: expectedFactoryMcpServerNames,
         });
       } catch (error) {
         await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
@@ -477,6 +492,16 @@ export async function startFreshCodexThread(
       ringZeroInheritedMcpServerNames,
     }),
   );
+  const expectedFactoryMcpServerNames = params.params.factoryNativeAuthority
+    ? resolveCodexFactoryNativeMcpServerNames(config, ringZeroInheritedMcpServerNames)
+    : [];
+  if (params.params.factoryNativeAuthority) {
+    assertCodexFactoryNativeThreadRequestAuthority({
+      binding: params.params.factoryNativeAuthority,
+      request: startParams,
+      expectedMcpServerNames: expectedFactoryMcpServerNames,
+    });
+  }
   const requestModelProvider =
     typeof startParams.modelProvider === "string" && startParams.modelProvider.trim()
       ? startParams.modelProvider
@@ -499,6 +524,7 @@ export async function startFreshCodexThread(
         binding: params.params.factoryNativeAuthority,
         request: startParams,
         response,
+        expectedMcpServerNames: expectedFactoryMcpServerNames,
       });
     } catch (error) {
       await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();

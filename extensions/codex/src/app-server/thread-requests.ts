@@ -1,5 +1,6 @@
 import {
   assertFactoryNativeLaunchAuthority,
+  hashFactoryNativeAuthorityValue,
   isHostScopedAgentToolActive,
   type SwarmLaunchAuthority,
   type EmbeddedRunAttemptParams,
@@ -169,12 +170,14 @@ export function buildThreadStartParams(
   return {
     model: modelSelection.model,
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
-    cwd: options.cwd,
+    cwd: factoryAuthority ? factoryAuthority.cwd : options.cwd,
     ...(factoryAuthority
       ? { runtimeWorkspaceRoots: [...factoryAuthority.filesystem.writableRoots] }
       : {}),
     approvalPolicy: factoryAuthority ? "never" : options.appServer.approvalPolicy,
-    approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
+    approvalsReviewer: factoryAuthority
+      ? factoryAuthority.approvalsReviewer
+      : resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
     ...codexThreadSandboxOrPermissions(options.appServer, factoryAuthority?.permissionProfile.id),
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
@@ -192,7 +195,7 @@ export function buildThreadStartParams(
       hostSystemAgentActive: options.hostSystemAgentActive,
       ringZeroInheritedMcpServerNames: options.ringZeroInheritedMcpServerNames,
     }),
-    ...resolveCodexThreadEnvironmentSelection(options),
+    ...(factoryAuthority ? {} : resolveCodexThreadEnvironmentSelection(options)),
     developerInstructions:
       options.developerInstructions ??
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
@@ -249,6 +252,7 @@ export function buildThreadResumeParams(
       });
   return {
     threadId: options.threadId,
+    ...(factoryAuthority ? { cwd: factoryAuthority.cwd } : {}),
     ...(factoryAuthority
       ? { runtimeWorkspaceRoots: [...factoryAuthority.filesystem.writableRoots] }
       : {}),
@@ -267,7 +271,9 @@ export function buildThreadResumeParams(
         }
       : {}),
     approvalPolicy: factoryAuthority ? "never" : options.appServer.approvalPolicy,
-    approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
+    approvalsReviewer: factoryAuthority
+      ? factoryAuthority.approvalsReviewer
+      : resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
     ...codexThreadSandboxOrPermissions(options.appServer, factoryAuthority?.permissionProfile.id),
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
@@ -386,14 +392,13 @@ export function buildCodexRuntimeThreadConfigForRun(
 ): JsonObject {
   if (params.factoryNativeAuthority) {
     const authority = assertFactoryNativeLaunchAuthority(params.factoryNativeAuthority.authority);
-    const configMcpServers = config?.mcp_servers;
-    if (configMcpServers !== undefined && !isJsonObject(configMcpServers)) {
-      throw new Error("Codex factory native received invalid thread mcp_servers config");
-    }
-    return buildCodexFactoryNativeThreadConfigPatch(authority, [
-      ...(options.ringZeroInheritedMcpServerNames ?? []),
-      ...(isJsonObject(configMcpServers) ? Object.keys(configMcpServers) : []),
-    ]);
+    return buildCodexFactoryNativeThreadConfigPatch(
+      authority,
+      resolveCodexFactoryNativeMcpServerNames(
+        config,
+        options.ringZeroInheritedMcpServerNames ?? [],
+      ),
+    );
   }
   const ringZeroActive =
     (options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
@@ -454,6 +459,22 @@ export function buildCodexRuntimeThreadConfigForRun(
   );
 }
 
+export function resolveCodexFactoryNativeMcpServerNames(
+  config: JsonObject | undefined,
+  inheritedMcpServerNames: readonly string[],
+): string[] {
+  const configMcpServers = config?.mcp_servers;
+  if (configMcpServers !== undefined && !isJsonObject(configMcpServers)) {
+    throw new Error("Codex factory native received invalid thread mcp_servers config");
+  }
+  return [
+    ...new Set([
+      ...inheritedMcpServerNames,
+      ...(isJsonObject(configMcpServers) ? Object.keys(configMcpServers) : []),
+    ]),
+  ].toSorted();
+}
+
 /** Builds the complete fail-closed native factory config, not a permissive overlay. */
 export function buildCodexFactoryNativeThreadConfigPatch(
   authority: SwarmLaunchAuthority,
@@ -474,6 +495,27 @@ export function buildCodexFactoryNativeThreadConfigPatch(
     shell_environment_policy: checked.shellEnvironmentPolicy.definition,
     ...(Object.keys(mcpServers).length > 0 ? { mcp_servers: mcpServers } : {}),
   };
+}
+
+/**
+ * Rebuilds the closed factory config from its immutable authority and the only
+ * runtime-varying input: inherited MCP names, all of which must be disabled.
+ */
+export function assertCodexFactoryNativeThreadConfigPatch(
+  authority: SwarmLaunchAuthority,
+  config: JsonObject,
+  expectedMcpServerNames: readonly string[],
+): JsonObject {
+  const checked = assertFactoryNativeLaunchAuthority(authority);
+  const configuredMcpServers = config.mcp_servers;
+  if (configuredMcpServers !== undefined && !isJsonObject(configuredMcpServers)) {
+    throw new Error("Codex factory native thread request has malformed MCP confinement");
+  }
+  const expected = buildCodexFactoryNativeThreadConfigPatch(checked, expectedMcpServerNames);
+  if (hashFactoryNativeAuthorityValue(config) !== hashFactoryNativeAuthorityValue(expected)) {
+    throw new Error("Codex factory native thread request drifted from its closed config");
+  }
+  return expected;
 }
 
 export function buildCodexRingZeroThreadConfigPatch(

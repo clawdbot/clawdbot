@@ -68,6 +68,7 @@ export function buildTestFactoryNativeAuthorityProof(params: {
     cwd: params.authority.cwd,
     runtimeWorkspaceRoots: [...params.authority.filesystem.writableRoots],
     approvalPolicy: params.authority.approvalPolicy,
+    approvalsReviewer: params.authority.approvalsReviewer,
     permissionSelection: params.authority.permissionProfile.id,
     threadStartRequestHash: TEST_HASH,
     turnStartRequestHash: TEST_HASH,

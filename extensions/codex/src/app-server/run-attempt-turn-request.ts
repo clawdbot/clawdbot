@@ -28,7 +28,10 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { buildTurnStartParams } from "./thread-lifecycle.js";
+import {
+  assertCodexFactoryNativeTurnRequestAuthority,
+  buildTurnStartParams,
+} from "./thread-lifecycle.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 
 export async function prepareCodexAttemptTurnRequest(
@@ -102,10 +105,6 @@ export async function prepareCodexAttemptTurnRequest(
     throw error;
   };
   const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
-    const activeTurnRoute = (await ensureCurrentThreadRoute()) as {
-      armTurn(): void;
-      cancelTurn(): Promise<void>;
-    };
     const turnAppServer = withCodexAppServerFastModeServiceTier(
       connection.mutable.pluginAppServer,
       runtimeParams,
@@ -126,6 +125,16 @@ export async function prepareCodexAttemptTurnRequest(
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       preserveNativeTurnSettings: usesSupervisionConnection,
     });
+    if (runtimeParams.factoryNativeAuthority) {
+      assertCodexFactoryNativeTurnRequestAuthority(
+        runtimeParams.factoryNativeAuthority.authority,
+        turnStartParams,
+      );
+    }
+    const activeTurnRoute = (await ensureCurrentThreadRoute()) as {
+      armTurn(): void;
+      cancelTurn(): Promise<void>;
+    };
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     state.latestStartupErrorNotification = undefined;
     state.rateLimitsRevisionBeforeLastTurnStart = readCodexRateLimitsRevision(resourceState.client);
@@ -218,6 +227,7 @@ export async function prepareCodexAttemptTurnRequest(
       cwd: startup.cwd,
       runtimeWorkspaceRoots: startup.runtimeWorkspaceRoots,
       approvalPolicy: "never",
+      approvalsReviewer: startup.approvalsReviewer,
       permissionSelection: binding.authority.permissionProfile.id,
       threadStartRequestHash: startup.threadStartRequestHash,
       turnStartRequestHash: hashFactoryNativeAuthorityValue(turnStartParams),
