@@ -301,6 +301,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs native executable resolution coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/executable-path.test.ts",
+    );
+  });
+
   it("runs Windows-only safe removal coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "src/infra/fs-safe-remove.test.ts",

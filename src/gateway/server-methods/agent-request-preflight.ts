@@ -1,10 +1,6 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  ErrorCodes,
-  errorShape,
-  validateAgentParams,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
@@ -16,7 +12,6 @@ import { resolveSwarmConfig } from "../../agents/swarm-config.js";
 import { validateStructuredOutputSchema } from "../../agents/swarm-output-schema.js";
 import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
@@ -24,11 +19,7 @@ import {
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "../agent-turn/types.js";
-import {
-  isAcceptedAgentDedupePayload,
-  readGatewayDedupeEntry,
-  resolveAgentDedupeKeys,
-} from "./agent-dedupe.js";
+import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
 import {
   resolveExpectedExistingSessionConstraint,
   type ExpectedExistingSessionConstraint,
@@ -39,13 +30,11 @@ import {
   resolveCanUseInternalRuntimeHandoff,
 } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
-import { assertValidParams } from "./validation.js";
 
-type AgentRequestPreflight = {
+export type AgentRequestPreflight = {
   request: AgentRunRequest;
   cfg: ReturnType<AgentTurnContext["getRuntimeConfig"]>;
   runId: string;
-  lifecycleGeneration: string;
   allowModelOverride: boolean;
   canUseInternalRuntimeHandoff: boolean;
   canUseCronRunContinuation: boolean;
@@ -67,19 +56,12 @@ type AgentRequestPreflight = {
 };
 
 export function prepareAgentRequestPreflight(params: {
-  params: unknown;
+  request: AgentRunRequest;
   context: AgentTurnContext;
   client: AgentTurnPrincipal | null;
   io: AgentTurnIo;
 }): AgentRequestPreflight | undefined {
-  if (
-    !assertValidParams(params.params, validateAgentParams, "agent", (ok, payload, error, meta) =>
-      params.io.emitAcceptance([ok, payload, error], meta),
-    )
-  ) {
-    return undefined;
-  }
-  const request = params.params as AgentRunRequest;
+  const { request } = params;
   const cfg = params.context.getRuntimeConfig();
   const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(params.client);
   const requestSessionKey = request.sessionKey?.trim();
@@ -272,46 +254,10 @@ export function prepareAgentRequestPreflight(params: {
     idempotencyKey: runId,
     execApprovalFollowupApprovalId,
   });
-  const cached = readGatewayDedupeEntry({ dedupe: params.context.dedupe, keys: agentDedupeKeys });
-  if (cached) {
-    if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
-      const cachedRunId =
-        typeof cached.payload.runId === "string" && cached.payload.runId.trim()
-          ? cached.payload.runId.trim()
-          : runId;
-      const cachedSessionKey =
-        typeof cached.payload.sessionKey === "string" && cached.payload.sessionKey.trim()
-          ? cached.payload.sessionKey.trim()
-          : undefined;
-      const cachedAgentId =
-        cachedSessionKey === "global" &&
-        typeof cached.payload.agentId === "string" &&
-        cached.payload.agentId.trim()
-          ? cached.payload.agentId.trim()
-          : undefined;
-      params.io.emitAcceptance(
-        [
-          true,
-          {
-            runId: cachedRunId,
-            status: "in_flight" as const,
-            ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
-            ...(cachedAgentId ? { agentId: cachedAgentId } : {}),
-          },
-          undefined,
-        ],
-        { cached: true, runId: cachedRunId },
-      );
-    } else {
-      params.io.emitAcceptance([cached.ok, cached.payload, cached.error], { cached: true });
-    }
-    return undefined;
-  }
   return {
     request,
     cfg,
     runId,
-    lifecycleGeneration: getAgentEventLifecycleGeneration(),
     allowModelOverride,
     canUseInternalRuntimeHandoff,
     canUseCronRunContinuation,

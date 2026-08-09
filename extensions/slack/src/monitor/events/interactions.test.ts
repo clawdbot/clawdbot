@@ -2,9 +2,6 @@ import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
 // Slack tests cover interactions plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { encodeSlackEnterpriseApprovalAction } from "../../approval-actions.js";
-
-const ENTERPRISE_APPROVAL_SIGNING_KEY = "xoxb-enterprise-test";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
@@ -74,7 +71,6 @@ const resolveQuestionOverGatewayMock = vi.hoisted(() =>
 );
 
 let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
-let registerSlackApprovalInteractionEvents: typeof import("./interactions.js").registerSlackApprovalInteractionEvents;
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>();
@@ -218,26 +214,13 @@ vi.mock("../conversation.runtime.js", () => {
 type RegisteredHandler = (args: {
   ack: () => Promise<void>;
   body: {
-    api_app_id?: string;
-    user: { id: string; team_id?: string };
-    team?: { id?: string } | null;
-    enterprise?: { id: string; name: string };
-    is_enterprise_install?: boolean;
+    user: { id: string };
+    team?: { id?: string };
     trigger_id?: string;
     response_url?: string;
     channel?: { id?: string };
     container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
     message?: { ts?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
-  };
-  context?: {
-    isEnterpriseInstall?: boolean;
-    enterpriseId?: string;
-    teamId?: string;
-  };
-  client?: {
-    chat: {
-      update: ReturnType<typeof vi.fn>;
-    };
   };
   action: Record<string, unknown>;
   respond?: (payload: { text: string; response_type: string }) => Promise<void>;
@@ -286,9 +269,6 @@ function createContext(overrides?: {
     name?: string;
     type?: "im" | "mpim" | "channel" | "group";
   }>;
-  installationIdentity?:
-    | { kind: "workspace"; teamId: string }
-    | { kind: "enterprise"; enterpriseId: string; apiAppId?: string };
 }) {
   let handler: RegisteredHandler | null = null;
   let actionMatcher: RegExp | null = null;
@@ -296,7 +276,6 @@ function createContext(overrides?: {
   let viewClosedHandler: RegisteredViewHandler | null = null;
   let shortcutHandler: RegisteredShortcutHandler | null = null;
   const app = {
-    webClientOptions: {},
     action: vi.fn((matcher: RegExp, next: RegisteredHandler) => {
       actionMatcher = matcher;
       handler = next;
@@ -349,11 +328,6 @@ function createContext(overrides?: {
   const ctx = {
     app,
     accountId: "default",
-    botToken: ENTERPRISE_APPROVAL_SIGNING_KEY,
-    installationIdentity: overrides?.installationIdentity ?? {
-      kind: "workspace",
-      teamId: "T9",
-    },
     cfg: overrides?.cfg ?? {
       channels: {
         slack: {
@@ -418,87 +392,6 @@ function createContext(overrides?: {
         throw new Error("Expected Slack shortcut handler to be registered");
       }
       return shortcutHandler;
-    },
-  };
-}
-
-function createEnterpriseApprovalContext() {
-  const context = createContext({
-    installationIdentity: { kind: "enterprise", enterpriseId: "E123", apiAppId: "A123" },
-    cfg: {
-      channels: {
-        slack: {
-          enterpriseOrgInstall: true,
-          allowFrom: ["*"],
-          execApprovals: {
-            enabled: true,
-            approvers: ["team:T123:user:U123", "team:T999:user:U123"],
-            target: "both",
-          },
-        },
-      },
-    },
-  });
-  registerSlackApprovalInteractionEvents({ ctx: context.ctx as never });
-  return context;
-}
-
-function buildEnterpriseApprovalActionArgs(params: {
-  approvalKind: "exec" | "plugin";
-  teamId: string;
-  signedTeamId?: string;
-  unsigned?: boolean;
-  channelId?: string;
-  client: NonNullable<Parameters<RegisteredHandler>[0]["client"]>;
-  respond?: Parameters<RegisteredHandler>[0]["respond"];
-}): Parameters<RegisteredHandler>[0] {
-  const channelId = params.channelId ?? "C123";
-  const approvalId = params.approvalKind === "exec" ? "req-grid" : "plugin:req-grid";
-  const action = {
-    type: "approval" as const,
-    approvalId,
-    approvalKind: params.approvalKind,
-    decision: "allow-once" as const,
-  };
-  return {
-    ack: vi.fn().mockResolvedValue(undefined),
-    respond: params.respond,
-    body: {
-      api_app_id: "A123",
-      user: { id: "U123", team_id: params.teamId },
-      team: null,
-      enterprise: { id: "E123", name: "Example Enterprise" },
-      is_enterprise_install: true,
-      channel: { id: channelId },
-      container: { channel_id: channelId, message_ts: "100.200" },
-      message: {
-        ts: "100.200",
-        text: `${params.approvalKind === "exec" ? "Exec" : "Plugin"} approval required`,
-        blocks: [],
-      },
-    },
-    context: {
-      isEnterpriseInstall: true,
-      enterpriseId: "E123",
-      teamId: params.teamId,
-    },
-    client: params.client,
-    action: {
-      type: "button",
-      action_id: "openclaw:approval_button:1:1",
-      block_id: `${params.approvalKind}_actions`,
-      value: params.unsigned
-        ? `openclaw:approval:v1:${JSON.stringify({
-            approvalId,
-            approvalKind: params.approvalKind,
-            decision: "allow-once",
-          })}`
-        : encodeSlackEnterpriseApprovalAction({
-            action,
-            teamId: params.signedTeamId ?? params.teamId,
-            signingKey: ENTERPRISE_APPROVAL_SIGNING_KEY,
-          }),
-      text: { type: "plain_text", text: "Allow once" },
     },
   };
 }
@@ -615,8 +508,7 @@ function inputByActionId(
 
 describe("registerSlackInteractionEvents", () => {
   beforeAll(async () => {
-    ({ registerSlackApprovalInteractionEvents, registerSlackInteractionEvents } =
-      await import("./interactions.js"));
+    ({ registerSlackInteractionEvents } = await import("./interactions.js"));
   });
 
   beforeEach(() => {
@@ -1621,104 +1513,6 @@ describe("registerSlackInteractionEvents", () => {
       ],
     });
     expect(respond).not.toHaveBeenCalled();
-  });
-
-  it("resolves same-team Enterprise Grid exec approvals with the listener-owned client", async () => {
-    const { app, getActionMatcher, getHandler } = createEnterpriseApprovalContext();
-    const workspaceClient = {
-      chat: { update: vi.fn().mockResolvedValue(undefined) },
-    };
-
-    expect(getActionMatcher().test("openclaw:approval_button:1:1")).toBe(true);
-    expect(getActionMatcher().test("openclaw:reply_button")).toBe(false);
-
-    await getHandler()(
-      buildEnterpriseApprovalActionArgs({
-        approvalKind: "exec",
-        teamId: "T123",
-        client: workspaceClient,
-      }),
-    );
-
-    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvalId: "req-grid",
-        approvalKind: "exec",
-        decision: "allow-once",
-        senderId: "U123",
-      }),
-    );
-    expect(workspaceClient.chat.update).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "C123", ts: "100.200" }),
-    );
-    expect(app.client.chat.update).not.toHaveBeenCalled();
-  });
-
-  it("rejects a T123-signed Enterprise approval replayed by an approver in T999", async () => {
-    const { getHandler } = createEnterpriseApprovalContext();
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const workspaceClient = { chat: { update: vi.fn().mockResolvedValue(undefined) } };
-
-    await getHandler()(
-      buildEnterpriseApprovalActionArgs({
-        approvalKind: "exec",
-        teamId: "T999",
-        signedTeamId: "T123",
-        channelId: "C999",
-        client: workspaceClient,
-        respond,
-      }),
-    );
-
-    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
-    expect(workspaceClient.chat.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "This approval action is invalid or expired.",
-      response_type: "ephemeral",
-    });
-  });
-
-  it("rejects unsigned model-authored Enterprise approval actions", async () => {
-    const { getHandler } = createEnterpriseApprovalContext();
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const workspaceClient = { chat: { update: vi.fn().mockResolvedValue(undefined) } };
-
-    await getHandler()(
-      buildEnterpriseApprovalActionArgs({
-        approvalKind: "exec",
-        teamId: "T123",
-        unsigned: true,
-        client: workspaceClient,
-        respond,
-      }),
-    );
-
-    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
-    expect(workspaceClient.chat.update).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "This approval action is invalid or expired.",
-      response_type: "ephemeral",
-    });
-  });
-
-  it("denies crafted Enterprise Grid plugin approval actions before Gateway resolution", async () => {
-    const { getHandler } = createEnterpriseApprovalContext();
-    const respond = vi.fn().mockResolvedValue(undefined);
-
-    await getHandler()(
-      buildEnterpriseApprovalActionArgs({
-        approvalKind: "plugin",
-        teamId: "T123",
-        client: { chat: { update: vi.fn().mockResolvedValue(undefined) } },
-        respond,
-      }),
-    );
-
-    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith({
-      text: "Plugin approvals are not available for Enterprise Grid org installs.",
-      response_type: "ephemeral",
-    });
   });
 
   it("resolves typed question buttons without enqueueing an agent interaction", async () => {

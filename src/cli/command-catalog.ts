@@ -306,6 +306,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "config-unset" },
   },
   {
+    commandPath: ["models"],
+    exact: true,
+    policy: {
+      configGuard: "skip",
+      ensureCliPath: false,
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    },
+    route: { id: "models-status" },
+  },
+  {
     commandPath: ["models", "list"],
     exact: true,
     policy: { configGuard: "skip", ensureCliPath: false, networkProxy: "bypass" },

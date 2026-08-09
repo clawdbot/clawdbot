@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 
@@ -49,44 +50,57 @@ function runPreflight(
     });
   }
   const respond = vi.fn();
+  const context = {
+    getRuntimeConfig: () =>
+      options?.requesterOnlyEnabled
+        ? {
+            agents: {
+              list: [{ id: "main", tools: { swarm: true } }, { id: "worker" }],
+            },
+          }
+        : options?.enabled
+          ? { tools: { swarm: true } }
+          : {},
+    dedupe: options?.cached
+      ? new Map([
+          [
+            "agent:collector-run",
+            {
+              ts: 1,
+              ok: true,
+              payload: { status: "accepted", runId: "gateway-run", sessionKey },
+            },
+          ],
+        ])
+      : new Map(),
+  };
+  const client = options?.backend
+    ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
+    : undefined;
+  const io = createAgentTurnIo(respond);
   const result = prepareAgentRequestPreflight({
-    params: {
+    request: {
       message: "collect",
       sessionKey,
       idempotencyKey: options?.idempotencyKey ?? "collector-run",
       lane: "subagent",
       ...(options?.includeCollectorFields === false ? {} : { swarmCollector, swarmOutputSchema }),
     },
-    io: createAgentTurnIo(respond),
-    context: {
-      getRuntimeConfig: () =>
-        options?.requesterOnlyEnabled
-          ? {
-              agents: {
-                list: [{ id: "main", tools: { swarm: true } }, { id: "worker" }],
-              },
-            }
-          : options?.enabled
-            ? { tools: { swarm: true } }
-            : {},
-      dedupe: options?.cached
-        ? new Map([
-            [
-              "agent:collector-run",
-              {
-                ts: 1,
-                ok: true,
-                payload: { status: "accepted", runId: "gateway-run", sessionKey },
-              },
-            ],
-          ])
-        : new Map(),
-    },
-    client: options?.backend
-      ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
-      : undefined,
+    io,
+    context,
+    client,
   } as never);
-  return { respond, result };
+  const replay = async () => {
+    if (!result) {
+      return;
+    }
+    await createAgentTurnService({ context, isWebchatConnect: () => false } as never).startTurn({
+      preflight: result,
+      principal: client ?? null,
+      io,
+    } as never);
+  };
+  return { respond, result, replay };
 }
 
 describe("agent request Swarm preflight", () => {
@@ -237,7 +251,7 @@ describe("agent request Swarm preflight", () => {
     );
   });
 
-  it("allows an accepted collector launch identity to replay only from Gateway dedupe", () => {
+  it("allows an accepted collector launch identity to replay only from Gateway dedupe", async () => {
     const rejected = runPreflight({ type: "object" }, true, {
       enabled: true,
       backend: true,
@@ -259,7 +273,8 @@ describe("agent request Swarm preflight", () => {
       launchPending: false,
       cached: true,
     });
-    expect(replayed.result).toBeUndefined();
+    expect(replayed.result).toBeDefined();
+    await replayed.replay();
     expect(replayed.respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ runId: "gateway-run", status: "in_flight" }),
@@ -268,14 +283,15 @@ describe("agent request Swarm preflight", () => {
     );
   });
 
-  it("allows an exact cached collector replay after Swarm is disabled", () => {
+  it("allows an exact cached collector replay after Swarm is disabled", async () => {
     const replayed = runPreflight({ type: "object" }, true, {
       backend: true,
       register: true,
       launchPending: false,
       cached: true,
     });
-    expect(replayed.result).toBeUndefined();
+    expect(replayed.result).toBeDefined();
+    await replayed.replay();
     expect(replayed.respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ runId: "gateway-run", status: "in_flight" }),
@@ -299,7 +315,7 @@ describe("agent request Swarm preflight", () => {
     );
   });
 
-  it("keeps completed collector sessions closed while allowing their exact cached replay", () => {
+  it("keeps completed collector sessions closed while allowing their exact cached replay", async () => {
     const ordinary = runPreflight({ type: "object" }, true, {
       enabled: true,
       backend: true,
@@ -324,7 +340,8 @@ describe("agent request Swarm preflight", () => {
       completed: true,
       cached: true,
     });
-    expect(replayed.result).toBeUndefined();
+    expect(replayed.result).toBeDefined();
+    await replayed.replay();
     expect(replayed.respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ runId: "gateway-run", status: "in_flight" }),
@@ -366,7 +383,7 @@ describe("agent request restart recovery preflight", () => {
   ) {
     const respond = vi.fn();
     const result = prepareAgentRequestPreflight({
-      params: {
+      request: {
         message: "continue",
         idempotencyKey: "restart-recovery-run",
         forceRestartSafeTools: true,

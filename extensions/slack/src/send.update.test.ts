@@ -57,7 +57,6 @@ describe("updateMessageSlack", () => {
 
     await updateMessageSlack({
       cfg: SLACK_TEST_CFG,
-      teamId: "T123",
       channelId: "C123",
       messageTs: "171234.567",
       text: longText,
@@ -65,7 +64,6 @@ describe("updateMessageSlack", () => {
     });
 
     expect(client.chat.update).toHaveBeenCalledTimes(1);
-    expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: "T123" });
     const [payload] = client.chat.update.mock.calls[0] ?? [];
     const sentText = (payload as { text?: string }).text ?? "";
     expect(sentText).toHaveLength(3_998);
