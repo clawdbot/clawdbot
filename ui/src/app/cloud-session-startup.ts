@@ -111,10 +111,6 @@ export function createApplicationCloudStartup(
       const snapshot = dependencies.gateway.snapshot;
       const recoveryScope = snapshot.client?.recoveryScope;
       if (
-        disposed ||
-        runtime ||
-        runtimeLoad ||
-        snapshot.phase !== "connected" ||
         !snapshot.client?.recoveryScopeReady ||
         !recoveryScope ||
         !hasCloudSessionRecovery(dependencies.gateway.connection.gatewayUrl, recoveryScope)

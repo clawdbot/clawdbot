@@ -206,19 +206,17 @@ describe("application cloud startup", () => {
     startup.dispose();
   });
 
-  it("resumes recovery only for the current connected recovery scope", async () => {
+  it("resumes recovery only for the current ready recovery scope", async () => {
     const fake = createFakeRuntime();
     const factory = vi.fn(() => fake.runtime);
     const loader = vi.fn(async () => ({ createApplicationCloudStartupRuntime: factory }));
-    const { startup, gateway, client } = harness(vi.fn(), { loadRuntime: loader });
-    const snapshot = gateway.snapshot as { phase: string; client: typeof client };
+    const { startup, client } = harness(vi.fn(), { loadRuntime: loader });
 
-    snapshot.phase = "connecting";
-    startup.resumeRecovery();
     client.recoveryScopeReady = false;
-    snapshot.phase = "connected";
     startup.resumeRecovery();
     client.recoveryScopeReady = true;
+    client.recoveryScope = "";
+    startup.resumeRecovery();
     client.recoveryScope = "principal-b";
     startup.resumeRecovery();
     expect(loader).not.toHaveBeenCalled();

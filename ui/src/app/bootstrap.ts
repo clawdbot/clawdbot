@@ -373,29 +373,34 @@ export function bootstrapApplication(
         }
       : null;
   let lastPostConnectClient: GatewayBrowserClient | null = null;
+  let lastRecoveryClient: GatewayBrowserClient | null = null;
   const stopPostConnect = gateway.subscribe((snapshot) => {
-    cloudStartup.resumeRecovery();
     if (snapshot.phase !== "connected" || !snapshot.client) {
       lastPostConnectClient = null;
+      lastRecoveryClient = null;
       return;
     }
-    if (lastPostConnectClient === snapshot.client) {
+    if (lastPostConnectClient !== snapshot.client) {
+      lastPostConnectClient = snapshot.client;
+      void config.refresh({
+        auth: {
+          hello: snapshot.hello,
+          settings: { token: gateway.connection.token },
+          password: gateway.connection.password,
+        },
+      });
+      void sendSessionObserverVisibility(
+        snapshot.client,
+        loadChatObserverDisplayPreference() !== "off",
+      ).catch(() => undefined);
+    }
+    // Recovery scope resolves after hello, so dedupe its later publication independently.
+    if (!snapshot.client.recoveryScopeReady || lastRecoveryClient === snapshot.client) {
       return;
     }
-    lastPostConnectClient = snapshot.client;
-    void config.refresh({
-      auth: {
-        hello: snapshot.hello,
-        settings: { token: gateway.connection.token },
-        password: gateway.connection.password,
-      },
-    });
-    void sendSessionObserverVisibility(
-      snapshot.client,
-      loadChatObserverDisplayPreference() !== "off",
-    ).catch(() => undefined);
+    lastRecoveryClient = snapshot.client;
+    cloudStartup.resumeRecovery();
   });
-  cloudStartup.resumeRecovery();
   const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
     const location = locationForRoute(routeId, basePath);
     const activeMatch = router.getState().matches[0];
