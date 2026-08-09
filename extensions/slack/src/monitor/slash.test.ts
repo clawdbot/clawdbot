@@ -221,7 +221,7 @@ function findFirstActionsBlock(payload: { blocks?: Array<{ type: string }> }) {
 
 function createArgMenusHarness(
   cfg: OpenClawConfig = { commands: { native: true, nativeSkills: false } },
-  options?: {
+  scope?: {
     installationIdentity?:
       | { kind: "workspace"; teamId: string }
       | { kind: "enterprise"; enterpriseId: string };
@@ -236,14 +236,14 @@ function createArgMenusHarness(
 
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
   const listenerClient = { chat: { postEphemeral } };
-  const installationIdentity = options?.installationIdentity ?? {
+  const installationIdentity = scope?.installationIdentity ?? {
     kind: "workspace" as const,
-    teamId: options?.teamId ?? "T1",
+    teamId: scope?.teamId ?? "T1",
   };
   const boltContext =
     installationIdentity.kind === "enterprise"
       ? {
-          teamId: options?.teamId,
+          teamId: scope?.teamId,
           enterpriseId: installationIdentity.enterpriseId,
           isEnterpriseInstall: true,
         }
