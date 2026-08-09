@@ -82,7 +82,7 @@ function projectExtendedStable2026_6_35QaConfig(cfg: OpenClawConfig): OpenClawCo
   } as OpenClawConfig;
 }
 
-function resolvePackageConfigTransform(env: NodeJS.ProcessEnv = process.env) {
+function resolvePackageConfigMutation(env: NodeJS.ProcessEnv = process.env) {
   return env.OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION === EXTENDED_STABLE_2026_6_35
     ? projectExtendedStable2026_6_35QaConfig
     : undefined;
@@ -179,11 +179,9 @@ async function resolveTrustedOpenClawCommand(
   if (realCommand !== realPrefix && !realCommand.startsWith(`${realPrefix}${path.sep}`)) {
     throw new Error("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must resolve inside NPM_CONFIG_PREFIX.");
   }
-  const configTransform = resolvePackageConfigTransform(env);
   return {
     executablePath: rawCommand,
     usePackagedPlugins: true,
-    ...(configTransform ? { configTransform } : {}),
   } as const;
 }
 
@@ -202,6 +200,7 @@ async function main() {
     throw new Error("Missing OPENCLAW_NPM_TELEGRAM_SUT_COMMAND.");
   }
   const sutOpenClawCommand = await resolveTrustedOpenClawCommand(rawSutOpenClawCommand);
+  const mutateConfig = resolvePackageConfigMutation();
 
   const repoRoot = path.resolve(process.env.OPENCLAW_NPM_TELEGRAM_REPO_ROOT ?? process.cwd());
   const outputDir = resolvePackageTelegramOutputDir(process.env, repoRoot);
@@ -229,6 +228,7 @@ async function main() {
     scenarioIds,
     resolvedScenarioIds: prioritizeRoundTripProbeScenario(resolvedScenarioIds, rttOptions),
     roundTripProbe: createRoundTripProbe(rttOptions),
+    ...(mutateConfig ? { mutateConfig } : {}),
     sutAccountId: process.env.OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT,
     credentialSource: resolveCredentialSource(process.env),
     credentialRole: resolveCredentialRole(process.env),
@@ -276,7 +276,7 @@ export const testing = {
   createRoundTripProbe,
   prioritizeRoundTripProbeScenario,
   projectExtendedStable2026_6_35QaConfig,
-  resolvePackageConfigTransform,
+  resolvePackageConfigMutation,
   resolveRttOptions,
   resolveTrustedOpenClawCommand,
   shouldFailPackageTelegramRun,

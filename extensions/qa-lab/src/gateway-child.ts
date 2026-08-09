@@ -113,8 +113,6 @@ type QaGatewayChildDirectCommand = {
   cwd?: string;
   tempParentDir?: string;
   usePackagedPlugins?: boolean;
-  /** Projects trusted-harness QA config onto a frozen package contract before it is written. */
-  configTransform?: (cfg: OpenClawConfig) => OpenClawConfig;
   processBoundary?: undefined;
 };
 
@@ -1346,10 +1344,7 @@ export async function startQaGatewayChild(params: {
           });
         }
       }
-      const mutatedConfig = params.mutateConfig ? params.mutateConfig(cfg) : cfg;
-      return gatewayCommand?.configTransform
-        ? gatewayCommand.configTransform(mutatedConfig)
-        : mutatedConfig;
+      return params.mutateConfig ? params.mutateConfig(cfg) : cfg;
     };
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];

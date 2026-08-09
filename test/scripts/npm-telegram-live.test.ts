@@ -242,11 +242,11 @@ describe("package Telegram live Docker E2E", () => {
   });
 
   it("projects the frozen 2026.6.35 package config without changing current package config", () => {
-    const transform = testing.resolvePackageConfigTransform({
+    const mutateConfig = testing.resolvePackageConfigMutation({
       OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: "2026.6.35",
     });
-    expect(transform).toBeDefined();
-    const projected = transform!({
+    expect(mutateConfig).toBeDefined();
+    const projected = mutateConfig!({
       memory: { backend: "builtin", search: { provider: "openai-compatible" } },
       plugins: { allow: ["telegram"], entries: { telegram: { enabled: true } } },
       agents: {
@@ -266,7 +266,7 @@ describe("package Telegram live Docker E2E", () => {
       list: [{ id: "qa", default: true, tools: { profile: "coding" } }],
     });
     expect(
-      testing.resolvePackageConfigTransform({ OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: "2026.8.1" }),
+      testing.resolvePackageConfigMutation({ OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: "2026.8.1" }),
     ).toBeUndefined();
   });
 
