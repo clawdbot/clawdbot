@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
+import { resolveSandboxContext } from "../../sandbox/context.js";
 import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -181,13 +182,37 @@ export async function persistSubagentSessionTiming(
 }
 
 /** Best-effort async removal for a subagent attachment directory. */
-export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
+export async function safeRemoveAttachmentsDir(
+  entry: SubagentRunRecord,
+  options?: {
+    config?: OpenClawConfig;
+    resolveSandbox?: typeof resolveSandboxContext;
+  },
+): Promise<boolean> {
   if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
     return true;
+  }
+  let sandboxFsBridge;
+  if (entry.attachmentsSandboxSessionKey) {
+    try {
+      const sandbox = await (options?.resolveSandbox ?? resolveSandboxContext)({
+        config: options?.config ?? getRuntimeConfig(),
+        agentId: entry.attachmentsSandboxAgentId ?? entry.requesterAgentId,
+        sessionKey: entry.attachmentsSandboxSessionKey,
+        workspaceDir: entry.attachmentsRootDir,
+      });
+      sandboxFsBridge = sandbox?.fsBridge;
+    } catch {
+      return false;
+    }
+    if (!sandboxFsBridge) {
+      return false;
+    }
   }
   return await removeSubagentAttachmentsDir({
     rootDir: entry.attachmentsRootDir,
     absDir: entry.attachmentsDir,
+    sandboxFsBridge,
   });
 }
 

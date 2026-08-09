@@ -224,11 +224,7 @@ function createSessionsSpawnToolSchema(params: {
           encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
           mimeType: Type.Optional(Type.String()),
         }),
-        {
-          maxItems: 50,
-          description:
-            "Inline snapshots; unavailable with visible=true or a read-write sandbox workspace.",
-        },
+        { maxItems: 50, description: "Inline snapshots; unavailable with visible=true." },
       ),
     ),
     attachAs: Type.Optional(

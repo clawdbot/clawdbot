@@ -277,6 +277,9 @@ export type SubagentRunRecord = {
   requesterSettleWake?: RequesterSettleWakeState;
   attachmentsDir?: string;
   attachmentsRootDir?: string;
+  /** Original sandbox boundary used for attachment staging and cleanup. */
+  attachmentsSandboxSessionKey?: string;
+  attachmentsSandboxAgentId?: string;
   retainAttachmentsOnKeep?: boolean;
   /** Collector-mode runs remain waitable and never announce to the requester. */
   collect?: boolean;

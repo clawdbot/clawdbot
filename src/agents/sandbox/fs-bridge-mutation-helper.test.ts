@@ -610,12 +610,28 @@ describe("sandbox pinned mutation helper", () => {
       await fs.mkdir(outside, { recursive: true });
       await fs.symlink(outside, path.join(workspace, "alias"));
 
-      const result = runMutation(["mkdirp", workspace, "alias/nested"]);
+      const result = runMutation(["mkdirp", workspace, "alias/nested", "700"]);
 
       expect(result.status).not.toBe(0);
       await expectPathMissing(path.join(outside, "nested"));
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "applies the requested private mode to every created mkdirp component",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {
+        const workspace = path.join(root, "workspace");
+        await fs.mkdir(workspace, { recursive: true });
+
+        const result = runMutation(["mkdirp", workspace, "private/nested", "700"]);
+
+        expect(result.status).toBe(0);
+        expect((await fs.stat(path.join(workspace, "private"))).mode & 0o777).toBe(0o700);
+        expect((await fs.stat(path.join(workspace, "private", "nested"))).mode & 0o777).toBe(0o700);
+      });
+    },
+  );
 
   it.runIf(process.platform !== "win32")("remove unlinks the symlink itself", async () => {
     await withTempDir({ prefix: "openclaw-mutation-helper-" }, async (root) => {

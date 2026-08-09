@@ -1,6 +1,7 @@
 import type { callGateway } from "../../../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
+import type { SandboxFsBridge } from "../../sandbox/fs-bridge.types.js";
 import { removeSubagentAttachmentsDir } from "./subagent-attachments.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
@@ -86,6 +87,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   childSessionKey: string;
   attachmentAbsDir?: string;
   attachmentRootDir?: string;
+  attachmentSandboxFsBridge?: SandboxFsBridge;
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
   waitForSessionDeletion?: boolean;
@@ -96,6 +98,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
     childSessionKey,
     attachmentAbsDir,
     attachmentRootDir,
+    attachmentSandboxFsBridge,
     waitForSessionDeletion,
     ...sessionCleanupOptions
   } = params;
@@ -104,6 +107,7 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
     attachmentsRemoved = await removeSubagentAttachmentsDir({
       rootDir: attachmentRootDir,
       absDir: attachmentAbsDir,
+      sandboxFsBridge: attachmentSandboxFsBridge,
     });
   }
   return {

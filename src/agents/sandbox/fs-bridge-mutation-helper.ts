@@ -28,6 +28,14 @@ const SANDBOX_PINNED_MUTATION_PYTHON_CANDIDATES = [
 // nonzero exit stays an error.
 export const SANDBOX_CREATE_EXISTS_EXIT_CODE = 17;
 
+export function formatSandboxDirectoryMode(mode?: number): string {
+  const resolved = mode ?? 0o777;
+  if (!Number.isInteger(resolved) || resolved < 0 || resolved > 0o777) {
+    throw new Error("sandbox directory mode must be an integer between 0000 and 0777");
+  }
+  return resolved.toString(8);
+}
+
 export const SANDBOX_PINNED_MUTATION_PYTHON = [
   `SANDBOX_CREATE_EXISTS_EXIT_CODE = ${SANDBOX_CREATE_EXISTS_EXIT_CODE}`,
   "import ctypes",
@@ -68,7 +76,7 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "def open_dir(path_value, dir_fd=None):",
   "    return os.open(path_value, DIR_FLAGS, dir_fd=dir_fd)",
   "",
-  "def walk_dir(root_fd, rel_path, mkdir_enabled):",
+  "def walk_dir(root_fd, rel_path, mkdir_enabled, mkdir_mode=0o777):",
   "    current_fd = os.dup(root_fd)",
   "    try:",
   "        for segment in split_relative(rel_path):",
@@ -77,7 +85,7 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "            except FileNotFoundError:",
   "                if not mkdir_enabled:",
   "                    raise",
-  "                os.mkdir(segment, 0o777, dir_fd=current_fd)",
+  "                os.mkdir(segment, mkdir_mode, dir_fd=current_fd)",
   "                next_fd = open_dir(segment, dir_fd=current_fd)",
   "            os.close(current_fd)",
   "            current_fd = next_fd",
@@ -478,7 +486,7 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "    root_fd = open_dir(sys.argv[2])",
   "    target_fd = None",
   "    try:",
-  "        target_fd = walk_dir(root_fd, sys.argv[3], True)",
+  "        target_fd = walk_dir(root_fd, sys.argv[3], True, int(sys.argv[4], 8))",
   "        os.fsync(target_fd)",
   "    finally:",
   "        if target_fd is not None:",
@@ -614,10 +622,16 @@ export function buildPinnedCopyPlan(params: {
 export function buildPinnedMkdirpPlan(params: {
   check: PathSafetyCheck;
   pinned: PinnedSandboxDirectoryEntry;
+  mode?: number;
 }): SandboxFsCommandPlan {
   return buildPinnedMutationPlan({
     checks: [params.check],
-    args: ["mkdirp", params.pinned.mountRootPath, params.pinned.relativePath],
+    args: [
+      "mkdirp",
+      params.pinned.mountRootPath,
+      params.pinned.relativePath,
+      formatSandboxDirectoryMode(params.mode),
+    ],
   });
 }
 

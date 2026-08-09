@@ -9,6 +9,7 @@ import {
   hasInProcessGatewayContext,
   loadPreparedModelCatalog,
   resolveContextEngine,
+  resolveSandboxContext,
 } from "./subagent-spawn.runtime.js";
 
 type SubagentSpawnDeps = {
@@ -21,6 +22,7 @@ type SubagentSpawnDeps = {
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
   loadPreparedModelCatalog: typeof loadPreparedModelCatalog;
   resolveContextEngine: typeof resolveContextEngine;
+  resolveSandboxContext: typeof resolveSandboxContext;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
@@ -33,6 +35,7 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   ensureContextEnginesInitialized,
   loadPreparedModelCatalog,
   resolveContextEngine,
+  resolveSandboxContext,
 };
 
 let subagentSpawnDeps = defaultSubagentSpawnDeps;

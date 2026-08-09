@@ -12,6 +12,7 @@ import type {
 import {
   SANDBOX_CREATE_EXISTS_EXIT_CODE,
   SANDBOX_PINNED_MUTATION_PYTHON,
+  formatSandboxDirectoryMode,
 } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
 import {
@@ -232,7 +233,12 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     return "created";
   }
 
-  async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
+  async mkdirp(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+    mode?: number;
+  }): Promise<void> {
     const target = this.resolveTarget(params);
     await this.ensureRemoteWritable(target, "create directories", params.signal);
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
@@ -256,6 +262,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         "mkdirp",
         pinned.mountRootPath,
         path.posix.join(pinned.relativeParentPath, pinned.basename),
+        formatSandboxDirectoryMode(params.mode),
       ],
       signal: params.signal,
     });

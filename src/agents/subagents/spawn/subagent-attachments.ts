@@ -17,6 +17,7 @@ import {
   root,
 } from "../../../infra/fs-safe.js";
 import { resolveAgentWorkspaceDir } from "../../agent-scope.js";
+import type { SandboxFsBridge } from "../../sandbox/fs-bridge.types.js";
 
 function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
   const maxEncodedBytes = Math.ceil(maxDecodedBytes / 3) * 4;
@@ -297,12 +298,22 @@ export function resolveAcpSessionsSpawnImageAttachments(params: {
 export async function removeSubagentAttachmentsDir(params: {
   rootDir: string;
   absDir: string;
+  sandboxFsBridge?: SandboxFsBridge;
 }): Promise<boolean> {
   try {
     const rootDir = path.resolve(params.rootDir);
     const absDir = path.resolve(params.absDir);
-    if (!isPathInside(rootDir, absDir)) {
+    const relativePath = path.relative(rootDir, absDir);
+    if (!relativePath || !isPathInside(rootDir, absDir)) {
       return false;
+    }
+    if (params.sandboxFsBridge) {
+      await params.sandboxFsBridge.remove({
+        filePath: absDir,
+        recursive: true,
+        force: true,
+      });
+      return true;
     }
     try {
       await fs.access(rootDir);
@@ -314,7 +325,7 @@ export async function removeSubagentAttachmentsDir(params: {
     }
     await removePathWithinRoot({
       rootDir,
-      relativePath: path.relative(rootDir, absDir),
+      relativePath,
       recursive: true,
       force: true,
     });
@@ -358,6 +369,8 @@ export async function materializeSubagentAttachments(params: {
   workspaceDir?: string;
   attachments?: SubagentInlineAttachment[];
   mountPathHint?: string;
+  /** Required when a lower-trust sandbox can concurrently mutate this workspace. */
+  sandboxFsBridge?: SandboxFsBridge;
 }): Promise<MaterializeSubagentAttachmentsResult | null> {
   const request = resolveSubagentAttachmentRequest(params);
   if (request.status === "none") {
@@ -398,19 +411,6 @@ export async function materializeSubagentAttachments(params: {
     // would trust a pre-existing attachments symlink before fs-safe can reject the hop.
     workspaceRootDir = workspaceRoot.rootReal;
     absDir = path.join(workspaceRootDir, ...relDir.split(path.posix.sep));
-    for (const privateRelDir of [".openclaw", ".openclaw/attachments", relDir]) {
-      const existed = await workspaceRoot.exists(privateRelDir);
-      await workspaceRoot.mkdir(privateRelDir);
-      // Match recursive mkdir(mode): harden directories created by this call
-      // without changing permissions on an operator-owned existing parent.
-      if (!existed) {
-        await setPrivateAttachmentDirectoryMode({
-          rootDir: workspaceRootDir,
-          absDir: path.join(workspaceRootDir, ...privateRelDir.split(path.posix.sep)),
-        });
-      }
-    }
-
     const files: SubagentAttachmentReceiptFile[] = [];
     const writeJobs: Array<{ outPath: string; buf: Buffer }> = [];
 
@@ -424,26 +424,63 @@ export async function materializeSubagentAttachments(params: {
       files.push({ name, bytes, sha256 });
     }
 
-    await Promise.all(
-      writeJobs.map(({ outPath, buf }) =>
-        workspaceRoot.write(path.posix.join(relDir, outPath), buf, {
-          mkdir: false,
-          mode: 0o600,
-        }),
-      ),
-    );
-
     const manifest = {
       relDir,
       count: files.length,
       totalBytes: prepared.totalBytes,
       files,
     };
-    await workspaceRoot.writeJson(path.posix.join(relDir, ".manifest.json"), manifest, {
-      mkdir: false,
-      mode: 0o600,
-      trailingNewline: true,
-    });
+    if (params.sandboxFsBridge) {
+      const createFileExclusive = params.sandboxFsBridge.createFileExclusive;
+      if (!createFileExclusive) {
+        throw new Error("sandbox attachment staging requires exclusive file creation support");
+      }
+      await params.sandboxFsBridge.mkdirp({ filePath: absDir, mode: 0o700 });
+      for (const { outPath, buf } of writeJobs) {
+        const created = await createFileExclusive.call(params.sandboxFsBridge, {
+          filePath: path.join(absDir, outPath),
+          data: buf,
+          mkdir: false,
+        });
+        if (created !== "created") {
+          throw new Error("sandbox attachment destination already exists");
+        }
+      }
+      const manifestCreated = await createFileExclusive.call(params.sandboxFsBridge, {
+        filePath: path.join(absDir, ".manifest.json"),
+        data: `${JSON.stringify(manifest)}\n`,
+        mkdir: false,
+      });
+      if (manifestCreated !== "created") {
+        throw new Error("sandbox attachment manifest already exists");
+      }
+    } else {
+      for (const privateRelDir of [".openclaw", ".openclaw/attachments", relDir]) {
+        const existed = await workspaceRoot.exists(privateRelDir);
+        await workspaceRoot.mkdir(privateRelDir);
+        // Match recursive mkdir(mode): harden directories created by this call
+        // without changing permissions on an operator-owned existing parent.
+        if (!existed) {
+          await setPrivateAttachmentDirectoryMode({
+            rootDir: workspaceRootDir,
+            absDir: path.join(workspaceRootDir, ...privateRelDir.split(path.posix.sep)),
+          });
+        }
+      }
+      await Promise.all(
+        writeJobs.map(({ outPath, buf }) =>
+          workspaceRoot.write(path.posix.join(relDir, outPath), buf, {
+            mkdir: false,
+            mode: 0o600,
+          }),
+        ),
+      );
+      await workspaceRoot.writeJson(path.posix.join(relDir, ".manifest.json"), manifest, {
+        mkdir: false,
+        mode: 0o600,
+        trailingNewline: true,
+      });
+    }
 
     return {
       status: "ok",
@@ -463,7 +500,11 @@ export async function materializeSubagentAttachments(params: {
     };
   } catch (err) {
     if (workspaceRootDir && absDir) {
-      await removeSubagentAttachmentsDir({ rootDir: workspaceRootDir, absDir });
+      await removeSubagentAttachmentsDir({
+        rootDir: workspaceRootDir,
+        absDir,
+        sandboxFsBridge: params.sandboxFsBridge,
+      });
     }
     return {
       status: "error",

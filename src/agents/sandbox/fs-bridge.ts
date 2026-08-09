@@ -194,7 +194,12 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     return "created";
   }
 
-  async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
+  async mkdirp(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+    mode?: number;
+  }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
     const mkdirCheck = {
@@ -209,6 +214,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       ...buildPinnedMkdirpPlan({
         check: mkdirCheck,
         pinned: this.pathGuard.resolvePinnedDirectoryEntry(target, "create directories"),
+        mode: params.mode,
       }),
       signal: params.signal,
     });

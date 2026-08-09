@@ -156,6 +156,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     cfg?: Record<string, unknown>;
     sessionKey?: string;
   }) => { sandboxed: boolean };
+  resolveSandboxContext?: (...args: unknown[]) => Promise<unknown>;
   getSessionBindingService?: () => {
     getCapabilities?: (params: { channel?: string; accountId?: string }) => {
       adapterAvailable: boolean;
@@ -380,6 +381,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
           : "openai/gpt-4"),
     resolveSandboxRuntimeStatus:
       params.resolveSandboxRuntimeStatus ?? (() => ({ sandboxed: false })),
+    resolveSandboxContext: params.resolveSandboxContext ?? (async () => null),
     ...createDefaultSessionHelperMocks(),
   }));
 

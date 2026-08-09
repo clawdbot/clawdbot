@@ -172,7 +172,7 @@ describe("sandbox fs bridge anchored ops", () => {
       name: "mkdirp pins mount root + relative path",
       invoke: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
         bridge.mkdirp({ filePath: "nested/leaf" }),
-      expectedArgs: ["mkdirp", "/workspace", "nested/leaf"],
+      expectedArgs: ["mkdirp", "/workspace", "nested/leaf", "777"],
       forbiddenArgs: ["/workspace/nested/leaf"],
     },
     {

@@ -91,6 +91,7 @@ type ResolvedSubagentChildPlan = {
   incognito: boolean;
   childSessionKey: string;
   childRuntimeSandboxed: boolean;
+  requesterSandboxWorkspaceWritable: boolean;
   targetAgentDir: string;
   modelPlan: Extract<ReturnType<typeof resolveSubagentModelAndThinkingPlan>, { status: "ok" }>;
   launchAuthorization?: SubagentLaunchAuthorization;
@@ -157,22 +158,10 @@ export async function resolveSubagentChildPlan(params: {
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,
   });
-  // A read-write sandbox can race host staging through its workspace mount.
-  // Gate that authority combination before any session or filesystem mutation.
-  if (
-    params.request.attachments?.length &&
+  const requesterSandboxWorkspaceWritable =
     requesterRuntime.sandboxed &&
-    resolveSandboxConfigForAgent(params.cfg, requesterRuntime.agentId).workspaceAccess === "rw"
-  ) {
-    return {
-      ok: false,
-      result: {
-        status: "forbidden",
-        error:
-          "sessions_spawn attachments are unavailable from a sandbox with workspaceAccess=rw because the caller can mutate the host staging path. Retry without attachments, retry from an unsandboxed session, or ask the operator to use sandbox workspaceAccess=ro or none.",
-      },
-    };
-  }
+    params.requesterAgentId === params.targetAgentId &&
+    resolveSandboxConfigForAgent(params.cfg, requesterRuntime.agentId).workspaceAccess === "rw";
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: childSessionKey,
@@ -271,6 +260,7 @@ export async function resolveSubagentChildPlan(params: {
       incognito,
       childSessionKey,
       childRuntimeSandboxed: childRuntime.sandboxed,
+      requesterSandboxWorkspaceWritable,
       targetAgentDir,
       modelPlan,
       launchAuthorization,

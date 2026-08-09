@@ -8,6 +8,7 @@ import {
   createSandboxFsBridge,
   createSeededSandboxFsBridge,
   getScriptsFromCalls,
+  getDockerArg,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
   mockedOpenRootFile,
@@ -178,6 +179,18 @@ describe("sandbox fs bridge shell compatibility", () => {
       expectNoScriptsContaining(scripts, 'rm -f -- "$2"');
       expectNoScriptsContaining(scripts, 'mv -- "$3" "$2/$4"');
     });
+  });
+
+  it("passes a private mode to descriptor-relative mkdirp", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.mkdirp({ filePath: ".openclaw/attachments/receipt", mode: 0o700 });
+
+    const mkdirCall = mockedExecDockerRaw.mock.calls.find(
+      ([args]) => getDockerArg(args, 1) === "mkdirp",
+    );
+    expect(mkdirCall).toBeDefined();
+    expect(getDockerArg(mkdirCall?.[0] ?? [], 4)).toBe("700");
   });
 
   it("re-validates target before the pinned write helper runs", async () => {

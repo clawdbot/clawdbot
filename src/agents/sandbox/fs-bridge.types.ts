@@ -57,7 +57,13 @@ export type SandboxFsBridge = {
     mkdir?: boolean;
     signal?: AbortSignal;
   }): Promise<"created" | "exists">;
-  mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
+  mkdirp(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+    /** Mode applied only to directories created by this operation. */
+    mode?: number;
+  }): Promise<void>;
   remove(params: {
     filePath: string;
     cwd?: string;

@@ -15,6 +15,7 @@ import {
   recordSessionCreated,
   recordSubagentSpawned,
 } from "../../../sessions/session-state-events.js";
+import type { SandboxFsBridge } from "../../sandbox/fs-bridge.types.js";
 import {
   runSpawnPipeline,
   type SpawnBackendAdapter,
@@ -49,7 +50,7 @@ import type {
   SpawnSubagentParams,
   SpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import { getSubagentSpawnDeps, setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
 import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
@@ -169,6 +170,7 @@ export async function spawnSubagentDirect(
       incognito,
       childSessionKey,
       childRuntimeSandboxed,
+      requesterSandboxWorkspaceWritable,
       targetAgentDir,
       modelPlan: plan,
       launchAuthorization,
@@ -304,6 +306,33 @@ export async function spawnSubagentDirect(
       | undefined;
     let attachmentAbsDir: string | undefined;
     let attachmentRootDir: string | undefined;
+    let attachmentSandboxFsBridge: SandboxFsBridge | undefined;
+    if (params.attachments?.length && requesterSandboxWorkspaceWritable) {
+      try {
+        const requesterSandbox = await getSubagentSpawnDeps().resolveSandboxContext({
+          config: cfg,
+          agentId: requesterAgentId,
+          sessionKey: requesterInternalKey,
+          workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
+        });
+        attachmentSandboxFsBridge = requesterSandbox?.fsBridge;
+      } catch (error) {
+        await cleanupCreatedSession(threadBindingReady);
+        return {
+          status: "error",
+          error: `attachments_sandbox_boundary_unavailable: ${summarizeSpawnError(error)}`,
+          childSessionKey,
+        };
+      }
+      if (!attachmentSandboxFsBridge) {
+        await cleanupCreatedSession(threadBindingReady);
+        return {
+          status: "error",
+          error: "attachments_sandbox_boundary_unavailable",
+          childSessionKey,
+        };
+      }
+    }
 
     const materializedAttachments = await materializeSubagentAttachments({
       config: cfg,
@@ -311,6 +340,7 @@ export async function spawnSubagentDirect(
       workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
       attachments: params.attachments,
       mountPathHint,
+      sandboxFsBridge: attachmentSandboxFsBridge,
     });
     if (materializedAttachments && materializedAttachments.status !== "ok") {
       await cleanupCreatedSession(threadBindingReady);
@@ -398,6 +428,7 @@ export async function spawnSubagentDirect(
         childSessionKey,
         attachmentAbsDir,
         attachmentRootDir,
+        attachmentSandboxFsBridge,
         emitLifecycleHooks: threadBindingReady,
         deleteTranscript: true,
         ...provisionalSessionIdentity,
@@ -438,6 +469,7 @@ export async function spawnSubagentDirect(
           await removeSubagentAttachmentsDir({
             rootDir: attachmentRootDir,
             absDir: attachmentAbsDir,
+            sandboxFsBridge: attachmentSandboxFsBridge,
           });
         }
         let emitLifecycleHooks = threadBindingReady;
@@ -520,6 +552,10 @@ export async function spawnSubagentDirect(
           queued: params.collect === true,
           attachmentsDir: attachmentAbsDir,
           attachmentsRootDir: attachmentRootDir,
+          attachmentsSandboxSessionKey: attachmentSandboxFsBridge
+            ? requesterInternalKey
+            : undefined,
+          attachmentsSandboxAgentId: attachmentSandboxFsBridge ? requesterAgentId : undefined,
           retainAttachmentsOnKeep: retainOnSessionKeep,
         };
       },

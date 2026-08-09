@@ -232,6 +232,55 @@ describe("reconcileOrphanedRestoredRuns", () => {
 });
 
 describe("safeRemoveAttachmentsDir", () => {
+  it("refuses a cleanup target equal to its recorded root", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-root-"));
+    await fs.writeFile(path.join(rootDir, "sentinel.txt"), "unchanged");
+    try {
+      await expect(
+        safeRemoveAttachmentsDir(
+          createRunEntry({ attachmentsDir: rootDir, attachmentsRootDir: rootDir }),
+        ),
+      ).resolves.toBe(false);
+      await expect(fs.readFile(path.join(rootDir, "sentinel.txt"), "utf8")).resolves.toBe(
+        "unchanged",
+      );
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reconstructs a persisted sandbox boundary for cleanup", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-sandbox-"));
+    const attachmentsDir = path.join(rootDir, "receipt");
+    await fs.mkdir(attachmentsDir);
+    const remove = vi.fn(async () => {
+      await fs.rm(attachmentsDir, { recursive: true, force: true });
+    });
+    try {
+      await expect(
+        safeRemoveAttachmentsDir(
+          createRunEntry({
+            attachmentsDir,
+            attachmentsRootDir: rootDir,
+            attachmentsSandboxSessionKey: "agent:main:main",
+            attachmentsSandboxAgentId: "main",
+          }),
+          {
+            config: {},
+            resolveSandbox: async () => ({ fsBridge: { remove } }) as never,
+          },
+        ),
+      ).resolves.toBe(true);
+      expect(remove).toHaveBeenCalledWith({
+        filePath: attachmentsDir,
+        recursive: true,
+        force: true,
+      });
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses a recorded directory outside its attachment root", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-cleanup-"));
     const rootDir = path.join(tempDir, "root");
