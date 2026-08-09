@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
+import { buildSessionContext } from "../session/session.js";
 import type { SessionTreeEntry } from "../types.js";
 import {
   calculateContextTokens,
@@ -595,6 +596,90 @@ describe("generateSummary thinking options", () => {
 });
 
 describe("split-turn compaction", () => {
+  it("preserves previous summaries for prefix-only second passes", async () => {
+    const model: Model = {
+      id: "summary-model",
+      name: "Summary Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 100_000,
+      maxTokens: 8_000,
+    };
+    const streamFn = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message: AssistantMessage = {
+          role: "assistant",
+          content: [{ type: "text", text: "prefix summary" }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: createUsage(0),
+          stopReason: "stop",
+          timestamp: 1,
+        };
+        stream.push({ type: "done", reason: "stop", message });
+        stream.end();
+      });
+      return stream;
+    });
+
+    const result = await compact(
+      {
+        firstKeptEntryId: "kept-entry",
+        messagesToSummarize: [],
+        turnPrefixMessages: [{ role: "user", content: "prefix", timestamp: 2 }],
+        isSplitTurn: true,
+        tokensBefore: 100,
+        previousSummary: "previous compacted history",
+        fileOps: createFileOps(),
+        settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
+      },
+      model,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      streamFn,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected compaction to succeed");
+    }
+    expect(result.value.summary).toContain("previous compacted history");
+    expect(result.value.summary).not.toContain("No prior history.");
+    expect(streamFn).toHaveBeenCalledOnce();
+
+    const replayContext = buildSessionContext([
+      createMessageEntry({ role: "user", content: "old", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("old answer", createUsage(20), 2), 1),
+      {
+        type: "compaction",
+        id: "entry-2",
+        parentId: "entry-1",
+        timestamp: new Date(3).toISOString(),
+        summary: result.value.summary,
+        firstKeptEntryId: result.value.firstKeptEntryId,
+        tokensBefore: result.value.tokensBefore,
+        details: result.value.details,
+      },
+      createMessageEntry(
+        { role: "assistant", content: [{ type: "text", text: "kept suffix" }], timestamp: 4 },
+        3,
+      ),
+    ]);
+    expect(replayContext.messages[0]).toMatchObject({
+      role: "compactionSummary",
+      summary: expect.stringContaining("previous compacted history"),
+    });
+  });
+
   it("serializes history and turn-prefix summaries", async () => {
     const model: Model = {
       id: "summary-model",

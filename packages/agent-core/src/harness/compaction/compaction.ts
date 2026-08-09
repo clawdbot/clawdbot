@@ -851,7 +851,7 @@ export async function compact(
           streamFn,
           runtime,
         )
-      : ok<string, CompactionError>("No prior history.");
+      : ok<string, CompactionError>(previousSummary ?? "No prior history.");
   if (!historyResult.ok) {
     return err(historyResult.error);
   }
