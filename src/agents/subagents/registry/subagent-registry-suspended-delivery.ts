@@ -50,6 +50,16 @@ export async function discardSuspendedPendingFinalDelivery(params: {
   const { runId, entry, now, reason, resumedRuns } = params;
   const snapshot = structuredClone(entry);
   const wasResumed = resumedRuns.has(runId);
+  if (
+    (entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep) &&
+    !(await safeRemoveAttachmentsDir(entry))
+  ) {
+    params.warn("subagent attachment cleanup failed; retaining suspended delivery owner", {
+      runId: entry.runId,
+      childSessionKey: entry.childSessionKey,
+    });
+    return;
+  }
   params.discardTerminalDelivery(entry, now, reason);
   const suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
   const completionReason = entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
@@ -81,9 +91,6 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: entry.requesterSessionKey,
   });
-  if (entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
-    await safeRemoveAttachmentsDir(entry);
-  }
   if (
     !suppressSessionEffects &&
     entry.expectsCompletionMessage === true &&

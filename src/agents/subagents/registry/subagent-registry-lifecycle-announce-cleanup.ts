@@ -18,10 +18,10 @@ import {
   logAnnounceGiveUp,
   MIN_ANNOUNCE_RETRY_DELAY_MS,
   resolveAnnounceRetryDelayMs,
-  safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import {
   beginSubagentCleanup,
+  removeSubagentAttachmentsForCleanup,
   retireSupersededCleanupIfNeeded,
   retireSupersededCleanupInBackground,
   runDetachedCleanupAttempt,
@@ -102,7 +102,7 @@ export const finalizeResumedAnnounceGiveUp = async (
   completion.fallbackResultText = undefined;
   completion.fallbackCapturedAt = undefined;
   if ((cleanup ?? entry.cleanup) === "delete" || !entry.retainAttachmentsOnKeep) {
-    await safeRemoveAttachmentsDir(entry);
+    await removeSubagentAttachmentsForCleanup(entry);
   }
   if (
     cleanupGeneration !== undefined &&
@@ -210,7 +210,7 @@ const finalizeSubagentCleanup = async (
     entry.wakeOnDescendantSettle = undefined;
     const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
     if (shouldDeleteAttachments) {
-      await safeRemoveAttachmentsDir(entry);
+      await removeSubagentAttachmentsForCleanup(entry);
     }
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
       await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
@@ -291,7 +291,7 @@ const finalizeSubagentCleanup = async (
     const completionReason = resolveCleanupCompletionReason(entry);
     const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
     if (shouldDeleteAttachments) {
-      await safeRemoveAttachmentsDir(entry);
+      await removeSubagentAttachmentsForCleanup(entry);
     }
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
       await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);

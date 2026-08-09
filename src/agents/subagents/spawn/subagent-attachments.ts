@@ -428,31 +428,42 @@ export async function materializeSubagentAttachments(params: {
   let sandboxDir: string | undefined;
 
   try {
-    let workspaceRoot: Awaited<ReturnType<typeof root>>;
-    try {
-      // An existing configured workspace may itself be a symlink. Let fs-safe pin
-      // its canonical target while still rejecting symlink hops beneath that root.
-      workspaceRoot = await root(childWorkspaceDir, { mkdir: true, mode: 0o600 });
-    } catch (error) {
-      if (!(error instanceof FsSafeError) || error.code !== "not-found") {
-        throw error;
+    let workspaceRoot: Awaited<ReturnType<typeof root>> | undefined;
+    if (params.sandboxFsBridge) {
+      if (!params.sandboxWorkspaceDir) {
+        throw new Error("sandbox attachment staging requires a resolved workspace path");
       }
-      const ensuredWorkspace = await ensureAbsoluteDirectory(childWorkspaceDir, {
-        scopeLabel: "child workspace",
-        mode: 0o700,
-      });
-      if (!ensuredWorkspace.ok) {
-        throw ensuredWorkspace.error;
+      // The requester can replace every host pathname below this workspace.
+      // Derive registry metadata lexically and let the confined bridge perform
+      // the first mutation, including creation of a missing workspace.
+      workspaceRootDir = path.resolve(childWorkspaceDir);
+      sandboxDir = path.posix.join(params.sandboxWorkspaceDir, relDir);
+    } else {
+      try {
+        // An existing configured workspace may itself be a symlink. Let fs-safe pin
+        // its canonical target while still rejecting symlink hops beneath that root.
+        workspaceRoot = await root(childWorkspaceDir, { mkdir: true, mode: 0o600 });
+      } catch (error) {
+        if (!(error instanceof FsSafeError) || error.code !== "not-found") {
+          throw error;
+        }
+        const ensuredWorkspace = await ensureAbsoluteDirectory(childWorkspaceDir, {
+          scopeLabel: "child workspace",
+          mode: 0o700,
+        });
+        if (!ensuredWorkspace.ok) {
+          throw ensuredWorkspace.error;
+        }
+        workspaceRoot = await root(ensuredWorkspace.path, { mkdir: true, mode: 0o600 });
       }
-      workspaceRoot = await root(ensuredWorkspace.path, { mkdir: true, mode: 0o600 });
+      // Keep the capability rooted at the workspace. Rooting it at the receipt directory
+      // would trust a pre-existing attachments symlink before fs-safe can reject the hop.
+      workspaceRootDir = workspaceRoot.rootReal;
     }
-    // Keep the capability rooted at the workspace. Rooting it at the receipt directory
-    // would trust a pre-existing attachments symlink before fs-safe can reject the hop.
-    workspaceRootDir = workspaceRoot.rootReal;
+    if (!workspaceRootDir) {
+      throw new Error("attachment staging requires a resolved workspace root");
+    }
     absDir = path.join(workspaceRootDir, ...relDir.split(path.posix.sep));
-    sandboxDir = params.sandboxWorkspaceDir
-      ? path.posix.join(params.sandboxWorkspaceDir, relDir)
-      : undefined;
     const files: SubagentAttachmentReceiptFile[] = [];
     const writeJobs: Array<{ outPath: string; buf: Buffer }> = [];
 
@@ -474,7 +485,7 @@ export async function materializeSubagentAttachments(params: {
     };
     if (params.sandboxFsBridge) {
       if (!sandboxDir) {
-        throw new Error("sandbox attachment staging requires a resolved workspace path");
+        throw new Error("sandbox attachment staging requires a resolved receipt path");
       }
       const createFileExclusive = params.sandboxFsBridge.createFileExclusive;
       if (!createFileExclusive) {
@@ -500,6 +511,9 @@ export async function materializeSubagentAttachments(params: {
         throw new Error("sandbox attachment manifest already exists");
       }
     } else {
+      if (!workspaceRoot) {
+        throw new Error("host attachment staging requires a rooted workspace");
+      }
       for (const privateRelDir of [".openclaw", ".openclaw/attachments", relDir]) {
         const existed = await workspaceRoot.exists(privateRelDir);
         await workspaceRoot.mkdir(privateRelDir);

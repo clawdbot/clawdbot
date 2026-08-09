@@ -96,7 +96,7 @@ const gatewayMocks = vi.hoisted(() => ({
 
 const helperMocks = vi.hoisted(() => ({
   persistSubagentSessionTiming: vi.fn(async () => {}),
-  safeRemoveAttachmentsDir: vi.fn(async () => {}),
+  safeRemoveAttachmentsDir: vi.fn(async () => true),
   logAnnounceGiveUp: vi.fn(),
 }));
 
@@ -3004,6 +3004,27 @@ describe("subagent registry lifecycle hardening", () => {
     expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledWith(entry);
     expect(runs.get(entry.runId)).toBe(entry);
     expect(entry.collectorCompletion).toEqual({ status: "done" });
+  });
+
+  it("retains the registry owner when attachment cleanup fails", async () => {
+    helperMocks.safeRemoveAttachmentsDir.mockResolvedValueOnce(false);
+    const entry = createRunEntry({
+      cleanup: "delete",
+      expectsCompletionMessage: false,
+      collect: true,
+      groupId: "swarm:test",
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const controller = createLifecycleController({ entry, runs });
+
+    await completeRun(controller, entry, { triggerCleanup: true });
+    await waitForLifecycleState(() =>
+      expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledWith(entry),
+    );
+
+    expect(runs.get(entry.runId)).toBe(entry);
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    await waitForLifecycleState(() => expect(entry.cleanupHandled).toBe(false));
   });
 
   it("treats accepted structured output as success for a tool-only collector turn", async () => {

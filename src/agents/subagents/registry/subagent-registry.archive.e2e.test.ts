@@ -26,6 +26,7 @@ const sessionAccessorMocks = vi.hoisted(() => ({
 }));
 
 const noop = () => {};
+const GENERATED_ATTACHMENT_ID = "00000000-0000-4000-8000-000000000001";
 let currentConfig = {
   agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
 };
@@ -350,7 +351,12 @@ describe("subagent registry archive behavior", () => {
     };
     const onSubagentEnded = vi.fn(async () => undefined);
     const attachmentsRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sweep-retry-"));
-    const attachmentsDir = path.join(attachmentsRootDir, "child");
+    const attachmentsDir = path.join(
+      attachmentsRootDir,
+      ".openclaw",
+      "attachments",
+      GENERATED_ATTACHMENT_ID,
+    );
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
     sessionAccessorMocks.listSessionEntriesReadOnly.mockReturnValue([
@@ -419,6 +425,40 @@ describe("subagent registry archive behavior", () => {
 
     expect(deleteAttempts).toBe(2);
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+  });
+
+  it("keeps archived runs when confined attachment cleanup cannot be restored", async () => {
+    currentConfig = {
+      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+    };
+    sessionAccessorMocks.listSessionEntriesReadOnly.mockReturnValue([
+      {
+        sessionKey: "agent:main:subagent:attachment-retry",
+        entry: {
+          sessionId: "session-attachment-retry",
+          lifecycleRevision: "lifecycle-attachment-retry",
+        },
+      },
+    ]);
+    addCanonicalSubagentRunForTests({
+      runId: "run-attachment-retry",
+      childSessionKey: "agent:main:subagent:attachment-retry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "retain cleanup owner",
+      cleanup: "delete",
+      createdAt: Date.now() - 60_000,
+      endedAt: Date.now() - 1,
+      archiveAtMs: Date.now(),
+      attachmentsDir: `/workspace/.openclaw/attachments/${GENERATED_ATTACHMENT_ID}`,
+      attachmentsRootDir: "/workspace",
+      attachmentsSandboxSessionKey: "agent:main:main",
+    });
+
+    await mod.testing.sweepOnceForTests();
+    await flushSweepMicrotasks();
+
+    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
   });
 
   it("stabilizes provisional killed tasks before deleting expired tombstones", async () => {
@@ -1007,7 +1047,12 @@ describe("subagent registry archive behavior", () => {
     const attachmentsRootDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-replace-attachments-"),
     );
-    const attachmentsDir = path.join(attachmentsRootDir, "old");
+    const attachmentsDir = path.join(
+      attachmentsRootDir,
+      ".openclaw",
+      "attachments",
+      GENERATED_ATTACHMENT_ID,
+    );
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
 

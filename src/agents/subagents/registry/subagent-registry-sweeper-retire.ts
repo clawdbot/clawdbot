@@ -37,7 +37,9 @@ export async function retireSupersededSubagentRun(params: {
     }
   }
   if (params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep) {
-    await safeRemoveAttachmentsDir(params.entry);
+    if (!(await safeRemoveAttachmentsDir(params.entry))) {
+      throw new Error("subagent attachment cleanup failed; retaining superseded registry owner");
+    }
   }
   if (!isCurrent()) {
     return;

@@ -24,6 +24,7 @@ import {
   MIN_ANNOUNCE_RETRY_DELAY_MS,
   persistSubagentSessionTiming,
   resolveAnnounceRetryDelayMs,
+  safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleCommonContext,
@@ -46,6 +47,15 @@ import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-re
 
 const MAX_DETACHED_CLEANUP_RETRIES = 3;
 type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
+
+export async function removeSubagentAttachmentsForCleanup(
+  entry: SubagentRunRecord,
+  remove: typeof safeRemoveAttachmentsDir = safeRemoveAttachmentsDir,
+): Promise<void> {
+  if (!(await remove(entry))) {
+    throw new Error("subagent attachment cleanup failed; retaining registry owner for retry");
+  }
+}
 
 export function scheduleResumeSubagentRun(
   context: SubagentLifecycleCleanupContext,

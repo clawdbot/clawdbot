@@ -514,6 +514,13 @@ export function createSubagentRegistrySweeper(params: {
             typeof entry.cleanupCompletedAt === "number" &&
             now - entry.cleanupCompletedAt > SESSION_RUN_TTL_MS
           ) {
+            if (!entry.retainAttachmentsOnKeep && !(await safeRemoveAttachmentsDir(entry))) {
+              params.warn("attachment cleanup failed during session run sweep; keeping run", {
+                runId,
+                childSessionKey: entry.childSessionKey,
+              });
+              continue;
+            }
             params.clearPendingLifecycleError(runId);
             if (!shouldSuppressSubagentRecoverySessionEffects(entry)) {
               runCleanupTail(runId, "context-engine cleanup", async () => {
@@ -523,9 +530,6 @@ export function createSubagentRegistrySweeper(params: {
             runs.delete(runId);
             mutated = true;
             mutatedRunIds.add(runId);
-            if (!entry.retainAttachmentsOnKeep) {
-              await safeRemoveAttachmentsDir(entry);
-            }
           }
           continue;
         }
@@ -556,10 +560,16 @@ export function createSubagentRegistrySweeper(params: {
             }
           }
         }
+        if (!(await safeRemoveAttachmentsDir(entry))) {
+          params.warn("attachment cleanup failed during archived run sweep; keeping run", {
+            runId,
+            childSessionKey: entry.childSessionKey,
+          });
+          continue;
+        }
         runs.delete(runId);
         mutated = true;
         mutatedRunIds.add(runId);
-        await safeRemoveAttachmentsDir(entry);
         if (!suppressSessionEffects && !sessionOwnershipChanged) {
           runCleanupTail(runId, "context-engine cleanup", async () => {
             await params.notifyContextEngineSubagentEnded(sweptContext(entry));

@@ -135,15 +135,10 @@ export function resolveWritableSandboxBindHostRoots(
   binds: readonly string[] | undefined,
 ): string[] {
   const parsedBinds = parseSandboxBindMounts(binds);
-  const readonlyRoots = parsedBinds.filter((bind) => !bind.writable).map((bind) => bind.hostRoot);
   const roots: string[] = [];
   const seen = new Set<string>();
   for (const parsed of parsedBinds) {
-    if (
-      !parsed.writable ||
-      seen.has(parsed.hostRoot) ||
-      readonlyRoots.some((root) => isHostPathWithinOrEqual(parsed.hostRoot, root))
-    ) {
+    if (!parsed.writable || seen.has(parsed.hostRoot)) {
       continue;
     }
     seen.add(parsed.hostRoot);

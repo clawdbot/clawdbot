@@ -42,9 +42,9 @@ describe("sandbox bind mounts", () => {
     ]);
   });
 
-  it("omits writable bind roots that contain read-only host shadows", () => {
-    // A writable parent with a read-only child is unsafe for generic host writes;
-    // callers must route through mount-aware path resolution instead.
+  it("keeps writable bind roots that contain read-only host shadows", () => {
+    // The writable remainder still needs bridge routing. Mount-aware resolution
+    // selects the narrower read-only child and rejects writes inside that shadow.
     expect(
       resolveWritableSandboxBindHostRoots([
         "/tmp/data:/tmp/data:rw",
@@ -52,7 +52,7 @@ describe("sandbox bind mounts", () => {
         "/tmp/readonly-parent:/tmp/readonly-parent:ro",
         "/tmp/readonly-parent/work:/tmp/readonly-parent/work:rw",
       ]),
-    ).toEqual([path.resolve("/tmp/readonly-parent/work")]);
+    ).toEqual([path.resolve("/tmp/data"), path.resolve("/tmp/readonly-parent/work")]);
   });
 
   it("detects bind mounts whose container path differs from the host path", () => {

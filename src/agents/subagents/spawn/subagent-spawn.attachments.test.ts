@@ -297,6 +297,7 @@ describe("spawnSubagentDirect filename validation", () => {
       }),
       mkdirp: async ({ filePath }: { filePath: string }) => {
         bridgeCalls.push(`mkdir:${filePath}`);
+        expect(fs.existsSync(workerWorkspaceDir)).toBe(false);
         await fs.promises.mkdir(filePath, { recursive: true, mode: 0o700 });
       },
       createFileExclusive: async ({
@@ -349,7 +350,7 @@ describe("spawnSubagentDirect filename validation", () => {
     );
   });
 
-  it("uses the requester bridge for a target inside a configured writable bind", async () => {
+  it("uses the requester bridge for a writable bind with a read-only shadow", async () => {
     const bindRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-bind-attachments-${process.pid}-${Date.now()}-`),
     );
@@ -360,7 +361,12 @@ describe("spawnSubagentDirect filename validation", () => {
           sandbox: {
             mode: "all",
             workspaceAccess: "rw",
-            docker: { binds: [`${bindRoot}:/mnt/shared:rw`] },
+            docker: {
+              binds: [
+                `${bindRoot}:/mnt/shared:rw`,
+                `${path.join(bindRoot, "readonly")}:/mnt/shared/readonly:ro`,
+              ],
+            },
           },
         },
         list: [
