@@ -460,7 +460,7 @@ async function hydrateConfiguredExternalCliAuth(params: {
   log: { warn: (msg: string) => void };
   deps?: StartupExternalAuthHydrationDeps;
 }): Promise<void> {
-  const deps =
+  const deps: StartupExternalAuthHydrationDeps =
     params.deps ??
     (await Promise.all([
       import("../agents/agent-scope.js"),
