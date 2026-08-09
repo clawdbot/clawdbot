@@ -400,12 +400,12 @@ Use when a client on another machine gets connection errors, timeouts, or connec
 One command sorts every case. From the machine that cannot connect:
 
 ```bash
-curl -sS -m 5 http://<gateway-host>:18789/
+curl -sS --connect-timeout 5 -m 10 http://<gateway-host>:18789/
 ```
 
 - Any HTTP response comes back (HTML, `404`, even `503`): you reached a listener at that host and port, so the network path is fine. Skip to [curl works, the client still fails](#curl-works-the-client-still-fails). HTML is the Control UI when it is enabled; a healthy gateway can still answer 404 or 503 with the UI disabled or the route explicit. No HTTP response proves auth.
 - `connection refused`: nothing is listening at that host:port.
-- Hangs then times out: path or firewall, see [timeout, not refused](#timeout-not-refused).
+- No TCP connection (hangs, then a connect timeout): path or firewall, see [timeout, not refused](#timeout-not-refused). If it connects but the transfer then stalls, the listener itself is unresponsive: check the gateway process before the network.
 
 ### Connection refused
 
@@ -413,9 +413,9 @@ On the gateway host, check what is actually listening: `ss -tlnp | grep 18789`.
 
 1. Nothing listening: start the gateway in the foreground and read its error.
    - `Missing config. Run 'openclaw setup' or set gateway.mode=local (or pass --allow-unconfigured)`: do exactly that.
-   - `Refusing to bind gateway to lan without auth.`: non-loopback binds require auth, with no exceptions (explicit `--auth none` is also refused). Set `OPENCLAW_GATEWAY_TOKEN` or pass `--token`/`--password`, then retry.
+   - `Refusing to bind gateway to lan without auth.`: non-loopback binds require auth, with no exceptions (explicit `--auth none` is also refused). Set `OPENCLAW_GATEWAY_TOKEN` or pass `--token`/`--password`. With the Control UI enabled, a non-loopback bind also requires an allowed origin in `gateway.controlUi.allowedOrigins`, or startup validation rejects it again (the container `auto` bind seeds origins at runtime; an explicit `--bind lan` does not).
    - `Port 18789 is already in use.`: first confirm the listener actually is a gateway: `openclaw gateway status --deep`, or check the process name in `ss -tlnp`. If it is a stale gateway, `openclaw gateway --force` takes the port over (it logs `force: killed pid <N> on port <P>`). If it is anything else, change the port instead: interactive `--force` can terminate whatever holds the port, gateway or not.
-2. Listening on `127.0.0.1:18789`: loopback is unreachable from other machines by design. Keep loopback and use the SSH tunnel from [remote access](/gateway/remote), or bind wider with auth (`--bind lan`).
+2. Listening on `127.0.0.1:18789`: loopback is unreachable from other machines by design. Keep loopback and use the SSH tunnel from [remote access](/gateway/remote), or bind wider: that needs auth plus, with the Control UI enabled, an allowed origin (see the startup errors above).
 3. Listening on an unexpected port: effective port precedence is `--port` flag, then `OPENCLAW_GATEWAY_PORT`, then `gateway.port`, then 18789. The classic miss is the env var set in your shell but not in the service environment that actually runs the gateway.
 4. Docker:
    - Gateway in a container: the port must be published (`-p 18789:18789`). In-container bind defaults to `auto` (0.0.0.0), but unpublished ports reach nobody.
@@ -425,7 +425,7 @@ On the gateway host, check what is actually listening: `ss -tlnp | grep 18789`.
 
 ### Timeout, not refused
 
-The gateway is fine; the path is not. On the same LAN, check the host firewall on the gateway machine. Across the internet, use a sanctioned path from the next section (plaintext `ws://` is only allowed to hosts the client can verify as private).
+A connect timeout means the path, not the gateway. On the same LAN, check the host firewall on the gateway machine. Across the internet, use a sanctioned path from the next section (plaintext `ws://` is only allowed to hosts the client can verify as private). If TCP connects but the response stalls instead, suspect the gateway host itself: check `openclaw gateway status --deep` and its logs before touching routing.
 
 ### curl works, the client still fails
 
@@ -440,7 +440,7 @@ Work down in order; each failure names itself.
 3. `pairing required: device is not approved yet` (close code 1008): token auth is only half; new devices also need approval. On the gateway host run `openclaw devices list`, find the request id, then `openclaw devices approve <requestId>` and reconnect. See [pairing](/gateway/pairing).
 4. Diagnostic trap: `openclaw gateway status` prints local service and config summaries first even when probing a remote `--url`, and the CLI keeps working from config when the gateway is down. A calm-looking CLI is not proof of a reachable gateway. Trust `openclaw gateway probe` and `openclaw gateway health --url <url> --token <token>`.
 
-`404 Not Found` on `/v1/...` does not mean unreachable: the HTTP APIs are plugin-gated and off by default. Any HTTP response proves you reached the listener.
+`404 Not Found` on `/v1/...` does not mean unreachable: those HTTP APIs are core endpoints gated by `gateway.http.endpoints.*.enabled` and disabled by default. Any HTTP response proves you reached the listener.
 
 ## Gateway service not running
 
