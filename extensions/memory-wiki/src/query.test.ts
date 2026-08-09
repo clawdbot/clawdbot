@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
@@ -1864,113 +1863,7 @@ describe("getMemoryWikiPage", () => {
     });
   });
 
-  it("skips session memory reads outside the caller visibility policy", async () => {
-    const { config } = await createQueryVault({
-      initialize: true,
-      config: {
-        search: { backend: "shared", corpus: "memory" },
-      },
-    });
-    mockSessionTranscriptStore();
-    const manager = createMemoryManager({
-      readResult: {
-        path: "sessions/main/sibling-session.jsonl",
-        text: "sibling transcript content",
-      },
-    });
-    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-
-    const result = await getMemoryWikiPage({
-      config,
-      appConfig: createSessionVisibilityAppConfig(),
-      agentSessionKey: "agent:main:child-session",
-      sandboxed: true,
-      lookup: "sessions/main/sibling-session.jsonl",
-    });
-
-    expect(result).toBeNull();
-    expect(manager.readFile).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { visibility: "self" as const, groupAlias: false, allowed: true },
-    { visibility: "agent" as const, groupAlias: true, allowed: false },
-  ])(
-    "applies protected recall authorization to session reads ($visibility, group alias: $groupAlias)",
-    async ({ visibility, groupAlias, allowed }) => {
-      const { config } = await createQueryVault({
-        initialize: true,
-        config: { search: { backend: "shared", corpus: "memory" } },
-      });
-      const anchorSessionKey = "agent:main:telegram:direct:owner";
-      const requesterSessionKey = `${anchorSessionKey}:active-memory:abcdef123456`;
-      const friendSessionKey = "agent:main:webchat:direct:friend";
-      loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-        storePath: "(test)",
-        store: {
-          [anchorSessionKey]: {
-            sessionId: "current",
-            updatedAt: 1,
-            sessionFile: "/tmp/current.jsonl",
-            chatType: "direct",
-          },
-          [friendSessionKey]: {
-            sessionId: "friend",
-            updatedAt: 2,
-            sessionFile: "/tmp/friend.jsonl",
-            chatType: "direct",
-          },
-          ...(groupAlias
-            ? {
-                "agent:main:telegram:group:team": {
-                  sessionId: "friend",
-                  updatedAt: 3,
-                  sessionFile: "/tmp/friend.jsonl",
-                  chatType: "group",
-                },
-              }
-            : {}),
-        },
-      });
-      const manager = createMemoryManager({
-        readResult: { path: "sessions/main/friend.jsonl", text: "private transcript" },
-      });
-      getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-      const request = {
-        config,
-        appConfig: {
-          ...createSessionVisibilityAppConfig(),
-          tools: { sessions: { visibility } },
-        },
-        agentId: "main",
-        agentSessionKey: requesterSessionKey,
-        conversationRecall: {
-          anchorSessionKey,
-          scope: "same-agent-private",
-          corpus: "sessions",
-        } as const,
-        lookup: "sessions/main/friend.jsonl",
-      };
-
-      const result = await getMemoryWikiPage(request);
-      const tool = createWikiGetTool(config, request.appConfig, {
-        agentId: request.agentId,
-        agentSessionKey: request.agentSessionKey,
-        conversationRecall: request.conversationRecall,
-      });
-      const toolResult = await tool.execute("protected-wiki-get", { lookup: request.lookup });
-      expect(toolResult.details).toMatchObject({ found: allowed });
-
-      if (allowed) {
-        expect(result?.content).toBe("private transcript");
-      } else {
-        expect(result).toBeNull();
-        expect(manager.readFile).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it("permits session memory reads inside the caller visibility policy", async () => {
+  it("does not expose indexed session transcripts through wiki_get", async () => {
     const { config } = await createQueryVault({
       initialize: true,
       config: {
@@ -1994,17 +1887,8 @@ describe("getMemoryWikiPage", () => {
       lookup: "sessions/main/child-session.jsonl",
     });
 
-    expectFields(result, {
-      corpus: "memory",
-      path: "sessions/main/child-session.jsonl",
-      content: "own transcript content",
-    });
-    expect(manager.readFile).toHaveBeenCalledTimes(1);
-    expect(manager.readFile).toHaveBeenCalledWith({
-      relPath: "sessions/main/child-session.jsonl",
-      from: 1,
-      lines: 200,
-    });
+    expect(result).toBeNull();
+    expect(manager.readFile).not.toHaveBeenCalled();
   });
 
   it("requires appConfig for session-bound shared memory reads", async () => {
