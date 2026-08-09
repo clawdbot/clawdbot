@@ -59,6 +59,7 @@ describe("slackSetupWizard.prepare", () => {
 
     expect(lines.join("\n")).not.toContain("Manifest (JSON):");
     expect(lines.join("\n")).not.toContain('"display_information"');
+    expect(lines.join("\n")).toContain("Enable Interactivity");
     expect(lines).toContain("Manifest JSON follows as plain text for copy/paste.");
   });
 
@@ -167,6 +168,9 @@ describe("slackSetupWizard.prepare", () => {
             "reaction_removed",
           ],
         },
+        interactivity: {
+          is_enabled: true,
+        },
       },
     });
   });
@@ -210,6 +214,7 @@ describe("slackSetupWizard.prepare", () => {
     const instructions = requireFirstStringArg(queued.note, "Slack user identity instructions");
     expect(instructions).toContain("User Token Scopes");
     expect(instructions).toContain("Subscribe to events on behalf of users");
+    expect(instructions).toContain("Enable Interactivity");
     expect(instructions).toContain("/channels/slack#user-identity-post-as-a-real-person");
     expect(queued.select.mock.invocationCallOrder[0]).toBeLessThan(
       queued.note.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,

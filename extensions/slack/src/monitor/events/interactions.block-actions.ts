@@ -15,7 +15,11 @@ import {
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { decodeSlackApprovalAction, type SlackApprovalAction } from "../../approval-actions.js";
+import {
+  decodeSlackApprovalAction,
+  type SlackApprovalAction,
+  verifySlackEnterpriseApprovalAction,
+} from "../../approval-actions.js";
 import { isSlackApprovalAuthorizedSender } from "../../approval-auth.js";
 import { isSlackExecApprovalAuthorizedSender } from "../../exec-approvals.js";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
@@ -103,8 +107,10 @@ type SlackActionSummary = Omit<InteractionSummary, "actionId" | "blockId">;
 
 type SlackBlockActionBody = {
   api_app_id?: string;
-  user?: { id?: string };
-  team?: { id?: string };
+  user?: { id?: string; team_id?: string };
+  team?: { id?: string } | null;
+  enterprise?: { id?: string; name?: string };
+  is_enterprise_install?: boolean;
   trigger_id?: string;
   response_url?: string;
   channel?: { id?: string };
@@ -113,6 +119,7 @@ type SlackBlockActionBody = {
 };
 
 type SlackBlockActionRespond = NonNullable<SlackActionMiddlewareArgs["respond"]>;
+type SlackBlockActionMiddlewareArgs = SlackActionMiddlewareArgs & AllMiddlewareArgs;
 
 type ParsedSlackBlockAction = {
   typedBody: SlackBlockActionBody;
@@ -381,10 +388,33 @@ function isSlackReplyActionId(actionId: string): boolean {
   );
 }
 
-function readSlackApprovalAction(parsed: ParsedSlackBlockAction): SlackApprovalAction | null {
+function readSlackApprovalAction(params: {
+  ctx: SlackMonitorContext;
+  eventScope?: SlackEventScope;
+  parsed: ParsedSlackBlockAction;
+}): SlackApprovalAction | null {
+  if (params.ctx.installationIdentity.kind === "enterprise") {
+    const action = params.parsed.typedAction as {
+      value?: unknown;
+      selected_option?: { value?: unknown };
+    };
+    const value =
+      typeof action.value === "string"
+        ? action.value
+        : typeof action.selected_option?.value === "string"
+          ? action.selected_option.value
+          : undefined;
+    return params.eventScope?.teamId
+      ? verifySlackEnterpriseApprovalAction({
+          value,
+          teamId: params.eventScope.teamId,
+          signingKey: params.ctx.botToken,
+        })
+      : null;
+  }
   const value =
-    normalizeOptionalString(parsed.actionSummary.value) ??
-    parsed.actionSummary.selectedValues
+    normalizeOptionalString(params.parsed.actionSummary.value) ??
+    params.parsed.actionSummary.selectedValues
       ?.map((entry) => normalizeOptionalString(entry))
       .find((entry): entry is string => Boolean(entry));
   return decodeSlackApprovalAction(value);
@@ -620,6 +650,17 @@ async function handleSlackApprovalInteraction(params: {
   approval: SlackApprovalAction;
   respond?: SlackBlockActionRespond;
 }): Promise<boolean> {
+  const enterpriseOrgInstall = params.ctx.installationIdentity.kind === "enterprise";
+  if (enterpriseOrgInstall && params.approval.approvalKind === "plugin") {
+    params.ctx.runtime.log?.(
+      `slack:interaction drop plugin approval user=${params.parsed.userId} (Enterprise Grid unsupported)`,
+    );
+    await respondEphemeral(
+      params.respond,
+      "Plugin approvals are not available for Enterprise Grid org installs.",
+    );
+    return true;
+  }
   const pluginApprovalAuthorizedSender = isSlackApprovalAuthorizedSender({
     cfg: params.ctx.cfg,
     accountId: params.ctx.accountId,
@@ -629,6 +670,7 @@ async function handleSlackApprovalInteraction(params: {
     cfg: params.ctx.cfg,
     accountId: params.ctx.accountId,
     senderId: params.parsed.userId,
+    teamId: params.eventScope?.teamId,
   });
   const authorized =
     params.approval.approvalKind === "plugin"
@@ -1042,7 +1084,7 @@ async function updateSlackLegacyBlockAction(params: {
 async function handleSlackBlockAction(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
-  args: SlackActionMiddlewareArgs & AllMiddlewareArgs;
+  args: SlackBlockActionMiddlewareArgs;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): Promise<void> {
   const { ack, body, action, respond, context, client } = params.args;
@@ -1077,7 +1119,7 @@ async function handleSlackBlockAction(params: {
   }
   params.trackEvent?.();
   if (isSlackApprovalActionId(parsed.actionId)) {
-    const approval = readSlackApprovalAction(parsed);
+    const approval = readSlackApprovalAction({ ctx: params.ctx, eventScope, parsed });
     if (!approval) {
       params.ctx.runtime.log?.(
         `slack:interaction drop malformed approval action user=${parsed.userId} channel=${parsed.channelId ?? "unknown"}`,
@@ -1188,17 +1230,14 @@ function registerSlackBlockActionHandlerForMatcher(params: {
   if (typeof params.ctx.app.action !== "function") {
     return;
   }
-  params.ctx.app.action(
-    params.matcher,
-    async (args: SlackActionMiddlewareArgs & AllMiddlewareArgs) => {
-      await handleSlackBlockAction({
-        ctx: params.ctx,
-        trackEvent: params.trackEvent,
-        args,
-        formatSystemEvent: params.formatSystemEvent,
-      });
-    },
-  );
+  params.ctx.app.action(params.matcher, async (args) => {
+    await handleSlackBlockAction({
+      ctx: params.ctx,
+      trackEvent: params.trackEvent,
+      args,
+      formatSystemEvent: params.formatSystemEvent,
+    });
+  });
 }
 
 export function registerSlackBlockActionHandler(params: {

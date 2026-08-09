@@ -1,10 +1,14 @@
 // Slack tests cover approval handler plugin behavior.
+import type { Block, KnownBlock } from "@slack/web-api";
 import type {
   ApprovalActionView,
   ApprovalMetadataView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { decodeSlackApprovalAction } from "./approval-actions.js";
+import {
+  decodeSlackApprovalAction,
+  verifySlackEnterpriseApprovalAction,
+} from "./approval-actions.js";
 import { slackApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
 const { sendMessageSlackMock, updateMessageSlackMock } = vi.hoisted(() => ({
@@ -19,7 +23,7 @@ vi.mock("./send.js", () => ({
 
 type SlackPayload = {
   text: string;
-  blocks?: unknown;
+  blocks: Array<Block | KnownBlock>;
 };
 type SlackUpdateEntryParams = Parameters<
   NonNullable<typeof slackApprovalNativeRuntime.transport.updateEntry>
@@ -34,6 +38,7 @@ const APPROVAL_CONTEXT = {
   context: {
     app: {} as never,
     config: {} as never,
+    approvalSigningKey: "approval-signing-key",
   },
 };
 const APPROVAL_ENTRY = {
@@ -203,8 +208,12 @@ function buildPluginExpiredResult() {
   });
 }
 
-function findSlackActionsBlock(blocks: Array<{ type?: string; elements?: unknown[] }>) {
-  return blocks.find((block) => block.type === "actions");
+function findSlackActionsBlock(
+  blocks: readonly unknown[],
+): { type?: string; elements?: unknown[] } | undefined {
+  return blocks.find((block): block is { type?: string; elements?: unknown[] } =>
+    Boolean(block && typeof block === "object" && (block as { type?: unknown }).type === "actions"),
+  );
 }
 
 function readSlackActionLabels(block: { elements?: unknown[] } | undefined): string[] {
@@ -302,7 +311,16 @@ describe("slackApprovalNativeRuntime", () => {
       request: { command: "echo hi" },
       ...APPROVAL_TIMING,
     };
-    const pendingPayload = { text: "Approval required", blocks: [] };
+    const pendingPayload = await buildExecPendingPayload({
+      approvalId: "req-grid",
+      commandText: "echo hi",
+      decisions: ["allow-once", "deny"],
+    });
+    const originalActionsBlock = findSlackActionsBlock(pendingPayload.blocks);
+    expect(decodeSlackApprovalElements(originalActionsBlock)).toEqual([
+      expect.objectContaining({ approvalId: "req-grid", decision: "allow-once" }),
+      expect.objectContaining({ approvalId: "req-grid", decision: "deny" }),
+    ]);
     const prepared = await slackApprovalNativeRuntime.transport.prepareTarget({
       ...APPROVAL_CONTEXT,
       plannedTarget: {
@@ -344,9 +362,53 @@ describe("slackApprovalNativeRuntime", () => {
     });
     expect(sendMessageSlackMock).toHaveBeenCalledWith(
       "team:T123:channel:C123",
-      "Approval required",
+      expect.stringContaining("Exec approval required"),
       expect.objectContaining({ accountId: "default", threadTs: "1712345678.100000" }),
     );
+    const sendOptions = sendMessageSlackMock.mock.calls[0]?.[2] as
+      | { blocks?: Array<{ type?: string; elements?: Array<{ value?: unknown }> }> }
+      | undefined;
+    const actionsBlock = findSlackActionsBlock(sendOptions?.blocks ?? []);
+    const values = (actionsBlock?.elements ?? []).map((element) =>
+      element && typeof element === "object" ? (element as { value?: unknown }).value : undefined,
+    );
+    expect(values).toHaveLength(2);
+    expect(
+      values.map((value) =>
+        verifySlackEnterpriseApprovalAction({
+          value,
+          teamId: "T123",
+          signingKey: APPROVAL_CONTEXT.context.approvalSigningKey,
+        }),
+      ),
+    ).toEqual([
+      expect.objectContaining({ approvalId: "req-grid", decision: "allow-once" }),
+      expect.objectContaining({ approvalId: "req-grid", decision: "deny" }),
+    ]);
+    expect(decodeSlackApprovalElements(originalActionsBlock)).toEqual([
+      expect.objectContaining({ approvalId: "req-grid", decision: "allow-once" }),
+      expect.objectContaining({ approvalId: "req-grid", decision: "deny" }),
+    ]);
+    expect(
+      values.every(
+        (value) =>
+          verifySlackEnterpriseApprovalAction({
+            value,
+            teamId: "T999",
+            signingKey: APPROVAL_CONTEXT.context.approvalSigningKey,
+          }) === null,
+      ),
+    ).toBe(true);
+    expect(
+      values.every(
+        (value) =>
+          verifySlackEnterpriseApprovalAction({
+            value,
+            teamId: "T123",
+            signingKey: "wrong-key",
+          }) === null,
+      ),
+    ).toBe(true);
     expect(entry).toEqual({
       channelId: "C123",
       messageTs: "1712345678.200000",
@@ -497,6 +559,7 @@ describe("slackApprovalNativeRuntime", () => {
     const context = {
       app: {},
       config: {},
+      approvalSigningKey: "approval-signing-key",
     } as never;
 
     await updateSlackApprovalEntry(context, { text: "Resolved", blocks });

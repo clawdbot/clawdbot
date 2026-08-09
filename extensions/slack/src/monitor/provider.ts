@@ -680,6 +680,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       context: {
         app,
         config: slackCfg.execApprovals ?? {},
+        // Credential rotation intentionally invalidates outstanding Enterprise approval controls.
+        approvalSigningKey: token,
       },
       abortSignal: opts.abortSignal,
     });

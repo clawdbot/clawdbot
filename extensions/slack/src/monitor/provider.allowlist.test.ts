@@ -139,6 +139,7 @@ describe("slack startup user allowlist resolution", () => {
           capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
           context: expect.objectContaining({
             config: expect.objectContaining({ enabled: false }),
+            approvalSigningKey: "bot-token",
           }),
         }),
       );
@@ -160,7 +161,7 @@ describe("slack startup user allowlist resolution", () => {
           groupPolicy: "open",
           execApprovals: {
             enabled: true,
-            approvers: ["U123OWNER"],
+            approvers: ["team:T1:user:U123OWNER"],
             target: "both",
           },
         },
@@ -184,6 +185,7 @@ describe("slack startup user allowlist resolution", () => {
           capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
           context: expect.objectContaining({
             config: expect.objectContaining({ enabled: true }),
+            approvalSigningKey: "bot-token",
           }),
         }),
       );

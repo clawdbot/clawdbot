@@ -123,7 +123,7 @@ export const slackChannelConfigUiHints = {
   },
   "execApprovals.approvers": {
     label: "Slack Exec Approval Approvers",
-    help: "Slack user IDs allowed to approve exec requests for this workspace account. Use Slack user IDs or user targets such as `U123`, `user:U123`, or `<@U123>`. If you leave this unset, OpenClaw falls back to commands.ownerAllowFrom when possible.",
+    help: "Slack users allowed to approve exec requests. Workspace installs accept IDs or user targets such as `U123`, `user:U123`, or `<@U123>` and can fall back to commands.ownerAllowFrom. Enterprise Grid accounts require explicit `team:T123:user:U123` targets; raw IDs and owner fallback are ignored.",
   },
   "execApprovals.agentFilter": {
     label: "Slack Exec Approval Agent Filter",

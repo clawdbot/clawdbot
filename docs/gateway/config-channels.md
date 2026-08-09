@@ -482,8 +482,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   direct Socket Mode or HTTP `message` and `app_mention` events with immediate
   replies; relay, commands, general interactions, App Home, reaction event
   listeners, pins, action tools, bindings, deferred delivery, and proactive
-  sends are unavailable. Slack-native approval buttons remain available and
-  use the originating workspace for delivery and updates. Listener-owned
+  sends are unavailable. Slack-native exec approval buttons remain available
+  when `execApprovals.approvers` contains an explicit
+  `team:<team-id>:user:<user-id>` target for the originating workspace. Raw
+  approvers and `commands.ownerAllowFrom` fallback are ignored; native plugin
+  approvals remain unavailable. Listener-owned
   acknowledgment, typing, and status reactions remain available with
   `reactions:write`; inbound reaction notifications and reaction action tools
   are unavailable. See
@@ -510,7 +513,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - Slack native streaming plus the Slack assistant-style "is typing..." thread status require a reply thread target. Top-level DMs stay off-thread by default, so they can still stream through Slack draft post-and-edit previews instead of showing the thread-style native stream/status preview.
 - `typingReaction` adds a temporary reaction to the inbound Slack message while a reply is running, then removes it on completion. Use a Slack emoji shortcode such as `"hourglass_flowing_sand"`.
-- `channels.slack.execApprovals`: Slack-native approval-client delivery and exec approver authorization. Same schema as Discord: `enabled` (`true`/`false`/`"auto"`), `approvers` (Slack user IDs), `agentFilter`, `sessionFilter`, and `target` (`"dm"`, `"channel"`, or `"both"`). Plugin approvals can use this native-client path for Slack-origin requests when Slack plugin approvers resolve; Slack-native plugin approval delivery can also be enabled through `approvals.plugin` for Slack-origin sessions or Slack targets. Plugin approvals use Slack plugin approvers from `allowFrom` and default routing, not exec approvers.
+- `channels.slack.execApprovals`: Slack-native approval-client delivery and exec approver authorization: `enabled` (`true`/`false`/`"auto"`), `approvers`, `agentFilter`, `sessionFilter`, and `target` (`"dm"`, `"channel"`, or `"both"`). Workspace installs accept Slack user IDs and can fall back to `commands.ownerAllowFrom`; plugin approvals use workspace Slack approvers from `allowFrom` and default routing, not exec approvers. Enterprise Grid accounts require explicit `team:<team-id>:user:<user-id>` exec approvers matching the originating team, ignore raw and owner-fallback approvers, and do not support native plugin approvals.
 
 | Action group | Default | Notes                  |
 | ------------ | ------- | ---------------------- |
