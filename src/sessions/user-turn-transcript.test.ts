@@ -545,7 +545,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("waits for a deferred projection rebuild before returning admission identity", async () => {
-      const dir = createTempDir("openclaw-user-turn-recorder-projection-");
+      const dir = tempDirs.make("openclaw-user-turn-recorder-projection-");
       const target = createSqliteTranscriptTarget({ dir });
       await replaceSessionEntry(
         { storePath: target.storePath, sessionKey: target.sessionKey },
