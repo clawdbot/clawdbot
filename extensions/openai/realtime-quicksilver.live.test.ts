@@ -319,9 +319,15 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
               responseCreateCountAtToolCall = responseCreateCount;
               resolveTool();
               try {
-                controlBridge?.submitToolResult(event.callId, {
-                  result: "OpenClaw GA sideband live proof passed.",
-                });
+                void Promise.resolve(
+                  controlBridge?.submitToolResult(event.callId, {
+                    result: "OpenClaw GA sideband live proof passed.",
+                  }),
+                ).catch((error: unknown) =>
+                  rejectFunctionOutputAdded(
+                    error instanceof Error ? error : new Error("function output submission failed"),
+                  ),
+                );
               } catch (error) {
                 rejectFunctionOutputAdded(
                   error instanceof Error ? error : new Error("function output submission failed"),
