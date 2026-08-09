@@ -8,10 +8,6 @@ import type { RuntimeId } from "./runtime-parity.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import { scenarioRequiresControlUi, splitModelRef } from "./suite-planning.js";
-import {
-  getQaSuiteConfigMutation,
-  withQaSuiteConfigMutation,
-} from "./suite-config-mutation.internal.js";
 import type { QaSuiteRunParams, QaSuiteScenarioResult, QaSuiteStartLabFn } from "./suite-types.js";
 
 type QaCrablineRuntime = typeof import("@openclaw/crabline");
@@ -77,12 +73,13 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
   input?: QaSuiteRunParams;
   startLab: QaSuiteStartLabFn;
 }): QaSuiteRunParams {
-  return withQaSuiteConfigMutation({
+  return {
     adapterFactories: params.input?.adapterFactories,
     adapterOptions: params.input?.adapterOptions,
     channelId: params.input?.channelId,
     repoRoot: params.repoRoot,
     sutOpenClawCommand: params.input?.sutOpenClawCommand,
+    mutateConfig: params.input?.mutateConfig,
     outputDir: params.outputDir,
     providerMode: params.providerMode,
     transportId: params.transportId,
@@ -106,7 +103,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
         ? params.input.roundTripProbe
         : undefined,
     writeEvidenceFile: params.input?.writeEvidenceFile,
-  }, getQaSuiteConfigMutation(params.input));
+  };
 }
 
 export function remapModelRefForForcedRuntime(params: {

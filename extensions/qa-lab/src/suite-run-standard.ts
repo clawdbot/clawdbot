@@ -27,7 +27,6 @@ import {
   mergeQaRuntimeEnvPatches,
   runQaScenarioWithFlakeRetry,
 } from "./suite-support.js";
-import { getQaSuiteConfigMutation } from "./suite-config-mutation.internal.js";
 import type {
   QaSuiteEnvironment,
   QaSuiteResolvedRunContext,
@@ -113,7 +112,6 @@ export async function runQaFlowSuiteStandard(
   let completionProgress: string | undefined;
   let evidenceWritten = false;
   const startedScenarioIds: string[] = [];
-  const configMutation = getQaSuiteConfigMutation(params);
   try {
     writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
     const activeMock = await startQaProviderServer(providerMode, {
@@ -144,12 +142,12 @@ export async function runQaFlowSuiteStandard(
       allowUnhealthyStartup: gatewayRuntimeOptions?.allowUnhealthyStartup,
       forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
       mutateConfig:
-        gatewayConfigPatch || configMutation
+        gatewayConfigPatch || params?.mutateConfig
           ? (cfg) => {
               const patchedConfig = gatewayConfigPatch
                 ? (applyQaMergePatch(cfg, gatewayConfigPatch) as OpenClawConfig)
                 : cfg;
-              return configMutation ? configMutation(patchedConfig) : patchedConfig;
+              return params?.mutateConfig ? params.mutateConfig(patchedConfig) : patchedConfig;
             }
           : undefined,
       // The gateway owns forced runtime, sandbox args, staged mock models, and provider keys.

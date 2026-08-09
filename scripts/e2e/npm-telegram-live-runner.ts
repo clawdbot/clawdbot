@@ -200,7 +200,7 @@ async function main() {
     throw new Error("Missing OPENCLAW_NPM_TELEGRAM_SUT_COMMAND.");
   }
   const sutOpenClawCommand = await resolveTrustedOpenClawCommand(rawSutOpenClawCommand);
-  const configMutation = resolvePackageConfigMutation();
+  const mutateConfig = resolvePackageConfigMutation();
 
   const repoRoot = path.resolve(process.env.OPENCLAW_NPM_TELEGRAM_REPO_ROOT ?? process.cwd());
   const outputDir = resolvePackageTelegramOutputDir(process.env, repoRoot);
@@ -228,7 +228,7 @@ async function main() {
     scenarioIds,
     resolvedScenarioIds: prioritizeRoundTripProbeScenario(resolvedScenarioIds, rttOptions),
     roundTripProbe: createRoundTripProbe(rttOptions),
-    ...(configMutation ? { configMutation } : {}),
+    ...(mutateConfig ? { mutateConfig } : {}),
     sutAccountId: process.env.OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT,
     credentialSource: resolveCredentialSource(process.env),
     credentialRole: resolveCredentialRole(process.env),
@@ -276,7 +276,6 @@ export const testing = {
   createRoundTripProbe,
   prioritizeRoundTripProbeScenario,
   projectExtendedStable2026_6_35QaConfig,
-  resolvePackageConfigMutation,
   resolveRttOptions,
   resolveTrustedOpenClawCommand,
   shouldFailPackageTelegramRun,

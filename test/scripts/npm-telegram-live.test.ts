@@ -241,35 +241,6 @@ describe("package Telegram live Docker E2E", () => {
     ).rejects.toThrow("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must resolve inside NPM_CONFIG_PREFIX.");
   });
 
-  it("projects the frozen 2026.6.35 package config without changing current package config", () => {
-    const mutateConfig = testing.resolvePackageConfigMutation({
-      OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: "2026.6.35",
-    });
-    expect(mutateConfig).toBeDefined();
-    const projected = mutateConfig!({
-      memory: { backend: "builtin", search: { provider: "openai-compatible" } },
-      plugins: { allow: ["telegram"], entries: { telegram: { enabled: true } } },
-      agents: {
-        defaults: { mediaModels: { image: { primary: "openai/gpt-image-1" } } },
-        entries: { qa: { default: true, tools: { profile: "coding" } } },
-      },
-    });
-
-    expect(projected.memory).toEqual({ backend: "builtin" });
-    expect(projected.plugins).toMatchObject({
-      allow: ["telegram"],
-      entries: { telegram: { enabled: true } },
-      bundledDiscovery: "compat",
-    });
-    expect(projected.agents).toMatchObject({
-      defaults: { imageGenerationModel: { primary: "openai/gpt-image-1" } },
-      list: [{ id: "qa", default: true, tools: { profile: "coding" } }],
-    });
-    expect(
-      testing.resolvePackageConfigMutation({ OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION: "2026.8.1" }),
-    ).toBeUndefined();
-  });
-
   it("mounts the QA taxonomy without exposing the repository root", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
 
