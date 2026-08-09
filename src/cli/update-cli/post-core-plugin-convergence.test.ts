@@ -127,8 +127,16 @@ describe("runPostCorePluginConvergence", () => {
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
     });
-    expect(mocks.maybeRepairStaleManagedNpmBundledPlugins.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.repairMissingConfiguredPluginInstalls.mock.invocationCallOrder[0],
+    expect(
+      expectDefined(
+        mocks.maybeRepairStaleManagedNpmBundledPlugins.mock.invocationCallOrder[0],
+        "stale managed cleanup call order",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        mocks.repairMissingConfiguredPluginInstalls.mock.invocationCallOrder[0],
+        "missing configured plugin repair call order",
+      ),
     );
   });
 
