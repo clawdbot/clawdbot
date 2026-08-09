@@ -462,25 +462,6 @@ describe("AppSidebar session mutation feedback", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it("patches a session icon from the picker", async () => {
-    const { harness, sidebar } = await mountMutationHarness();
-    const menu = await openSessionMenu(sidebar, "agent:main:a");
-    menu.querySelector<HTMLElement>('wa-dropdown-item[value="change-icon"]')?.click();
-    await menu.updateComplete;
-
-    menu
-      .querySelector<HTMLButtonElement>('.session-menu__icon-choice[aria-label="spark"]')
-      ?.click();
-
-    await waitForFast(() =>
-      expect(harness.patch).toHaveBeenCalledWith(
-        "agent:main:a",
-        { icon: "name:spark" },
-        { agentId: "main" },
-      ),
-    );
-  });
-
   it("reconciles and stops an idle active cloud worker through its session", async () => {
     const request = vi.fn(() => Promise.resolve({ ok: true }));
     const { gateway, harness, sidebar } = await mountMutationHarness({

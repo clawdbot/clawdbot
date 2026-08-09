@@ -211,7 +211,6 @@ describe("lazy protocol validators", () => {
       label: "Label",
       category: "Category",
       boardFace: "dashboard",
-      icon: "name:spark",
       statusNote: "Working",
       attention: "hand",
       ttlMinutes: 30,

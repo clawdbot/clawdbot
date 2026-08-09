@@ -326,7 +326,6 @@ describe("method scope resolution", () => {
         key: "agent:main:ios-1",
         label: "Trip planning",
         boardFace: "dashboard",
-        icon: "name:spark",
         pinned: true,
         archived: false,
       }),

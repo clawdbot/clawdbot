@@ -20,7 +20,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "archivedAt",
   "archivedBy",
   "pinnedAt",
-  "icon",
   "lastReadAt",
   "agentStatus",
   "observerDigest",
@@ -167,7 +166,13 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pendingTranscriptRepair",
   "visibility",
 ] as const satisfies ReadonlyArray<
-  keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"
+  | keyof SessionEntry
+  | "__proto__"
+  | "constructor"
+  | "prototype"
+  | "icon"
+  | "sessionFile"
+  | "transcriptPath"
 >;
 
 type ReservedSessionEntrySlotKey = Extract<
