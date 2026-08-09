@@ -2516,6 +2516,36 @@ describe("MatrixClient crypto bootstrapping", () => {
     });
   });
 
+  it("does not force-reset bootstrap when cross-signing needs interactive approval", async () => {
+    matrixJsClient.getCrypto = vi.fn(() => ({ on: vi.fn() }));
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+    });
+    const bootstrapSpy = vi.fn().mockResolvedValue({
+      crossSigningReady: false,
+      crossSigningPublished: false,
+      ownDeviceVerified: null,
+      crossSigningApprovalRequired: {
+        guidance: "Open https://mas.example.org/account?action=org.matrix.cross_signing_reset",
+        resetUrl: "https://mas.example.org/account?action=org.matrix.cross_signing_reset",
+      },
+    });
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
+    (
+      client as unknown as {
+        cryptoBootstrapper: { bootstrap: typeof bootstrapSpy };
+      }
+    ).cryptoBootstrapper.bootstrap = bootstrapSpy;
+
+    await client.start();
+
+    expect(bootstrapSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("does not force-reset bootstrap automatically when the device has an owner signature but not full trust", async () => {
     matrixJsClient.getCrypto = vi.fn(() => ({ on: vi.fn() }));
     const client = new MatrixClient("https://matrix.example.org", "token", {

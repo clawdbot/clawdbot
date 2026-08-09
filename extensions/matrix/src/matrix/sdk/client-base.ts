@@ -626,7 +626,13 @@ export abstract class MatrixClientBase {
       MATRIX_INITIAL_CRYPTO_BOOTSTRAP_OPTIONS,
     );
     throwIfMatrixStartupAborted(abortSignal);
-    if (!initial.crossSigningPublished || initial.ownDeviceVerified === false) {
+    if (initial.crossSigningApprovalRequired) {
+      LogService.warn(
+        "MatrixClientLite",
+        "Cross-signing needs interactive approval; skipping automatic reset.",
+        initial.crossSigningApprovalRequired.guidance,
+      );
+    } else if (!initial.crossSigningPublished || initial.ownDeviceVerified === false) {
       const status = await this.getOwnDeviceVerificationStatus();
       if (status.signedByOwner) {
         LogService.warn(

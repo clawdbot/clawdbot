@@ -35,15 +35,27 @@ export type MatrixCryptoBootstrapOptions = {
   strict?: boolean;
 };
 
+type MatrixCrossSigningApprovalRequired = {
+  guidance: string;
+  resetUrl?: string;
+};
+
 export type MatrixCryptoBootstrapResult = {
   crossSigningReady: boolean;
   crossSigningPublished: boolean;
   ownDeviceVerified: boolean | null;
+  crossSigningApprovalRequired?: MatrixCrossSigningApprovalRequired;
 };
 
 const CROSS_SIGNING_PUBLICATION_WAIT_MS = 5_000;
 
 const INTERACTIVE_RESET_UIA_STAGES = new Set(["org.matrix.cross_signing_reset", "m.oauth"]);
+
+type CrossSigningBootstrapOutcome = {
+  ready: boolean;
+  published: boolean;
+  approvalRequired?: MatrixCrossSigningApprovalRequired;
+};
 
 type CrossSigningBootstrapOptions = {
   forceResetCrossSigning: boolean;
@@ -197,11 +209,15 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
       strict,
     });
 
-    if (forceReset && (!crossSigning.ready || !crossSigning.published)) {
+    if (
+      crossSigning.approvalRequired ||
+      (forceReset && !(crossSigning.ready && crossSigning.published))
+    ) {
       return {
         crossSigningReady: crossSigning.ready,
         crossSigningPublished: crossSigning.published,
         ownDeviceVerified: null,
+        crossSigningApprovalRequired: crossSigning.approvalRequired,
       };
     }
 
@@ -283,7 +299,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
   private async bootstrapCrossSigning(
     crypto: MatrixCryptoBootstrapApi,
     options: CrossSigningBootstrapOptions,
-  ): Promise<{ ready: boolean; published: boolean }> {
+  ): Promise<CrossSigningBootstrapOutcome> {
     try {
       return await this.runCrossSigningBootstrap(crypto, options);
     } catch (err) {
@@ -293,10 +309,11 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
           "Cross-signing bootstrap needs interactive approval:",
           err.message,
         );
-        if (options.strict) {
-          throw err;
-        }
-        return { ready: false, published: false };
+        return {
+          ready: false,
+          published: false,
+          approvalRequired: { guidance: err.message, resetUrl: err.resetUrl },
+        };
       }
       throw err;
     }
@@ -305,7 +322,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
   private async runCrossSigningBootstrap(
     crypto: MatrixCryptoBootstrapApi,
     options: CrossSigningBootstrapOptions,
-  ): Promise<{ ready: boolean; published: boolean }> {
+  ): Promise<CrossSigningBootstrapOutcome> {
     const userId = await this.deps.getUserId();
     const authUploadDeviceSigningKeys = this.createSigningKeysUiAuthCallback({
       userId,

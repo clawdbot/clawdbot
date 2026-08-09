@@ -508,7 +508,9 @@ export class MatrixClient extends MatrixClientVerification {
             : params?.allowAutomaticCrossSigningReset,
         }),
       );
-      await this.ensureRoomKeyBackupEnabled(crypto);
+      if (!bootstrapSummary.crossSigningApprovalRequired) {
+        await this.ensureRoomKeyBackupEnabled(crypto);
+      }
     } catch (err) {
       this.recoveryKeyStore.discardStagedRecoveryKey();
       bootstrapError = formatErrorMessage(err);
@@ -519,7 +521,8 @@ export class MatrixClient extends MatrixClientVerification {
     const verificationError =
       verification.verified && crossSigning.published
         ? null
-        : (bootstrapError ??
+        : (bootstrapSummary?.crossSigningApprovalRequired?.guidance ??
+          bootstrapError ??
           "Matrix verification bootstrap did not produce a device verified by its owner with published cross-signing keys");
     const backupError =
       verificationError === null

@@ -345,22 +345,15 @@ describe("MatrixCryptoBootstrapper UIA", () => {
       deps as unknown as MatrixCryptoBootstrapperDeps<MatrixRawEvent>,
     );
 
-    let caught: unknown;
-    try {
-      await bootstrapper.bootstrap(crypto, {
-        strict: true,
-        forceResetCrossSigning: true,
-        allowSecretStorageRecreateWithoutRecoveryKey: true,
-      });
-    } catch (err) {
-      caught = err;
-    }
+    const result = await bootstrapper.bootstrap(crypto, {
+      strict: true,
+      forceResetCrossSigning: true,
+      allowSecretStorageRecreateWithoutRecoveryKey: true,
+    });
 
-    const resetErr = expectResetRequiredError(caught);
-    expect(resetErr.resetUrl).toBe(masUrl);
-    expect(resetErr.session).toBe("sess-mas");
-    expect(resetErr.stages).toContain("org.matrix.cross_signing_reset");
-    expect(resetErr.message).toContain(masUrl);
+    expect(result.crossSigningApprovalRequired?.resetUrl).toBe(masUrl);
+    expect(result.crossSigningApprovalRequired?.guidance).toContain(masUrl);
+    expect(result.crossSigningPublished).toBe(false);
     expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
   });
 
@@ -391,14 +384,9 @@ describe("MatrixCryptoBootstrapper UIA", () => {
       getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
     });
 
-    let caught: unknown;
-    try {
-      await bootstrapper.bootstrap(crypto, { strict: true });
-    } catch (err) {
-      caught = err;
-    }
+    const result = await bootstrapper.bootstrap(crypto, { strict: true });
 
-    expect(expectResetRequiredError(caught).resetUrl).toBe(oauthUrl);
+    expect(result.crossSigningApprovalRequired?.resetUrl).toBe(oauthUrl);
   });
 
   it("does not retry with a fresh-identity reset after the MAS reset stage rejects the upload", async () => {
@@ -475,14 +463,9 @@ describe("MatrixCryptoBootstrapper UIA", () => {
       getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
     });
 
-    let caught: unknown;
-    try {
-      await bootstrapper.bootstrap(crypto, { strict: true });
-    } catch (err) {
-      caught = err;
-    }
+    const result = await bootstrapper.bootstrap(crypto, { strict: true });
 
-    expect(expectResetRequiredError(caught).resetUrl).toBe(masUrl);
+    expect(result.crossSigningApprovalRequired?.resetUrl).toBe(masUrl);
     expect(bootstrapCrossSigning).toHaveBeenCalledTimes(2);
     expectBootstrapCrossSigningCall(bootstrapCrossSigning, 2, { setupNewCrossSigning: true });
   });
