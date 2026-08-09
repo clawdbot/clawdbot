@@ -16,12 +16,14 @@ import {
   consumeSystemEventEntries,
   drainSystemEventEntries,
   enqueueSystemEvent,
+  enqueueSystemEventEntry,
   hasSystemEvents,
   isSystemEventContextChanged,
   peekSystemEventEntries,
   peekSystemEvents,
   resetSystemEventsForTest,
   resolveSystemEventDeliveryContext,
+  type SystemEvent,
 } from "./system-events.js";
 
 type SystemEventsModule = typeof import("./system-events.js");
@@ -218,6 +220,55 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents(key)).toEqual(["second"]);
   });
 
+  it.each([
+    {
+      name: "prefix consume with object spread",
+      consume: consumeSystemEventEntries,
+      copy: (event: SystemEvent): SystemEvent => ({ ...event }),
+    },
+    {
+      name: "selected consume with structuredClone",
+      consume: consumeSelectedSystemEventEntries,
+      copy: (event: SystemEvent): SystemEvent => structuredClone(event),
+    },
+    {
+      name: "prefix consume with JSON round trip",
+      consume: consumeSystemEventEntries,
+      // oxlint-disable-next-line unicorn/prefer-structured-clone -- This case exercises JSON transport.
+      copy: (event: SystemEvent): SystemEvent => JSON.parse(JSON.stringify(event)) as SystemEvent,
+    },
+  ])("does not consume an identical successor from a stale copy: $name", ({ consume, copy }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-08T00:00:00Z"));
+
+    const key = "agent:main:test-stale-copied-snapshot";
+    const options = {
+      sessionKey: key,
+      contextKey: "build:123",
+      deliveryContext: { channel: "telegram", to: "-100123", threadId: "42" },
+    };
+    const original = expectDefined(
+      enqueueSystemEventEntry("Build completed", options),
+      "original event",
+    );
+    const staleCopy = copy(original);
+    expect(staleCopy.id).toBe(original.id);
+
+    expect(consume(key, [original]).map((event) => event.id)).toEqual([original.id]);
+    const successor = expectDefined(
+      enqueueSystemEventEntry("Build completed", options),
+      "successor event",
+    );
+    expect(successor.id).not.toBe(original.id);
+    expect(successor).toEqual({ ...original, id: successor.id });
+
+    expect(consume(key, [staleCopy])).toStrictEqual([]);
+    expect(peekSystemEventEntries(key).map((event) => event.id)).toEqual([successor.id]);
+
+    expect(consume(key, [successor]).map((event) => event.id)).toEqual([successor.id]);
+    expect(peekSystemEventEntries(key)).toStrictEqual([]);
+  });
+
   it("matches consumed delivery contexts through normalized route identity", () => {
     const key = "agent:main:test-consume-route-context";
     enqueueSystemEvent("first", {
@@ -228,13 +279,22 @@ describe("system events (session routing)", () => {
         threadId: 42.9,
       },
     });
-    const inspected = peekSystemEventEntries(key);
-    expectDefined(
-      expectDefined(inspected[0], "inspected event").deliveryContext,
-      "inspected delivery context",
-    ).threadId = "42";
+    const current = expectDefined(peekSystemEventEntries(key)[0], "queued event");
+    const legacyCopy: SystemEvent = {
+      text: current.text,
+      ts: current.ts,
+      contextKey: current.contextKey,
+      deliveryContext: {
+        channel: current.deliveryContext?.channel,
+        to: current.deliveryContext?.to,
+        threadId: "42",
+      },
+    };
+    expect(legacyCopy).not.toHaveProperty("id");
 
-    expect(consumeSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual(["first"]);
+    expect(consumeSystemEventEntries(key, [legacyCopy]).map((entry) => entry.text)).toEqual([
+      "first",
+    ]);
     expect(peekSystemEvents(key)).toStrictEqual([]);
   });
 
