@@ -617,7 +617,7 @@ export async function editMessageMSTeams(
     );
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
+    const hint = formatMSTeamsSendErrorHint(classification, "edit");
     const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
     throw new Error(
       `msteams edit failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
@@ -654,7 +654,7 @@ export async function deleteMessageMSTeams(
     });
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
-    const hint = formatMSTeamsSendErrorHint(classification);
+    const hint = formatMSTeamsSendErrorHint(classification, "delete");
     const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
     throw new Error(
       `msteams delete failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,

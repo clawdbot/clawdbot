@@ -646,6 +646,40 @@ describe("editMessageMSTeams", () => {
       }),
     ).rejects.toThrow("msteams edit failed");
   });
+
+  it("describes an ambiguous edit 503 as possibly applied, not duplicate delivery", async () => {
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      app: createMockApp(),
+      appId: "app-id",
+      conversationId: "19:conversation@thread.tacv2",
+      ref: {
+        user: { id: "user-1" },
+        agent: { id: "agent-1" },
+        conversation: { id: "19:conversation@thread.tacv2", conversationType: "personal" },
+        channelId: "msteams",
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "personal",
+      sdkCloudOptions: { cloud: "Public" },
+      tokenProvider: {},
+    });
+    mockState.updateMSTeamsActivityWithReference.mockRejectedValue(
+      Object.assign(new Error("connector 503"), { statusCode: 503 }),
+    );
+
+    const err: unknown = await editMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:conversation@thread.tacv2",
+      activityId: "activity-123",
+      text: "Updated text",
+    }).catch((error: unknown) => error);
+
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("msteams edit failed (HTTP 503)");
+    expect(message).toContain("verify the message state in Teams");
+    expect(message).not.toContain("duplicate delivery");
+  });
 });
 
 describe("deleteMessageMSTeams", () => {
@@ -703,6 +737,39 @@ describe("deleteMessageMSTeams", () => {
         activityId: "activity-456",
       }),
     ).rejects.toThrow("msteams delete failed");
+  });
+
+  it("describes an ambiguous delete 503 as possibly completed, not duplicate delivery", async () => {
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      app: createMockApp(),
+      appId: "app-id",
+      conversationId: "19:conversation@thread.tacv2",
+      ref: {
+        user: { id: "user-1" },
+        agent: { id: "agent-1" },
+        conversation: { id: "19:conversation@thread.tacv2", conversationType: "groupChat" },
+        channelId: "msteams",
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "groupChat",
+      sdkCloudOptions: { cloud: "Public" },
+      tokenProvider: {},
+    });
+    mockState.deleteMSTeamsActivityWithReference.mockRejectedValue(
+      Object.assign(new Error("connector 503"), { statusCode: 503 }),
+    );
+
+    const err: unknown = await deleteMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:conversation@thread.tacv2",
+      activityId: "activity-456",
+    }).catch((error: unknown) => error);
+
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("msteams delete failed (HTTP 503)");
+    expect(message).toContain("verify the message state in Teams");
+    expect(message).not.toContain("duplicate delivery");
   });
 
   it("uses app from the resolved context for delete operations", async () => {

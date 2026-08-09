@@ -305,6 +305,7 @@ export function isRevokedProxyError(err: unknown): boolean {
 
 export function formatMSTeamsSendErrorHint(
   classification: MSTeamsSendErrorClassification,
+  operation: "send" | "edit" | "delete" = "send",
 ): string | undefined {
   if (classification.kind === "auth") {
     return "check msteams appId/appPassword/tenantId (or env vars MSTEAMS_APP_ID/MSTEAMS_APP_PASSWORD/MSTEAMS_TENANT_ID)";
@@ -318,6 +319,12 @@ export function formatMSTeamsSendErrorHint(
   if (classification.kind === "ambiguous") {
     if (classification.stage === "prepare") {
       return "attachment preparation (Graph/SharePoint) failed before the Teams message was created; nothing was delivered — safe to retry";
+    }
+    if (operation === "edit") {
+      return "Teams may have applied the edit before failing — verify the message state in Teams before retrying";
+    }
+    if (operation === "delete") {
+      return "Teams may have completed the deletion before failing — verify the message state in Teams before retrying";
     }
     return "Teams/Bot Framework may have accepted the message before failing; not retried to avoid duplicate delivery — verify in Teams before resending";
   }

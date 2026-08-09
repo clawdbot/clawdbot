@@ -128,6 +128,20 @@ describe("msteams errors", () => {
     expect(formatMSTeamsSendErrorHint(send)).toContain("verify in Teams");
   });
 
+  it("scopes ambiguous guidance by operation for edit/delete", () => {
+    // Edits and deletes never create a message, so the create-oriented
+    // duplicate-delivery wording would be wrong for them.
+    const editHint = formatMSTeamsSendErrorHint({ kind: "ambiguous", statusCode: 503 }, "edit");
+    expect(editHint).toContain("applied the edit");
+    expect(editHint).toContain("verify the message state in Teams");
+    expect(editHint).not.toContain("duplicate delivery");
+
+    const deleteHint = formatMSTeamsSendErrorHint({ kind: "ambiguous", statusCode: 503 }, "delete");
+    expect(deleteHint).toContain("completed the deletion");
+    expect(deleteHint).toContain("verify the message state in Teams");
+    expect(deleteHint).not.toContain("duplicate delivery");
+  });
+
   it("classifies permanent 4xx errors", () => {
     const result = classifyMSTeamsSendError({ statusCode: 400 });
     expect(result.kind).toBe("permanent");
