@@ -1461,17 +1461,50 @@ describe("GatewayClient connect auth payload", () => {
       minProtocol: MIN_NODE_PROTOCOL_VERSION,
       maxProtocol: MIN_NODE_PROTOCOL_VERSION,
     });
-    emitHelloOk(upgradedProbeWs, upgradedProbeConnect.id, PROTOCOL_VERSION);
+    emitConnectFailure(
+      upgradedProbeWs,
+      upgradedProbeConnect.id,
+      { expectedProtocol: PROTOCOL_VERSION },
+      "protocol mismatch",
+    );
 
     await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(3), { timeout: 3_000 });
     expect(onHelloOk).toHaveBeenCalledOnce();
     const currentReconnectWs = getLatestWs();
     currentReconnectWs.emitOpen();
     emitConnectChallenge(currentReconnectWs, "nonce-v4-upgraded");
-    expect(connectRequestFrom(currentReconnectWs).params).toMatchObject({
+    const currentReconnect = connectRequestFrom(currentReconnectWs);
+    expect(currentReconnect.params).toMatchObject({
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       client: { platform: "macos", deviceFamily: "Mac" },
+    });
+    emitHelloOk(currentReconnectWs, currentReconnect.id, PROTOCOL_VERSION);
+    await waitForFast(() => expect(onHelloOk).toHaveBeenCalledTimes(2));
+
+    currentReconnectWs.emitClose(1012, "gateway rolled back");
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(4), { timeout: 3_000 });
+    const rolledBackProbeWs = getLatestWs();
+    rolledBackProbeWs.emitOpen();
+    emitConnectChallenge(rolledBackProbeWs, "nonce-v4-rolled-back");
+    const rolledBackProbeConnect = connectRequestFrom(rolledBackProbeWs);
+    expect(rolledBackProbeConnect.params).toMatchObject({
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+    });
+    emitConnectFailure(
+      rolledBackProbeWs,
+      rolledBackProbeConnect.id,
+      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      "protocol mismatch",
+    );
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(5), { timeout: 3_000 });
+    const rolledBackLegacyWs = getLatestWs();
+    rolledBackLegacyWs.emitOpen();
+    emitConnectChallenge(rolledBackLegacyWs, "nonce-v3-rolled-back");
+    expect(connectRequestFrom(rolledBackLegacyWs).params).toMatchObject({
+      minProtocol: MIN_NODE_PROTOCOL_VERSION,
+      maxProtocol: MIN_NODE_PROTOCOL_VERSION,
     });
     client.stop();
   });

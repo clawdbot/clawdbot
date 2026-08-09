@@ -907,6 +907,24 @@ export class GatewayClient {
     );
   }
 
+  private shouldRetryWithCurrentNodeProtocol(error: GatewayProtocolRequestError): boolean {
+    if (
+      !this.useLegacyNodeProtocolEnvelope ||
+      !this.shouldNegotiateLegacyNodeProtocol() ||
+      !(error instanceof GatewayClientRequestError)
+    ) {
+      return false;
+    }
+    const detailCode = readConnectErrorDetailCode(error.details);
+    const expectedProtocol = (error.details as { expectedProtocol?: unknown } | null | undefined)
+      ?.expectedProtocol;
+    return (
+      expectedProtocol === PROTOCOL_VERSION &&
+      (detailCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
+        normalizeLowercaseStringOrEmpty(error.message).includes("protocol mismatch"))
+    );
+  }
+
   private buildDeviceConnectParams(params: {
     nonce: string;
     role: string;
@@ -951,8 +969,8 @@ export class GatewayClient {
       this.useLegacyNodeProtocolEnvelope && helloOk.protocol > MIN_NODE_PROTOCOL_VERSION;
     if (reconnectWithCurrentNodeProtocol) {
       this.useLegacyNodeProtocolEnvelope = false;
-      this.legacyNodeProtocolRetryBudgetUsed = false;
     }
+    this.legacyNodeProtocolRetryBudgetUsed = false;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.suppressedTransientPreHelloCleanCloses = 0;
@@ -986,6 +1004,15 @@ export class GatewayClient {
     error: GatewayProtocolRequestError,
     assembled: AssembledConnect,
   ) {
+    if (this.shouldRetryWithCurrentNodeProtocol(error)) {
+      // Keep the retry budget armed until v4 succeeds so contradictory
+      // mismatch responses cannot bounce the client between envelopes.
+      this.useLegacyNodeProtocolEnvelope = false;
+      this.legacyNodeProtocolRetryBudgetUsed = true;
+      this.protocol.resetReconnectBackoff(250);
+      this.logDebug("gateway rejected protocol v3; retrying node host with protocol v4");
+      return { closeCode: 1008, closeReason: "connect retry" };
+    }
     if (this.shouldRetryWithLegacyNodeProtocol(error)) {
       this.useLegacyNodeProtocolEnvelope = true;
       this.legacyNodeProtocolRetryBudgetUsed = true;
