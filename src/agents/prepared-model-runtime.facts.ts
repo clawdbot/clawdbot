@@ -28,6 +28,7 @@ import {
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
+import { withoutRuntimeExternalAuthProfilePublication } from "./auth-profiles/store.js";
 import {
   buildInlineProviderModels,
   type InlineModelEntry,
@@ -145,21 +146,20 @@ function prepareAgentFacts(
       return separator > 0 ? [value.slice(0, separator)] : [];
     }),
   });
-  const templateAuthStorage = discoverAuthStorage(input.agentDir, {
-    config: input.config,
-    // Snapshot construction never initializes, migrates, or externally syncs auth. ModelRegistry
-    // discovery only parses the credential generation captured here. The generation owns any
-    // external overlay it discovers, so publishing that overlay mid-build would recursively stale
-    // the owner that is currently materializing it.
-    readOnly: true,
-    publishExternalAuthProfiles: false,
-    ambientCredentials,
-    externalCli,
-    ...(input.skipCredentials ? { skipCredentials: true } : {}),
-    ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    ...(input.env ? { env } : {}),
-  });
+  const templateAuthStorage = withoutRuntimeExternalAuthProfilePublication(() =>
+    discoverAuthStorage(input.agentDir, {
+      config: input.config,
+      // The generation owns external overlays discovered here. Republishing one mid-build would
+      // recursively stale the owner currently materializing it.
+      readOnly: true,
+      ambientCredentials,
+      externalCli,
+      ...(input.skipCredentials ? { skipCredentials: true } : {}),
+      ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
+      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+      ...(input.env ? { env } : {}),
+    }),
+  );
   const credentials = templateAuthStorage.getAll();
   return {
     input,

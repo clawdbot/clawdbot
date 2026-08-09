@@ -814,36 +814,6 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(2);
   });
 
-  it("does not republish external auth while rebuilding its prepared owner", async () => {
-    const config = {};
-    const agentDir = "/tmp/prepared-model-runtime-external-auth";
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir });
-    let recursivePublications = 0;
-    mocks.discoverAuthStorage.mockImplementation((_agentDir, options) => {
-      if (
-        (options as { publishExternalAuthProfiles?: boolean } | undefined)
-          ?.publishExternalAuthProfiles !== false &&
-        recursivePublications < 2
-      ) {
-        recursivePublications += 1;
-        mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-      }
-      return mocks.authStorage;
-    });
-
-    mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-
-    await vi.waitFor(() => expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(2));
-    await expect(prepareModelRuntimeSnapshot({ config, agentDir })).resolves.toMatchObject({
-      agentDir,
-    });
-    expect(recursivePublications).toBe(0);
-    expect(mocks.discoverAuthStorage).toHaveBeenLastCalledWith(
-      agentDir,
-      expect.objectContaining({ publishExternalAuthProfiles: false }),
-    );
-  });
-
   it("treats an auth refresh superseded by a newer mutation as control flow", async () => {
     const config = {};
     const agentDir = "/tmp/prepared-model-runtime-auth-superseded";

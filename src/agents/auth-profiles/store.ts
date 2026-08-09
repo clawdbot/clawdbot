@@ -74,7 +74,6 @@ type LoadAuthProfileStoreOptions = {
   externalCli?: ExternalCliAuthDiscovery;
   inheritedAuthDir?: string;
   readOnly?: boolean;
-  publishExternalAuthProfiles?: boolean;
   syncExternalCli?: boolean;
   externalCliProviderIds?: Iterable<string>;
   externalCliProfileIds?: Iterable<string>;
@@ -92,6 +91,7 @@ const INLINE_OAUTH_TOKEN_FIELDS = ["access", "refresh", "idToken"] as const;
 type AuthProfileRuntimeMode = { kind: "env-only" } | { kind: "agent-dir"; agentDir: string };
 
 const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
+const runtimeExternalProfilePublication = new AsyncLocalStorage<boolean>();
 
 function createEmptyAuthProfileStore(): AuthProfileStore {
   return { version: AUTH_STORE_VERSION, profiles: {} };
@@ -105,6 +105,11 @@ export function withEnvOnlyAuthProfileStore<T>(run: () => T): T {
 /** Run a bounded operation against one existing persisted auth store. */
 export function withAuthProfileStoreAgentDir<T>(agentDir: string, run: () => T): T {
   return authProfileRuntimeMode.run({ kind: "agent-dir", agentDir }, run);
+}
+
+/** Read external overlays while the prepared owner itself is rebuilding. */
+export function withoutRuntimeExternalAuthProfilePublication<T>(run: () => T): T {
+  return runtimeExternalProfilePublication.run(false, run);
 }
 
 function isEnvOnlyAuthProfileRuntime(): boolean {
@@ -1153,7 +1158,6 @@ export function ensureAuthProfileStore(
     externalCliProviderIds?: Iterable<string>;
     externalCliProfileIds?: Iterable<string>;
     inheritedAuthDir?: string;
-    publishExternalAuthProfiles?: boolean;
     readOnly?: boolean;
     syncExternalCli?: boolean;
   },
@@ -1163,6 +1167,7 @@ export function ensureAuthProfileStore(
   }
   const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
   const effectiveOptions = resolveRuntimeAuthProfileLoadOptions(options);
+  const publishExternalProfiles = runtimeExternalProfilePublication.getStore() !== false;
   const externalCli = resolveExternalCliOverlayOptions(effectiveOptions);
   const runtimeStore = resolveRuntimeAuthProfileStore(effectiveAgentDir, effectiveOptions);
   const store = overlayExternalAuthProfiles(
@@ -1174,7 +1179,7 @@ export function ensureAuthProfileStore(
   );
   if (!runtimeStore) {
     if (
-      effectiveOptions?.publishExternalAuthProfiles !== false &&
+      publishExternalProfiles &&
       hasScopedExternalCliOverlay(externalCli) &&
       (store.runtimeExternalProfileIds?.length ?? 0) > 0
     ) {
@@ -1187,10 +1192,7 @@ export function ensureAuthProfileStore(
     // snapshot must retain unrelated external profiles. Publish the merged owner fact so prepared
     // model and chat metadata generations converge without reopening credential sources.
     const materialized = mergeRuntimeExternalProfileState({ next: store, existing: runtimeStore });
-    if (
-      effectiveOptions?.publishExternalAuthProfiles !== false &&
-      !isDeepStrictEqual(materialized, runtimeStore)
-    ) {
+    if (publishExternalProfiles && !isDeepStrictEqual(materialized, runtimeStore)) {
       setRuntimeAuthProfileStoreSnapshot(materialized, effectiveAgentDir);
     }
     return store;
