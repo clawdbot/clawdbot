@@ -285,6 +285,32 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(diagnostics).toHaveLength(0);
   });
 
+  it("surfaces a diagnostic for a directory that matches the pattern", async () => {
+    // FINDING C: Node fs.glob returns directories that match the pattern; main
+    // routes those through the guarded loader so a configured directory match
+    // surfaces a diagnostic instead of silently vanishing. Here `pkg/AGENTS.md` is
+    // itself a directory, so `**/AGENTS.md` matches it — the loader must report it
+    // (a directory cannot be read as a bootstrap file) while still loading the real
+    // sibling file match.
+    const workspaceDir = await createWorkspaceDir("glob-dir-diagnostic");
+    const dirNamedLikeBootstrap = path.join(workspaceDir, "pkg", "AGENTS.md");
+    await fs.mkdir(dirNamedLikeBootstrap, { recursive: true });
+    await fs.writeFile(path.join(dirNamedLikeBootstrap, "inner.md"), "inner", "utf-8");
+    const realFile = path.join(workspaceDir, "other", "AGENTS.md");
+    await fs.mkdir(path.dirname(realFile), { recursive: true });
+    await fs.writeFile(realFile, "real agents", "utf-8");
+
+    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+      "**/AGENTS.md",
+    ]);
+
+    // The real file still loads; the directory does not leak in as content.
+    expect(files.map((file) => file.path)).toStrictEqual([realFile]);
+    // The directory match is not dropped silently — it reaches the guarded loader
+    // and produces a diagnostic pointing at the directory path.
+    expect(diagnostics.map((diagnostic) => diagnostic.path)).toContain(dirNamedLikeBootstrap);
+  });
+
   it("loads literal bootstrap paths with square brackets", async () => {
     const workspaceDir = await createWorkspaceDir("literal-brackets");
     const packageDir = path.join(workspaceDir, "pkg[1]");

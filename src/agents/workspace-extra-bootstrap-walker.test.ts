@@ -8,10 +8,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  patternHasUnsupportedParentTraversal,
-  resolveExtraBootstrapPatternPaths,
-} from "./workspace-extra-bootstrap-walker.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { resolveExtraBootstrapPatternPaths } from "./workspace-extra-bootstrap-walker.js";
 import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
 
 const realPlatform = process.platform;
@@ -120,7 +118,7 @@ describe("resolveExtraBootstrapPatternPaths platform case parity", () => {
   });
 });
 
-describe("resolveExtraBootstrapPatternPaths parent-traversal parity and diagnostics", () => {
+describe("resolveExtraBootstrapPatternPaths parent-traversal parity", () => {
   let fixtureRoot = "";
   let fixtureCount = 0;
 
@@ -144,6 +142,22 @@ describe("resolveExtraBootstrapPatternPaths parent-traversal parity and diagnost
     }
   });
 
+  // fs.glob's globstar-parent `..` can step above the cwd (`**/../AGENTS.md`
+  // matches the workspace root's own parent when the zero-globstar case pops out
+  // of the tree). The walker prunes those escaping matches for containment, so the
+  // parity oracle is fs.glob's set restricted to entries that stay inside the
+  // workspace — anything the walker is allowed to return.
+  const nodeGlobContained = async (workspaceDir: string, pattern: string): Promise<string[]> => {
+    const contained: string[] = [];
+    for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
+      const rel = match.replaceAll(path.sep, "/");
+      if (rel !== ".." && !rel.startsWith("../")) {
+        contained.push(rel);
+      }
+    }
+    return contained.toSorted();
+  };
+
   // A small tree with a root AGENTS.md plus `a/AGENTS.md` under a subdir, so the
   // reducible parent-traversal shapes have real targets to resolve against.
   const seedTree = async (prefix: string): Promise<string> => {
@@ -164,31 +178,57 @@ describe("resolveExtraBootstrapPatternPaths parent-traversal parity and diagnost
 
   it("matches Node fs.glob for reducible parent-traversal shapes", async () => {
     // optimizationLevel 2 collapses `*/../`, `a/*/../`, and literal `foo/../` into a
-    // downward form, so the observable loader result equals fs.glob's set. These
-    // are the parent-traversal shapes the walker fully supports.
+    // downward form, so the observable loader result equals fs.glob's set.
     for (const pattern of ["*/../AGENTS.md", "a/*/../AGENTS.md", "foo/../AGENTS.md"]) {
       const workspaceDir = await seedTree("supported");
       expect(await loaderRelative(workspaceDir, pattern)).toStrictEqual(
         await nodeGlobRelative(workspaceDir, pattern),
       );
-      expect(patternHasUnsupportedParentTraversal(pattern)).toBe(false);
     }
   });
 
-  it("records an unsupported-pattern diagnostic for a globstar parent traversal", async () => {
-    // `**/../` cannot be reduced to a downward walk (fs.glob steps up a level; this
-    // matcher-only walk cannot), so the walker would silently return []. The loader
-    // must surface an explicit diagnostic instead of dropping the configured
-    // pattern without a trace.
-    for (const pattern of ["**/../AGENTS.md", "x/**/../AGENTS.md"]) {
-      const workspaceDir = await seedTree("unsupported");
-      expect(patternHasUnsupportedParentTraversal(pattern)).toBe(true);
-      const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
-        pattern,
-      ]);
-      expect(files).toHaveLength(0);
-      expect(diagnostics.map((diagnostic) => diagnostic.reason)).toContain("unsupported-pattern");
+  it("returns Node fs.glob's contained match set for a globstar parent traversal", async () => {
+    // FINDING A: `**/../AGENTS.md` and similar globstar-parent patterns are a
+    // supported fs.glob shape — Node steps up a level and returns the contained
+    // matches (`AGENTS.md`, `a/AGENTS.md` here). The walker must resolve the same
+    // in-root set instead of declaring the pattern unsupported and dropping every
+    // configured bootstrap file. Differential: the walker's set equals fs.glob's,
+    // restricted to matches that stay inside the workspace.
+    // Deepen the seed so a globstar parent has more than one contained target and
+    // the parity is meaningful.
+    for (const pattern of ["**/../AGENTS.md", "x/**/../AGENTS.md", "**/../a/AGENTS.md"]) {
+      const workspaceDir = await seedTree("globstar-parent");
+      const deep = path.join(workspaceDir, "a", "x", "deep");
+      await fs.mkdir(deep, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "a", "x", "AGENTS.md"), "ax", "utf-8");
+
+      const walkerMatches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false)
+      ).toSorted();
+      const contained = await nodeGlobContained(workspaceDir, pattern);
+
+      expect(walkerMatches).toStrictEqual(contained);
     }
+  });
+
+  it("prunes a globstar parent traversal that only escapes the workspace", async () => {
+    // The contained-parent walk still enforces the workspace boundary: a globstar
+    // parent whose only fs.glob matches sit above the root (via the zero-globstar
+    // pop) must resolve to nothing rather than leak an out-of-tree file, even
+    // though fs.glob itself would return the escaping path.
+    const rootDir = await createWorkspaceDir("escape-only");
+    const workspaceDir = path.join(rootDir, "workspace");
+    await fs.mkdir(path.join(workspaceDir, "only"), { recursive: true });
+    // The single AGENTS.md lives in the workspace's PARENT; `*/../AGENTS.md` reduces
+    // to a downward walk that cannot reach it, and `**/../AGENTS.md`'s only match is
+    // the escaping parent pop, so both must be empty.
+    await fs.writeFile(path.join(rootDir, "AGENTS.md"), "outside", "utf-8");
+
+    const matches = await resolveExtraBootstrapPatternPaths(workspaceDir, "**/../AGENTS.md", false);
+
+    expect(matches).toStrictEqual([]);
+    // fs.glob would surface the escaping parent match; the walker must not.
+    expect(await nodeGlobRelative(workspaceDir, "**/../AGENTS.md")).toContain("../AGENTS.md");
   });
 });
 
@@ -635,4 +675,141 @@ describe("resolveExtraBootstrapPatternPaths symlink descent parity", () => {
       expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "does not follow a wildcard-reached symlink in a globstar-parent pattern",
+    async () => {
+      // The contained-parent walk must apply the same symlink rule as the downward
+      // walk: fs.glob never follows a symlink reached through a `*`/`**` wildcard, so
+      // `*/**/../AGENTS.md` where `sl` is a symlink must resolve to fs.glob's set
+      // (nothing here) rather than crossing the link and matching under its target.
+      const workspaceDir = await createWorkspaceDir("parent-wildcard-symlink");
+      const target = path.join(workspaceDir, "target");
+      await fs.mkdir(path.join(target, "sub"), { recursive: true });
+      await fs.writeFile(path.join(target, "AGENTS.md"), "tgt", "utf-8");
+      if (!(await trySymlink(path.join(".", "target"), path.join(workspaceDir, "sl")))) {
+        return;
+      }
+
+      const pattern = "*/**/../AGENTS.md";
+      const matches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false)
+      ).toSorted();
+
+      expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not escape the workspace via a literal symlink in a globstar-parent pattern",
+    async () => {
+      // A literal-named directory symlink pointing OUTSIDE the workspace must not be
+      // followed by the contained-parent walk, even though fs.glob would descend a
+      // literal symlink: the walker enforces the workspace boundary fs.glob does not,
+      // exactly as the downward walk's resolveSymlinkDescent does.
+      const rootDir = await createWorkspaceDir("parent-literal-escape");
+      const workspaceDir = path.join(rootDir, "workspace");
+      const external = path.join(rootDir, "external");
+      await fs.mkdir(path.join(external, "sub"), { recursive: true });
+      await fs.writeFile(path.join(external, "AGENTS.md"), "outside", "utf-8");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      if (!(await trySymlink(external, path.join(workspaceDir, "link")))) {
+        return;
+      }
+      const workspaceReal = await fs.realpath(workspaceDir);
+
+      const matches = await resolveExtraBootstrapPatternPaths(
+        workspaceDir,
+        "link/**/../AGENTS.md",
+        false,
+      );
+
+      expect(matches).toStrictEqual([]);
+      // No returned path may resolve outside the workspace root.
+      for (const match of matches) {
+        const resolved = await fs.realpath(path.resolve(workspaceDir, match));
+        expect(isPathInside(workspaceReal, resolved)).toBe(true);
+      }
+      // fs.glob itself would follow the literal link and surface the escaping match;
+      // the walker intentionally diverges to hold containment.
+      expect(await nodeGlobRelative(workspaceDir, "link/**/../AGENTS.md")).toContain(
+        "link/AGENTS.md",
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "follows a contained literal symlink in a globstar-parent pattern (parity)",
+    async () => {
+      // The containment guard must not over-prune: a literal-named symlink whose
+      // target stays inside the workspace is still followed, matching fs.glob's
+      // contained set so a legitimately configured bootstrap file is not dropped.
+      const workspaceDir = await createWorkspaceDir("parent-literal-contained");
+      const real = path.join(workspaceDir, "real");
+      await fs.mkdir(path.join(real, "sub"), { recursive: true });
+      await fs.writeFile(path.join(real, "AGENTS.md"), "inside", "utf-8");
+      if (!(await trySymlink(path.join(".", "real"), path.join(workspaceDir, "link")))) {
+        return;
+      }
+
+      const pattern = "link/**/../AGENTS.md";
+      const matches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false)
+      ).toSorted();
+
+      expect(matches).toStrictEqual(["link/AGENTS.md"]);
+      expect(matches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
+    },
+  );
+});
+
+describe("resolveExtraBootstrapPatternPaths matching-directory parity", () => {
+  let fixtureRoot = "";
+  let fixtureCount = 0;
+
+  const createWorkspaceDir = async (prefix: string) => {
+    const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  };
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-walker-dir-"));
+  });
+
+  afterAll(async () => {
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("emits directories that match the pattern (fs.glob parity)", async () => {
+    // FINDING C: Node fs.glob returns DIRECTORIES that match the pattern, not just
+    // files. The walker used to descend a matching directory without ever yielding
+    // it, so a configured directory match vanished silently instead of reaching the
+    // guarded loader as a diagnostic. Differential: the walker's set — files AND
+    // matching directories — must equal fs.glob's over the same tree.
+    const workspaceDir = await createWorkspaceDir("dir-match");
+    // `dir-agents/AGENTS.md/inner.md`: AGENTS.md is itself a DIRECTORY here, so
+    // `**/AGENTS.md` matches that directory (a terminal full match) as well as the
+    // real file below.
+    await fs.mkdir(path.join(workspaceDir, "dir-agents", "AGENTS.md"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "dir-agents", "AGENTS.md", "inner.md"),
+      "inner",
+      "utf-8",
+    );
+    await fs.mkdir(path.join(workspaceDir, "pkg"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "pkg", "AGENTS.md"), "file agents", "utf-8");
+
+    for (const pattern of ["**/AGENTS.md", "*/AGENTS.md"]) {
+      const walkerMatches = (
+        await resolveExtraBootstrapPatternPaths(workspaceDir, pattern, false)
+      ).toSorted();
+
+      expect(walkerMatches).toStrictEqual(await nodeGlobRelative(workspaceDir, pattern));
+      // The matching directory is present, proving it is not silently dropped.
+      expect(walkerMatches).toContain("dir-agents/AGENTS.md");
+    }
+  });
 });
