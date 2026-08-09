@@ -25,15 +25,17 @@ if (
 ) {
   throw new Error("invalid worker workspace rsync receiver context");
 }
-const [workspace, canonicalHome, remoteRelative] = context;
+const [workspace, canonicalHome, remoteRelative] = context as [string, string, string];
+const receiverMode = mode!;
+const receiverNonce = nonce!;
 
 const receiverTarget =
-  mode === "git-pack"
+  receiverMode === "git-pack"
     ? path.posix.join(workspace, ".openclaw-base.pack")
-    : mode === "accepted-next"
+    : receiverMode === "accepted-next"
       ? path.posix.join(
           path.posix.dirname(workspace),
-          `.openclaw-accepted-${createHash("sha256").update(workspace).digest("hex")}-${nonce}`,
+          `.openclaw-accepted-${createHash("sha256").update(workspace).digest("hex")}-${receiverNonce}`,
           "next",
         )
       : workspace;
@@ -44,12 +46,12 @@ process.argv = [
   workspace,
   canonicalHome,
   remoteRelative,
-  nonce!,
-  ...(mode === "accepted-next" ? [] : [receiverTarget]),
+  receiverNonce,
+  ...(receiverMode === "accepted-next" ? [] : [receiverTarget]),
   ...receiverArgs.with(receiverArgs.length - 1, receiverTarget),
 ];
 compileFunction(
-  mode === "accepted-next"
+  receiverMode === "accepted-next"
     ? REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS
     : REMOTE_WORKSPACE_RSYNC_RECEIVER_JS,
   ["require"],

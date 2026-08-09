@@ -204,6 +204,9 @@ describe("accepted workspace publication", () => {
         );
 
         await releaseReceiver("release");
+        if (!receiverExited) {
+          throw new Error("accepted staging receiver did not start");
+        }
         const receiverExit = await receiverExited;
         expect(receiverExit.signal).toBeNull();
         expect(receiverExit.code).not.toBe(0);

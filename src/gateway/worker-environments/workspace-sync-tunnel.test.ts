@@ -457,6 +457,9 @@ describe("worker tunnel manager", () => {
         const gateWriter = await fs.open(receiverGate, "w");
         await gateWriter.write("release\n");
         await gateWriter.close();
+        if (!receiverExited) {
+          throw new Error("workspace receiver did not start");
+        }
         const receiverExit = await receiverExited;
         expect(receiverExit.signal).toBeNull();
         expect(receiverExit.code).not.toBe(0);
