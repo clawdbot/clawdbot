@@ -46,11 +46,15 @@ export async function createGatewayChatMetadataLifecycle(params: {
     if (params.minimalTestGateway) {
       return undefined;
     }
-    const [{ registerPreparedModelRuntimePublicationListener }, { registerSkillsChangeListener }] =
-      await Promise.all([
-        import("../agents/prepared-model-runtime.js"),
-        import("../skills/runtime/refresh.js"),
-      ]);
+    const [
+      { registerRuntimeAuthProfileStoreMutationListener },
+      { registerPreparedModelRuntimePublicationListener },
+      { registerSkillsChangeListener },
+    ] = await Promise.all([
+      import("../agents/auth-profiles/runtime-snapshots.js"),
+      import("../agents/prepared-model-runtime.js"),
+      import("../skills/runtime/refresh.js"),
+    ]);
     const unregisterPreparedModelRuntimePublication =
       registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "invalidated") {
@@ -67,8 +71,14 @@ export async function createGatewayChatMetadataLifecycle(params: {
       runtime.invalidate();
       refreshLogged();
     });
+    const unregisterRuntimeAuthProfileStoreMutation =
+      registerRuntimeAuthProfileStoreMutationListener(() => {
+        runtime.invalidate();
+        refreshLogged();
+      });
     return {
       stop: async () => {
+        unregisterRuntimeAuthProfileStoreMutation();
         unregisterPreparedModelRuntimePublication();
         unregisterSkillsChange();
       },
@@ -85,6 +95,13 @@ export async function createGatewayChatMetadataLifecycle(params: {
       if (sidecar) {
         sidecars.push(sidecar);
       }
+      // Auth/model snapshots published before listener registration are otherwise never
+      // observed; one awaited catch-up refresh reconciles facts (revision-aware, no-op when
+      // fresh) so post-attach reads cannot serve a pre-publication generation. Failures are
+      // logged, not thrown: startup must not die on a metadata build error.
+      await runtime.refresh().catch((error: unknown) => {
+        params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
+      });
     },
     read: runtime.read,
     readStartup: runtime.readStartup,
