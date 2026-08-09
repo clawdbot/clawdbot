@@ -653,7 +653,7 @@ Implement the Phase 0 contract for builtin memory:
 Do not insert scoped content into `memory_index_sources`,
 `memory_index_chunks`, or legacy FTS/vector tables.
 
-#### 8.5 QMD and alternate backend admission
+#### 8.5 Alternate backend admission
 
 Define conformance requirements for:
 
@@ -664,9 +664,9 @@ Define conformance requirements for:
 - status and export;
 - no silent fallback to a broader backend.
 
-If QMD cannot meet the contract in the first release, enforced agents use the
-builtin backend or memory remains unavailable. QMD failure must not fall back to
-legacy broad builtin search.
+If a selected alternate backend cannot meet the contract in the first release,
+enforced agents use the builtin backend or memory remains unavailable. A failed
+alternate backend must not fall back to legacy broad builtin search.
 
 #### 8.6 Doctor migration scaffold
 
@@ -719,7 +719,7 @@ groups. Add any lazily ensured columns to `allowedMissingColumns`.
 - active/pending/quarantined/tombstoned revision visibility;
 - policy deny precedence and expiry;
 - candidate-superset property for FTS, vector scan, sqlite-vec, and exact read;
-- QMD nonconformance rejects enforced mode;
+- alternate-backend nonconformance rejects enforced mode;
 - dry-run migration is deterministic and content-free in logs;
 - existing legacy agent remains byte-for-byte on the old path.
 
@@ -737,7 +737,7 @@ Phase 1B is complete only when all of the following are demonstrated:
 - [ ] Every additive per-agent table, column, and trigger group is registered
       in schema compatibility so an existing current-version database opens
       before feature-local lazy ensure.
-- [ ] A nonconforming or failed QMD/alternate backend becomes unavailable in
+- [ ] A nonconforming or failed alternate backend becomes unavailable in
       enforced mode and never falls back to broader legacy search.
 - [ ] Doctor dry-run produces a deterministic, content-redacted classification,
       backup, copy, reindex, verification, and cutover plan without modifying
@@ -1646,7 +1646,7 @@ matching GitHub labels as part of the plugin PR.
 - role removal within documented bound;
 - provider outage does not extend membership indefinitely;
 - audit explanation reveals no unauthorized resource title/existence;
-- collection/mount fan-out benchmarks for builtin and QMD.
+- collection/mount fan-out benchmarks for builtin and alternate backends.
 
 ### Definition of done
 
@@ -1866,7 +1866,7 @@ why no version bump is required.
 | Pure types/evaluator | Property tests for implication, deny precedence, revision, audience, delegation, and lineage.         |
 | SQL/backend          | Candidate superset, top-K crowd-out, immutable revision, pending/quarantine denial, hash/path checks. |
 | Core context         | Identity, session-rebound, subject revision, actor separation, delivery revision.                     |
-| Plugin contract      | Builtin/QMD/LanceDB/wiki/active-memory conformance or enforced unavailability.                        |
+| Plugin contract      | Builtin, LanceDB, wiki, active-memory, and alternate-backend conformance or enforced unavailability.  |
 | Filesystem/sandbox   | Virtual mount, traversal/symlink/case/Unicode, direct host-path denial, exec profile.                 |
 | Transcript           | Atomic companion labels, reset/fork/rewind/archive/export, missing-label denial.                      |
 | Derivation           | Compaction/flush/dreaming/delegation audience intersection and ancestor revocation.                   |
@@ -1956,7 +1956,7 @@ Stable denial reasons should include:
 | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | Scope grows into a second memory architecture    | Keep selected plugin ownership; add generic contracts only; no core deep imports into bundled memory implementation. |
 | Stage 1 is too large to land                     | Use Phases 1A-1D with read-only enforced state and explicit exit gates.                                              |
-| Legacy backend silently widens access            | Reject nonconforming backend; never fallback from authorized QMD/external backend to broad legacy builtin.           |
+| Legacy backend silently widens access            | Reject nonconforming backend; never fall back from an authorized alternate backend to broad legacy builtin.          |
 | Transcript or compaction launders content        | Require atomic policy companion rows before scoped exposure; compaction is derivation.                               |
 | File tools bypass memory policy                  | Controlled artifact roots are never model-visible; virtual memory paths delegate to authorized operations.           |
 | Unsandboxed exec defeats model isolation         | Hide/deny or restrict claim to cooperative isolation with Doctor finding.                                            |
