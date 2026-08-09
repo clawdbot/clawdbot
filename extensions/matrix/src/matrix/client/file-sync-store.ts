@@ -20,6 +20,11 @@ import { getMatrixRuntime } from "../../runtime.js";
 import { createAsyncLock } from "../async-lock.js";
 import { LogService } from "../sdk/logger.js";
 import { resolveMatrixSqliteStateEnv } from "../sqlite-state.js";
+import {
+  buildReplayEventKey,
+  normalizePendingReplayEvents,
+  type PendingReplayEvent,
+} from "./file-sync-store-replay.js";
 import { claimCurrentTokenStorageState } from "./storage.js";
 
 const STORE_VERSION = 1;
@@ -36,6 +41,8 @@ type PersistedMatrixSyncStore = {
   savedSync: ISyncData | null;
   clientOptions?: IStoredClientOpts;
   cleanShutdown?: boolean;
+  pendingReplayEvents?: PendingReplayEvent[];
+  replayLedgerKnown?: boolean;
 };
 
 type MatrixSyncCacheMeta = {
@@ -46,6 +53,7 @@ type MatrixSyncCacheMeta = {
   syncDigest?: string;
   clientOptions?: IStoredClientOpts;
   cleanShutdown?: boolean;
+  payloadFormat?: "store-v2";
 };
 
 type MatrixSyncCacheChunk = {
@@ -125,6 +133,8 @@ function normalizePersistedStore(value: unknown): PersistedMatrixSyncStore | nul
       ? (value.clientOptions as IStoredClientOpts)
       : undefined,
     cleanShutdown: value.cleanShutdown === true,
+    pendingReplayEvents: normalizePendingReplayEvents(value.pendingReplayEvents),
+    replayLedgerKnown: value.replayLedgerKnown === true,
   };
 }
 
@@ -164,6 +174,8 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private savedClientOptions: IStoredClientOpts | undefined;
   private readonly hadSavedSyncOnLoad: boolean;
   private readonly hadCleanShutdownOnLoad: boolean;
+  private readonly hadReplayLedgerOnLoad: boolean;
+  private readonly pendingReplayEvents = new Map<string, PendingReplayEvent>();
   private cleanShutdown = false;
   private dirty = false;
   private frozen = false;
@@ -177,6 +189,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     let restoredSavedSync: ISyncData | null = null;
     let restoredClientOptions: IStoredClientOpts | undefined;
     let restoredCleanShutdown = false;
+    let restoredReplayLedger = false;
     let syncCacheStore = createNoopMatrixSyncCacheStore();
     let syncCacheStoreUnavailableError: unknown;
     try {
@@ -186,6 +199,10 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
         restoredSavedSync = persisted.savedSync;
         restoredClientOptions = persisted.clientOptions;
         restoredCleanShutdown = persisted.cleanShutdown === true;
+        restoredReplayLedger = persisted.replayLedgerKnown === true;
+        for (const entry of persisted.pendingReplayEvents ?? []) {
+          this.pendingReplayEvents.set(entry.key, entry);
+        }
       }
     } catch (err) {
       syncCacheStoreUnavailableError = err;
@@ -198,6 +215,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     this.savedClientOptions = restoredClientOptions;
     this.hadSavedSyncOnLoad = restoredSavedSync !== null;
     this.hadCleanShutdownOnLoad = this.hadSavedSyncOnLoad && restoredCleanShutdown;
+    this.hadReplayLedgerOnLoad = this.hadSavedSyncOnLoad && restoredReplayLedger;
     this.cleanShutdown = this.hadCleanShutdownOnLoad;
 
     if (this.savedSync) {
@@ -215,6 +233,55 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
 
   hasSavedSyncFromCleanShutdown(): boolean {
     return this.hadCleanShutdownOnLoad;
+  }
+
+  hasTrustedSyncCursor(): boolean {
+    // A dirty cache written before the replay ledger existed cannot say which
+    // cached events were interrupted, so its cursor keeps the cold-start
+    // timestamp fence instead of routing old room history as fresh work.
+    return this.hadCleanShutdownOnLoad || this.hadReplayLedgerOnLoad;
+  }
+
+  getStartupReplayState():
+    | { kind: "none" | "hydrate-only" }
+    | { kind: "selective"; events: readonly PendingReplayEvent[] } {
+    if (!this.savedSync) {
+      return { kind: "none" };
+    }
+    // Only ledger-enrolled events are attributable to interrupted routing; a
+    // clean shutdown can still leave entries a handler released for retry.
+    if (this.pendingReplayEvents.size === 0) {
+      return { kind: "hydrate-only" };
+    }
+    return {
+      kind: "selective",
+      events: Array.from(this.pendingReplayEvents.values()).map((entry) => cloneJson(entry)),
+    };
+  }
+
+  notePendingReplayEvent(roomId: string, eventId: string, event: Record<string, unknown>): void {
+    const key = buildReplayEventKey(roomId, eventId);
+    if (!key) {
+      return;
+    }
+    const existing = this.pendingReplayEvents.get(key);
+    if (existing && JSON.stringify(existing.event) === JSON.stringify(event)) {
+      return;
+    }
+    this.pendingReplayEvents.set(key, {
+      key,
+      roomId: roomId.trim(),
+      event: cloneJson(event),
+    });
+    this.markDirtyAndSchedulePersist();
+  }
+
+  markReplayEventSettled(roomId: string, eventId: string): void {
+    const key = buildReplayEventKey(roomId, eventId);
+    if (!key || !this.pendingReplayEvents.delete(key)) {
+      return;
+    }
+    this.markDirtyAndSchedulePersist();
   }
 
   override getSavedSync(): Promise<ISyncData | null> {
@@ -275,6 +342,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     await super.deleteAllData();
     this.savedSync = null;
     this.savedClientOptions = undefined;
+    this.pendingReplayEvents.clear();
     this.cleanShutdown = false;
     this.store.delete(metaKey(this.stateKey));
     for (const row of this.store.entries()) {
@@ -351,6 +419,8 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
       version: STORE_VERSION,
       savedSync: this.savedSync ? cloneJson(this.savedSync) : null,
       cleanShutdown: this.cleanShutdown,
+      pendingReplayEvents: Array.from(this.pendingReplayEvents.values()),
+      replayLedgerKnown: true,
       ...(this.savedClientOptions ? { clientOptions: cloneJson(this.savedClientOptions) } : {}),
     };
     try {
@@ -434,7 +504,18 @@ function readPersistedStoreFromSyncStore(
       });
     }
     try {
-      savedSync = toPersistedSyncData(JSON.parse(syncJson));
+      const parsed = JSON.parse(syncJson);
+      if (meta.payloadFormat === "store-v2" && isRecord(parsed)) {
+        return normalizePersistedStore({
+          version: STORE_VERSION,
+          savedSync: parsed.savedSync,
+          pendingReplayEvents: parsed.pendingReplayEvents,
+          replayLedgerKnown: true,
+          clientOptions: meta.clientOptions,
+          cleanShutdown: meta.cleanShutdown,
+        });
+      }
+      savedSync = toPersistedSyncData(parsed);
     } catch {
       savedSync = null;
     }
@@ -535,7 +616,17 @@ function buildSyncCacheRows(
   nextChunkKeys: Set<string>;
 } {
   const generation = randomUUID().replaceAll("-", "");
-  const syncJson = payload.savedSync ? JSON.stringify(payload.savedSync) : "";
+  const useReplayLedger = payload.replayLedgerKnown === true;
+  const syncJson = payload.savedSync
+    ? JSON.stringify(
+        useReplayLedger
+          ? {
+              savedSync: payload.savedSync,
+              pendingReplayEvents: payload.pendingReplayEvents ?? [],
+            }
+          : payload.savedSync,
+      )
+    : "";
   const chunkValues = syncJson ? chunkSyncCacheJson(syncJson) : [];
   const chunks = chunkValues.map((data, index) => ({
     key: chunkKey(stateKey, generation, index),
@@ -558,6 +649,7 @@ function buildSyncCacheRows(
         ...(syncJson ? { syncDigest: digestText(syncJson) } : {}),
         ...(payload.clientOptions ? { clientOptions: payload.clientOptions } : {}),
         cleanShutdown: payload.cleanShutdown === true,
+        ...(useReplayLedger ? { payloadFormat: "store-v2" as const } : {}),
       },
     },
   };
@@ -600,7 +692,12 @@ export async function hasMatrixSyncCacheStateInStore(params: {
     return false;
   }
   try {
-    return toPersistedSyncData(JSON.parse(syncJson)) !== null;
+    const parsed = JSON.parse(syncJson);
+    return (
+      toPersistedSyncData(
+        meta.payloadFormat === "store-v2" && isRecord(parsed) ? parsed.savedSync : parsed,
+      ) !== null
+    );
   } catch {
     return false;
   }

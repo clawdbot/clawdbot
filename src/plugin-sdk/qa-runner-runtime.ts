@@ -102,6 +102,7 @@ type QaRunnerTransportFlowPreparationInput = {
         stateDir: string;
         tempRoot: string;
       }) => Promise<void>,
+      options?: { shutdownMode?: "graceful" | "hard" },
     ) => Promise<void>;
     stop?: (options?: { preserveToDir?: string }) => Promise<void>;
   };

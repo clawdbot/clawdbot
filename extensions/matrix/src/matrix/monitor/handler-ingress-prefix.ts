@@ -30,6 +30,7 @@ type MatrixIngressPrefixConfig = {
     }) => Promise<boolean>;
   };
   claimInboundReplay: (handle: ReplayClaimHandle) => void;
+  retainInboundReplay: () => void;
 };
 
 export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig) {
@@ -49,6 +50,7 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     logVerboseMessage,
     directTracker,
     claimInboundReplay,
+    retainInboundReplay,
   } = config;
   const selfUserId = await client.getUserId();
   if (senderId === selfUserId) {
@@ -93,6 +95,12 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     // Missing identifiers fail open; committed and in-flight events do not.
     if (claim.kind === "claimed") {
       claimInboundReplay(claim.handle);
+    } else if (claim.kind === "inflight") {
+      const committed = await claim.pending.catch(() => false);
+      if (!committed) {
+        retainInboundReplay();
+      }
+      return undefined;
     } else if (claim.kind !== "invalid") {
       logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
       return undefined;

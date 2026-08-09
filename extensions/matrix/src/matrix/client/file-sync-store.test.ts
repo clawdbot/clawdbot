@@ -13,6 +13,7 @@ import { installMatrixTestRuntime } from "../../test-runtime.js";
 import {
   openMatrixSyncCacheStoreOptions,
   SqliteBackedMatrixSyncStore,
+  writeMatrixSyncCacheStateToStore,
   type MatrixSyncCacheRecord,
 } from "./file-sync-store.js";
 import { openMatrixStorageMetaStoreOptions } from "./storage.js";
@@ -59,6 +60,16 @@ function createSyncResponse(nextBatch: string): ISyncResponse {
         },
       ],
     },
+  };
+}
+
+function createPendingEvent(eventId: string): Record<string, unknown> {
+  return {
+    content: { body: eventId, msgtype: "m.text" },
+    event_id: eventId,
+    origin_server_ts: 1,
+    sender: "@user:example.org",
+    type: "m.room.message",
   };
 }
 
@@ -228,6 +239,136 @@ describe("SqliteBackedMatrixSyncStore", () => {
     const afterCleanShutdown = new SqliteBackedMatrixSyncStore(storageRoot);
     expect(afterCleanShutdown.hasSavedSync()).toBe(true);
     expect(afterCleanShutdown.hasSavedSyncFromCleanShutdown()).toBe(true);
+  });
+
+  it("persists only unsettled event provenance for selective crash replay", async () => {
+    const storageRoot = createStorageRoot();
+    const firstStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    firstStore.notePendingReplayEvent(
+      "!room:example.org",
+      "$pending",
+      createPendingEvent("$pending"),
+    );
+    firstStore.notePendingReplayEvent(
+      "!room:example.org",
+      "$settled",
+      createPendingEvent("$settled"),
+    );
+    firstStore.markReplayEventSettled("!room:example.org", "$settled");
+    await firstStore.setSyncData(createSyncResponse("s123"));
+    await firstStore.flush();
+
+    const restartedStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    const replayState = restartedStore.getStartupReplayState();
+    expect(replayState.kind).toBe("selective");
+    if (replayState.kind === "selective") {
+      expect(replayState.events.map((entry) => entry.key)).toEqual(["!room:example.org\0$pending"]);
+    }
+  });
+
+  it("keeps a graceful shutdown dirty while retryable events remain pending", async () => {
+    const storageRoot = createStorageRoot();
+    const firstStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    firstStore.notePendingReplayEvent("!room:example.org", "$retry", createPendingEvent("$retry"));
+    await firstStore.setSyncData(createSyncResponse("s123"));
+    firstStore.markCleanShutdown();
+    await firstStore.flush();
+
+    const restartedStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    const replayState = restartedStore.getStartupReplayState();
+    expect(replayState.kind).toBe("selective");
+    if (replayState.kind === "selective") {
+      expect(replayState.events.map((entry) => entry.key)).toEqual(["!room:example.org\0$retry"]);
+    }
+  });
+
+  it("retains pending payloads outside the SDK timeline and room membership state", async () => {
+    const storageRoot = createStorageRoot();
+    const response = createSyncResponse("s123");
+    const joinedRoom = response.rooms.join["!room:example.org"];
+    if (!joinedRoom) {
+      throw new Error("expected joined room fixture");
+    }
+    joinedRoom.timeline.events = Array.from(
+      { length: 60 },
+      (_, index) => createPendingEvent(`$newer-${index}`) as never,
+    );
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+    store.notePendingReplayEvent(
+      "!room:example.org",
+      "$pending-old",
+      createPendingEvent("$pending-old"),
+    );
+    await store.setSyncData(response);
+    await store.setSyncData({
+      next_batch: "s124",
+      rooms: {
+        join: {},
+        invite: {},
+        leave: {
+          "!room:example.org": {
+            state: { events: [] },
+            timeline: { events: [], prev_batch: "t1" },
+            account_data: { events: [] },
+          },
+        },
+        knock: {},
+      },
+      account_data: { events: [] },
+    });
+    await store.flush();
+
+    const restartedStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    const replayState = restartedStore.getStartupReplayState();
+    expect(replayState.kind).toBe("selective");
+    if (replayState.kind === "selective") {
+      expect(replayState.events).toEqual([
+        {
+          key: "!room:example.org\0$pending-old",
+          roomId: "!room:example.org",
+          event: createPendingEvent("$pending-old"),
+        },
+      ]);
+    }
+  });
+
+  it("keeps the cold-start fence and skips replay for a pre-ledger dirty cache", async () => {
+    const storageRoot = createStorageRoot();
+    const legacyStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    await legacyStore.setSyncData(createSyncResponse("s123"));
+    await legacyStore.flush();
+    await writeMatrixSyncCacheStateToStore({
+      storageRootDir: storageRoot,
+      payload: {
+        version: 1,
+        savedSync: (await legacyStore.getSavedSync()) as NonNullable<
+          Awaited<ReturnType<SqliteBackedMatrixSyncStore["getSavedSync"]>>
+        >,
+        cleanShutdown: false,
+      },
+      store: getMatrixRuntime().state.openKeyedStore<MatrixSyncCacheRecord>(
+        openMatrixSyncCacheStoreOptions(storageRoot),
+      ),
+    });
+
+    const restartedStore = new SqliteBackedMatrixSyncStore(storageRoot);
+
+    expect(restartedStore.hasSavedSync()).toBe(true);
+    expect(restartedStore.hasTrustedSyncCursor()).toBe(false);
+    expect(restartedStore.getStartupReplayState()).toEqual({ kind: "hydrate-only" });
+  });
+
+  it("trusts a dirty cursor once the replay ledger owns its provenance", async () => {
+    const storageRoot = createStorageRoot();
+    const firstStore = new SqliteBackedMatrixSyncStore(storageRoot);
+    await firstStore.setSyncData(createSyncResponse("s123"));
+    await firstStore.flush();
+
+    const restartedStore = new SqliteBackedMatrixSyncStore(storageRoot);
+
+    expect(restartedStore.hasSavedSyncFromCleanShutdown()).toBe(false);
+    expect(restartedStore.hasTrustedSyncCursor()).toBe(true);
+    expect(restartedStore.getStartupReplayState()).toEqual({ kind: "hydrate-only" });
   });
 
   it("clears the clean-shutdown marker once fresh sync data arrives", async () => {

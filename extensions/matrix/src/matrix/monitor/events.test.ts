@@ -149,6 +149,7 @@ function createHarness(params?: {
       return client;
     }),
     sendMessage,
+    markInboundEventSettled: vi.fn(),
     getUserId: vi.fn(async () => {
       if (params?.selfUserIdError) {
         throw params.selfUserIdError;

@@ -1564,6 +1564,48 @@ describe("buildQaRuntimeEnv", () => {
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
+  it("hard-stops gateway children without sending a graceful signal first", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      pid: 23456,
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill: vi.fn((signal?: "SIGTERM" | "SIGKILL" | number) => {
+        if (signal === "SIGKILL") {
+          child.signalCode = "SIGKILL";
+          queueMicrotask(() => child.emit("exit"));
+        }
+        return true;
+      }),
+    });
+    const processKill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === "SIGKILL") {
+        child.signalCode = "SIGKILL";
+        queueMicrotask(() => child.emit("exit"));
+      }
+      if (signal === 0 && child.signalCode) {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      }
+      return true;
+    });
+
+    await stopQaGatewayChildProcessTree(
+      child as unknown as Parameters<typeof stopQaGatewayChildProcessTree>[0],
+      {
+        forceTimeoutMs: 10,
+        shutdownMode: "hard",
+      },
+    );
+
+    if (process.platform === "win32") {
+      expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+      expect(child.kill).not.toHaveBeenCalledWith("SIGTERM");
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-23456, "SIGKILL");
+      expect(processKill).not.toHaveBeenCalledWith(-23456, "SIGTERM");
+    }
+    expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
+  });
+
   it("force-closes a gateway log stream whose final flush never settles", async () => {
     const stream = new Writable({
       write(_chunk, _encoding, callback) {

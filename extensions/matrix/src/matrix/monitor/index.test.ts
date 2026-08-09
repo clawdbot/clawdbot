@@ -132,6 +132,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.stopThreadBindingManager.mockReset();
     hoisted.client.removeAllListeners();
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
+    hoisted.client.markInboundEventSettled.mockReset();
     hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
     hoisted.inboundDeduper.claim
       .mockReset()
@@ -579,7 +580,7 @@ describe("monitorMatrixProvider", () => {
     expectPersistRelease();
   });
 
-  it("disables cold-start backlog dropping only when sync state is cleanly persisted", async () => {
+  it("disables cold-start backlog dropping when any persisted sync cursor exists", async () => {
     hoisted.client.hasPersistedSyncState.mockReturnValue(true);
     await startMonitorAndAbortAfterStartup();
 
@@ -587,6 +588,16 @@ describe("monitorMatrixProvider", () => {
       dropPreStartupMessages?: unknown;
     };
     expect(handlerParams.dropPreStartupMessages).toBe(false);
+  });
+
+  it("keeps the cold-start backlog fence when no persisted sync cursor exists", async () => {
+    hoisted.client.hasPersistedSyncState.mockReturnValue(false);
+    await startMonitorAndAbortAfterStartup();
+
+    const handlerParams = mockCallArg(hoisted.createMatrixRoomMessageHandler) as {
+      dropPreStartupMessages?: unknown;
+    };
+    expect(handlerParams.dropPreStartupMessages).toBe(true);
   });
 
   it("detaches listeners, closes admission, waits for handlers, then releases", async () => {

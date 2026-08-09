@@ -42,6 +42,22 @@ describe("Matrix inbound event dedupe", () => {
     await expect(second.claim(event)).resolves.toEqual({ kind: "duplicate" });
   });
 
+  it("reclaims an event after a crash before commit, then dedupes it after settlement", async () => {
+    const env = createStateEnv();
+    const beforeCrash = createMatrixInboundEventDeduper({ auth, env });
+    await expect(beforeCrash.claim(event)).resolves.toMatchObject({ kind: "claimed" });
+
+    const afterCrash = createMatrixInboundEventDeduper({ auth, env });
+    const replay = await afterCrash.claim(event);
+    expect(replay.kind).toBe("claimed");
+    if (replay.kind === "claimed") {
+      await replay.handle.commit();
+    }
+
+    const afterSettlement = createMatrixInboundEventDeduper({ auth, env });
+    await expect(afterSettlement.claim(event)).resolves.toEqual({ kind: "duplicate" });
+  });
+
   it("scopes dedupe state per account", async () => {
     const env = createStateEnv();
     const ops = createMatrixInboundEventDeduper({ auth: { accountId: "ops" }, env });

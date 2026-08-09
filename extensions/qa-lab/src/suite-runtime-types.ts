@@ -1,5 +1,9 @@
 // Qa Lab plugin module implements suite runtime types behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  QaGatewayChildRestartOptions,
+  QaGatewayChildStateMutationContext,
+} from "./gateway-child-contracts.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportActionName, QaTransportAdapter } from "./qa-transport.js";
 
@@ -14,12 +18,8 @@ type QaRuntimeGatewayClient = {
   restart?: () => Promise<void>;
   stop?: (options?: { preserveToDir?: string }) => Promise<void>;
   restartAfterStateMutation?: (
-    mutateState: (context: {
-      configPath: string;
-      runtimeEnv: NodeJS.ProcessEnv;
-      stateDir: string;
-      tempRoot: string;
-    }) => Promise<void>,
+    mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,
+    options?: QaGatewayChildRestartOptions,
   ) => Promise<void>;
   call: (
     method: string,

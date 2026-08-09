@@ -90,6 +90,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       emitDecryptedEvent: (roomId: string, event: TRawEvent) => void;
       emitMessage: (roomId: string, event: TRawEvent) => void;
       emitFailedDecryption: (roomId: string, event: TRawEvent, error: Error) => void;
+      settleFailedDecryption?: (roomId: string, eventId: string) => void;
     },
   ) {}
 
@@ -135,6 +136,28 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       const eventId = raw.event_id || event.getId() || "";
       this.scheduleDecryptRetry({ event, roomId, eventId });
     }
+  }
+
+  replayEncryptedEvent(event: MatrixEvent, roomId: string): void {
+    this.attachEncryptedEvent(event, roomId);
+    const decryptEventIfNeeded = this.deps.client.decryptEventIfNeeded;
+    if (!decryptEventIfNeeded) {
+      this.handleEncryptedEventDecrypted({
+        roomId,
+        encryptedEvent: event,
+        decryptedEvent: event,
+        err: new Error("Matrix client cannot decrypt replayed encrypted event"),
+      });
+      return;
+    }
+    void decryptEventIfNeeded.call(this.deps.client, event).catch((err: unknown) => {
+      this.handleEncryptedEventDecrypted({
+        roomId,
+        encryptedEvent: event,
+        decryptedEvent: event,
+        err: err instanceof Error ? err : new Error(String(err)),
+      });
+    });
   }
 
   retryPendingNow(reason: string, options?: { includeExhausted?: boolean }): void {
@@ -270,6 +293,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
         });
       } else if (retryKey) {
         this.clearDecryptRetry(retryKey);
+        this.deps.settleFailedDecryption?.(decryptedRoomId, retryEventId);
       }
       return;
     }
@@ -289,6 +313,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
         });
       } else if (retryKey) {
         this.clearDecryptRetry(retryKey);
+        this.deps.settleFailedDecryption?.(decryptedRoomId, retryEventId);
       }
       return;
     }
@@ -396,6 +421,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       canAttemptDecryption || typeof this.deps.client.decryptEventIfNeeded === "function";
     if (!canDecrypt) {
       this.clearDecryptRetry(retryKey);
+      this.deps.settleFailedDecryption?.(state.roomId, state.eventId);
       this.activeRetryRuns = Math.max(0, this.activeRetryRuns - 1);
       this.resolveRetryIdleIfNeeded();
       return;
@@ -429,6 +455,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     if (state.event.isDecryptionFailure()) {
       if (!shouldRetryDecryptionFailure(state.event)) {
         this.clearDecryptRetry(retryKey);
+        this.deps.settleFailedDecryption?.(state.roomId, state.eventId);
         return;
       }
       this.scheduleDecryptRetry(state);
@@ -456,6 +483,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     for (const [retryKey, state] of this.exhaustedDecryptRetries) {
       if (now - state.exhaustedAt > MATRIX_DECRYPT_EXHAUSTED_RETRY_TTL_MS) {
         this.exhaustedDecryptRetries.delete(retryKey);
+        this.deps.settleFailedDecryption?.(state.roomId, state.eventId);
       }
     }
     while (this.exhaustedDecryptRetries.size > MATRIX_DECRYPT_EXHAUSTED_RETRY_MAX_ENTRIES) {
@@ -463,7 +491,11 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       if (oldest === undefined) {
         break;
       }
+      const state = this.exhaustedDecryptRetries.get(oldest);
       this.exhaustedDecryptRetries.delete(oldest);
+      if (state) {
+        this.deps.settleFailedDecryption?.(state.roomId, state.eventId);
+      }
     }
   }
 

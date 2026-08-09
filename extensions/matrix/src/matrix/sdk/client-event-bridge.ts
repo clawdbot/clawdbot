@@ -1,14 +1,19 @@
 import { EventEmitter } from "node:events";
 import {
   ClientEvent,
+  MatrixEvent,
   type MatrixClient as MatrixJsClient,
-  type MatrixEvent,
 } from "matrix-js-sdk/lib/matrix.js";
 import type { Room } from "matrix-js-sdk/lib/models/room.js";
+import type { PendingReplayEvent } from "../client/file-sync-store-replay.js";
 import type { MatrixSyncState } from "../sync-state.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
 import type { MatrixRawEvent } from "./types.js";
+
+export type MatrixStartupCacheMode =
+  | { kind: "none" | "hydrate-only" }
+  | { kind: "selective"; events: readonly PendingReplayEvent[] };
 
 export function registerMatrixClientBridge(params: {
   client: MatrixJsClient;
@@ -16,20 +21,38 @@ export function registerMatrixClientBridge(params: {
   emitter: EventEmitter;
   emitMembershipForRoom: (room: Room) => void;
   getSelfUserId: () => string;
+  notePendingReplayEvent: (roomId: string, eventId: string, event: Record<string, unknown>) => void;
   setCurrentSyncState: (state: MatrixSyncState, error?: unknown) => void;
-}): void {
-  params.client.on(ClientEvent.Event, (event: MatrixEvent) => {
+}): { prepareStartup: (mode: MatrixStartupCacheMode) => void } {
+  let startupCacheMode: MatrixStartupCacheMode = { kind: "none" };
+  let hydratingStartupCache = false;
+
+  const handleEvent = (event: MatrixEvent, replayedFromLedger = false) => {
     const roomId = event.getRoomId();
     if (!roomId) {
+      return;
+    }
+    // Cached SDK emissions rebuild client state only. Routing them would reply
+    // to old room history; the ledger replay below owns interrupted work.
+    if (hydratingStartupCache) {
       return;
     }
 
     const raw = matrixEventToRaw(event, { contentMode: "original" });
     const isEncryptedEvent = raw.type === "m.room.encrypted";
+    const shouldEmitUnencryptedMessage =
+      !isEncryptedEvent && params.decryptBridge.shouldEmitUnencryptedMessage(roomId, raw.event_id);
+    if (isEncryptedEvent || shouldEmitUnencryptedMessage) {
+      params.notePendingReplayEvent(
+        roomId,
+        raw.event_id ?? "",
+        raw as unknown as Record<string, unknown>,
+      );
+    }
     params.emitter.emit("room.event", roomId, raw);
     if (isEncryptedEvent) {
       params.emitter.emit("room.encrypted_event", roomId, raw);
-    } else if (params.decryptBridge.shouldEmitUnencryptedMessage(roomId, raw.event_id)) {
+    } else if (shouldEmitUnencryptedMessage) {
       params.emitter.emit("room.message", roomId, raw);
     }
 
@@ -48,15 +71,38 @@ export function registerMatrixClientBridge(params: {
     }
 
     if (isEncryptedEvent) {
-      params.decryptBridge.attachEncryptedEvent(event, roomId);
+      if (replayedFromLedger) {
+        params.decryptBridge.replayEncryptedEvent(event, roomId);
+      } else {
+        params.decryptBridge.attachEncryptedEvent(event, roomId);
+      }
     }
-  });
+  };
+  params.client.on(ClientEvent.Event, handleEvent);
 
   // Some SDK invite transitions are surfaced as room lifecycle events instead of raw timeline events.
-  params.client.on(ClientEvent.Room, params.emitMembershipForRoom);
+  params.client.on(ClientEvent.Room, (room: Room) => {
+    if (!hydratingStartupCache) {
+      params.emitMembershipForRoom(room);
+    }
+  });
   params.client.on(
     ClientEvent.Sync,
     (state: MatrixSyncState, prevState: string | null, data?: unknown) => {
+      if (hydratingStartupCache && isCachedSyncData(data)) {
+        hydratingStartupCache = false;
+        if (startupCacheMode.kind === "selective") {
+          for (const entry of startupCacheMode.events) {
+            handleEvent(
+              new MatrixEvent({
+                ...entry.event,
+                room_id: entry.roomId,
+              }),
+              true,
+            );
+          }
+        }
+      }
       const error =
         data && typeof data === "object" && "error" in data
           ? (data as { error?: unknown }).error
@@ -68,6 +114,18 @@ export function registerMatrixClientBridge(params: {
   params.client.on(ClientEvent.SyncUnexpectedError, (error: Error) => {
     params.emitter.emit("sync.unexpected_error", error);
   });
+  return {
+    prepareStartup: (mode) => {
+      startupCacheMode = mode;
+      hydratingStartupCache = mode.kind !== "none";
+    },
+  };
+}
+
+function isCachedSyncData(data: unknown): boolean {
+  return (
+    data !== null && typeof data === "object" && "fromCache" in data && data.fromCache === true
+  );
 }
 
 export function emitMatrixMembershipForRoom(params: {

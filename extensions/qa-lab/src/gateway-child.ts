@@ -27,6 +27,10 @@ import {
   runQaGatewayCliCommand,
   type QaGatewayChildCommand,
 } from "./gateway-child-command.js";
+import type {
+  QaGatewayChildRestartOptions,
+  QaGatewayChildStateMutationContext,
+} from "./gateway-child-contracts.js";
 import {
   buildQaForcedRuntimeEnvPatch,
   buildQaRuntimeEnv,
@@ -79,12 +83,7 @@ const QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS = 30_000;
 const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
 const QA_PACKAGE_AUTH_FAILURE_MAX_CHARS = 2_048;
 
-export type QaGatewayChildStateMutationContext = {
-  configPath: string;
-  runtimeEnv: NodeJS.ProcessEnv;
-  stateDir: string;
-  tempRoot: string;
-};
+export type { QaGatewayChildStateMutationContext } from "./gateway-child-contracts.js";
 
 export type QaGatewayChildListeningContext = {
   attempt: number;
@@ -150,7 +149,7 @@ async function stopQaGatewayChildWithBoundary(params: {
   child: ChildProcess;
   controller: QaGatewayProcessBoundaryController | null;
   identity: QaGatewayVerifiedProcessIdentity | null;
-  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number };
+  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number } & QaGatewayChildRestartOptions;
 }) {
   const errors: unknown[] = [];
   if (params.controller && params.identity) {
@@ -887,6 +886,7 @@ export async function startQaGatewayChild(params: {
       },
       async restartAfterStateMutation(
         mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,
+        options?: QaGatewayChildRestartOptions,
       ) {
         throwActiveChildFailure();
         await activeRpcClient.stop().catch(() => {});
@@ -894,6 +894,7 @@ export async function startQaGatewayChild(params: {
           child: activeChild,
           controller: processBoundaryController,
           identity: activeIdentity,
+          opts: options,
         });
         await mutateState({
           configPath,

@@ -7,6 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { QaSuiteInfraError } from "./errors.js";
+import type { QaGatewayChildRestartOptions } from "./gateway-child-contracts.js";
 import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
 import {
   inspectLinuxProcessGroup,
@@ -238,6 +239,7 @@ type QaGatewayChildStopOptions = {
   gracefulTimeoutMs?: number;
   forceTimeoutMs?: number;
   inspectLinuxProcessGroup?: QaLinuxProcessGroupInspector;
+  shutdownMode?: QaGatewayChildRestartOptions["shutdownMode"];
 };
 
 function resolveQaGatewayChildStopTimeouts(opts?: QaGatewayChildStopOptions) {
@@ -272,6 +274,25 @@ export async function stopQaGatewayChildProcessTree(
     return;
   }
   const timeouts = resolveQaGatewayChildStopTimeouts(opts);
+  if (opts?.shutdownMode === "hard") {
+    // Crash-recovery scenarios inject state only after the process tree is gone.
+    // A graceful signal would let the Gateway persist a clean-shutdown marker.
+    signalQaGatewayChildProcessTree(child, "SIGKILL");
+    const killed = await waitForQaGatewayChildExit(
+      child,
+      timeouts.forceTimeoutMs,
+      inspectLinuxProcessGroupFn,
+    );
+    if (!killed) {
+      throw new Error(
+        `qa gateway process tree remained alive after forced shutdown: ${formatQaGatewayProcessTreeDiagnostics(
+          child,
+          inspectLinuxProcessGroupFn,
+        )}`,
+      );
+    }
+    return;
+  }
   signalQaGatewayChildProcessTree(child, "SIGTERM");
   if (
     await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs, inspectLinuxProcessGroupFn)

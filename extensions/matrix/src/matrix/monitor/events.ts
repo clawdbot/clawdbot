@@ -241,6 +241,7 @@ export function registerMatrixMonitorEvents(params: {
 
   const onRoomMessageEvent = (roomId: string, event: MatrixRawEvent) => {
     if (routeVerificationEvent(roomId, event)) {
+      client.markInboundEventSettled(roomId, event.event_id ?? "");
       return;
     }
     void runMonitorTask(
@@ -262,9 +263,11 @@ export function registerMatrixMonitorEvents(params: {
     const eventType = event?.type ?? "unknown";
     logVerboseMessage(`matrix: decrypted event room=${roomId} type=${eventType} id=${eventId}`);
     if (routeVerificationEvent(roomId, event)) {
+      client.markInboundEventSettled(roomId, event.event_id ?? "");
       return;
     }
     if (eventType !== EventType.RoomMessage) {
+      client.markInboundEventSettled(roomId, event.event_id ?? "");
       return;
     }
     void runMonitorTask(
@@ -406,7 +409,9 @@ export function registerMatrixMonitorEvents(params: {
       return;
     }
 
-    routeVerificationEvent(roomId, event);
+    if (routeVerificationEvent(roomId, event)) {
+      client.markInboundEventSettled(roomId, event.event_id ?? "");
+    }
   };
 
   client.on("room.message", onRoomMessageEvent);

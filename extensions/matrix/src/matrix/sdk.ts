@@ -12,6 +12,7 @@ import {
   emitMatrixMembershipForRoom,
   refreshMatrixDmRoomIds,
   registerMatrixClientBridge,
+  type MatrixStartupCacheMode,
 } from "./sdk/client-event-bridge.js";
 import {
   createMatrixExplicitBootstrapOptions,
@@ -54,6 +55,8 @@ export type {
 } from "./sdk/types.js";
 
 export class MatrixClient extends MatrixClientVerification {
+  private bridgeController: ReturnType<typeof registerMatrixClientBridge> | undefined;
+
   async verifyWithRecoveryKey(
     rawRecoveryKey: string,
   ): Promise<MatrixRecoveryKeyVerificationResult> {
@@ -605,17 +608,27 @@ export class MatrixClient extends MatrixClientVerification {
       return;
     }
     this.bridgeRegistered = true;
-    registerMatrixClientBridge({
+    this.bridgeController = registerMatrixClientBridge({
       client: this.client,
       decryptBridge,
       emitter: this.emitter,
       emitMembershipForRoom: (room) => this.emitMembershipForRoom(room),
       getSelfUserId: () => this.client.getUserId() ?? this.selfUserId ?? "",
+      notePendingReplayEvent: (roomId, eventId, event) => {
+        this.syncStore?.notePendingReplayEvent(roomId, eventId, event);
+      },
       setCurrentSyncState: (state, error) => {
         this.currentSyncState = state;
         this.currentSyncError = error;
       },
     });
+  }
+
+  protected prepareBridgeForStartup(): void {
+    const startupCacheMode: MatrixStartupCacheMode = this.syncStore?.getStartupReplayState() ?? {
+      kind: "none",
+    };
+    this.bridgeController?.prepareStartup(startupCacheMode);
   }
 
   private emitMembershipForRoom(room: Room): void {

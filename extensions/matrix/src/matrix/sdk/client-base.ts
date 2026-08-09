@@ -108,6 +108,7 @@ export abstract class MatrixClientBase {
     opts?: { allowRemote?: boolean; maxBytes?: number; readIdleTimeoutMs?: number },
   ): Promise<Buffer>;
   protected abstract registerBridge(): void;
+  protected abstract prepareBridgeForStartup(): void;
   protected abstract emitOutstandingInviteEvents(): void;
   protected abstract refreshDmCache(): Promise<boolean>;
 
@@ -294,6 +295,9 @@ export abstract class MatrixClientBase {
       },
       emitFailedDecryption: (roomId, event, error) => {
         this.emitter.emit("room.failed_decryption", roomId, event, error);
+      },
+      settleFailedDecryption: (roomId, eventId) => {
+        this.syncStore?.markReplayEventSettled(roomId, eventId);
       },
     });
     if (!this.encryptionEnabled) {
@@ -492,6 +496,7 @@ export abstract class MatrixClientBase {
     await this.ensureCryptoSupportInitialized();
     throwIfMatrixStartupAborted(opts.abortSignal);
     this.registerBridge();
+    this.prepareBridgeForStartup();
     await this.initializeCryptoIfNeeded(opts.abortSignal);
 
     await this.client.startClient({
@@ -530,9 +535,9 @@ export abstract class MatrixClientBase {
   }
 
   hasPersistedSyncState(): boolean {
-    // Only trust restart replay when the previous process completed a final
-    // sync-store persist. A stale cursor can make Matrix re-surface old events.
-    return this.syncStore?.hasSavedSyncFromCleanShutdown() === true;
+    // Cursor catch-up is admitted for any cursor whose provenance the replay
+    // ledger can account for. Pre-ledger dirty caches keep the cold-start fence.
+    return this.syncStore?.hasTrustedSyncCursor() === true;
   }
 
   protected async ensureStartedForCryptoControlPlane(): Promise<void> {
@@ -555,6 +560,10 @@ export abstract class MatrixClientBase {
     this.client.stopClient();
     this.sdkStopped = true;
     this.started = false;
+  }
+
+  markInboundEventSettled(roomId: string, eventId: string): void {
+    this.syncStore?.markReplayEventSettled(roomId, eventId);
   }
 
   async quiesceSync(): Promise<void> {
