@@ -5,7 +5,7 @@ scenario:
   surface: channels
   category: channels.conversation-routing-and-delivery
   coverage:
-    secondary:
+    primary:
       - channels.streaming-final-reply
   regressionRefs:
     - openclaw/openclaw#120626
