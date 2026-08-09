@@ -389,7 +389,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
     expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ includeProviderPluginAugmentation: true }),
     );
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledOnce();
     expect(mocks.loadAgentRuntimePluginRegistryHandle.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.buildPreparedModelCatalogSnapshot.mock.invocationCallOrder[0]!,
     );
