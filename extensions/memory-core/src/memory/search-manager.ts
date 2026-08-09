@@ -743,6 +743,31 @@ export async function closeMemorySearchManager(params: {
   );
 }
 
+// Atomic owner-boundary refresh: close the agent-scoped cached manager and
+// reacquire under one scope lifecycle tail so concurrent get/close/search
+// handoffs cannot interleave between eviction and the replacement open.
+export async function refreshMemorySearchManager(
+  params: MemorySearchManagerParams,
+): Promise<MemorySearchManagerResult> {
+  const normalizedAgentId = normalizeAgentId(params.agentId);
+  const scopeKey = buildQmdManagerScopeKey(normalizedAgentId);
+  const resolved = resolveMemoryBackendConfig(params);
+  return await runMemorySearchManagerScopeOperation(
+    scopeKey,
+    async () => {
+      await closeMemorySearchManagerWithinLifecycle({
+        cfg: params.cfg,
+        agentId: normalizedAgentId,
+      });
+      // Use the unwrapped acquire path so we do not re-enter this scope tail.
+      return await getMemorySearchManagerWithinLifecycle(params);
+    },
+    // Drain retained QMD managers before replacement so in-flight borrowers are
+    // retired on the same serialized handoff that installs the new manager.
+    { drainRetained: resolved.backend === "qmd" },
+  );
+}
+
 async function closeMemorySearchManagerWithinLifecycle(params: {
   cfg: OpenClawConfig;
   agentId: string;

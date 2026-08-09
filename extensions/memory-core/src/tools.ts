@@ -713,19 +713,68 @@ export function createMemorySearchTool(options: {
                   activeMemory = refreshed;
                   rawResults = await searchActiveMemory();
                 }
-                const statusBeforeRetry = activeMemory.manager.status();
-                pausedIndexIdentityReason =
-                  resolvePausedMemoryIndexIdentityReason(statusBeforeRetry);
+                let managerStatus = activeMemory.manager.status();
+                pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(managerStatus);
+                if (pausedIndexIdentityReason) {
+                  // Cached manager may predate a memory index identity change
+                  // (e.g. session memory enabled after the gateway cached the
+                  // manager). Refresh once at the owner boundary, then retry.
+                  const { refreshMemorySearchManager } = await loadMemoryToolRuntime();
+                  const refreshed = await runWithDefaultDeadline(async () => {
+                    if (refreshMemorySearchManager) {
+                      const result = await refreshMemorySearchManager({
+                        cfg,
+                        agentId,
+                        purpose: memoryManagerPurpose,
+                        acquireLocalService: options.acquireLocalService,
+                        withLease: options.withLease,
+                      });
+                      // Normalize nullable manager into the tool context union.
+                      if (!result.manager) {
+                        return trackMemoryManager({ error: result.error });
+                      }
+                      return trackMemoryManager({
+                        manager: result.manager,
+                        debug: result.debug,
+                      });
+                    }
+                    return trackMemoryManager(
+                      await getMemoryManagerContextWithPurpose({
+                        cfg,
+                        agentId,
+                        purpose: memoryManagerPurpose,
+                        acquireLocalService: options.acquireLocalService,
+                        withLease: options.withLease,
+                      }),
+                    );
+                  });
+                  if ("error" in refreshed) {
+                    // Keep the pre-refresh paused reason; reacquisition failure
+                    // still surfaces as index unavailable rather than a throw.
+                  } else {
+                    managerMs = refreshed.debug?.managerMs;
+                    managerCacheState = refreshed.debug?.managerCacheState;
+                    activeMemory = refreshed;
+                    rawResults = await searchActiveMemory();
+                    // All post-refresh policy uses the refreshed manager only.
+                    managerStatus = activeMemory.manager.status();
+                    pausedIndexIdentityReason =
+                      resolvePausedMemoryIndexIdentityReason(managerStatus);
+                  }
+                }
                 if (pausedIndexIdentityReason) {
                   return;
                 }
                 // One-shot CLI managers have no background lifecycle, so keep their bootstrap
                 // retry. Long-lived QMD managers must not run update work in the tool hot path.
+                // Explicit corpus=sessions zero-hit is a legitimate miss; do not force a full
+                // sync that can turn a normal miss into a slow or timing-sensitive tool call.
                 if (
                   rawResults.length === 0 &&
+                  requestedCorpus !== "sessions" &&
                   !runtimeDebug.some((entry) => entry.embeddingBootstrap) &&
                   activeMemory.manager.sync &&
-                  (statusBeforeRetry.backend !== "qmd" || options.oneShotCliRun === true)
+                  (managerStatus.backend !== "qmd" || options.oneShotCliRun === true)
                 ) {
                   await runWithDefaultDeadline(async () => {
                     // Sync may join shared/background manager maintenance and has

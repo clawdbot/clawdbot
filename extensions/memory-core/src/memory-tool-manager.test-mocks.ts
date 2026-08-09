@@ -81,6 +81,11 @@ const stubManager = {
 const getMemorySearchManagerMock = vi.fn(async (params: MemoryManagerParams) =>
   getManagerImpl ? await getManagerImpl(params) : { manager: stubManager },
 );
+const closeMemorySearchManagerMock = vi.fn(async (_params?: MemoryManagerParams) => {});
+const refreshMemorySearchManagerMock = vi.fn(async (params: MemoryManagerParams) => {
+  await closeMemorySearchManagerMock(params);
+  return await getMemorySearchManagerMock(params);
+});
 const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );
@@ -95,6 +100,8 @@ vi.mock("./tools.runtime.js", () => ({
     qmd: cfg?.memory?.qmd,
   }),
   getMemorySearchManager: getMemorySearchManagerMock,
+  closeMemorySearchManager: closeMemorySearchManagerMock,
+  refreshMemorySearchManager: refreshMemorySearchManagerMock,
   readAgentMemoryFile: readAgentMemoryFileMock,
 }));
 
@@ -164,10 +171,23 @@ export function resetMemoryToolMockState(overrides?: {
       lines: params.lines ?? 120,
     }));
   vi.clearAllMocks();
+  closeMemorySearchManagerMock.mockImplementation(async (_params?: MemoryManagerParams) => {});
+  refreshMemorySearchManagerMock.mockImplementation(async (params: MemoryManagerParams) => {
+    await closeMemorySearchManagerMock(params);
+    return await getMemorySearchManagerMock(params);
+  });
 }
 
 export function getMemorySearchManagerMockCalls(): number {
   return getMemorySearchManagerMock.mock.calls.length;
+}
+
+export function getCloseMemorySearchManagerMockCalls(): number {
+  return closeMemorySearchManagerMock.mock.calls.length;
+}
+
+export function getRefreshMemorySearchManagerMockCalls(): number {
+  return refreshMemorySearchManagerMock.mock.calls.length;
 }
 
 export function getMemorySyncMockCalls(): number {
@@ -176,6 +196,22 @@ export function getMemorySyncMockCalls(): number {
 
 export function getMemoryCloseMockCalls(): number {
   return stubManager.close.mock.calls.length;
+}
+
+export function setCloseMemorySearchManagerImpl(next: () => Promise<void> | void): void {
+  closeMemorySearchManagerMock.mockImplementation(async (_params?: MemoryManagerParams) => {
+    await next();
+  });
+}
+
+export function setRefreshMemorySearchManagerImpl(
+  next: (params: MemoryManagerParams) => Promise<{
+    manager?: unknown;
+    error?: string;
+    debug?: MemoryManagerDebug;
+  }>,
+): void {
+  refreshMemorySearchManagerMock.mockImplementation(async (params) => await next(params));
 }
 
 export function getMemorySearchManagerMockConfigs(): unknown[] {
