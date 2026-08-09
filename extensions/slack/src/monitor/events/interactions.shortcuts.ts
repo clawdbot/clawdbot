@@ -108,7 +108,7 @@ async function handleSlackShortcut(params: {
     channelType: auth.channelType,
     senderId: userId,
     threadTs,
-    ...(eventScope ? { eventScope } : {}),
+    eventScope,
   });
   const contextKey = [
     "slack:interaction:shortcut",
