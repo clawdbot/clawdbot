@@ -159,6 +159,28 @@ describe("showPromptDialog", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
+  it("turns a thrown operation into a visible failure instead of a stuck dialog", async () => {
+    const submit = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway exploded"))
+      .mockResolvedValue(null);
+    const closed = showPromptDialog({ ...OPTIONS, submit });
+    await getRenderedModalDialog(document.body);
+
+    await type("Client work");
+    submitForm();
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
+    await Promise.resolve();
+
+    expect(document.body.textContent).toContain("gateway exploded");
+    expect(promptInput().disabled).toBe(false);
+    expect(promptInput().value).toBe("Client work");
+
+    submitForm();
+    await closed;
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
+
   it("drops a reentrant prompt instead of stacking dialogs", async () => {
     const submit = vi.fn().mockResolvedValue(null);
     const first = showPromptDialog({ ...OPTIONS, submit });

@@ -54,7 +54,9 @@ function presentPromptDialog(options: PromptDialogOptions): Promise<void> {
       submitting = true;
       failure = null;
       paint();
-      const message = await options.submit(entered);
+      // A thrown operation still has to produce a visible outcome: without this
+      // the dialog would stay disabled forever and wedge every later prompt.
+      const message = await options.submit(entered).catch((error: unknown) => String(error));
       if (settled) {
         return;
       }
