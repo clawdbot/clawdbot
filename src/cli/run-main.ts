@@ -1195,6 +1195,19 @@ async function runCliWithPreparedOutputMode(
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();
   }
+  const bareSessionPrimary = !isHelpOrVersionInvocation
+    ? resolveUnownedCliPrimaryCandidate(normalizedArgv)
+    : null;
+  const sessionRefModule = bareSessionPrimary ? await import("./session-ref.js") : null;
+  const bareSessionTarget = bareSessionPrimary
+    ? sessionRefModule?.isSessionUrlInputCandidate(bareSessionPrimary)
+      ? bareSessionPrimary
+      : null
+    : null;
+  const bareSessionOptions =
+    bareSessionTarget && sessionRefModule
+      ? sessionRefModule.parseBareSessionTuiOptions(normalizedArgv, bareSessionTarget)
+      : {};
 
   // Activate operator-managed proxy routing for network-capable commands.
   // Local Gateway/control-plane commands keep direct loopback access while
@@ -1240,6 +1253,7 @@ async function runCliWithPreparedOutputMode(
   }
   if (
     !isHelpOrVersionInvocation &&
+    !bareSessionTarget &&
     normalizedInvocation.primary &&
     !isKnownBuiltInCommandRoot(normalizedInvocation.primary)
   ) {
@@ -1308,9 +1322,11 @@ async function runCliWithPreparedOutputMode(
   };
   if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
     const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
-    const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
-    if (unownedPrimary) {
-      throw new Error(await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }));
+    if (!bareSessionTarget) {
+      const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
+      if (unownedPrimary) {
+        throw new Error(await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }));
+      }
     }
     await replaceStartedProxy(config?.proxy ?? undefined);
   }
@@ -1357,6 +1373,19 @@ async function runCliWithPreparedOutputMode(
     // Genuine help fast paths have returned. Any remaining help/version-shaped
     // invocation can still fail validation and must honor the console style.
     await installConsoleCapture();
+
+    if (bareSessionTarget) {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.error(
+          "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const { runTuiCliAction } = await import("./tui-cli.js");
+      await runTuiCliAction(bareSessionTarget, bareSessionOptions);
+      return;
+    }
 
     // Reject unowned command roots before help/version routing, so that
     // `openclaw <typo> --help` surfaces the same Unknown command error as

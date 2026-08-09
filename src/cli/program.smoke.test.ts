@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./program.js";
 import {
+  callGateway,
   configureCommand,
   ensureConfigReady,
   runSystemAgentWithInference,
@@ -64,6 +65,37 @@ describe("cli program (smoke)", () => {
     expect(options?.timeoutMs).toBe(45000);
     expect(options?.historyLimit).toBe(200);
     expect(options?.forceProcessExitOnReturn).toBe(true);
+  });
+
+  it("resolves a positional tui short reference before launch", async () => {
+    callGateway.mockResolvedValue({ ok: true, key: "agent:main:thread:resolved" });
+
+    await runProgram(["tui", "movies-a1166b81"]);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: { shortId: "a1166b81", slugHint: "movies" },
+      }),
+    );
+    expect(firstMockArg(runTui)).toMatchObject({
+      local: false,
+      session: "agent:main:thread:resolved",
+    });
+  });
+
+  it("rejects a URL target combined with --url", async () => {
+    await expect(
+      runProgram([
+        "tui",
+        "https://gateway.example/dashboard/main/movies-a1166b81",
+        "--url",
+        "wss://other.example",
+      ]),
+    ).rejects.toThrow("exit");
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("pass one target"));
+    expect(runTui).not.toHaveBeenCalled();
   });
 
   it("runs setup one-shot requests", async () => {
