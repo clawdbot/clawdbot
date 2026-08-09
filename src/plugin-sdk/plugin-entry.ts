@@ -1,7 +1,11 @@
 // Plugin entry contracts define the manifest-facing hooks implemented by plugin packages.
 export type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-import type { OpenClawPluginConfigSchema, OpenClawPluginDefinition } from "../plugins/types.js";
+import type {
+  OpenClawPluginConfigSchema,
+  OpenClawPluginDefinition,
+  ProviderBuiltInModelSuppressionContext as ProviderBuiltInModelSuppressionContextType,
+} from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 
 export type {
@@ -138,8 +142,7 @@ export type {
 
 // A direct re-export would inherit upstream @deprecated metadata, while this
 // entrypoint's established surface exposes the same type without deprecating it.
-export type ProviderBuiltInModelSuppressionContext =
-  import("../plugins/provider-catalog.types.js").ProviderBuiltInModelSuppressionContext;
+export type ProviderBuiltInModelSuppressionContext = ProviderBuiltInModelSuppressionContextType;
 
 export type {
   OpenClawPluginGatewayEventScope,
