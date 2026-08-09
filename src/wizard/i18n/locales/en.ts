@@ -457,8 +457,7 @@ export const en = {
       sharedAuthority:
         "Per-sender tool policies can limit what someone can do, but they do not provide complete isolation: people can still influence one agent's use of shared files, accounts, and tools.",
       title: "Security disclaimer",
-      toolAccess:
-        "With tools enabled, it can read files and act through your accounts or connected services.",
+      toolAccess: "This bot can read files and run actions if tools are enabled.",
     },
     skills: {
       configure: "Configure skills now? (recommended)",
