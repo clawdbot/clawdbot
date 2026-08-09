@@ -91,6 +91,64 @@ describe("sanitizeForPlainText", () => {
     expect(sanitized).not.toContain("<script");
   });
 
+  it("preserves tag-shaped code inside fenced blocks while converting prose tags", () => {
+    const reply = [
+      "Here is the nginx snippet:",
+      "",
+      "```xml",
+      '<server port="8080">',
+      '  <route path="/api"/>',
+      "</server>",
+      "```",
+      "",
+      "Wrap it in <b>bold</b> when quoting.",
+    ].join("\n");
+
+    expect(sanitizeForPlainText(reply, { style: "markdown" })).toBe(
+      [
+        "Here is the nginx snippet:",
+        "",
+        "```xml",
+        '<server port="8080">',
+        '  <route path="/api"/>',
+        "</server>",
+        "```",
+        "",
+        "Wrap it in **bold** when quoting.",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves generics and JSX inside inline code spans", () => {
+    expect(
+      sanitizeForPlainText("Use `Array<string>` for ids, and render `<Button onClick={save}>`."),
+    ).toBe("Use `Array<string>` for ids, and render `<Button onClick={save}>`.");
+  });
+
+  it("keeps paired HTML formatting that wraps an inline code span", () => {
+    expect(sanitizeForPlainText("<strong>Use `<Button>` now</strong>")).toBe(
+      "*Use `<Button>` now*",
+    );
+    expect(sanitizeForPlainText("<em>render `<Button>` twice</em>", { style: "markdown" })).toBe(
+      "_render `<Button>` twice_",
+    );
+    expect(sanitizeForPlainText("<li>call `Array<string>` first</li>")).toBe(
+      "• call `Array<string>` first\n",
+    );
+  });
+
+  it("preserves tag-shaped code inside indented code blocks", () => {
+    expect(sanitizeForPlainText('Example:\n\n    <div id="root"></div>\n\ndone')).toBe(
+      'Example:\n\n    <div id="root"></div>\n\ndone',
+    );
+  });
+
+  it("keeps stripping tags after an unterminated inline code delimiter", () => {
+    expect(sanitizeForPlainText("prefix ` unterminated <span>text</span>")).toBe(
+      "prefix ` unterminated text",
+    );
+  });
+
   it("strips known internal runtime scaffolding tags including underscore names", () => {
     expect(sanitizeForPlainText("ok <previous_response>null</previous_response> done")).toBe(
       "ok  done",

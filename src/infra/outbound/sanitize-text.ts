@@ -1,3 +1,4 @@
+import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { flattenMarkdownDetails } from "./markdown-details.js";
 // Plain-text sanitization strips internal runtime scaffolding and converts a
 // conservative subset of model-produced HTML into channel-friendly text.
@@ -22,18 +23,18 @@ function stripRemainingHtmlTags(text: string): string {
   return current;
 }
 
-/**
- * Convert common HTML tags to their plain-text/lightweight-markup equivalents
- * and strip anything that remains.
- *
- * The function is intentionally conservative — it only targets tags that models
- * are known to produce and avoids false positives on angle brackets in normal
- * prose (e.g. `a < b`).
- */
-export function sanitizeForPlainText(text: string, options: { style?: "markdown" } = {}): string {
+function reserveCodeMarker(text: string): string {
+  let marker = "\u0000";
+  while (text.includes(marker)) {
+    marker += "\u0000";
+  }
+  return marker;
+}
+
+function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): string {
   const boldMarker = options.style === "markdown" ? "**" : "*";
   const strikeMarker = options.style === "markdown" ? "~~" : "~";
-  const converted = flattenMarkdownDetails(stripInternalRuntimeScaffolding(text))
+  const converted = text
     // Preserve angle-bracket autolinks as plain URLs before tag stripping.
     .replace(/<((?:https?:\/\/|mailto:)[^<>\s]+)>/gi, "$1")
     // Normalize attributes once; conversions below only need exact bare tag names.
@@ -56,4 +57,34 @@ export function sanitizeForPlainText(text: string, options: { style?: "markdown"
     .replace(/<li>(.*?)<\/li>/gi, "• $1\n");
 
   return stripRemainingHtmlTags(converted).replace(/\n{3,}/g, "\n\n");
+}
+
+/**
+ * Convert common HTML tags to their plain-text/lightweight-markup equivalents
+ * and strip anything that remains.
+ *
+ * The function is intentionally conservative — it only targets tags that models
+ * are known to produce and avoids false positives on angle brackets in normal
+ * prose (e.g. `a < b`), in fenced blocks, and in inline code spans.
+ */
+export function sanitizeForPlainText(text: string, options: { style?: "markdown" } = {}): string {
+  const prepared = flattenMarkdownDetails(stripInternalRuntimeScaffolding(text));
+  const codeRegions = findCodeRegions(prepared);
+  if (codeRegions.length === 0) {
+    return convertHtmlOutsideCode(prepared, options);
+  }
+  const marker = reserveCodeMarker(prepared);
+  const preservedCode: string[] = [];
+  let masked = "";
+  let cursor = 0;
+  for (const region of codeRegions) {
+    masked += `${prepared.slice(cursor, region.start)}${marker}${preservedCode.length}${marker}`;
+    preservedCode.push(prepared.slice(region.start, region.end));
+    cursor = region.end;
+  }
+  masked += prepared.slice(cursor);
+  return convertHtmlOutsideCode(masked, options).replace(
+    new RegExp(`${marker}(\\d+)${marker}`, "g"),
+    (_match, index: string) => preservedCode[Number(index)] ?? "",
+  );
 }
