@@ -952,7 +952,9 @@ type MemoryAuthorizationCapabilities = Readonly<{
   exactReadByAuthorizedHandle: true;
   scopedSync: true;
   scopedWrite: true;
+  scopedImport: true;
   scopedExport: true;
+  scopedStatus: true;
   exposureReceipts: true;
   egressReceipts: true;
 }>;
@@ -986,6 +988,11 @@ interface AuthorizedMemoryRuntime {
     plan: AuthorizedMemoryPlan;
     mutation: AuthorizedMemoryMutation;
   }): Promise<MemoryWriteResult>;
+  importAuthorized(params: {
+    context: MemoryAccessContext;
+    plan: AuthorizedMemoryPlan;
+    mutation: AuthorizedMemoryMutation;
+  }): Promise<MemoryWriteResult>;
   syncAuthorized(params: {
     context: MemoryAccessContext;
     plan: AuthorizedMemoryPlan;
@@ -995,6 +1002,10 @@ interface AuthorizedMemoryRuntime {
     plan: AuthorizedMemoryPlan;
     handles: readonly AuthorizedResourceHandle[];
   }): Promise<AuthorizedMemoryResultEnvelope<MemoryExportResult>>;
+  statusAuthorized(params: {
+    context: MemoryAccessContext;
+    plan: AuthorizedMemoryPlan;
+  }): Promise<AuthorizedMemoryResultEnvelope<MemoryProviderStatus>>;
 }
 ```
 
