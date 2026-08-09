@@ -12,7 +12,10 @@ afterEach(async () => {
 });
 
 describe("chat composer steering queue", () => {
-  it("keeps an acknowledged steer pending until transcript history confirms it", () => {
+  it.each([
+    { sendState: "steering" as const, sendRunId: "send-1" },
+    { pendingRunId: "run-1", sendRunId: "send-1" },
+  ])("renders one Steering badge for an in-flight or acknowledged steer", (steerState) => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
@@ -23,8 +26,7 @@ describe("chat composer steering queue", () => {
             text: "change course",
             createdAt: 1,
             kind: "steered",
-            pendingRunId: "run-1",
-            sendRunId: "send-1",
+            ...steerState,
           },
         ],
         onQueueRemove: vi.fn(),
@@ -32,8 +34,8 @@ describe("chat composer steering queue", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-queue__badge--steered")?.textContent?.trim()).toBe(
-      t("chat.queue.states.steering"),
-    );
+    const badges = container.querySelectorAll(".chat-queue__badge");
+    expect(badges).toHaveLength(1);
+    expect(badges[0]?.textContent?.trim()).toBe(t("chat.queue.states.steering"));
   });
 });
