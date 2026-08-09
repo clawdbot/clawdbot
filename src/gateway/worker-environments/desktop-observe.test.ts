@@ -175,7 +175,7 @@ describe("worker desktop observer proxy", () => {
 
   it("keeps controlling observers on the plain pass-through path", async () => {
     const harness = await createProxyHarness({ control: true });
-    const bytes = Buffer.from([1, 2, 3]);
+    const bytes = Buffer.concat([Buffer.from("RFB 003.008\n", "ascii"), Buffer.from([1, 0])]);
     const fromWebSocket = readSocketBytes(harness.desktopPeer, bytes.length);
     harness.ws.send(bytes);
     await expect(fromWebSocket).resolves.toEqual(bytes);

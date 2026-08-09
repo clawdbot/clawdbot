@@ -31,6 +31,28 @@ describe("RFB view-only client message filter", () => {
     expect(filter.filter(handshake)).toEqual({ forward: handshake });
   });
 
+  it.each([
+    ["rewrites exclusive", 0, 1],
+    ["forwards shared", 1, 1],
+  ])("%s ClientInit when it arrives in its own chunk", (_name, clientInit, expected) => {
+    const filter = createRfbClientMessageFilter();
+    const prefix = Buffer.concat([VERSION, Buffer.from([1])]);
+    expect(filter.filter(prefix)).toEqual({ forward: prefix });
+    expect(filter.filter(Buffer.from([clientInit]))).toEqual({
+      forward: Buffer.from([expected]),
+    });
+  });
+
+  it("rewrites an exclusive ClientInit batched with the following message", () => {
+    const filter = createRfbClientMessageFilter();
+    const prefix = Buffer.concat([VERSION, Buffer.from([1])]);
+    const framebufferRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
+    expect(filter.filter(prefix)).toEqual({ forward: prefix });
+    expect(filter.filter(Buffer.concat([Buffer.from([0]), framebufferRequest]))).toEqual({
+      forward: Buffer.concat([Buffer.from([1]), framebufferRequest]),
+    });
+  });
+
   it("fails closed on unsupported security types", () => {
     const filter = createRfbClientMessageFilter();
     expect(filter.filter(Buffer.concat([VERSION, Buffer.from([19])]))).toEqual({

@@ -71,6 +71,8 @@ export function createRfbClientMessageFilter() {
       forwarded.push(pending);
       phase = "clientInit";
     } else if (phase === "clientInit") {
+      // A passive viewer must stay shared; exclusive ClientInit would disconnect the controller.
+      pending[0] = 1;
       forwarded.push(pending);
       phase = "messages";
     } else if (pending[0] === 0 || pending[0] === 2 || pending[0] === 3) {
