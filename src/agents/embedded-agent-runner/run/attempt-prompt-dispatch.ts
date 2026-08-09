@@ -16,7 +16,7 @@ type PromptDispatchState = PromptPreflightInput["state"];
 export async function dispatchEmbeddedAttemptPrompt(input: {
   attempt: EmbeddedRunAttemptParams;
   activeContextEngine?: PromptPreflightInput["activeContextEngine"];
-  activeSession: PromptExecutionInput["session"] & PromptSubmissionInput["activeSession"];
+  activeSession: PromptSubmissionInput["activeSession"];
   promptContext: PromptContext;
   getCompactionReserveTokens: () => number;
   publishState: (state: PromptDispatchState) => void;
@@ -71,7 +71,6 @@ export async function dispatchEmbeddedAttemptPrompt(input: {
     ...input.execution,
     attempt,
     prompt: promptContext.promptSubmission.prompt,
-    session: activeSession,
     skipPromptSubmission: input.state.skipPromptSubmission,
   });
 

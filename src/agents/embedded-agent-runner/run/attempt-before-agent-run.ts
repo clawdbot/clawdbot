@@ -14,7 +14,7 @@ type HookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
 type BeforeAgentRunHookRunner = Pick<HookRunner, "hasHooks" | "runBeforeAgentRun">;
 type HookContext = Parameters<HookRunner["runBeforeAgentRun"]>[1];
 type AttemptSessionManager = Parameters<typeof flushSessionManagerTranscript>[0];
-type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
+type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 type BeforeAgentRunSession = {
   messages: AgentMessage[];
@@ -38,7 +38,7 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
   modelPrompt: string;
   sessionManager: AttemptSessionManager;
   systemPrompt: string;
-  withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
+  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
 }): Promise<BeforeAgentRunBlockOutcome | undefined> {
   if (!input.hookRunner?.hasHooks("before_agent_run")) {
     return undefined;
@@ -66,7 +66,7 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
       },
     };
     try {
-      await input.withOwnedSessionWriteLock(() => {
+      await input.withOwnedTranscriptWrite(() => {
         input.sessionManager.appendMessage(
           redactedUserMessage as Parameters<typeof input.sessionManager.appendMessage>[0],
         );
