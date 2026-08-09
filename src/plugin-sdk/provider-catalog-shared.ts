@@ -35,6 +35,41 @@ export {
 } from "../plugins/provider-catalog.js";
 
 /**
+ * Merge a discovered provider catalog into explicit config without dropping
+ * discovered input capability from matching rows.
+ */
+export function mergeImplicitProviderCatalog(params: {
+  existing: ModelProviderConfig | undefined;
+  implicit: ModelProviderConfig;
+}): ModelProviderConfig {
+  const { existing, implicit } = params;
+  if (!existing) {
+    return implicit;
+  }
+
+  const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
+  const existingModels = Array.isArray(existing.models) ? existing.models : [];
+  if (implicitModels.length === 0 || existingModels.length === 0) {
+    return {
+      ...implicit,
+      ...existing,
+      models: existingModels.length > 0 ? existingModels : implicit.models,
+    };
+  }
+
+  const implicitById = new Map(implicitModels.map((model) => [model.id, model] as const));
+  const models = existingModels.map((model) => {
+    const implicitModel = implicitById.get(model.id);
+    if (!implicitModel || "input" in model) {
+      return model;
+    }
+    return { ...implicitModel, ...model, input: implicitModel.input };
+  });
+
+  return { ...implicit, ...existing, models };
+}
+
+/**
  * Normalized model row read from user config for provider catalog augmentation.
  */
 export type ConfiguredProviderCatalogEntry = {

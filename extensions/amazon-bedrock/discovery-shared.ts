@@ -3,6 +3,7 @@
  * consumers without pulling in the AWS discovery implementation.
  */
 import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { mergeImplicitProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 /** Resolve the config auth marker that tells OpenClaw to use AWS SDK credentials. */
@@ -19,16 +20,5 @@ export function mergeImplicitBedrockProvider(params: {
   existing: ModelProviderConfig | undefined;
   implicit: ModelProviderConfig;
 }): ModelProviderConfig {
-  const { existing, implicit } = params;
-  if (!existing) {
-    return implicit;
-  }
-  return {
-    ...implicit,
-    ...existing,
-    models:
-      Array.isArray(existing.models) && existing.models.length > 0
-        ? existing.models
-        : implicit.models,
-  };
+  return mergeImplicitProviderCatalog(params);
 }

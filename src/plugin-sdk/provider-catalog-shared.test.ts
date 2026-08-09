@@ -7,6 +7,7 @@ import {
   buildManifestModelProviderConfig,
   clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
+  mergeImplicitProviderCatalog,
   readConfiguredProviderCatalogEntries,
   readManifestProviderDefaultModelRef,
   supportsNativeStreamingUsageCompat,
@@ -291,6 +292,59 @@ describe("provider-catalog-shared configured catalog entries", () => {
         reasoning: true,
         contextWindow: 1048576,
       },
+    ]);
+  });
+});
+
+describe("provider-catalog-shared implicit catalog merge", () => {
+  it("inherits omitted input capability while preserving explicit overrides", () => {
+    const result = mergeImplicitProviderCatalog({
+      implicit: {
+        models: [
+          {
+            id: "vision-model",
+            name: "Vision Model",
+            input: ["text", "image"],
+            reasoning: false,
+            contextWindow: 128_000,
+            maxTokens: 8192,
+          },
+        ],
+      },
+      existing: {
+        baseUrl: "https://example.test/v1",
+        models: [
+          {
+            id: "vision-model",
+            name: "Configured Vision Model",
+            reasoning: false,
+            contextWindow: 128_000,
+            maxTokens: 8192,
+          },
+          {
+            id: "text-only-model",
+            name: "Text-only Model",
+            input: ["text"],
+            reasoning: false,
+            contextWindow: 128_000,
+            maxTokens: 8192,
+          },
+          {
+            id: "custom-model",
+            name: "Custom Model",
+            input: ["text"],
+            reasoning: false,
+            contextWindow: 128_000,
+            maxTokens: 8192,
+          },
+        ],
+      },
+    });
+
+    expect(result.models).toEqual([
+      expect.objectContaining({ id: "vision-model", input: ["text", "image"] }),
+      expect.objectContaining({ id: "text-only-model", input: ["text"] }),
+      expect.objectContaining({ id: "custom-model", input: ["text"] }),
     ]);
   });
 });

@@ -8,6 +8,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { mergeImplicitProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -540,16 +541,5 @@ export function mergeImplicitMantleProvider(params: {
   existing: ModelProviderConfig | undefined;
   implicit: ModelProviderConfig;
 }): ModelProviderConfig {
-  const { existing, implicit } = params;
-  if (!existing) {
-    return implicit;
-  }
-  return {
-    ...implicit,
-    ...existing,
-    models:
-      Array.isArray(existing.models) && existing.models.length > 0
-        ? existing.models
-        : implicit.models,
-  };
+  return mergeImplicitProviderCatalog(params);
 }
