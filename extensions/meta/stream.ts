@@ -19,7 +19,7 @@ function ensureMetaResponsesReplayFields(payloadObj: Record<string, unknown>): v
 
 function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model, options }) => {
-    if (model.provider !== "meta" || model.api !== "openai-responses") {
+    if (model.provider !== "meta") {
       return;
     }
     // The catalog limit is the no-override request default. Preserve an explicit
@@ -35,7 +35,7 @@ function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamF
 }
 
 export function wrapMetaProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  if (ctx.provider !== "meta" || ctx.model?.api !== "openai-responses") {
+  if (ctx.provider !== "meta") {
     return undefined;
   }
   return createMetaResponsesWrapper(ctx.streamFn);

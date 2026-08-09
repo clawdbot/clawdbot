@@ -1,4 +1,13 @@
 // Meta tests cover plugin registration and catalog shape.
+import {
+  configureAiTransportHost,
+  createApiRegistry,
+  createAssistantMessageEventStream,
+  createLlmRuntime,
+  getAiTransportHost,
+  type Api,
+} from "@openclaw/ai";
+import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -8,6 +17,7 @@ import plugin from "./index.js";
 import { wrapMetaProviderStream } from "./stream.js";
 
 const CATALOG_CAP_MODEL_ID = "muse-spark-1.2";
+const initialAiTransportHost = getAiTransportHost();
 
 function resolveCatalogModel(modelId: string): Model<"openai-responses"> {
   const provider = buildMetaProvider();
@@ -51,6 +61,7 @@ function requireThinkingProfileResolver(
 describe("meta provider", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    configureAiTransportHost(initialAiTransportHost);
   });
 
   it("registers the Meta provider with api-key auth", () => {
@@ -146,6 +157,70 @@ describe("meta provider", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(model.maxTokens).toBe(131072);
     expect(capturedPayload?.max_output_tokens).toBe(model.maxTokens);
+  });
+
+  it("preserves Meta replay fields through canonical simple-completion aliases", async () => {
+    const captured = capturePluginRegistration(plugin);
+    const [provider] = captured.providers;
+    if (!provider?.wrapSimpleCompletionStreamFn) {
+      throw new Error("Expected Meta direct completion stream wrapper");
+    }
+
+    const registry = createApiRegistry();
+    const runtime = createLlmRuntime(registry);
+    const model = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
+    let capturedPayload: Record<string, unknown> | undefined;
+    let sourceModelApi: Api | undefined;
+    const sourceStreamFn: StreamFn = (streamModel, _context, options) => {
+      sourceModelApi = streamModel.api;
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload, streamModel);
+      capturedPayload = payload;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: { stopReason: "stop" } as never,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+    registry.registerApiProvider({
+      api: "openai-responses",
+      stream: sourceStreamFn,
+      streamSimple: sourceStreamFn,
+    });
+    configureAiTransportHost({
+      ...initialAiTransportHost,
+      registerCustomApi: (apiRegistry, api, streamFn) => {
+        if (apiRegistry.getApiProvider(api)) {
+          return false;
+        }
+        apiRegistry.registerApiProvider({ api, stream: streamFn, streamSimple: streamFn });
+        return true;
+      },
+      plugin: {
+        ...initialAiTransportHost.plugin,
+        resolveProviderStream: () => undefined,
+        wrapSimpleCompletionStream: ({ provider: providerId, context }) =>
+          providerId === "meta" ? provider.wrapSimpleCompletionStreamFn?.(context) : undefined,
+      },
+    });
+
+    const preparedModel = prepareModelForSimpleCompletion({ apiRegistry: registry, model });
+    expect(preparedModel.api).toMatch(/^openclaw-provider-simple:/);
+
+    const result = await runtime.completeSimple(preparedModel, { messages: [] });
+
+    expect(result.stopReason).toBe("stop");
+    expect(sourceModelApi).toBe("openai-responses");
+    expect(capturedPayload).toMatchObject({
+      max_output_tokens: 131072,
+      store: false,
+      include: ["reasoning.encrypted_content"],
+    });
   });
 
   it.each([
