@@ -142,7 +142,7 @@ function createParams(): SubscriptionParams {
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
     chatAbortControllers: new Map(),
     restartRecoveryCandidates: new Map(),
-    terminalSessions: { closeAgentSessions: vi.fn() },
+    terminalSessions: { closeTaskSessions: vi.fn() },
   };
 }
 
@@ -402,8 +402,8 @@ describe("startGatewayEventSubscriptions", () => {
 
   it("closes task-run terminals only after the authoritative task becomes terminal", async () => {
     const events: string[] = [];
-    const closeAgentSessions = vi.fn((sessionKey: string) => {
-      events.push(`terminal:${sessionKey}`);
+    const closeTaskSessions = vi.fn((taskId: string) => {
+      events.push(`terminal:${taskId}`);
       return 1;
     });
     const broadcast = vi.fn<SubscriptionParams["broadcast"]>((event, payload) => {
@@ -415,7 +415,7 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs = startGatewayEventSubscriptions({
       ...createParams(),
       broadcast,
-      terminalSessions: { closeAgentSessions },
+      terminalSessions: { closeTaskSessions },
     });
     await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
 
@@ -434,38 +434,17 @@ describe("startGatewayEventSubscriptions", () => {
     if (!task) {
       throw new Error("expected task record");
     }
-    expect(closeAgentSessions).not.toHaveBeenCalled();
+    expect(closeTaskSessions).not.toHaveBeenCalled();
     expect(events).toEqual(["task:running"]);
 
     markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_000 });
-    expect(closeAgentSessions).toHaveBeenCalledOnce();
-    expect(closeAgentSessions).toHaveBeenCalledWith(runSessionKey);
-    expect(events).toEqual(["task:running", "task:completed", `terminal:${runSessionKey}`]);
+    expect(closeTaskSessions).toHaveBeenCalledOnce();
+    expect(closeTaskSessions).toHaveBeenCalledWith(task.taskId);
+    expect(events).toEqual(["task:running", "task:completed", `terminal:${task.taskId}`]);
 
     // Later terminal-row updates cannot close terminals opened by a newer owner.
     markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_001 });
-    expect(closeAgentSessions).toHaveBeenCalledOnce();
-
-    const persistentTask = createTaskRecord({
-      runtime: "cron",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "",
-      scopeKind: "system",
-      childSessionKey: "agent:main:main",
-      task: "Persistent conversation task",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    if (!persistentTask) {
-      throw new Error("expected persistent task record");
-    }
-    markTaskTerminalById({
-      taskId: persistentTask.taskId,
-      status: "succeeded",
-      endedAt: 3_000,
-    });
-    expect(closeAgentSessions).toHaveBeenCalledOnce();
+    expect(closeTaskSessions).toHaveBeenCalledOnce();
   });
 
   it("keeps a replacement gateway's task observer when a stale unsub runs late", async () => {

@@ -9,7 +9,7 @@ export type TerminalExitReason = "process_exit" | "closed" | "disconnected" | "d
 
 export type TerminalOwner =
   | { kind: "conn"; connId: string }
-  | { kind: "agent"; agentSessionKey: string };
+  | { kind: "agent"; agentSessionKey: string; taskId?: string };
 
 export type TerminalSession = {
   id: string;

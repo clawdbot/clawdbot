@@ -381,13 +381,11 @@ export class TerminalSessionManager {
     return true;
   }
 
-  /** Closes every PTY owned by one exact agent session. */
-  closeAgentSessions(agentSessionKey: string): number {
+  /** Closes every PTY whose agent owner was bound to one exact task. */
+  closeTaskSessions(taskId: string): number {
     const owned = [...this.sessions.values()].filter(
       (session) =>
-        !session.closed &&
-        session.owner?.kind === "agent" &&
-        session.owner.agentSessionKey === agentSessionKey,
+        !session.closed && session.owner?.kind === "agent" && session.owner.taskId === taskId,
     );
     for (const session of owned) {
       this.finalize(session, "closed", {});
