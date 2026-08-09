@@ -7,7 +7,6 @@ export {
   getPluginStateCapacity as getPluginStateCapacityForTests,
   importPluginStateEntriesForDoctor as importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
 } from "../plugin-state/plugin-state-store.js";
 export { setMaxPluginStateEntriesPerPluginForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 export { setMaxMemoryHostEventsForTests } from "../memory-host-sdk/event-store.js";
