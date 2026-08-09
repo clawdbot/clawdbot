@@ -554,7 +554,7 @@ describe("auth rate limiter", () => {
     }
   });
 
-  it("clamps a sub-millisecond windowMs to 1ms instead of a zero-width window", () => {
+  it("falls back to the default window for sub-millisecond windowMs", () => {
     vi.useFakeTimers();
     try {
       limiter = createAuthRateLimiter({
@@ -563,9 +563,11 @@ describe("auth rate limiter", () => {
         lockoutMs: 60_000,
         pruneIntervalMs: 0,
       });
-      // resolveTimerTimeoutMs truncates, so without the 1ms floor 0.5 would
-      // become 0 and every failure would expire in the same tick.
+      // resolveTimerTimeoutMs truncates, so 0.5 would collapse to a zero-width
+      // (or toy 1ms) window; the default window must apply instead, and
+      // attempts spaced past 1ms still accumulate.
       limiter.recordFailure("10.0.0.61");
+      vi.advanceTimersByTime(2);
       limiter.recordFailure("10.0.0.61");
       const result = limiter.check("10.0.0.61");
       expect(result.allowed).toBe(false);
@@ -575,7 +577,7 @@ describe("auth rate limiter", () => {
     }
   });
 
-  it("clamps a sub-millisecond lockoutMs to 1ms instead of an instant lockout", () => {
+  it("falls back to the default lockout for sub-millisecond lockoutMs", () => {
     vi.useFakeTimers();
     try {
       limiter = createAuthRateLimiter({
@@ -587,10 +589,11 @@ describe("auth rate limiter", () => {
       limiter.recordFailure("10.0.0.62");
       const locked = limiter.check("10.0.0.62");
       expect(locked.allowed).toBe(false);
-      expect(locked.retryAfterMs).toBe(1);
+      expect(locked.retryAfterMs).toBeGreaterThan(60_000);
 
+      // Still locked well past the would-be instant lockout.
       vi.advanceTimersByTime(2);
-      expect(limiter.check("10.0.0.62").allowed).toBe(true);
+      expect(limiter.check("10.0.0.62").allowed).toBe(false);
     } finally {
       vi.useRealTimers();
     }

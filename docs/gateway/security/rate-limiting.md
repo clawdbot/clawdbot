@@ -76,10 +76,11 @@ Tune it under `gateway.auth.rateLimit` in `openclaw.json`:
 
 `maxAttempts`, `windowMs`, and `lockoutMs` must be positive. A zero or
 negative value is treated as a config mistake and falls back to the default —
-`maxAttempts: 0` would lock out every IP after a single failure, while
-`windowMs: 0` or `lockoutMs: 0` would silently disable brute-force protection.
-Sub-millisecond durations are clamped to 1 ms so they cannot collapse into a
-zero-width window or an instant lockout either.
+`maxAttempts: 0` would lock out every non-exempt IP after a single failure,
+while `windowMs: 0` or `lockoutMs: 0` would silently disable brute-force
+protection. Durations below 1 ms fall back to the default too: timer
+resolution truncates fractional milliseconds, so a sub-millisecond value would
+otherwise collapse into a zero-width window or an instant lockout.
 
 Repeated `AUTH_RATE_LIMITED` entries in the Gateway log mean someone is
 guessing credentials; see the [exposure runbook](/gateway/security/exposure-runbook).

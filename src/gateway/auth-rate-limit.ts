@@ -27,9 +27,9 @@ import { isLoopbackAddress, resolveClientIp } from "./net.js";
 export interface RateLimitConfig {
   /** Maximum failed attempts before blocking; must be positive, otherwise the default applies.  @default 10 */
   maxAttempts?: number;
-  /** Sliding window duration in milliseconds; must be positive, otherwise the default applies. Values below 1 ms clamp to 1 ms.  @default 60_000 (1 min) */
+  /** Sliding window duration in milliseconds; must be at least 1, otherwise the default applies.  @default 60_000 (1 min) */
   windowMs?: number;
-  /** Lockout duration in milliseconds after the limit is exceeded; must be positive, otherwise the default applies. Values below 1 ms clamp to 1 ms.  @default 300_000 (5 min) */
+  /** Lockout duration in milliseconds after the limit is exceeded; must be at least 1, otherwise the default applies.  @default 300_000 (5 min) */
   lockoutMs?: number;
   /** Exempt loopback (localhost) addresses from rate limiting.  @default true */
   exemptLoopback?: boolean;
@@ -154,32 +154,37 @@ function resolvePruneIntervalMs(value: number | undefined): number {
 
 /**
  * Non-positive configured values fall back to the default. They are config
- * mistakes, not "off" switches: maxAttempts: 0 would deny every IP with any
- * failure history (remaining is always 0), while windowMs/lockoutMs: 0 would
- * silently turn the limiter into a no-op.
+ * mistakes, not "off" switches: maxAttempts: 0 would deny every non-exempt IP
+ * with any failure history (remaining is always 0), while windowMs/lockoutMs: 0
+ * would silently turn the limiter into a no-op.
  *
- * Positive values pass through untouched — including fractions. Flooring a
- * schema-accepted fraction like maxAttempts: 0.5 to 0 would recreate the
- * permanent-denial trap, so no rounding happens here.
+ * Positive values pass through untouched — including fractional attempt
+ * counts. Flooring a schema-accepted fraction like maxAttempts: 0.5 to 0 would
+ * recreate the permanent-denial trap, so no rounding happens here.
  */
 function resolvePositiveConfigValue(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+/**
+ * Durations must survive timer truncation: resolveTimerTimeoutMs floors, so a
+ * sub-millisecond value like 0.5 would collapse to a zero-width window or an
+ * instant lockout — the same silently-disabled outcome as 0. Anything below
+ * 1ms falls back to the default as well.
+ */
+function resolveDurationConfigValue(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) && value >= 1 ? value : fallback;
+}
+
 export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter {
   const maxAttempts = resolvePositiveConfigValue(config?.maxAttempts, DEFAULT_MAX_ATTEMPTS);
-  // Durations resolve with a 1ms floor: resolveTimerTimeoutMs truncates, so a
-  // sub-millisecond value like 0.5 would otherwise collapse to a zero-width
-  // window or an instant lockout.
   const windowMs = resolveTimerTimeoutMs(
-    resolvePositiveConfigValue(config?.windowMs, DEFAULT_WINDOW_MS),
+    resolveDurationConfigValue(config?.windowMs, DEFAULT_WINDOW_MS),
     DEFAULT_WINDOW_MS,
-    1,
   );
   const lockoutMs = resolveTimerTimeoutMs(
-    resolvePositiveConfigValue(config?.lockoutMs, DEFAULT_LOCKOUT_MS),
+    resolveDurationConfigValue(config?.lockoutMs, DEFAULT_LOCKOUT_MS),
     DEFAULT_LOCKOUT_MS,
-    1,
   );
   const exemptLoopback = config?.exemptLoopback ?? true;
   const pruneIntervalMs = resolvePruneIntervalMs(config?.pruneIntervalMs);
