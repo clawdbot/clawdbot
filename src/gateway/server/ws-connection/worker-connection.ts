@@ -1,3 +1,4 @@
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import type { RawData, WebSocket } from "ws";
 import {
   ErrorCodes,
@@ -45,7 +46,7 @@ import {
   validateWorkerInferenceStartParams,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { rawDataByteLength, rawDataToString } from "../../../infra/ws.js";
+import { rawDataByteLength } from "../../../infra/ws.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
