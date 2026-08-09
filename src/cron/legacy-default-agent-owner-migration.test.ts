@@ -50,6 +50,28 @@ it("preserves undecodable JSON and bumps the epoch once", () => {
   ).toBe(1);
 });
 
+it("preserves a session-scoped owner stored only in job JSON", () => {
+  const { env, storePath, storeKey, database } = fixture("openclaw-cron-json-owner-");
+  const row = loadCronRows(database, storeKey)[0];
+  const jobJson = JSON.parse(row?.job_json ?? "{}") as Record<string, unknown>;
+  delete jobJson.agentId;
+  jobJson.sessionKey = "agent:research:main";
+  database
+    .prepare(
+      "UPDATE cron_jobs SET agent_id = NULL, session_key = NULL, job_json = ? WHERE store_key = ?",
+    )
+    .run(JSON.stringify(jobJson), storeKey);
+
+  expect(migrate(storePath, env)).toBe(0);
+  const preserved = loadCronRows(database, storeKey)[0];
+  const preservedJobJson = JSON.parse(preserved?.job_json ?? "{}") as Record<string, unknown>;
+  expect(preserved?.agent_id).toBeNull();
+  expect(preservedJobJson).toMatchObject({
+    sessionKey: "agent:research:main",
+  });
+  expect(preservedJobJson).not.toHaveProperty("agentId");
+});
+
 it("rolls back the row when the epoch bump fails", () => {
   const { env, storePath, storeKey, database } = fixture("openclaw-cron-atomic-");
   ensureCronStoreEpochSchema(database);

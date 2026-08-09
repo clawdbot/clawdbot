@@ -1,18 +1,16 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
+import {
+  getRetainedLegacyDefaultAgentId,
+  setRetainedLegacyDefaultAgentId,
+} from "./legacy.default-agent-owner-state.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-
-const legacyDefaultAgentIdByConfig = new WeakMap<object, string>();
 
 export function retainLegacyDefaultAgentId(
   config: OpenClawConfig,
   agentId: string | undefined,
 ): OpenClawConfig {
-  if (agentId) {
-    legacyDefaultAgentIdByConfig.set(config, normalizeAgentId(agentId));
-  } else {
-    legacyDefaultAgentIdByConfig.delete(config);
-  }
+  setRetainedLegacyDefaultAgentId(config, agentId ? normalizeAgentId(agentId) : undefined);
   return config;
 }
 
@@ -24,7 +22,7 @@ export function inheritLegacyDefaultAgentId(
 }
 
 export function tryGetLegacyDefaultAgentId(config: OpenClawConfig): string | undefined {
-  return legacyDefaultAgentIdByConfig.get(config);
+  return getRetainedLegacyDefaultAgentId(config);
 }
 
 export function tryResolveLegacyCompatibilityAgentId(config: OpenClawConfig): string | undefined {

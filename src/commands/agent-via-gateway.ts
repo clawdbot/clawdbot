@@ -52,6 +52,7 @@ import {
   type OneShotDiagnosticsHandle,
 } from "../plugins/one-shot-diagnostics.js";
 import {
+  buildAgentMainSessionKey,
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
@@ -594,7 +595,17 @@ async function normalizeSessionKeyOptsForDispatch(
     const unscopedSession = isUnscopedSessionKeySentinel(rawSessionKey) || implicitGlobalSession;
     const implicitAgentSelection = implicitSoleAgent || implicitCompatibilityDefault;
     agentIdRaw = implicitAgentSelection && unscopedSession ? undefined : selectedAgentId;
-    if (agentIdRaw && !implicitCompatibilityDefault) {
+    if (agentIdRaw && implicitCompatibilityDefault && !rawSessionKey && !rawTo) {
+      // Legacy multi-agent owners stay implicit, but a bare per-sender turn still
+      // needs their canonical main session to reach gateway dispatch.
+      normalizedOpts = {
+        ...normalizedOpts,
+        sessionKey: buildAgentMainSessionKey({
+          agentId: selectedAgentId,
+          mainKey: remoteGatewayRoster?.mainKey ?? cfg.session?.mainKey,
+        }),
+      };
+    } else if (agentIdRaw && !implicitCompatibilityDefault) {
       normalizedOpts = {
         ...normalizedOpts,
         agent: selectedAgentId,

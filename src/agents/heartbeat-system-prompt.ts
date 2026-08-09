@@ -15,6 +15,14 @@ import { listAgentEntries, resolveAgentConfig, tryResolveSoleAgentId } from "./a
 
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
+function isHeartbeatSharedAcrossAgents(config: OpenClawConfig): boolean {
+  return (
+    config.agents?.defaults?.heartbeat !== undefined &&
+    normalizeOptionalString(config.agents.defaults.heartbeat.agentId) === undefined &&
+    !listAgentEntries(config).some((entry) => Boolean(entry?.heartbeat))
+  );
+}
+
 function tryResolveHeartbeatOwnerAgentId(config?: OpenClawConfig): string | undefined {
   return (
     normalizeOptionalString(config?.agents?.defaults?.heartbeat?.agentId) ??
@@ -40,7 +48,7 @@ function resolveHeartbeatConfigForSystemPrompt(
 }
 
 // Explicit heartbeat config on any agent means only those agents are opted in;
-// otherwise the default agent receives the standard heartbeat guidance.
+// shared defaults without an owner enroll every configured agent.
 function isHeartbeatEnabledByAgentPolicy(config: OpenClawConfig, agentId: string): boolean {
   const resolvedAgentId = normalizeAgentId(agentId);
   const agents = listAgentEntries(config);
@@ -49,6 +57,9 @@ function isHeartbeatEnabledByAgentPolicy(config: OpenClawConfig, agentId: string
     return agents.some(
       (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry.id) === resolvedAgentId,
     );
+  }
+  if (isHeartbeatSharedAcrossAgents(config)) {
+    return true;
   }
   const heartbeatOwnerAgentId = tryResolveHeartbeatOwnerAgentId(config);
   return (
@@ -76,9 +87,15 @@ function shouldIncludeHeartbeatGuidanceForSystemPrompt(params: {
   agentId?: string;
   defaultAgentId?: string;
 }): boolean {
+  const heartbeatSharedAcrossAgents = params.config
+    ? isHeartbeatSharedAcrossAgents(params.config)
+    : false;
   const defaultAgentId = params.defaultAgentId ?? tryResolveHeartbeatOwnerAgentId(params.config);
   const agentId = params.agentId ?? defaultAgentId;
-  if (!agentId || normalizeAgentId(agentId) !== normalizeAgentId(defaultAgentId)) {
+  if (
+    !agentId ||
+    (!heartbeatSharedAcrossAgents && normalizeAgentId(agentId) !== normalizeAgentId(defaultAgentId))
+  ) {
     return false;
   }
   if (params.config && !isHeartbeatEnabledByAgentPolicy(params.config, agentId)) {

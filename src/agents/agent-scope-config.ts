@@ -1,6 +1,7 @@
 /** Resolves configured agent ids, directories, workspaces, and merged agent defaults. */
 import path from "node:path";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { getRetainedLegacyDefaultAgentId } from "../config/legacy.default-agent-owner-state.js";
 import { hasExplicitModelPolicyAllow } from "../config/model-policy-allowlist-migration.js";
 import { resolveStateDir } from "../config/paths.js";
 import type {
@@ -325,9 +326,14 @@ export function resolveAgentWorkspaceDir(
   if (configured) {
     return stripNullBytes(resolveUserPath(configured, env));
   }
-  const defaultAgentId = tryResolveSoleAgentId(cfg);
+  // Read-time migration removes default:true before write-time workspace pinning can run.
+  const retainedWorkspaceAgentId = getRetainedLegacyDefaultAgentId(cfg);
+  const inheritedWorkspaceAgentId =
+    retainedWorkspaceAgentId && resolveAgentEntry(cfg, retainedWorkspaceAgentId)
+      ? retainedWorkspaceAgentId
+      : tryResolveSoleAgentId(cfg);
   const fallback = cfg.agents?.defaults?.workspace?.trim();
-  if (defaultAgentId && id === defaultAgentId) {
+  if (inheritedWorkspaceAgentId && id === inheritedWorkspaceAgentId) {
     if (fallback) {
       return stripNullBytes(resolveUserPath(fallback, env));
     }

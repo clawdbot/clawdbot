@@ -1,11 +1,13 @@
 // Agent scope tests cover which per-agent fields may flatten into runtime defaults.
 import { describe, expect, it, vi } from "vitest";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   AgentSelectionRequiredError,
   listAgentEntriesWithSource,
   listAgentIds,
   resolveAgentConfig,
+  resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
   resolveSoleAgentId,
   tryResolveDefaultAgentId,
@@ -59,6 +61,20 @@ describe("agent roster resolution", () => {
     expect(resolveAgentConfig({ agents: { defaults } }, "work")).toBeUndefined();
     expect(resolveAgentConfig({ agents: { defaults, entries: {} } }, "main")).toBeUndefined();
     expect(resolveAgentConfig({ agents: { defaults, list: [] } }, "main")).toBeUndefined();
+  });
+
+  it("keeps the retained legacy owner on the inherited workspace before config write", () => {
+    const cfg = migratePersistedImplicitMainRoster({
+      agents: {
+        defaults: { workspace: "/srv/ops" },
+        entries: { ops: { default: true }, research: {} },
+      },
+    }).config as OpenClawConfig;
+
+    expect(cfg.agents?.entries?.ops?.default).toBeUndefined();
+    expect(cfg.agents?.entries?.ops?.workspace).toBeUndefined();
+    expect(resolveAgentWorkspaceDir(cfg, "ops")).toBe("/srv/ops");
+    expect(resolveAgentWorkspaceDir(cfg, "research")).toBe("/srv/ops/research");
   });
 
   it("offers a non-throwing diagnostic lookup for malformed rosters", () => {

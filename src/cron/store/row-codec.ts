@@ -402,10 +402,14 @@ export function materializeCronRowAgentOwners(
   let rewritten = 0;
   for (const row of loadCronRows(db, storeKey)) {
     const jobJson = tryParseJsonObject(row.job_json);
+    const jsonSessionAgentId = parseAgentSessionKey(
+      normalizeOptionalString(jobJson?.sessionKey),
+    )?.agentId;
     if (
       normalizeOptionalString(row.agent_id) ||
       normalizeOptionalString(jobJson?.agentId) ||
-      parseAgentSessionKey(row.session_key)?.agentId
+      parseAgentSessionKey(row.session_key)?.agentId ||
+      jsonSessionAgentId
     ) {
       continue;
     }

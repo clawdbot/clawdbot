@@ -87,6 +87,20 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
     ).toBeUndefined();
   });
 
+  it("includes the heartbeat section for every agent enrolled by shared defaults", () => {
+    expect(
+      resolveHeartbeatPromptForSystemPrompt({
+        config: {
+          agents: {
+            defaults: { heartbeat: { every: "30m" } },
+            list: [{ id: "ops" }, { id: "research" }],
+          },
+        },
+        agentId: "research",
+      }),
+    ).toBeDefined();
+  });
+
   it("honors default-agent overrides for the prompt text", () => {
     // Defaults establish cadence/shape, but the default agent can override the
     // final visible prompt text.
