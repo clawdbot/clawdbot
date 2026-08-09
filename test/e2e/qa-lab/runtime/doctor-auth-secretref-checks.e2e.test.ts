@@ -71,7 +71,12 @@ async function expectAclFixturePreservesExecFileContract(preloadUrl: string): Pr
 describe("doctor auth and SecretRef product proof", () => {
   it(
     "preserves SecretRef ownership while proving resolution, fallback, exec gating, and token generation",
-    { timeout: 240_000 },
+    // The case runs six sequential `doctor` CLI invocations, each capped at an
+    // inner timeoutMs of 120s (resolution, repair, file, exec-gated, exec-allowed,
+    // and token generation). An outer budget below their sum leaves zero headroom
+    // for setup/spawn overhead and fires on slow Windows runners even when every
+    // inner invocation stays within its own cap. 780s = 6 x 120s + 60s headroom.
+    { timeout: 780_000 },
     async () => {
       instance = await createOpenClawTestInstance({
         name: "qa-doctor-auth-secretref",
