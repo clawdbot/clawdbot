@@ -3,6 +3,7 @@
  * The adapter and wrapper both consult this map so later execution can use the
  * normalized payload selected by hook processing.
  */
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
@@ -12,6 +13,7 @@ const startedToolCallIds = new Set<string>();
 const trackedToolCallIds = new Set<string>();
 const batchAdmittedToolCallIds = new Set<string>();
 const loopWarningsByToolCallId = new Map<string, string>();
+const MAX_PENDING_LOOP_WARNINGS = 1024;
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -112,6 +114,7 @@ export function recordLoopWarningForToolCall(
   runId?: string,
 ): void {
   loopWarningsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), warning);
+  pruneMapToMaxSize(loopWarningsByToolCallId, MAX_PENDING_LOOP_WARNINGS);
 }
 
 /** Consume pending guidance when no model-visible result can be emitted. */
@@ -150,7 +153,8 @@ export function appendLoopWarningToError(
   if (!warning) {
     return error;
   }
-  const message = `${error instanceof Error ? error.message : String(error)}\n\nTool loop warning: ${warning}`;
+  const originalMessage = error instanceof Error ? error.message : String(error);
+  const message = `${originalMessage}\n\nTool loop warning: ${warning}`;
   if (error instanceof Error) {
     try {
       error.message = message;
@@ -164,7 +168,7 @@ export function appendLoopWarningToError(
   return new Error(message);
 }
 
-/** Release exact batch-admission markers for prepared calls suppressed by steering. */
+/** Release admission and warning state for prepared calls suppressed by steering. */
 export function releaseBatchAdmittedToolCalls(
   toolCallIds: readonly string[],
   runId?: string,
@@ -176,7 +180,7 @@ export function releaseBatchAdmittedToolCalls(
   }
 }
 
-/** Remove unused batch-admission markers when their embedded run ends. */
+/** Remove unused admission and warning state when an embedded run ends. */
 export function clearBatchAdmittedToolCallsForRun(runId: string): void {
   const prefix = `${runId}:`;
   for (const key of batchAdmittedToolCallIds) {

@@ -199,6 +199,28 @@ describe("agent tool definition adapter", () => {
     expect(JSON.stringify(next)).not.toContain("Tool loop warning:");
   });
 
+  it("does not mask a frozen tool error while appending a loop warning", async () => {
+    const toolCallId = "call-warning-frozen-error";
+    const frozenError = Object.freeze(new TypeError("immutable failure"));
+    const tool = wrapToolWithBeforeToolCallHook({
+      name: "frozen_error_tool",
+      label: "Frozen Error Tool",
+      description: "throws an immutable error",
+      parameters: Type.Object({}),
+      execute: async () => {
+        throw frozenError;
+      },
+    } satisfies AgentTool);
+    recordLoopWarningForToolCall(toolCallId, "Reassess before retrying.");
+
+    const result = await executeTool(tool, toolCallId);
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "immutable failure\n\nTool loop warning: Reassess before retrying.",
+    });
+  });
+
   it("normalizes exec tool aliases in error results", async () => {
     const result = await executeThrowingTool("bash", "call2");
 

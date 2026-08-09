@@ -8,6 +8,8 @@ import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js"
 import {
   clearBatchAdmittedToolCallsForRun,
   consumeBatchAdmittedToolCall,
+  consumeLoopWarningForToolCall,
+  recordLoopWarningForToolCall,
   resetAdjustedParamsByToolCallIdForTests,
 } from "./agent-tools.before-tool-call.state.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
@@ -166,10 +168,12 @@ describe("whole-batch tool-loop admission", () => {
   it("cleans an admitted marker when a run ends before the wrapped tool consumes it", async () => {
     const admitted = call("blocked-later", "write", {});
     await admitToolCallBatch([admitted], ctx);
+    recordLoopWarningForToolCall(admitted.toolCall.id, "Choose a different action.", ctx.runId);
 
     clearBatchAdmittedToolCallsForRun(ctx.runId);
 
     expect(consumeBatchAdmittedToolCall(admitted.toolCall.id, ctx.runId)).toBe(false);
+    expect(consumeLoopWarningForToolCall(admitted.toolCall.id, ctx.runId)).toBeUndefined();
   });
 
   it("releases repeated skipped admissions without mutating bounded history", async () => {
@@ -223,6 +227,7 @@ describe("whole-batch tool-loop admission", () => {
       otherRun,
     );
     const admission = await admitToolCallBatch([first, skipped, last], ctx);
+    recordLoopWarningForToolCall(skipped.toolCall.id, "Choose a different action.", ctx.runId);
 
     admission.commitReadyCalls?.([
       { toolCallId: last.toolCall.id, args: last.args },
@@ -239,6 +244,7 @@ describe("whole-batch tool-loop admission", () => {
       last.toolCall.id,
     ]);
     expect(consumeBatchAdmittedToolCall(skipped.toolCall.id, ctx.runId)).toBe(false);
+    expect(consumeLoopWarningForToolCall(skipped.toolCall.id, ctx.runId)).toBeUndefined();
     expect(consumeBatchAdmittedToolCall(sharedId, otherRun.runId)).toBe(true);
     otherAdmission.releaseSkippedCalls?.([sharedId]);
   });

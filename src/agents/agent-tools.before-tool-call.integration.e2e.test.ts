@@ -53,6 +53,7 @@ import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   consumeTrackedToolExecutionStarted,
+  recordLoopWarningForToolCall,
   resetAdjustedParamsByToolCallIdForTests,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
@@ -322,11 +323,15 @@ describe("before_tool_call hook integration", () => {
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
     const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "exec", execute }));
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
+    recordLoopWarningForToolCall("call-3", "Choose a different action.");
 
     await expect(
       tool.execute("call-3", { cmd: "rm -rf /" }, undefined, extensionContext),
     ).resolves.toEqual({
-      content: [{ type: "text", text: "blocked" }],
+      content: [
+        { type: "text", text: "blocked" },
+        { type: "text", text: "Tool loop warning: Choose a different action." },
+      ],
       details: {
         status: "blocked",
         deniedReason: "plugin-before-tool-call",
@@ -401,10 +406,14 @@ describe("before_tool_call hook integration", () => {
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
     const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }));
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
+    recordLoopWarningForToolCall("call-4", "Choose a different action.");
 
     await expect(
       tool.execute("call-4", { path: "/tmp/file" }, undefined, extensionContext),
-    ).rejects.toThrow("Tool call blocked because before_tool_call hook failed");
+    ).rejects.toThrow(
+      "Tool call blocked because before_tool_call hook failed\n\n" +
+        "Tool loop warning: Choose a different action.",
+    );
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -2084,6 +2093,49 @@ describe("before_tool_call adapter and client tool integration", () => {
     });
   });
 
+  it("surfaces a loop warning when a plugin vetoes a client-hosted tool", async () => {
+    installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => ({ block: true, blockReason: "blocked client call" }),
+    });
+    const runId = "run-client-veto-warning";
+    const toolCallId = "call-client-veto-warning";
+    const definition = expectDefined(
+      toClientToolDefinitions(
+        [
+          {
+            type: "function",
+            function: {
+              name: "client_tool",
+              description: "Client tool",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        undefined,
+        { runId },
+      )[0],
+      "client tool definition",
+    );
+    recordLoopWarningForToolCall(toolCallId, "Choose a different action.", runId);
+
+    const result = await definition.execute(
+      toolCallId,
+      {},
+      undefined,
+      undefined,
+      {} as ExtensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "blocked",
+      deniedReason: "plugin-before-tool-call",
+    });
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: "Tool loop warning: Choose a different action.",
+    });
+  });
+
   it("preserves client tool source order when hooks resolve out of order", async () => {
     let releaseFirstHook: (() => void) | undefined;
     const firstHookGate = new Promise<void>((resolve) => {
@@ -2540,6 +2592,11 @@ describe("before_tool_call adapter and client tool integration", () => {
       undefined,
       {} as ExtensionContext,
     );
+    recordLoopWarningForToolCall(
+      "call-voice-client-2",
+      "Choose a different action.",
+      runId,
+    );
     const second = await definition.execute(
       "call-voice-client-2",
       toolParams,
@@ -2552,6 +2609,10 @@ describe("before_tool_call adapter and client tool integration", () => {
     expect(second.details).toMatchObject({
       status: "blocked",
       deniedReason: "client-voice-confirmation",
+    });
+    expect(second.content).toContainEqual({
+      type: "text",
+      text: "Tool loop warning: Choose a different action.",
     });
     expect(onClientToolCall).toHaveBeenCalledOnce();
     expect(onClientToolCall).toHaveBeenCalledWith("message", toolParams);
