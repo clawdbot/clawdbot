@@ -4616,6 +4616,70 @@ public struct SessionsCatalogArchiveResult: Codable, Sendable {
     }
 }
 
+public struct SessionsCatalogStartTerminalParams: Codable, Sendable {
+    public let catalogid: String
+    public let hostid: String?
+    public let agentid: String
+    public let cwd: String
+    public let initialmessage: String?
+
+    public init(
+        catalogid: String,
+        hostid: String? = nil,
+        agentid: String,
+        cwd: String,
+        initialmessage: String? = nil)
+    {
+        self.catalogid = catalogid
+        self.hostid = hostid
+        self.agentid = agentid
+        self.cwd = cwd
+        self.initialmessage = initialmessage
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case catalogid = "catalogId"
+        case hostid = "hostId"
+        case agentid = "agentId"
+        case cwd
+        case initialmessage = "initialMessage"
+    }
+}
+
+public struct SessionsCatalogStartTerminalResult: Codable, Sendable {
+    public let sessionid: String
+    public let agentid: String
+    public let shell: String
+    public let cwd: String
+    public let confined: Bool
+    public let title: String?
+
+    public init(
+        sessionid: String,
+        agentid: String,
+        shell: String,
+        cwd: String,
+        confined: Bool,
+        title: String? = nil)
+    {
+        self.sessionid = sessionid
+        self.agentid = agentid
+        self.shell = shell
+        self.cwd = cwd
+        self.confined = confined
+        self.title = title
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case agentid = "agentId"
+        case shell
+        case cwd
+        case confined
+        case title
+    }
+}
+
 public struct SessionsCleanupParams: Codable, Sendable {
     public let agent: String?
     public let allagents: Bool?
