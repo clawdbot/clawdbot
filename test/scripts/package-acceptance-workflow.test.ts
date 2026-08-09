@@ -118,6 +118,7 @@ type WorkflowStep = {
   shell?: string;
   uses?: string;
   with?: Record<string, string>;
+  "working-directory"?: string;
 };
 
 type WorkflowMatrixEntry = {
@@ -2497,11 +2498,46 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
     const prepareDockerImage = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
     const prepareDockerImageStepNames = (prepareDockerImage.steps ?? []).map((step) => step.name);
-    expect(prepareDockerImageStepNames.indexOf("Setup Node environment")).toBeLessThan(
-      prepareDockerImageStepNames.indexOf("Plan Docker E2E images"),
+    const setupHarnessStepName = "Setup trusted release harness package manager";
+    const installHarnessStepName = "Install trusted release harness dependencies";
+    const planStepName = "Plan Docker E2E images";
+    const setupCandidateStepName = "Setup Node environment";
+    expect(
+      prepareDockerImageStepNames.filter((name) => name === setupHarnessStepName),
+    ).toHaveLength(1);
+    expect(
+      prepareDockerImageStepNames.filter((name) => name === installHarnessStepName),
+    ).toHaveLength(1);
+    expect(
+      prepareDockerImageStepNames.filter((name) => name === setupCandidateStepName),
+    ).toHaveLength(1);
+    expect(prepareDockerImageStepNames.indexOf(setupHarnessStepName)).toBeLessThan(
+      prepareDockerImageStepNames.indexOf(planStepName),
     );
-    expect(workflowStep(prepareDockerImage, "Setup Node environment").if).toBeUndefined();
-    expect(workflowStep(prepareDockerImage, "Plan Docker E2E images").env).toEqual({
+    expect(prepareDockerImageStepNames.indexOf(installHarnessStepName)).toBeLessThan(
+      prepareDockerImageStepNames.indexOf(planStepName),
+    );
+    expect(prepareDockerImageStepNames.indexOf(setupCandidateStepName)).toBeGreaterThan(
+      prepareDockerImageStepNames.indexOf(planStepName),
+    );
+    expect(workflowStep(prepareDockerImage, setupHarnessStepName)).toMatchObject({
+      uses: "./.release-harness/.github/actions/setup-pnpm-store-cache",
+      with: {
+        "package-manager-file": ".release-harness/package.json",
+        "use-actions-cache": "false",
+      },
+    });
+    expect(workflowStep(prepareDockerImage, setupHarnessStepName).if).toBeUndefined();
+    expect(workflowStep(prepareDockerImage, installHarnessStepName)).toMatchObject({
+      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+      "working-directory": ".release-harness",
+    });
+    expect(workflowStep(prepareDockerImage, installHarnessStepName).if).toBeUndefined();
+    expect(workflowStep(prepareDockerImage, setupCandidateStepName)).toMatchObject({
+      if: "(steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == '') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')",
+      uses: "./.github/actions/setup-node-env",
+    });
+    expect(workflowStep(prepareDockerImage, planStepName).env).toEqual({
       INCLUDE_OPENWEBUI: "${{ inputs.include_openwebui }}",
       INCLUDE_RELEASE_PATH_SUITES: "${{ inputs.include_release_path_suites }}",
       LANES: "${{ inputs.docker_lanes }}",

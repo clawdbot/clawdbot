@@ -2141,11 +2141,21 @@ jobs:
           path: .release-harness
           persist-credentials: false
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+      - name: Setup trusted release harness package manager
+        uses: ./.release-harness/.github/actions/setup-pnpm-store-cache
         with:
           node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
+          package-manager-file: .release-harness/package.json
+          use-actions-cache: "false"
+
+      - name: Install trusted release harness dependencies
+        env:
+          CI: "true"
+        # Corepack resolves packageManager from the process cwd before pnpm can
+        # process --dir. Keep this in the trusted harness so a frozen candidate
+        # pin cannot select a different pnpm binary for its harness install.
+        working-directory: .release-harness
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Plan Docker E2E images
         id: plan
@@ -2186,23 +2196,12 @@ jobs:
           fi
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
 
-      - name: Setup artifact package validation environment
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
-        uses: ./.release-harness/.github/actions/setup-pnpm-store-cache
+      - name: Setup Node environment
+        if: (steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == '') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')
+        uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          package-manager-file: .release-harness/package.json
-          use-actions-cache: "false"
-
-      - name: Install trusted package validation dependencies
-        if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_id != ''
-        env:
-          CI: "true"
-        # Corepack resolves packageManager from the process cwd before pnpm can
-        # process --dir. Keep this in the trusted harness so a frozen candidate
-        # pin cannot select a different pnpm binary for its harness install.
-        working-directory: .release-harness
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+          install-bun: "true"
 
       - name: Validate OpenClaw package artifact identity
         id: input_package_artifact
