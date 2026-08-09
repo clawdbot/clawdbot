@@ -3,12 +3,15 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
-import { listBundledChannelLegacyStateMigrationDetectorEntries } from "../channels/plugins/bundled.js";
+import { shouldIncludeChannelSetupFeatureForConfig } from "../channels/plugins/bundled-setup-policy.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { BundledChannelSetupEntryContract } from "../plugin-sdk/channel-entry-contract.js";
+import type { BundledChannelLegacyStateMigrationDetector } from "../plugin-sdk/channel-entry-contract.types.js";
 import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/doctor-migration-plan-adapter.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import { resolvePluginDoctorContractArtifactPath } from "./doctor-contract-artifact.js";
 import {
   coercePluginDoctorContractModule,
@@ -17,8 +20,10 @@ import {
 } from "./doctor-contract-module.js";
 import { pluginDoctorContractRegistryLoaderState } from "./doctor-contract-registry-loader-state.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
+import { isActivatedManifestOwner } from "./manifest-owner-policy.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
+import { unwrapDefaultModuleExport } from "./module-export.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
@@ -337,35 +342,96 @@ export function listPluginDoctorSessionStoreAgentIds(params?: {
   return [...agentIds].toSorted();
 }
 
+function loadLegacyChannelStateMigrationDetector(
+  record: PluginManifestRegistryRecord,
+): BundledChannelLegacyStateMigrationDetector | null {
+  if (
+    !record.setupSource ||
+    record.packageManifest?.setupFeatures?.legacyStateMigrations !== true
+  ) {
+    return null;
+  }
+  try {
+    const entry = unwrapDefaultModuleExport(
+      loadPluginDoctorContractModule(record.setupSource),
+    ) as Partial<BundledChannelSetupEntryContract> | null;
+    if (
+      entry?.kind !== "bundled-channel-setup-entry" ||
+      entry.features?.legacyStateMigrations !== true
+    ) {
+      return null;
+    }
+    return (
+      entry.loadLegacyStateMigrationDetector?.() ??
+      entry.loadSetupPlugin?.().lifecycle?.detectLegacyStateMigrations ??
+      null
+    );
+  } catch (error) {
+    log.warn(
+      `failed to load legacy state migration for ${record.id} from ${record.setupSource}: ${formatErrorMessage(error)}`,
+    );
+    return null;
+  }
+}
+
 export function listPluginDoctorStateMigrationEntries(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
 }): PluginDoctorStateMigrationEntry[] {
-  const declaredEntries = resolvePluginDoctorContracts({
-    ...params,
-    surface: "stateMigrations",
-  }).flatMap((entry) =>
-    entry.stateMigrations.map((migration) => ({
-      pluginId: entry.pluginId,
-      migration,
-    })),
-  );
-  // Shipped channel setup entries may still declare migration detectors. Keep this
-  // single bridge until the 2027.1 external-plugin migration window closes.
-  const legacyEntries = listBundledChannelLegacyStateMigrationDetectorEntries({
-    config: params?.config,
-    pluginIds: params?.pluginIds,
-  }).map(({ pluginId, detector }) => ({
-    pluginId,
-    migration: definePluginDoctorMigrationFromPlans({
-      id: `${pluginId}-legacy-channel-state`,
-      label: `${pluginId} legacy channel state`,
-      resolvePlans: detector,
-    }),
-  }));
-  return [...declaredEntries, ...legacyEntries];
+  const entries: PluginDoctorStateMigrationEntry[] = [];
+  const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
+  for (const record of resolvePluginDoctorManifestRecords(params ?? {})) {
+    const channelOwner = record.channels.length > 0;
+    // Config repair intentionally includes disabled plugins; channel state must never be moved
+    // after its operator has disabled the owning plugin or every configured channel.
+    if (
+      channelOwner &&
+      !shouldIncludeChannelSetupFeatureForConfig({ plugin: record, config: params?.config })
+    ) {
+      continue;
+    }
+    // Bundled channel migrations retain their historical allowlist bypass. External owners must
+    // pass normal activation first so an untrusted workspace cannot execute its setup artifact.
+    if (
+      channelOwner &&
+      record.origin !== "bundled" &&
+      !isActivatedManifestOwner({ plugin: record, normalizedConfig, rootConfig: params?.config })
+    ) {
+      continue;
+    }
+
+    const modernEntries = loadPluginDoctorContractEntries({
+      records: [record],
+      surface: "stateMigrations",
+    }).flatMap((entry) =>
+      entry.stateMigrations.map((migration) => ({ pluginId: entry.pluginId, migration })),
+    );
+    if (modernEntries.length > 0) {
+      entries.push(...modernEntries);
+      continue;
+    }
+    if (!channelOwner) {
+      continue;
+    }
+
+    // Released external plugins retain their own setup-entry detector through 2027.1; resolving
+    // the winning manifest's validated setupSource avoids loading a shadowed bundled plugin.
+    const detector = loadLegacyChannelStateMigrationDetector(record);
+    if (!detector) {
+      continue;
+    }
+    entries.push({
+      pluginId: record.id,
+      migration: definePluginDoctorMigrationFromPlans({
+        id: `${record.id}-legacy-channel-state`,
+        label: `${record.id} legacy channel state`,
+        resolvePlans: detector,
+      }),
+    });
+  }
+  return entries;
 }
 
 export function applyPluginDoctorCompatibilityMigrations(
