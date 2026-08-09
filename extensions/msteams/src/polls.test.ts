@@ -7,7 +7,8 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   buildMSTeamsPollCard,
   createMSTeamsPollStoreState,
@@ -16,6 +17,8 @@ import {
 } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("msteams polls", () => {
   beforeEach(() => {
@@ -142,7 +145,7 @@ describe("state poll store", () => {
   });
 
   it("keeps each account's poll retention quota independent", async () => {
-    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
+    const stateDir = tempDirs.make("openclaw-msteams-polls-");
     const defaultStore = createMSTeamsPollStoreState({ stateDir });
     const busyStore = createMSTeamsPollStoreState({ stateDir, accountId: "busy" });
     await defaultStore.createPoll({
