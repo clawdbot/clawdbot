@@ -135,8 +135,10 @@ export const DevicePairSetupCodeParamsSchema = closedObject({
  * limited access so the presenting client can explain how to upgrade.
  */
 export const DevicePairSetupCodeResultSchema = closedObject({
-  setupId: SetupIdSchema,
-  expiresAtMs: Type.Integer({ minimum: 0 }),
+  // Optional on the wire so separately shipped native clients can still decode
+  // setup-code responses from older v4 gateways that predate lifecycle metadata.
+  setupId: Type.Optional(SetupIdSchema),
+  expiresAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   setupCode: NonEmptyString,
   qrDataUrl: Type.Optional(SetupCodeQrDataUrlSchema),
   gatewayUrl: NonEmptyString,

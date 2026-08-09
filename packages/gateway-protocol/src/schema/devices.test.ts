@@ -8,7 +8,7 @@ import {
 } from "./devices.js";
 
 describe("device pairing setup schemas", () => {
-  it("accepts the additive setup result without exposing the bootstrap credential", () => {
+  it("accepts current and older-v4 setup results without exposing the bootstrap credential", () => {
     const result = {
       setupId: "setup-123",
       expiresAtMs: 1_800_000_000_000,
@@ -23,7 +23,10 @@ describe("device pairing setup schemas", () => {
     expect(
       Value.Check(DevicePairSetupCodeResultSchema, { ...result, bootstrapToken: "secret" }),
     ).toBe(false);
-    expect(Value.Check(DevicePairSetupCodeResultSchema, { ...result, setupId: undefined })).toBe(
+    const { setupId: _setupId, expiresAtMs: _expiresAtMs, ...legacyResult } = result;
+    expect(Value.Check(DevicePairSetupCodeResultSchema, legacyResult)).toBe(true);
+    expect(Value.Check(DevicePairSetupCodeResultSchema, { ...result, setupId: "" })).toBe(false);
+    expect(Value.Check(DevicePairSetupCodeResultSchema, { ...result, expiresAtMs: -1 })).toBe(
       false,
     );
   });

@@ -213,6 +213,27 @@ describe("device pairing setup state", () => {
     expect(state.devicePairSetupExpiryTimer).toBeNull();
   });
 
+  it("fails visibly when an older gateway omits lifecycle metadata", async () => {
+    const request = vi.fn().mockResolvedValue({
+      setupCode: "LEGACY",
+      gatewayUrl: "wss://gateway.example.com",
+      auth: "token",
+      urlSource: "test",
+    });
+    const state = stateWithClient({ request } as unknown as DevicePairSetupState["client"]);
+
+    await refreshDevicePairSetup(state);
+
+    expect(state.devicePairSetupLifecycle).toEqual({
+      phase: "error",
+      source: "create",
+      access: "full",
+      message:
+        "Error: Gateway does not provide pairing lifecycle metadata. Update the Gateway and try again.",
+    });
+    expect(state.devicePairSetupExpiryTimer).toBeNull();
+  });
+
   it("completes only the exact active setup and immediately retires its credential", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

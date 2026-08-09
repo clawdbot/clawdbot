@@ -17778,8 +17778,8 @@ public struct DevicePairSetupCodeParams: Codable, Sendable {
 }
 
 public struct DevicePairSetupCodeResult: Codable, Sendable {
-    public let setupid: String
-    public let expiresatms: Int
+    public let setupid: String?
+    public let expiresatms: Int?
     public let setupcode: String
     public let qrdataurl: String?
     public let gatewayurl: String
@@ -17790,8 +17790,8 @@ public struct DevicePairSetupCodeResult: Codable, Sendable {
     public let accessdowngraded: Bool?
 
     public init(
-        setupid: String,
-        expiresatms: Int,
+        setupid: String? = nil,
+        expiresatms: Int? = nil,
         setupcode: String,
         qrdataurl: String? = nil,
         gatewayurl: String,

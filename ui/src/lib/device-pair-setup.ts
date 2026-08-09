@@ -10,7 +10,7 @@ type GatewayRequestClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
 
-type DevicePairSetup = DevicePairSetupCodeResult;
+type DevicePairSetup = DevicePairSetupCodeResult & { setupId: string; expiresAtMs: number };
 export type DevicePairSetupAccess = "full" | "limited";
 // Only the fields the modal actually shows. The event also carries deviceId and
 // ts; validating what is never rendered would just be shipped dead weight.
@@ -74,6 +74,16 @@ export function readDevicePairSetupSnapshot(state: DevicePairSetupOverlayState) 
 
 // A refresh owns the lifecycle only while its token is current; replacement or close retires it.
 const devicePairSetupRequests = new WeakMap<DevicePairSetupState, object>();
+
+function hasDevicePairSetupLifecycle(setup: DevicePairSetupCodeResult): setup is DevicePairSetup {
+  return (
+    typeof setup.setupId === "string" &&
+    setup.setupId.length > 0 &&
+    typeof setup.expiresAtMs === "number" &&
+    Number.isInteger(setup.expiresAtMs) &&
+    setup.expiresAtMs >= 0
+  );
+}
 
 function clearDevicePairSetupExpiry(state: DevicePairSetupState) {
   if (state.devicePairSetupExpiryTimer !== null) {
@@ -246,6 +256,11 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
       !state.devicePairSetupOpen
     ) {
       return;
+    }
+    if (!hasDevicePairSetupLifecycle(result)) {
+      throw new Error(
+        "Gateway does not provide pairing lifecycle metadata. Update the Gateway and try again.",
+      );
     }
     const resolvedAccess = result.access === "limited" ? "limited" : access;
     state.devicePairSetupLifecycle = { phase: "waiting", access: resolvedAccess, setup: result };
