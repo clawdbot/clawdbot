@@ -40,10 +40,10 @@ export function normalizeNodeHostCompatibilityMetadata(
   if (client.id !== GATEWAY_CLIENT_IDS.NODE_HOST || client.mode !== GATEWAY_CLIENT_MODES.NODE) {
     return client;
   }
-  const metadata = LEGACY_NODE_HOST_DESKTOP_METADATA[client.platform];
-  if (!metadata) {
+  if (!Object.hasOwn(LEGACY_NODE_HOST_DESKTOP_METADATA, client.platform)) {
     return client;
   }
+  const metadata = LEGACY_NODE_HOST_DESKTOP_METADATA[client.platform]!;
   const deviceFamily = client.deviceFamily?.trim();
   if (deviceFamily && deviceFamily.toLowerCase() !== metadata.deviceFamily.toLowerCase()) {
     return client;

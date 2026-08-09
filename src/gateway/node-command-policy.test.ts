@@ -283,6 +283,21 @@ describe("gateway/node-command-policy", () => {
     expect(normalizeNodeHostCompatibilityMetadata(otherClient)).toBe(otherClient);
   });
 
+  it.each(["__proto__", "constructor", "prototype"])(
+    "does not normalize inherited platform key %s",
+    (platform) => {
+      const client = {
+        id: GATEWAY_CLIENT_IDS.NODE_HOST,
+        version: "2026.5.7",
+        platform,
+        deviceFamily: "Mac",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      } as const;
+
+      expect(normalizeNodeHostCompatibilityMetadata(client)).toBe(client);
+    },
+  );
+
   it("adds explicitly defaulted plugin node-host agent tools from the active registry", () => {
     const registry = createEmptyPluginRegistry();
     registry.nodeHostCommands.push(
