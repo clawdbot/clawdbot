@@ -338,6 +338,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
+    canInject?: () => boolean,
+    onQueueAccepted?: (accepted: boolean) => void,
   ): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
@@ -349,6 +351,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
     const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
+    // Transcript preparation may outlive the captured attempt. Recheck its owner
+    // fence immediately before enqueue so a successor cannot inherit this steer.
+    if (canInject && !canInject()) {
+      throw new Error("active session is finalizing");
+    }
     await this.queueSteer(
       expandedText,
       images,
@@ -358,6 +365,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       media,
       imageOrder,
       queueIdentity,
+      onQueueAccepted,
     );
   }
 
@@ -394,6 +402,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
+    onQueueAccepted?: (accepted: boolean) => void,
   ): Promise<void> {
     this.steeringMessages.push(text);
     this.emitQueueUpdate();
@@ -407,6 +416,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         ? attachRuntimeUserTurnTranscriptContext(promptMessage, transcriptContext)
         : promptMessage,
     );
+    onQueueAccepted?.(true);
   }
 
   /**

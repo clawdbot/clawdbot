@@ -393,6 +393,37 @@ describe("AgentSession tree navigation", () => {
 });
 
 describe("AgentSession queued user turns", () => {
+  it("rechecks captured steering ownership after transcript preparation", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    let resolveInput!: () => void;
+    const inputReady = new Promise<void>((resolve) => {
+      resolveInput = resolve;
+    });
+    const recorder = createUserTurnTranscriptRecorder({
+      resolveInput: async () => {
+        await inputReady;
+        return { text: "visible prompt" };
+      },
+      target: createTestUserTurnTranscriptTarget(),
+    });
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    let canInject = true;
+    const queued = session.steer(
+      "runtime prompt",
+      undefined,
+      recorder,
+      undefined,
+      undefined,
+      "queue-identity",
+      () => canInject,
+    );
+    canInject = false;
+    resolveInput();
+
+    await expect(queued).rejects.toThrow("active session is finalizing");
+    expect(steer).not.toHaveBeenCalled();
+  });
+
   it("carries prepared transcript context on the exact steered message", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
     const recorder = createUserTurnTranscriptRecorder({
@@ -403,8 +434,18 @@ describe("AgentSession queued user turns", () => {
       target: createTestUserTurnTranscriptTarget(),
     });
     const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const onQueueAccepted = vi.fn();
 
-    await session.steer("runtime group prompt", undefined, recorder);
+    await session.steer(
+      "runtime group prompt",
+      undefined,
+      recorder,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      onQueueAccepted,
+    );
 
     const runtimeMessage = steer.mock.calls[0]?.[0];
     expect(runtimeMessage).toMatchObject({
@@ -422,6 +463,10 @@ describe("AgentSession queued user turns", () => {
       },
       recorder,
     });
+    expect(onQueueAccepted).toHaveBeenCalledWith(true);
+    expect(steer.mock.invocationCallOrder[0]!).toBeLessThan(
+      onQueueAccepted.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("carries prompt facts non-enumerably on the exact steered message", async () => {

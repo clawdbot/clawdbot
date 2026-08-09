@@ -27,6 +27,7 @@ export type CodexSteeringQueueOptions = {
   debounceMs?: number;
   images?: EmbeddedRunAttemptParams["images"];
   isInboundUserMessage?: boolean;
+  onQueueAccepted?: (accepted: boolean) => void;
 };
 
 /**
@@ -47,9 +48,10 @@ export function createCodexSteeringQueue(params: {
   signal: AbortSignal;
 }) {
   type PendingSteerMessage = {
-    accepted: boolean;
+    acceptance: "open" | "accepted" | "rejected";
     text: string;
     images?: EmbeddedRunAttemptParams["images"];
+    onQueueAccepted?: (accepted: boolean) => void;
     resolve: () => void;
     reject: (error: unknown) => void;
     settled: boolean;
@@ -72,10 +74,19 @@ export function createCodexSteeringQueue(params: {
     }
   };
 
+  const reportItemAcceptance = (item: PendingSteerMessage, accepted: boolean) => {
+    if (item.acceptance !== "open") {
+      return;
+    }
+    item.acceptance = accepted ? "accepted" : "rejected";
+    item.onQueueAccepted?.(accepted);
+  };
+
   const resolveItem = (item: PendingSteerMessage) => {
     if (item.settled) {
       return;
     }
+    reportItemAcceptance(item, true);
     item.settled = true;
     pendingMessages.delete(item);
     item.resolve();
@@ -87,8 +98,9 @@ export function createCodexSteeringQueue(params: {
     }
     item.settled = true;
     pendingMessages.delete(item);
+    reportItemAcceptance(item, false);
     item.reject(
-      item.accepted
+      item.acceptance === "accepted"
         ? new CodexSteeringAcceptedUnconfirmedError(
             "Codex accepted steering but did not confirm transcript consumption",
             { cause: error },
@@ -105,6 +117,13 @@ export function createCodexSteeringQueue(params: {
     params.signal.removeEventListener("abort", abortQueue);
     clearBatchTimer();
     batchedMessages = [];
+    // An issued RPC may have reached Codex before its response. Fence wire-dispatched
+    // batches as accepted-unconfirmed so terminal cancellation cannot replay them.
+    for (const batch of dispatchedBatches.values()) {
+      for (const item of batch.items) {
+        reportItemAcceptance(item, true);
+      }
+    }
     dispatchedBatches.clear();
     for (const item of pendingMessages) {
       rejectItem(item, error);
@@ -152,7 +171,7 @@ export function createCodexSteeringQueue(params: {
         { timeoutMs: params.requestTimeoutMs, signal: params.signal },
       );
       for (const item of liveItems) {
-        item.accepted = true;
+        reportItemAcceptance(item, true);
       }
     } catch (error) {
       dispatchedBatches.delete(clientUserMessageId);
@@ -160,15 +179,10 @@ export function createCodexSteeringQueue(params: {
         isCodexAppServerIndeterminateRequestCancellationError(error) ||
         isCodexAppServerIndeterminateTransportError(error);
       for (const item of liveItems) {
-        rejectItem(
-          item,
-          acceptedUnconfirmed
-            ? new CodexSteeringAcceptedUnconfirmedError(
-                "Codex steering request may have been accepted before confirmation",
-                { cause: error },
-              )
-            : error,
-        );
+        if (acceptedUnconfirmed) {
+          reportItemAcceptance(item, true);
+        }
+        rejectItem(item, error);
       }
       throw error;
     }
@@ -202,7 +216,7 @@ export function createCodexSteeringQueue(params: {
 
   const createPendingMessage = (
     text: string,
-    images?: EmbeddedRunAttemptParams["images"],
+    options?: CodexSteeringQueueOptions,
   ): { item: PendingSteerMessage; delivery: Promise<void> } => {
     let resolveDelivery!: () => void;
     let rejectDelivery!: (error: unknown) => void;
@@ -211,9 +225,10 @@ export function createCodexSteeringQueue(params: {
       rejectDelivery = reject;
     });
     const item = {
-      accepted: false,
+      acceptance: "open" as const,
       text,
-      images,
+      images: options?.images,
+      onQueueAccepted: options?.onQueueAccepted,
       resolve: resolveDelivery,
       reject: rejectDelivery,
       settled: false,
@@ -232,23 +247,29 @@ export function createCodexSteeringQueue(params: {
       const pendingUserInput = params.claimPendingUserInput();
       if (pendingUserInput) {
         if (!options?.images?.length) {
-          pendingUserInput.answer(text);
+          const answered = pendingUserInput.answer(text);
+          options?.onQueueAccepted?.(answered);
+          if (!answered) {
+            throw new Error("codex pending user input rejected the answer");
+          }
           return;
         }
         // request_user_input cannot carry images. Submit the complete message
         // before releasing the prompt so no partial text answer can win the race.
         void flushBatch().catch(() => undefined);
-        const { item, delivery } = createPendingMessage(text, options.images);
+        const { item, delivery } = createPendingMessage(text, options);
         await Promise.all([enqueueSend([item]).finally(() => pendingUserInput.cancel()), delivery]);
         return;
       }
       if (closedError) {
+        options?.onQueueAccepted?.(false);
         throw closedError;
       }
       if (params.signal.aborted) {
+        options?.onQueueAccepted?.(false);
         throw new Error("codex app-server steering queue aborted");
       }
-      const { item, delivery } = createPendingMessage(text, options?.images);
+      const { item, delivery } = createPendingMessage(text, options);
       batchedMessages.push(item);
       clearBatchTimer();
       const debounceMs = normalizeCodexSteerDebounceMs(options?.debounceMs);
@@ -261,12 +282,6 @@ export function createCodexSteeringQueue(params: {
         }, debounceMs);
       }
       return await delivery;
-    },
-    async flushPending() {
-      if (closedError) {
-        return;
-      }
-      await flushBatch().catch(() => undefined);
     },
     confirmConsumed(clientUserMessageId: string) {
       const batch = dispatchedBatches.get(clientUserMessageId);

@@ -78,6 +78,7 @@ export async function sendChatMessageWithGeneratedRunId(
           : {}),
       ...(options.expectedRunId ? { expectedRunId: options.expectedRunId } : {}),
       ...(options.queueMode ? { queueMode: options.queueMode } : {}),
+      ...(options.replyToId ? { replyToId: options.replyToId } : {}),
     });
   } catch (err) {
     const error = applyChatSendError(state, err, canApplyError);

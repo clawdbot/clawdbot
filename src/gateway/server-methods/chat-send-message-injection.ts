@@ -54,6 +54,37 @@ export function beginChatSendMessageInjection(params: {
   );
 }
 
+type PreAckMessageInjectionResult =
+  | { status: "continue"; attempt: ReplyMessageInjectionAttempt | undefined }
+  | { status: "handled" };
+
+/** Wait for runtime ownership before ACK without waiting for transcript commitment. */
+export async function settleChatSendPreAckMessageInjection(params: {
+  attempt: ReplyMessageInjectionAttempt | undefined;
+  isAborted: () => boolean;
+  sessionRoutingChanged: () => boolean;
+  onActiveLeafChanged: () => Promise<void>;
+  onAborted: () => void;
+  onSessionRoutingChanged: () => void;
+}): Promise<PreAckMessageInjectionResult> {
+  if (params.attempt?.rejectBeforeAck) {
+    await params.onActiveLeafChanged();
+    return { status: "handled" };
+  }
+  if (!params.attempt || (await params.attempt.acceptance)) {
+    return { status: "continue", attempt: params.attempt };
+  }
+  if (params.isAborted()) {
+    params.onAborted();
+    return { status: "handled" };
+  }
+  if (params.sessionRoutingChanged()) {
+    params.onSessionRoutingChanged();
+    return { status: "handled" };
+  }
+  return { status: "continue", attempt: undefined };
+}
+
 /** Finish an irrevocably accepted steer without entering reply dispatch. */
 export async function finalizeAcceptedChatSendMessageInjection(params: {
   context: GatewayRequestContext;

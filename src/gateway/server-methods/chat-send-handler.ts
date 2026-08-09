@@ -35,9 +35,9 @@ import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-au
 import {
   beginChatSendMessageInjection,
   finalizeAcceptedChatSendMessageInjection,
+  settleChatSendPreAckMessageInjection,
 } from "./chat-send-message-injection.js";
 import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
-import { ACTIVE_RUN_CHANGED_ERROR_REASON } from "./chat-send-pre-admission.js";
 import {
   applyChatSendReplyContextFields,
   resolveChatSendReplyContext,
@@ -96,6 +96,7 @@ export async function handleChatSend(
     agentId,
     activeRunScopeKey,
     expectedLeafEntryId,
+    expectedRunId,
     resolvedSessionModel,
     now,
   } = preparedSession.value;
@@ -264,14 +265,19 @@ export async function handleChatSend(
           })
         : undefined;
     let messageInjectionAttempt = p.replyToId ? undefined : beginCapturedMessageInjection();
-    if (messageInjectionTarget && !isInternalTextSlashCommandTurn) {
-      // Accepted injection never consumes plugin-bound media, but the shared
-      // persistence promise still needs a rejection observer.
-      void pluginBoundMediaPromise.catch(() => undefined);
+    void pluginBoundMediaPromise.catch(() => undefined);
+    const preAckInjection = await settleChatSendPreAckMessageInjection({
+      attempt: messageInjectionAttempt,
+      isAborted: () => activeRunAbort.controller.signal.aborted,
+      sessionRoutingChanged: () => sessionRoutingChanged(context.getRuntimeConfig()),
+      onActiveLeafChanged: admitted.value.rejectActiveLeafChanged,
+      onAborted: finishAbortedChatSend,
+      onSessionRoutingChanged: admitted.value.rejectSessionRoutingChanged,
+    });
+    if (preAckInjection.status === "handled") {
+      return;
     }
-    if (messageInjectionAttempt?.rejectBeforeAck) {
-      return admitted.value.rejectActiveLeafChanged();
-    }
+    messageInjectionAttempt = preAckInjection.attempt;
 
     const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
       ? {
@@ -438,9 +444,6 @@ export async function handleChatSend(
                   counts: { tool: 0, block: 0, final: 0 },
                 };
               }
-              if (p.replyToId) {
-                throw new Error(ACTIVE_RUN_CHANGED_ERROR_REASON);
-              }
             }
             applyChatSendManagedMedia(ctx, await pluginBoundMediaPromise);
             const dispatchInbound = () =>
@@ -502,7 +505,8 @@ export async function handleChatSend(
                   fastModeOverride: p.fastMode,
                   queueModeOverride: p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
-                  ...(messageInjectionTarget && !isInternalTextSlashCommandTurn
+                  ...((messageInjectionTarget && !isInternalTextSlashCommandTurn) ||
+                  (p.queueMode === "steer" && expectedRunId !== undefined)
                     ? { messageInjectionAttempted: true as const }
                     : {}),
                   ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),

@@ -50,7 +50,16 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       userTurnTranscriptRecorder: recorder,
     });
 
-    expect(steer).toHaveBeenCalledWith("runtime prompt", undefined, recorder);
+    expect(steer).toHaveBeenCalledWith(
+      "runtime prompt",
+      undefined,
+      recorder,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      expect.any(Function),
+    );
   });
 
   it("forwards ordered images with a queued steering message", async () => {
@@ -66,7 +75,16 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
     await steerActiveSessionWithOptionalDeliveryWait(activeSession, "compare these", { images });
 
-    expect(steer).toHaveBeenCalledWith("compare these", images);
+    expect(steer).toHaveBeenCalledWith(
+      "compare these",
+      images,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      expect.any(Function),
+    );
   });
 
   it("forwards ordered prompt facts with a queued steering message", async () => {
@@ -93,6 +111,8 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       media,
       imageOrder,
       undefined,
+      undefined,
+      expect.any(Function),
     );
   });
 
@@ -285,6 +305,54 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       expect(queueMessages).toEqual([keepMessage]);
       expect(steeringUiMessages).toEqual(["keep unrelated queue entry"]);
       expect(unsubscribed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fences a terminal steer before delayed preparation can enqueue it", async () => {
+    vi.useFakeTimers();
+    let emit!: (event: unknown) => void;
+    let releasePreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    let enqueued = false;
+    const onQueueAccepted = vi.fn();
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer: async (_text, _images, _recorder, _media, _imageOrder, _identity, canInject) => {
+        await preparation;
+        if (canInject && !canInject()) {
+          throw new Error("active session is finalizing");
+        }
+        enqueued = true;
+      },
+      subscribe: (listener) => {
+        emit = listener;
+        return () => {};
+      },
+    };
+    const wait = steerActiveSessionWithOptionalDeliveryWait(
+      activeSession,
+      "delayed steer",
+      { deliveryTimeoutMs: 10_000, onQueueAccepted, waitForTranscriptCommit: true },
+      undefined,
+      () => true,
+    );
+    const rejection = expect(wait).rejects.toThrow(
+      "active session ended before queued steering message was committed to the transcript",
+    );
+
+    emit({ type: "agent_end", messages: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    releasePreparation();
+
+    try {
+      await rejection;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(enqueued).toBe(false);
+      expect(onQueueAccepted).toHaveBeenCalledOnce();
+      expect(onQueueAccepted).toHaveBeenCalledWith(false);
     } finally {
       vi.useRealTimers();
     }
