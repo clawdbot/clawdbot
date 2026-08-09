@@ -309,6 +309,21 @@ async function authorizeControlUiReadRequest(
   const clientIp =
     resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
     req.socket?.remoteAddress;
+  const sharedSecretRateCheck = token
+    ? opts.rateLimiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET)
+    : undefined;
+  if (sharedSecretRateCheck && !sharedSecretRateCheck.allowed) {
+    sendGatewayAuthFailure(res, {
+      ok: false,
+      reason: "rate_limited",
+      rateLimited: true,
+      retryAfterMs: sharedSecretRateCheck.retryAfterMs,
+    });
+    return false;
+  }
+
+  // A device token must not pay the shared-secret brute-force penalty.
+  // Apply penalties only after every credential class has failed.
   const authResult = await authorizeHttpGatewayConnect({
     auth: opts.auth,
     connectAuth: token ? { token, password: token } : null,
@@ -316,10 +331,13 @@ async function authorizeControlUiReadRequest(
     browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: token ? opts.rateLimiter : undefined,
+    rateLimiter: undefined,
     clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   });
+  if (authResult.ok && (authResult.method === "token" || authResult.method === "password")) {
+    opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+  }
   const sharedAuthGeneration = resolveSharedGatewaySessionGeneration(
     opts.auth,
     opts.trustedProxies,
@@ -351,6 +369,10 @@ async function authorizeControlUiReadRequest(
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
         resolvedAuthResult = { ok: true, method: "device-token" };
       } else {
+        await opts.rateLimiter?.recordFailureAndDelay(
+          clientIp,
+          AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+        );
         await opts.rateLimiter?.recordFailureAndDelay(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
       }
     }
