@@ -17,6 +17,11 @@ import {
 let instance: OpenClawTestInstance | undefined;
 type GatewayToken = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>["token"];
 const execFileAsync = promisify(execFile);
+const DOCTOR_CLI_TIMEOUT_MS = 120_000;
+const DOCTOR_CLI_CALL_COUNT = 6;
+// Entry-point preparation can precede the first CLI timeout; reserve one more
+// command budget for instance, config, and fixture setup across the scenario.
+const DOCTOR_SCENARIO_TIMEOUT_MS = DOCTOR_CLI_TIMEOUT_MS * (DOCTOR_CLI_CALL_COUNT + 2);
 
 afterEach(async () => {
   await instance?.cleanup();
@@ -71,7 +76,7 @@ async function expectAclFixturePreservesExecFileContract(preloadUrl: string): Pr
 describe("doctor auth and SecretRef product proof", () => {
   it(
     "preserves SecretRef ownership while proving resolution, fallback, exec gating, and token generation",
-    { timeout: 240_000 },
+    { timeout: DOCTOR_SCENARIO_TIMEOUT_MS },
     async () => {
       instance = await createOpenClawTestInstance({
         name: "qa-doctor-auth-secretref",
@@ -88,7 +93,7 @@ describe("doctor auth and SecretRef product proof", () => {
       );
       const resolved = await instance.cli(
         ["doctor", "--non-interactive", "--no-workspace-suggestions"],
-        { timeoutMs: 120_000 },
+        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
       );
       const resolvedOutput = outputOf(resolved);
       expect(resolved.code).toBe(0);
@@ -112,7 +117,7 @@ describe("doctor auth and SecretRef product proof", () => {
           "--generate-gateway-token",
           "--no-workspace-suggestions",
         ],
-        { timeoutMs: 120_000 },
+        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
       );
       const unresolvedOutput = outputOf(unresolved);
       expect(unresolved.code).toBe(0);
@@ -156,7 +161,7 @@ describe("doctor auth and SecretRef product proof", () => {
       });
       const fileResult = await instance.cli(
         ["doctor", "--non-interactive", "--no-workspace-suggestions"],
-        { timeoutMs: 120_000 },
+        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
       );
       expect(fileResult.code).toBe(0);
       const fileOutput = normalizedOutputOf(fileResult);
@@ -197,7 +202,7 @@ describe("doctor auth and SecretRef product proof", () => {
         });
         const execGated = await activeInstance.cli(
           ["doctor", "--non-interactive", "--no-workspace-suggestions"],
-          { timeoutMs: 120_000 },
+          { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
         );
         expect(execGated.code).toBe(0);
         expect(normalizedOutputOf(execGated)).toMatch(
@@ -207,7 +212,7 @@ describe("doctor auth and SecretRef product proof", () => {
 
         const execAllowed = await activeInstance.cli(
           ["doctor", "--non-interactive", "--allow-exec", "--no-workspace-suggestions"],
-          { timeoutMs: 120_000 },
+          { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
         );
         expect(execAllowed.code).toBe(0);
         const execAllowedOutput = normalizedOutputOf(execAllowed);
@@ -235,7 +240,7 @@ describe("doctor auth and SecretRef product proof", () => {
           "--generate-gateway-token",
           "--no-workspace-suggestions",
         ],
-        { timeoutMs: 120_000 },
+        { timeoutMs: DOCTOR_CLI_TIMEOUT_MS },
       );
       expect(generated.code).toBe(0);
       const generatedConfig = JSON.parse(await fs.readFile(instance.configPath, "utf8")) as {

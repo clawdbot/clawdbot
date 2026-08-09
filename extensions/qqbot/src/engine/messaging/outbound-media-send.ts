@@ -3,7 +3,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
@@ -11,6 +11,8 @@ import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
   pathExistsSync,
   resolveLocalPathFromRootsSync,
+  sanitizeUntrustedFileName,
+  writeExternalFileWithinRoot,
 } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
@@ -252,17 +254,21 @@ async function stageLoadedHostReadVoice(
   loaded: LoadedOutboundMedia,
 ): Promise<string> {
   const stagedDir = getQQBotMediaDir("host-read", "voice");
-  await mkdir(stagedDir, { recursive: true });
-  const rawFileName = sanitizeFileName(loaded.fileName || path.basename(mediaPath) || "voice");
-  const ext = path.extname(rawFileName);
-  const inferredExt = extensionForMime(loaded.contentType);
-  const baseName = sanitizeFileName(path.basename(rawFileName, ext)) || "voice";
-  const stagedPath = path.join(
-    stagedDir,
-    `${baseName}-${randomUUID()}${ext || inferredExt || ".bin"}`,
+  // Decode QQ escapes once before applying portable basename policy. Decoding
+  // again after basename can recreate traversal separators at the write boundary.
+  const normalizedFileName = sanitizeFileName(
+    loaded.fileName || path.basename(mediaPath) || "voice",
   );
-  await writeFile(stagedPath, loaded.buffer);
-  return stagedPath;
+  const safeFileName = sanitizeUntrustedFileName(normalizedFileName, "voice");
+  const ext = path.extname(safeFileName);
+  const inferredExt = extensionForMime(loaded.contentType);
+  const baseName = path.basename(safeFileName, ext) || "voice";
+  const staged = await writeExternalFileWithinRoot({
+    rootDir: stagedDir,
+    path: `${baseName}-${randomUUID()}${ext || inferredExt || ".bin"}`,
+    write: async (tempPath) => await writeFile(tempPath, loaded.buffer),
+  });
+  return staged.path;
 }
 
 async function stageHostReadVoice(

@@ -20,6 +20,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { persistSessionBoardFace } from "./chat-board-face-persistence.ts";
 import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
+import { closePaneBrowserAnnotations } from "./chat-pane-browser-annotation.ts";
 import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
@@ -216,12 +217,12 @@ export class ChatPage extends OpenClawLightDomElement {
       return;
     }
     const targetPane =
-      command.kind === "split"
-        ? undefined
-        : panesOf(layout).find((pane) => pane.sessionKey === command.sessionKey);
+      command.kind === "close-pane"
+        ? panesOf(layout).find((pane) => pane.sessionKey === command.sessionKey)
+        : undefined;
     const survivingPane =
       command.kind === "close-pane" && targetPane
-        ? panesOf(layout).find((pane) => pane.id !== targetPane.id)
+        ? closePaneBrowserAnnotations(this.context, this, layout, targetPane.id)
         : undefined;
     const next = applyUiCommandToSplitLayout(layout, command, sourceSessionKey);
     if (next === layout) {
@@ -518,7 +519,7 @@ export class ChatPage extends OpenClawLightDomElement {
     if (!layout) {
       return;
     }
-    const survivingPane = panesOf(layout).find((pane) => pane.id !== paneId);
+    const survivingPane = closePaneBrowserAnnotations(this.context, this, layout, paneId);
     const next = closePane(layout, paneId);
     if (!next && survivingPane) {
       const survivingLocation = findPane(layout, survivingPane.id);

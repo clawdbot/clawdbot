@@ -1,6 +1,7 @@
 // Gateway session reset/delete service.
 // Rotates transcripts and coordinates lifecycle cleanup across runtimes/hooks.
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
@@ -21,7 +22,6 @@ import {
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { resolveSessionPlacementResetBlock } from "../agents/session-placement-admission.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -104,6 +104,11 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveSessionStoreKey,
 } from "./session-utils.js";
+import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
+import {
+  resolveSessionWorkerPlacementMutationError,
+  retireSessionWorkerPlacementBeforeMutation,
+} from "./worker-environments/session-placement-lifecycle.js";
 
 type McpRunEndWatcherState = {
   cancellations: Map<string, () => void>;
@@ -442,6 +447,7 @@ async function ensureSessionRuntimeCleanup(params: {
   clearFinishedSessionsForScopes(processScopeKeys);
   clearSessionResetRuntimeState([...queueKeys], {
     activeReplySessionId: params.sessionId,
+    agentId: normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg)),
   });
   await stopSubagentsForRequester({
     cfg: params.cfg,
@@ -1012,6 +1018,7 @@ export async function performGatewaySessionReset(params: {
   creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
   authorizedPluginId?: string;
+  workerPlacementContext?: SessionWorkerPlacementContext;
   assertCurrent?: () => void;
   assertAuthorizedInstance?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
@@ -1101,16 +1108,19 @@ export async function performGatewaySessionReset(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
     };
   }
-  const initialPlacementBlock = initialResetEntry?.sessionId
-    ? resolveSessionPlacementResetBlock(initialResetEntry.sessionId)
-    : undefined;
-  if (initialPlacementBlock) {
+  const workerPlacementContext =
+    params.workerPlacementContext ??
+    (await import("./session-worker-placement-context.js")).resolveSessionWorkerPlacementContext();
+  const initialPlacementError = resolveSessionWorkerPlacementMutationError({
+    action: "reset",
+    context: workerPlacementContext,
+    key: params.key,
+    sessionId: normalizeOptionalString(initialResetEntry?.sessionId),
+  });
+  if (initialPlacementError) {
     return {
       ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Session ${params.key} cannot reset while ${initialPlacementBlock}.`,
-      ),
+      error: errorShape(ErrorCodes.INVALID_REQUEST, initialPlacementError.message),
     };
   }
   const resetLifecycleIdentities = [
@@ -1137,7 +1147,8 @@ export async function performGatewaySessionReset(params: {
     };
   }
   let admittedWorkReleased = true;
-  let resetOwnershipError: ReturnType<typeof errorShape> | undefined;
+  let resetPreparationError: ReturnType<typeof errorShape> | undefined;
+  let preparedResetSessionId: string | undefined;
   return await runExclusiveSessionLifecycleMutation({
     scope: resetTarget.storePath,
     identities: resetLifecycleIdentities,
@@ -1146,21 +1157,64 @@ export async function performGatewaySessionReset(params: {
     prepare: async () => {
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
-      const currentEntry = loadSessionEntry(
+      const { entry: currentEntry, canonicalKey: currentCanonicalKey } = loadSessionEntry(
         params.key,
         resetTarget.requestedAgentId ? { agentId: resetTarget.requestedAgentId } : undefined,
-      ).entry;
+      );
       // Check the locked generation before interrupting any work; a replaced
       // foreign row must not be reset or have its admitted run cancelled.
-      resetOwnershipError = resolvePluginSessionOwnershipError({
+      resetPreparationError = resolvePluginSessionOwnershipError({
         action: "reset",
         entry: currentEntry,
         key: resetTarget.target.canonicalKey,
         pluginOwnerId: params.authorizedPluginId,
       });
-      if (resetOwnershipError) {
+      if (resetPreparationError) {
         return;
       }
+      const currentMissingHarnessSessionError = resolveMissingAgentHarnessSessionError(
+        resetTarget.target.canonicalKey,
+        currentEntry,
+      );
+      if (currentMissingHarnessSessionError) {
+        resetPreparationError = errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          currentMissingHarnessSessionError,
+        );
+        return;
+      }
+      const placementError = resolveSessionWorkerPlacementMutationError({
+        action: "reset",
+        context: workerPlacementContext,
+        key: params.key,
+        sessionId: normalizeOptionalString(currentEntry?.sessionId),
+      });
+      if (placementError) {
+        resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, placementError.message);
+        return;
+      }
+      const archivedSessionError = resolveSessionWorkStartError(currentCanonicalKey, currentEntry);
+      if (archivedSessionError) {
+        resetPreparationError = errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError);
+        return;
+      }
+      if (isModelSelectionLocked(currentEntry)) {
+        resetPreparationError = errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+        );
+        return;
+      }
+      const incognito =
+        currentEntry?.incognito === true || isIncognitoSessionKey(resetTarget.target.canonicalKey);
+      if (incognito && !currentEntry) {
+        resetPreparationError = errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `unknown session: ${params.key}`,
+        );
+        return;
+      }
+      preparedResetSessionId = normalizeOptionalString(currentEntry?.sessionId);
       admittedWorkReleased = await interruptSessionWorkAdmissions({
         scope: resetTarget.storePath,
         identities: resetLifecycleIdentities,
@@ -1169,8 +1223,8 @@ export async function performGatewaySessionReset(params: {
     },
     run: async () => {
       const { cfg, target, storePath, requestedAgentId } = resetTarget;
-      if (resetOwnershipError) {
-        return { ok: false, error: resetOwnershipError };
+      if (resetPreparationError) {
+        return { ok: false, error: resetPreparationError };
       }
       if (!admittedWorkReleased) {
         return {
@@ -1181,10 +1235,21 @@ export async function performGatewaySessionReset(params: {
           ),
         };
       }
+      params.assertCurrent?.();
+      params.assertAuthorizedInstance?.();
       const { entry, legacyKey, canonicalKey } = loadSessionEntry(
         params.key,
         requestedAgentId ? { agentId: requestedAgentId } : undefined,
       );
+      if (normalizeOptionalString(entry?.sessionId) !== preparedResetSessionId) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Session ${params.key} changed before reset. Retry.`,
+          ),
+        };
+      }
       const currentOwnershipError = resolvePluginSessionOwnershipError({
         action: "reset",
         entry,
@@ -1194,16 +1259,16 @@ export async function performGatewaySessionReset(params: {
       if (currentOwnershipError) {
         return { ok: false, error: currentOwnershipError };
       }
-      const placementBlock = entry?.sessionId
-        ? resolveSessionPlacementResetBlock(entry.sessionId)
-        : undefined;
-      if (placementBlock) {
+      const placementError = resolveSessionWorkerPlacementMutationError({
+        action: "reset",
+        context: workerPlacementContext,
+        key: params.key,
+        sessionId: normalizeOptionalString(entry?.sessionId),
+      });
+      if (placementError) {
         return {
           ok: false,
-          error: errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `Session ${params.key} cannot reset while ${placementBlock}.`,
-          ),
+          error: errorShape(ErrorCodes.INVALID_REQUEST, placementError.message),
         };
       }
       const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
@@ -1217,6 +1282,28 @@ export async function performGatewaySessionReset(params: {
         return {
           ok: false,
           error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE),
+        };
+      }
+      const incognito = entry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
+      if (incognito && !entry) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.key}`),
+        };
+      }
+      // Drain first so a legitimate local turn can release its claim. Retire only
+      // after every non-destructive guard is rechecked; a placement race must abort
+      // before hooks, runtime cleanup, or session mutation begins.
+      const placementRetirementError = retireSessionWorkerPlacementBeforeMutation({
+        action: "reset",
+        context: workerPlacementContext,
+        key: params.key,
+        sessionId: normalizeOptionalString(entry?.sessionId),
+      });
+      if (placementRetirementError) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, placementRetirementError.message),
         };
       }
       const hadExistingEntry = Boolean(entry);
@@ -1245,8 +1332,6 @@ export async function performGatewaySessionReset(params: {
           workspaceDir,
         },
       );
-      params.assertCurrent?.();
-      params.assertAuthorizedInstance?.();
       await triggerInternalHook(hookEvent);
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
@@ -1314,7 +1399,6 @@ export async function performGatewaySessionReset(params: {
           })
         : undefined;
 
-      const incognito = entry?.incognito === true || isIncognitoSessionKey(target.canonicalKey);
       if (incognito) {
         if (!entry) {
           return {

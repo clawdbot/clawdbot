@@ -14,10 +14,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
+import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
 import { SUPPORTED_LOCALES } from "../../ui/src/i18n/lib/registry.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -48,6 +49,12 @@ const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 const MATURITY_SCORECARD_WORKFLOW_REF =
   "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
 const OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS = new Set<string>();
+const AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC =
+  "::error title=ambiguous main push::github.event.before is zero; refusing to infer a diff base for a created or recreated main branch.";
+const AMBIGUOUS_MAIN_PUSH_GUARD = `if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$base_sha" =~ ^0+$ ]]; then
+  echo "${AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC}" >&2
+  exit 1
+fi`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const MATURITY_GENERATED_PR_PATHS = [
   "qa/maturity-scores.yaml",
@@ -67,6 +74,42 @@ type WorkflowStep = {
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+}
+
+function evaluateWorkflowExpression(
+  expression: unknown,
+  context: {
+    eventName: "pull_request" | "push" | "workflow_dispatch";
+    headRepository?: string;
+    repository: string;
+    runAttempt: number;
+  },
+) {
+  if (typeof expression !== "string") {
+    throw new TypeError("workflow expression must be a string");
+  }
+  const match = expression.match(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/u);
+  if (!match) {
+    throw new Error(`invalid workflow expression: ${expression}`);
+  }
+  const source = match[1];
+  if (source === undefined) {
+    throw new Error(`workflow expression has no body: ${expression}`);
+  }
+  return runInNewContext(source, {
+    github: {
+      event_name: context.eventName,
+      repository: context.repository,
+      run_attempt: context.runAttempt,
+      event: context.headRepository
+        ? {
+            pull_request: {
+              head: { repo: { full_name: context.headRepository } },
+            },
+          }
+        : {},
+    },
+  });
 }
 
 function runCiGateFixture(requiredResults: string, selectedResults: string) {
@@ -97,7 +140,7 @@ function runWorkflowShellScript(
     let moduleIndex = 0;
     const moduleRoot = options.cwd ?? process.cwd();
     const rewritten = script.replace(
-      /node --input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\1(?=\n|$)/gu,
+      /node (?:--import tsx )?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\1(?=\n|$)/gu,
       (_match, _marker: string, body: string) => {
         const modulePath = path.join(
           moduleRoot,
@@ -106,7 +149,7 @@ function runWorkflowShellScript(
         moduleIndex += 1;
         modulePaths.push(modulePath);
         writeFileSync(modulePath, `${body}\n`, "utf8");
-        return `${quoteShell(process.execPath)} ${quoteShell(modulePath)}`;
+        return `${quoteShell(process.execPath)} --import ${quoteShell(import.meta.resolve("tsx"))} ${quoteShell(modulePath)}`;
       },
     );
     const scriptPath = path.join(root, "run.sh");
@@ -148,7 +191,7 @@ function runCiManifestFixture(options: {
     const scriptsDir = path.join(root, "scripts", "lib");
     mkdirSync(scriptsDir, { recursive: true });
     writeFileSync(
-      path.join(scriptsDir, "ci-node-test-plan.mjs"),
+      path.join(scriptsDir, "ci-node-test-plan.mts"),
       options.bundledPlanner
         ? `
           export const createNodeTestShards = () => [{
@@ -199,7 +242,7 @@ function runCiManifestFixture(options: {
     );
     if (options.bundledPlanner) {
       writeFileSync(
-        path.join(scriptsDir, "ci-changed-node-test-plan.mjs"),
+        path.join(scriptsDir, "ci-changed-node-test-plan.mts"),
         options.changedPlannerImportFails
           ? `throw new Error("planner import failure");\n`
           : `
@@ -218,11 +261,11 @@ function runCiManifestFixture(options: {
         "utf8",
       );
       writeFileSync(
-        path.join(scriptsDir, "channel-contract-test-plan.mjs"),
+        path.join(scriptsDir, "channel-contract-test-plan.mts"),
         `export const createChannelContractTestShards = () => [{ checkName: "channel-contracts" }];\n`,
       );
       writeFileSync(
-        path.join(scriptsDir, "plugin-contract-test-plan.mjs"),
+        path.join(scriptsDir, "plugin-contract-test-plan.mts"),
         `export const createPluginContractTestShards = () => [{ checkName: "plugin-contracts" }];\n`,
       );
     }
@@ -667,6 +710,67 @@ function findUnpinnedExternalActions(): string[] {
 
 function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function runPushDiffBaseFixture(options: {
+  commitCount: 1 | 2 | 3;
+  eventBaseSha: string | "parent";
+}) {
+  const root = tempDirs.make("openclaw-ci-diff-base-");
+  runGit(root, ["init", "-q", "-b", "main"]);
+  runGit(root, ["config", "commit.gpgsign", "false"]);
+  runGit(root, ["config", "user.email", "ci-fixture@example.com"]);
+  runGit(root, ["config", "user.name", "CI Fixture"]);
+  for (let index = 1; index <= options.commitCount; index += 1) {
+    writeFileSync(path.join(root, "fixture.txt"), `commit ${index}\n`, "utf8");
+    runGit(root, ["add", "fixture.txt"]);
+    runGit(root, ["commit", "-q", "-m", `fixture ${index}`]);
+  }
+
+  const headSha = runGit(root, ["rev-parse", "HEAD"]);
+  const parentSha =
+    options.commitCount > 1 ? runGit(root, ["rev-parse", "--verify", "HEAD^1"]) : null;
+  const eventBaseSha = options.eventBaseSha === "parent" ? parentSha! : options.eventBaseSha;
+  const outputPath = path.join(root, "github-output");
+  writeFileSync(outputPath, "", "utf8");
+  const diffBaseStep = readCiWorkflow().jobs.preflight.steps.find(
+    (step: WorkflowStep) => step.name === "Resolve exact diff base",
+  );
+  const run = runWorkflowShellScript(diffBaseStep.run, {
+    cwd: root,
+    env: {
+      ...process.env,
+      DEFAULT_BRANCH: "main",
+      EVENT_BASE_SHA: eventBaseSha,
+      GITHUB_EVENT_NAME: "push",
+      GITHUB_OUTPUT: outputPath,
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      PULL_REQUEST_NUMBER: "",
+      RELEASE_GATE: "false",
+    },
+  });
+  const rawOutputs = readFileSync(outputPath, "utf8").trim();
+  const outputs: Record<string, string> =
+    rawOutputs === ""
+      ? {}
+      : Object.fromEntries(
+          rawOutputs.split("\n").map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+        );
+  const emittedBaseIsCommit =
+    typeof outputs.sha === "string" &&
+    spawnSync("git", ["cat-file", "-e", `${outputs.sha}^{commit}`], { cwd: root }).status === 0;
+  return {
+    emittedBaseIsCommit,
+    eventBaseSha,
+    headSha,
+    output: `${run.stdout}${run.stderr}`,
+    outputs,
+    parentSha,
+    status: run.status,
+  };
 }
 
 function writeExecutable(filePath: string, lines: string[]): void {
@@ -2483,15 +2587,18 @@ NODE
     for (const { jobName, stepWith } of stickyConsumers) {
       const stickyCondition = stepWith["sticky-disk"];
       const cacheCondition = stepWith["use-actions-cache"];
+      if (jobName === "checks-ui-e2e") {
+        continue;
+      }
       expect(stickyCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
+      expect(cacheCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
+      expect(cacheCondition, jobName).toContain("&& 'false' || 'true'");
       expect(stickyCondition, jobName).toContain(
         "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
       );
-      expect(cacheCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
       expect(cacheCondition, jobName).toContain(
         "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
       );
-      expect(cacheCondition, jobName).toContain("&& 'false' || 'true'");
     }
     // Required CI jobs only clone the snapshot. The disposable warmer below
     // owns commits so writer coalescing cannot cancel a required build job.
@@ -3134,13 +3241,17 @@ NODE
     expect(writerStep.with.key).toContain("github.run_attempt");
     expect(writerStep.with.key).not.toContain("pull_request");
     expect(writerStep.with["restore-keys"]).toContain("**/tsconfig*.json");
+    expect(writerStep.with.key).toContain("src/state/*.sql");
+    expect(writerStep.with["restore-keys"]).toContain("src/state/*.sql");
     expect(writerStep.with.key).toContain("!**/node_modules/**");
     expect(writerStep.with["restore-keys"]).toContain("!**/node_modules/**");
     expect(readerStep.uses).toBe(CACHE_V5);
     expect(readerStep.if).toContain("inputs.save-vitest-fs-cache != 'true'");
     expect(readerStep.with["restore-keys"]).toBe(writerStep.with["restore-keys"]);
     expect(readerStep.with.key).toContain("!**/node_modules/**");
+    expect(readerStep.with.key).toContain("src/state/*.sql");
     expect(configureStep.env.CACHE_GENERATION).toContain("!**/node_modules/**");
+    expect(configureStep.env.CACHE_GENERATION).toContain("src/state/*.sql");
     expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root");
     expect(configureStep.run).toContain(".openclaw-transform-generation");
     expect(configureStep.run).not.toContain("protected Vitest transform seed");
@@ -4371,11 +4482,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     expect(workflow).toContain("check-guards");
     expect(workflow).toContain("check-npm-lock");
-    expect(preflightGuards).toContain('has_package_script "check:script-declarations"');
-    expect(preflightGuards).toContain("pnpm check:script-declarations");
-    expect(preflightGuards).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
+    expect(preflightGuards).toContain('has_package_script "check:doctor-deprecation-registry"');
+    expect(preflightGuards).toContain("pnpm check:doctor-deprecation-registry");
     expect(preflightGuards).toContain(
-      "Current CI targets must provide the check:script-declarations package script.",
+      "[skip] historical target skips the wall-clock doctor deprecation registry guard",
+    );
+    expect(preflightGuards).toContain(
+      "Current CI targets must provide the check:doctor-deprecation-registry package script.",
+    );
+    expect(preflightGuards.indexOf('if [[ "$HISTORICAL_TARGET" == "true" ]]')).toBeLessThan(
+      preflightGuards.indexOf("pnpm check:doctor-deprecation-registry"),
     );
     expect(npmLockGuards).toContain("pnpm deps:npm-lock:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
@@ -4394,11 +4510,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${head_sha}"',
     );
     expect(diffBaseStep.run).toContain("Could not resolve an exact diff base");
+    expect(diffBaseStep.run).toContain(AMBIGUOUS_MAIN_PUSH_GUARD);
     const securityDiffBase = parsedWorkflow.jobs["security-fast"].steps.find(
       (step: WorkflowStep) => step.name === "Resolve security diff base",
     ).run;
     expect(securityDiffBase).toContain("git rev-list --parents -n 1 HEAD");
     expect(securityDiffBase).not.toContain("node scripts/lib/merge-head-diff-base.mjs");
+    expect(securityDiffBase).toContain(AMBIGUOUS_MAIN_PUSH_GUARD);
     const checkShardStep = parsedWorkflow.jobs["check-shard"].steps.find(
       (step: WorkflowStep) => step.name === "Run check shard",
     );
@@ -4408,6 +4526,29 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checkShardStep.run).toContain(
       'timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"',
     );
+  });
+
+  it("rejects ambiguous zero-before main pushes and preserves concrete bases", () => {
+    const zeroSha = "0".repeat(40);
+    const threeCommit = runPushDiffBaseFixture({ commitCount: 3, eventBaseSha: zeroSha });
+    expect(threeCommit.status, threeCommit.output).toBe(1);
+    expect(threeCommit.output).toContain(AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC);
+    expect(threeCommit.outputs).not.toHaveProperty("sha");
+    expect(threeCommit.emittedBaseIsCommit).toBe(false);
+
+    const rootCommit = runPushDiffBaseFixture({ commitCount: 1, eventBaseSha: zeroSha });
+    expect(rootCommit.status, rootCommit.output).toBe(1);
+    expect(rootCommit.output).toContain(AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC);
+    expect(rootCommit.outputs).not.toHaveProperty("sha");
+    expect(rootCommit.emittedBaseIsCommit).toBe(false);
+
+    const concreteBase = runPushDiffBaseFixture({
+      commitCount: 3,
+      eventBaseSha: "parent",
+    });
+    expect(concreteBase.status, concreteBase.output).toBe(0);
+    expect(concreteBase.outputs.sha).toBe(concreteBase.eventBaseSha);
+    expect(concreteBase.emittedBaseIsCommit).toBe(true);
   });
 
   it("uses stable deadcode checks for current and frozen checkouts", () => {
@@ -4499,7 +4640,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checkShardRun).toContain('if [ "$(nproc)" -lt 8 ]; then');
     expect(checkShardRun).toContain("lint_args=(--split-core --threads=1)");
     expect(checkShardRun).toContain('pnpm lint "${lint_args[@]}"');
-    expect(checkShardRun).toContain('node scripts/run-oxlint-shards.mjs "${lint_args[@]}"');
+    expect(checkShardRun).toContain(
+      'node --import tsx scripts/run-oxlint-shards.mts "${lint_args[@]}"',
+    );
   });
 
   it("runs the suppression-baseline max-lines ratchet against the exact tested tree", () => {
@@ -4598,6 +4741,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then',
     );
     expect(checksFastRun.run).toContain(
+      "node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --split-core --threads=1",
+    );
+    expect(checksFastRun.run).not.toContain(
       "node scripts/run-oxlint.mjs src ui/src packages extensions",
     );
 
@@ -4986,7 +5132,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(uiInstall.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
     expect(uiInstall.run).toContain("pnpm --dir ui exec playwright install chromium");
-    expect(uiInstall.run).toContain("node scripts/ensure-playwright-chromium.mjs");
+    expect(uiInstall.run).toContain("node --import tsx scripts/ensure-playwright-chromium.mts");
     expect(uiInstall.run).not.toContain("OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM");
     expect(uiTest.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
     expect(uiTest.run).toContain("pnpm --dir ui test --testTimeout=30000 --isolate");
@@ -5004,7 +5150,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2e.if).toBe(
       "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
-    expect(uiE2e["runs-on"]).toContain("blacksmith-8vcpu-ubuntu-2404");
+    expect(uiE2e["runs-on"]).toBe(
+      "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}",
+    );
     expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
     // Each Chromium worker keeps serial file ownership while all four shards
     // together remain required by the aggregate CI gate.
@@ -5016,22 +5164,105 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e");
 
-    const uiSetup = expectDefined(
-      ui.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
-      "Control UI Node setup",
-    );
     const uiE2eSetup = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
       "Control UI E2E Node setup",
     );
     expect(uiE2eSetup.uses).toBe("./.github/actions/setup-node-env");
-    expect(uiE2eSetup.with).toEqual(uiSetup.with);
+    expect(uiE2eSetup.with).toEqual({
+      "node-version": "24.x",
+      "install-bun": "false",
+      "sticky-disk":
+        "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}",
+      "use-actions-cache":
+        "${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}",
+    });
+    const routingScenarios = [
+      {
+        name: "same-repo pull request first attempt",
+        context: {
+          eventName: "pull_request",
+          headRepository: "openclaw/openclaw",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+        expected: {
+          runner: "blacksmith-8vcpu-ubuntu-2404",
+          stickyDisk: "true",
+          useActionsCache: "false",
+        },
+      },
+      {
+        name: "same-repo pull request retry",
+        context: {
+          eventName: "pull_request",
+          headRepository: "openclaw/openclaw",
+          repository: "openclaw/openclaw",
+          runAttempt: 2,
+        },
+        expected: {
+          runner: "ubuntu-24.04",
+          stickyDisk: "false",
+          useActionsCache: "true",
+        },
+      },
+      {
+        name: "fork pull request",
+        context: {
+          eventName: "pull_request",
+          headRepository: "contributor/openclaw",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+        expected: {
+          runner: "ubuntu-24.04",
+          stickyDisk: "false",
+          useActionsCache: "true",
+        },
+      },
+      {
+        name: "workflow dispatch",
+        context: {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+        expected: {
+          runner: "ubuntu-24.04",
+          stickyDisk: "false",
+          useActionsCache: "true",
+        },
+      },
+      {
+        name: "canonical push retry",
+        context: {
+          eventName: "push",
+          repository: "openclaw/openclaw",
+          runAttempt: 2,
+        },
+        expected: {
+          runner: "blacksmith-8vcpu-ubuntu-2404",
+          stickyDisk: "true",
+          useActionsCache: "false",
+        },
+      },
+    ] as const;
+    for (const { context, expected, name } of routingScenarios) {
+      expect(evaluateWorkflowExpression(uiE2e["runs-on"], context), name).toBe(expected.runner);
+      expect(evaluateWorkflowExpression(uiE2eSetup.with?.["sticky-disk"], context), name).toBe(
+        expected.stickyDisk,
+      );
+      expect(
+        evaluateWorkflowExpression(uiE2eSetup.with?.["use-actions-cache"], context),
+        name,
+      ).toBe(expected.useActionsCache);
+    }
 
     const chromiumInstall = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Install Playwright Chromium"),
       "Control UI E2E Chromium installation",
     );
-    expect(chromiumInstall.run).toBe("node scripts/ensure-playwright-chromium.mjs");
+    expect(chromiumInstall.run).toBe("node --import tsx scripts/ensure-playwright-chromium.mts");
 
     const scenario = expectDefined(
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
@@ -5357,17 +5588,27 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Checkout trusted Node shard runner",
     );
     expect(trustedRunnerStep).toMatchObject({
-      if: "${{ hashFiles('scripts/ci-run-node-test-shard.mjs') == '' }}",
+      if: "${{ hashFiles('scripts/ci-run-node-test-shard.mts') == '' }}",
       uses: CHECKOUT_V6,
       with: {
         ref: "${{ github.workflow_sha }}",
         path: ".ci-workflow",
-        "sparse-checkout": expect.stringContaining("scripts/ci-run-node-test-shard.mjs"),
+        "sparse-checkout": expect.stringContaining("scripts/ci-run-node-test-shard.mts"),
         "sparse-checkout-cone-mode": false,
         "persist-credentials": false,
       },
     });
-    expect(existsSync("scripts/ci-run-node-test-shard.mjs")).toBe(true);
+    // Non-cone sparse-checkout ignores missing paths silently, so a renamed
+    // script would surface only as a runtime module-not-found on the frozen
+    // lane. Require every listed path to exist at this revision.
+    const sparseCheckoutPaths = String(trustedRunnerStep?.with?.["sparse-checkout"] ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    expect(sparseCheckoutPaths).toContain("scripts/ci-run-node-test-shard.mts");
+    for (const sparsePath of sparseCheckoutPaths) {
+      expect({ sparsePath, exists: existsSync(sparsePath) }).toEqual({ sparsePath, exists: true });
+    }
   });
 
   it("emits one final CI gate after every selected lane", () => {
@@ -5662,7 +5903,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const ensurePlaywrightStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Ensure Playwright Chromium",
     );
-    expect(ensurePlaywrightStep.run).toBe("node scripts/ensure-playwright-chromium.mjs");
+    expect(ensurePlaywrightStep.run).toBe(
+      "node --import tsx scripts/ensure-playwright-chromium.mts",
+    );
     const runProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Run QA profile",
     );
@@ -6377,21 +6620,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.run).toContain("ci-routing)");
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
     expect(smokeProfileJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
-    const publicRuntimeBuild = smokeBuildStep.run.indexOf("node scripts/build-all.mjs qaRuntime");
+    const publicRuntimeBuild = smokeBuildStep.run.indexOf(
+      "node --import tsx scripts/build-all.mts qaRuntime",
+    );
     const uiBuild = smokeBuildStep.run.indexOf("pnpm ui:build");
     const packageBuild = smokeBuildStep.run.indexOf("node scripts/package-openclaw-for-docker.mjs");
     const privateRuntimeBuild = smokeBuildStep.run.lastIndexOf(
-      "node scripts/build-all.mjs qaRuntime",
+      "node --import tsx scripts/build-all.mts qaRuntime",
     );
-    expect(smokeBuildStep.run).toContain("node scripts/build-all.mjs qaRuntime");
+    expect(smokeBuildStep.run).toContain("node --import tsx scripts/build-all.mts qaRuntime");
     expect(smokeBuildStep.run).toContain("pnpm ui:build");
     expect(smokeBuildStep.env).not.toHaveProperty("OPENCLAW_BUILD_PRIVATE_QA");
     expect(smokeBuildStep.run).toContain("unset OPENCLAW_BUILD_PRIVATE_QA");
     expect(smokeBuildStep.run).toContain("--skip-build");
     expect(smokeBuildStep.run).toContain(
-      "OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs qaRuntime",
+      "OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts qaRuntime",
     );
-    expect(smokeBuildStep.run.match(/node scripts\/build-all\.mjs qaRuntime/g)).toHaveLength(2);
+    expect(
+      smokeBuildStep.run.match(/node --import tsx scripts\/build-all\.mts qaRuntime/g),
+    ).toHaveLength(2);
     expect(smokeBuildStep.run).toContain("--allow-unreleased-changelog");
     expect(smokeBuildStep.run).toContain("grep -Fq");
     expect(smokeBuildStep.run).toContain('"${package_args[@]}"');
@@ -6473,7 +6720,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(smokeRunStep.run).toContain('exit "$qa_exit_code"');
     expect(smokeRunStep.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
     expect(smokeRunStep.run).toContain("--max-old-space-size=16384");
-    expect(smokeRunStep.run).not.toContain("scripts/build-all.mjs qaRuntime");
+    expect(smokeRunStep.run).not.toContain("scripts/build-all.mts qaRuntime");
     expect(smokeRunStep.run).not.toContain("OPENAI_API_KEY");
     expect(smokeUploadStep.if).toBe("always()");
     expect(smokeUploadStep.with).toMatchObject({

@@ -13,9 +13,9 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { gte as semverGte, valid as validSemver } from "semver";
 import { describe, expect, it } from "vitest";
-import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory.ts";
-import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mts";
 
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mjs";
 const NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES = 1024 * 1024;
@@ -645,23 +645,6 @@ describe("check-openclaw-package-tarball", () => {
       ["dist/index.js"],
       {
         "dist/index.js": `const candidate = new URL(${JSON.stringify(specifier)}, import.meta.url);\n`,
-      },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      "2026.4.27",
-    );
-  });
-
-  it("allows import.meta.url source helper probes", () => {
-    withTarball(
-      ["dist/index.js"],
-      {
-        "dist/index.js":
-          'const shim = new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url);\n',
       },
       (tarball) => {
         const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });

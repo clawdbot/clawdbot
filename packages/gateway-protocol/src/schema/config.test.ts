@@ -104,6 +104,7 @@ describe("update protocol schemas", () => {
             { sha: "def5678", subject: "Second change" },
           ],
         },
+        effectiveChannel: "dev",
         schedule: {
           channel: "dev",
           autoEnabled: true,

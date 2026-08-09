@@ -35,6 +35,17 @@ import type {
 
 const log = createSubsystemLogger("gateway/terminal");
 
+// Task binding is manager-private metadata: public terminal ownership stays
+// conversation-scoped while lifecycle cleanup can target the exact producer.
+type TaskBoundAgentOwner = Extract<TerminalOwner, { kind: "agent" }> & { taskId?: string };
+
+function terminalOwnerMatches(owner: TerminalOwner | null, ownerKey: string): boolean {
+  if (owner?.kind !== "agent") {
+    return false;
+  }
+  return owner.agentSessionKey === ownerKey || (owner as TaskBoundAgentOwner).taskId === ownerKey;
+}
+
 /**
  * Tracks live PTY sessions keyed by session id, with a reverse index for
  * connection owners and viewers so disconnect cleanup stays bounded.
@@ -379,6 +390,17 @@ export class TerminalSessionManager {
     }
     this.finalize(session, "closed", {});
     return true;
+  }
+
+  /** Closes every PTY owned by one exact agent session. */
+  closeAgentSessions(agentSessionKey: string): number {
+    const owned = [...this.sessions.values()].filter(
+      (session) => !session.closed && terminalOwnerMatches(session.owner, agentSessionKey),
+    );
+    for (const session of owned) {
+      this.finalize(session, "closed", {});
+    }
+    return owned.length;
   }
 
   /**

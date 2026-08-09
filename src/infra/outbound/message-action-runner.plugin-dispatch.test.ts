@@ -112,6 +112,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./channel-resolution.js", () => ({
+  normalizeDeliverableOutboundChannel: (value?: string | null) =>
+    typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined,
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
   resetOutboundChannelResolutionStateForTest: vi.fn(),
 }));

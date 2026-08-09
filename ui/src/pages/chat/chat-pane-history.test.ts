@@ -6,6 +6,7 @@ import type {
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -47,16 +48,6 @@ type TestChatPane = HTMLElement & {
     pendingScrollOffsetFor: (sessionKey: string) => number | null;
   };
 };
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  return { promise, resolve, reject };
-}
 
 function createSessionContext(
   client: GatewayBrowserClient,
@@ -872,7 +863,7 @@ describe("chat pane catalog continuation lifecycle", () => {
   });
 
   it("does not display an adopted send failure after returning to the source conversation", async () => {
-    const sent = createDeferred<void>();
+    const sent = createDeferred();
     const request = vi.fn().mockResolvedValue({ sessionKey: "agent:main:continued" });
     const { key, pane, sourceSessionKey, state } = createCatalogContinuationPane(request);
     state.handleSendChat = vi.fn(() => sent.promise);

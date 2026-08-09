@@ -1,18 +1,12 @@
 // Ios Pull Gateway Log tests cover ios pull gateway log script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const scriptPath = "scripts/dev/ios-pull-gateway-log.sh";
-const tempDirs: string[] = [];
-
-function makeTempDir(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-ios-log-pull-"));
-  tempDirs.push(root);
-  return root;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runWithFakeXcrun(
   root: string,
@@ -38,15 +32,9 @@ function runWithFakeXcrun(
   });
 }
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
-});
-
 describe("scripts/dev/ios-pull-gateway-log.sh", () => {
   it("fails when the copied gateway log is empty", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-ios-log-pull-");
     const destPath = path.join(root, "openclaw-gateway.log");
     const result = runWithFakeXcrun(
       root,
@@ -60,7 +48,7 @@ describe("scripts/dev/ios-pull-gateway-log.sh", () => {
   });
 
   it("prints the pulled gateway log tail when the copied file has content", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-ios-log-pull-");
     const destPath = path.join(root, "openclaw-gateway.log");
     const result = runWithFakeXcrun(
       root,

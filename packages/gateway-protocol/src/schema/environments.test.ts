@@ -88,6 +88,7 @@ describe("worker environment protocol schemas", () => {
         ...destroyedBase.worker,
         leaseId: "lease-1",
         idleMs: 50,
+        error: "provider teardown failed",
       },
     };
 
@@ -132,6 +133,12 @@ describe("worker environment protocol schemas", () => {
           ...workerSummary("attached", "available").worker,
           attachedSessionIds: [""],
         },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...workerSummary("failed"),
+        worker: { ...workerSummary("failed").worker, error: "" },
       }),
     ).toBe(false);
   });

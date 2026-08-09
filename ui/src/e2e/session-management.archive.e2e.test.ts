@@ -159,6 +159,7 @@ suite.define(() => {
             "agent:main:research",
             "Research notes",
             Date.parse("2026-07-01T15:00:00.000Z"),
+            { hasActiveRun: true, status: "running" },
           ),
         ]),
         "sessions.patch": {},
@@ -179,7 +180,10 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await row.getByRole("button", { name: "Open session menu" }).click();
-      await activateMenuItem(menuHost.getByRole("menuitem", { name: "Archive session" }));
+      const archiveItem = menuHost.getByRole("menuitem", { name: "Archive session" });
+      expect(await archiveItem.isDisabled()).toBe(false);
+      expect(await menuHost.getByRole("menuitem", { name: "Delete…" }).isDisabled()).toBe(true);
+      await activateMenuItem(archiveItem);
       const patch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -188,6 +192,9 @@ suite.define(() => {
         archived: true,
         key: "agent:main:research",
       });
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.abort")).toEqual([]);
+      expect(await gateway.getRequests("agent.wait")).toEqual([]);
     } finally {
       await context.close();
     }
@@ -196,7 +203,7 @@ suite.define(() => {
   // Batch archiving used to serialize one sessions.patch transaction per row.
   // The whole selection now crosses the Gateway once and settles from one list.
 
-  it("archives a sidebar multi-select in one RPC and surfaces ordered partial failures", async () => {
+  it("archives a mixed active and idle sidebar multi-select in one RPC", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -210,20 +217,14 @@ suite.define(() => {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", baseTime),
           sessionRow(batchKeys[0], "Batch A", baseTime - 1_000),
-          sessionRow(batchKeys[1], "Batch B", baseTime - 2_000),
+          sessionRow(batchKeys[1], "Batch B", baseTime - 2_000, {
+            hasActiveRun: true,
+            status: "running",
+          }),
           sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
         ]),
         "sessions.patchMany": {
-          outcomes: [
-            { ok: true, key: batchKeys[0], agentId: "main" },
-            {
-              ok: false,
-              key: batchKeys[1],
-              agentId: "main",
-              error: { code: "INVALID_REQUEST", message: "active run" },
-            },
-            { ok: true, key: batchKeys[2], agentId: "main" },
-          ],
+          outcomes: batchKeys.map((key) => ({ ok: true, key, agentId: "main" })),
         },
       },
       sessionArchiveFiltering: true,
@@ -248,8 +249,12 @@ suite.define(() => {
       const batchMenu = page.locator("openclaw-session-menu");
       const archiveItem = batchMenu.getByRole("menuitem", { name: `Archive ${batchKeys.length}` });
       await archiveItem.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await archiveItem.isDisabled()).toBe(false);
+      expect(
+        await batchMenu.getByRole("menuitem", { name: `Delete ${batchKeys.length}…` }).isDisabled(),
+      ).toBe(true);
       await captureUiProof(page, "sidebar-multi-select-archive-menu.png");
-      await activateMenuItem(archiveItem);
+      await page.keyboard.press("A");
 
       const patchMany = await gateway.waitForRequest("sessions.patchMany");
       const patchManyParams = requireRecord(patchMany.params);
@@ -258,18 +263,18 @@ suite.define(() => {
         (patchManyParams.targets as Array<{ key: string }>).map((target) => target.key),
       ).toEqual([...batchKeys]);
       expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+      expect(await gateway.getRequests("sessions.abort")).toEqual([]);
+      expect(await gateway.getRequests("agent.wait")).toEqual([]);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 10_000 })
         .toBe(listCountBeforeBatch + 1);
-      await rowFor(batchKeys[0]).waitFor({ state: "detached" });
-      await rowFor(batchKeys[2]).waitFor({ state: "detached" });
-      await rowFor(batchKeys[1]).waitFor({ state: "visible" });
-      const error = page.locator("[data-sidebar-session-error]");
-      await error.waitFor({ state: "visible" });
-      await expect.poll(() => error.textContent()).toContain(`${batchKeys[1]}: active run`);
+      for (const key of batchKeys) {
+        await rowFor(key).waitFor({ state: "detached" });
+      }
+      await expect.poll(() => page.locator("[data-sidebar-session-error]").count()).toBe(0);
       await expect
         .poll(() => page.locator(".app-toast").textContent())
-        .toContain("Archived 2 sessions");
+        .toContain("Archived 3 sessions");
       await captureUiProof(page, "sidebar-multi-select-archive-settled.png");
       await page.waitForTimeout(500);
       expect((await gateway.getRequests("sessions.list")).length).toBe(listCountBeforeBatch + 1);

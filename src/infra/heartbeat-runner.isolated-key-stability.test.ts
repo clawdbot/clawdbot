@@ -262,9 +262,9 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         .mockResolvedValueOnce({ text: "Relay this cron update now" })
         .mockResolvedValueOnce({ text: "HEARTBEAT_OK" });
 
-      enqueueSystemEvent("Cron: QMD maintenance completed", {
+      enqueueSystemEvent("Cron: memory maintenance completed", {
         sessionKey: baseSessionKey,
-        contextKey: "cron:qmd-maintenance",
+        contextKey: "cron:memory-maintenance",
       });
 
       await runHeartbeatOnce({
@@ -295,9 +295,9 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
 
       expect(firstCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
       expect(firstCtx.Provider).toBe("cron-event");
-      expect(firstCtx.Body).toContain("Cron: QMD maintenance completed");
+      expect(firstCtx.Body).toContain("Cron: memory maintenance completed");
       expect(secondCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
-      expect(secondCtx.Body).not.toContain("Cron: QMD maintenance completed");
+      expect(secondCtx.Body).not.toContain("Cron: memory maintenance completed");
     });
   });
 

@@ -41,7 +41,7 @@ import {
 } from "./thread-fingerprints.js";
 import {
   CodexAdoptedThreadActiveError,
-  CodexRingZeroAttestationError,
+  CodexRestrictedToolSurfaceAttestationError,
   CodexThreadBindingConflictError,
   CodexThreadStartRequestError,
 } from "./thread-lifecycle-errors.js";
@@ -55,7 +55,7 @@ import {
   resolveCodexAppServerThreadModelSelection,
 } from "./thread-model-selection.js";
 import {
-  attestCodexRingZeroThreadHasNoMcpServers,
+  attestCodexRestrictedToolSurfaceMcpServersDisabled,
   buildThreadResumeParams,
   buildThreadStartParams,
 } from "./thread-requests.js";
@@ -78,7 +78,7 @@ type ThreadRequestContext = {
   environmentSelectionFingerprint?: string;
   hostSystemAgentActive: boolean;
   ringZeroActive: boolean;
-  ringZeroInheritedMcpServerNames: string[];
+  restrictedToolSurfaceInheritedMcpServerNames: string[];
   nativeSkillIsolation?: CodexNativeSkillIsolation;
   lifecycleTiming: CodexThreadLifecycleTimingTracker;
   normalizeBindingModelProvider: (
@@ -139,7 +139,7 @@ export async function resumeExistingCodexThread(
     environmentSelectionFingerprint,
     hostSystemAgentActive,
     ringZeroActive,
-    ringZeroInheritedMcpServerNames,
+    restrictedToolSurfaceInheritedMcpServerNames,
     nativeSkillIsolation,
     lifecycleTiming,
     normalizeBindingModelProvider,
@@ -191,7 +191,7 @@ export async function resumeExistingCodexThread(
         nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
         webSearchAllowed: params.webSearchAllowed,
         hostSystemAgentActive,
-        ringZeroInheritedMcpServerNames,
+        restrictedToolSurfaceInheritedMcpServerNames,
       }),
     );
     const requestModelProvider =
@@ -226,18 +226,23 @@ export async function resumeExistingCodexThread(
         signal: params.signal,
       }),
     );
-    if (ringZeroActive || isMessageOnlyCodexSourceReply(params.params)) {
+    if (
+      ringZeroActive ||
+      isMessageOnlyCodexSourceReply(params.params) ||
+      params.params.pluginHarnessToolPolicyRestricted === true
+    ) {
       try {
-        await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
-          attestCodexRingZeroThreadHasNoMcpServers(
+        await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
+          attestCodexRestrictedToolSurfaceMcpServersDisabled(
             params.client,
             response.thread.id,
+            resumeParams.config,
             params.signal,
           ),
         );
       } catch (error) {
         await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
-        throw new CodexRingZeroAttestationError(error);
+        throw new CodexRestrictedToolSurfaceAttestationError(error);
       }
     }
     throwIfAborted();
@@ -348,8 +353,8 @@ export async function resumeExistingCodexThread(
     if (isCodexAppServerStartSelectionChangedError(error)) {
       throw error;
     }
-    if (error instanceof CodexRingZeroAttestationError) {
-      await clearCurrentBinding("retiring a failed ring-zero thread attestation");
+    if (error instanceof CodexRestrictedToolSurfaceAttestationError) {
+      await clearCurrentBinding("retiring a failed restricted-tool-surface attestation");
       throw error;
     }
     if (error instanceof CodexAdoptedThreadActiveError) {
@@ -415,7 +420,7 @@ export async function startFreshCodexThread(
     environmentSelectionFingerprint,
     hostSystemAgentActive,
     ringZeroActive,
-    ringZeroInheritedMcpServerNames,
+    restrictedToolSurfaceInheritedMcpServerNames,
     nativeSkillIsolation,
     lifecycleTiming,
     normalizeBindingModelProvider,
@@ -461,7 +466,7 @@ export async function startFreshCodexThread(
       model: startModelSelection.model,
       modelProvider: startModelProvider,
       hostSystemAgentActive,
-      ringZeroInheritedMcpServerNames,
+      restrictedToolSurfaceInheritedMcpServerNames,
     }),
   );
   const requestModelProvider =
@@ -509,10 +514,19 @@ export async function startFreshCodexThread(
     }
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
-  if (ringZeroActive || isMessageOnlyCodexSourceReply(params.params)) {
+  if (
+    ringZeroActive ||
+    isMessageOnlyCodexSourceReply(params.params) ||
+    params.params.pluginHarnessToolPolicyRestricted === true
+  ) {
     try {
-      await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
-        attestCodexRingZeroThreadHasNoMcpServers(params.client, response.thread.id, params.signal),
+      await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
+        attestCodexRestrictedToolSurfaceMcpServersDisabled(
+          params.client,
+          response.thread.id,
+          startParams.config,
+          params.signal,
+        ),
       );
     } catch (error) {
       await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();

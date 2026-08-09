@@ -142,7 +142,6 @@ describe("resolveGatewayConnection", () => {
       "OPENCLAW_GATEWAY_PORT",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
-      "OPENCLAW_TUI_SETUP_AUTH_SOURCE",
     ]);
     loadConfig.mockReset();
     loadDeviceIdentityIfPresentMock.mockReset().mockReturnValue(null);
@@ -163,7 +162,6 @@ describe("resolveGatewayConnection", () => {
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.OPENCLAW_TUI_SETUP_AUTH_SOURCE;
   });
 
   afterEach(() => {
@@ -182,7 +180,7 @@ describe("resolveGatewayConnection", () => {
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_URL: "wss://env.example/ws",
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        OPENCLAW_GATEWAY_TOKEN: "bound-global-shell-auth",
       },
       async () => {
         const result = resolveBoundGatewayConnection({
@@ -213,7 +211,7 @@ describe("resolveGatewayConnection", () => {
       gateway: { mode: "local", auth: { token: "configured-token" } },
     });
 
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
+    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "override-shell-auth" }, async () => {
       await expect(
         resolveGatewayConnection({ url: "wss://override.example/ws/?ignored=1" }),
       ).rejects.toThrow(/pass --token or --password once to request pairing/i);
@@ -263,6 +261,29 @@ describe("resolveGatewayConnection", () => {
       deviceAuthScope: "wss://override.example/ws",
       ...expected,
       preauthHandshakeTimeoutMs: undefined,
+    });
+  });
+
+  it("keeps explicit URL auth ahead of ambiguous configured local auth", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: {
+          token: "config-token",
+          password: "ambiguous-local-pass-value", // pragma: allowlist secret
+        },
+      },
+    });
+
+    await expect(
+      resolveGatewayConnection({
+        url: "wss://override.example/ws",
+        token: "explicit-token",
+      }),
+    ).resolves.toMatchObject({
+      url: "wss://override.example/ws",
+      token: "explicit-token",
+      password: undefined,
     });
   });
 
@@ -326,7 +347,7 @@ describe("resolveGatewayConnection", () => {
   it("uses config auth token for local mode when both config and env tokens are set", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", auth: { token: "config-token" } } });
 
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
+    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "local-competing-shell-auth" }, async () => {
       const result = await resolveGatewayConnection({});
       expect(result.token).toBe("config-token");
     });
@@ -335,9 +356,9 @@ describe("resolveGatewayConnection", () => {
   it("falls back to OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
 
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
+    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "local-shell-fallback-auth" }, async () => {
       const result = await resolveGatewayConnection({});
-      expect(result.token).toBe("env-token");
+      expect(result.token).toBe("local-shell-fallback-auth");
     });
   });
 
@@ -346,13 +367,13 @@ describe("resolveGatewayConnection", () => {
       gateway: {
         mode: "local",
         auth: {
-          password: "config-password", // pragma: allowlist secret
+          password: "implicit-local-pass-value", // pragma: allowlist secret
         },
       },
     });
 
     const result = await resolveGatewayConnection({});
-    expect(result.password).toBe("config-password");
+    expect(result.password).toBe("implicit-local-pass-value");
     expect(result.token).toBeUndefined();
   });
 
@@ -362,41 +383,18 @@ describe("resolveGatewayConnection", () => {
         mode: "local",
         auth: {
           mode: "password",
-          password: "config-password", // pragma: allowlist secret
+          password: "local-config-pass-value", // pragma: allowlist secret
         },
       },
     });
 
-    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "env-password" }, async () => {
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "local-shell-pass-value" }, async () => {
       const result = await resolveGatewayConnection({});
-      expect(result.password).toBe("config-password");
+      expect(result.password).toBe("local-config-pass-value");
     });
   });
 
-  it("uses configured local password for setup-launched TUI despite stale gateway password env", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        auth: {
-          mode: "password",
-          password: "config-password", // pragma: allowlist secret
-        },
-      },
-    });
-
-    await withEnvAsync(
-      {
-        OPENCLAW_GATEWAY_PASSWORD: "stale-env-password", // pragma: allowlist secret
-        OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
-      },
-      async () => {
-        const result = await resolveGatewayConnection({});
-        expect(result.password).toBe("config-password");
-      },
-    );
-  });
-
-  it("still resolves env SecretRefs for setup-launched TUI config auth", async () => {
+  it("resolves env SecretRefs for TUI config auth", async () => {
     loadConfig.mockReturnValue({
       secrets: {
         providers: {
@@ -412,16 +410,10 @@ describe("resolveGatewayConnection", () => {
       },
     });
 
-    await withEnvAsync(
-      {
-        OPENCLAW_GATEWAY_PASSWORD: "resolved-ref-password", // pragma: allowlist secret
-        OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
-      },
-      async () => {
-        const result = await resolveGatewayConnection({});
-        expect(result.password).toBe("resolved-ref-password");
-      },
-    );
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "resolved-ref-password" }, async () => {
+      const result = await resolveGatewayConnection({});
+      expect(result.password).toBe("resolved-ref-password");
+    });
   });
 
   it("fails when both local token and password are configured but gateway.auth.mode is unset", async () => {
@@ -430,7 +422,7 @@ describe("resolveGatewayConnection", () => {
         mode: "local",
         auth: {
           token: "config-token",
-          password: "config-password", // pragma: allowlist secret
+          password: "ambiguous-mode-pass-value", // pragma: allowlist secret
         },
       },
     });
@@ -476,7 +468,11 @@ describe("resolveGatewayConnection", () => {
     loadConfig.mockReturnValue({
       gateway: {
         mode: "remote",
-        remote: { url: "wss://remote.example/ws", token: "remote-token", password: "remote-pass" }, // pragma: allowlist secret
+        remote: {
+          url: "wss://remote.example/ws",
+          token: "remote-password-case-auth",
+          password: "remote-pass",
+        }, // pragma: allowlist secret
       },
     });
 
@@ -512,30 +508,6 @@ describe("resolveGatewayConnection", () => {
     });
 
     await expect(resolveGatewayConnection({})).rejects.toThrow("Missing gateway auth credentials.");
-  });
-
-  it("uses configured remote password for setup-launched TUI despite stale gateway env", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        mode: "remote",
-        remote: {
-          url: "wss://remote.example/ws",
-          password: "configured-remote-password", // pragma: allowlist secret
-        },
-      },
-    });
-
-    await withEnvAsync(
-      {
-        OPENCLAW_GATEWAY_PASSWORD: "stale-env-password", // pragma: allowlist secret
-        OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
-      },
-      async () => {
-        const result = await resolveGatewayConnection({});
-        expect(result.token).toBeUndefined();
-        expect(result.password).toBe("configured-remote-password");
-      },
-    );
   });
 
   it.runIf(process.platform !== "win32")(

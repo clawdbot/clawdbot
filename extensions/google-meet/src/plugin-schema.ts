@@ -26,7 +26,7 @@ export const googleMeetConfigSchema = {
     },
     "chrome.audioBackend": {
       label: "Chrome Audio Backend",
-      help: "BlackHole 2ch is required for local duplex audio routing.",
+      help: "Auto selects BlackHole 2ch on macOS or PipeWire-Pulse on Linux.",
     },
     "chrome.launch": { label: "Launch Chrome" },
     "chrome.browserProfile": { label: "Chrome Profile", advanced: true },
@@ -54,7 +54,7 @@ export const googleMeetConfigSchema = {
     },
     "chrome.audioBufferBytes": {
       label: "Audio Buffer Bytes",
-      help: "SoX processing buffer for generated Chrome command-pair audio commands. Lower values reduce latency but may underrun on busy hosts.",
+      help: "Processing buffer for generated Chrome command-pair audio. Lower values reduce latency but may underrun on busy hosts.",
       advanced: true,
     },
     "chrome.audioInputCommand": {
@@ -94,7 +94,7 @@ export const googleMeetConfigSchema = {
     },
     "chromeNode.node": {
       label: "Chrome Node",
-      help: "Node id/name/IP that owns Chrome, BlackHole, and SoX for chrome-node transport.",
+      help: "Node id/name/IP that owns Chrome and the native virtual-audio backend for chrome-node transport.",
       advanced: true,
     },
     "twilio.defaultDialInNumber": {

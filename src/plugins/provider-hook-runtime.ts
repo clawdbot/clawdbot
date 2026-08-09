@@ -43,7 +43,6 @@ type ProviderRuntimePluginLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
-  bundledProviderVitestCompat?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
 
@@ -76,7 +75,6 @@ function resolveProviderRuntimePluginCacheKey(
     models: params.config?.models?.providers,
     workspaceDir: params.workspaceDir ?? "",
     applyAutoEnable: params.applyAutoEnable ?? null,
-    bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
     pluginMetadata:
       params.pluginMetadataSnapshot?.manifestRegistry.plugins
         .map((plugin) => plugin.id)
@@ -189,7 +187,6 @@ export function resolveProviderPluginsForHooks(params: {
   providerRefs?: readonly string[];
   modelRefs?: readonly string[];
   applyAutoEnable?: boolean;
-  bundledProviderVitestCompat?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
@@ -200,7 +197,6 @@ export function resolveProviderPluginsForHooks(params: {
     env,
     activate: false,
     applyAutoEnable: params.applyAutoEnable,
-    bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
     skipIfLoadInFlight: true,
   });
 }
@@ -231,7 +227,6 @@ export function resolveProviderRuntimePlugin(
       providerRefs,
       activate: false,
       applyAutoEnable: params.applyAutoEnable,
-      bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
     })
   ) {
     return undefined;
@@ -249,7 +244,6 @@ export function resolveProviderRuntimePlugin(
         providerRefs: lookupScope.providerRefs,
         modelRefs: lookupScope.modelRefs,
         applyAutoEnable: params.applyAutoEnable,
-        bundledProviderVitestCompat: params.bundledProviderVitestCompat,
         pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       }).find((plugin) => {
         if (apiOwnerHint) {
@@ -351,7 +345,6 @@ export function ensureProviderRuntimePluginHandle(
       workspaceDir: params.workspaceDir ?? params.runtimeHandle?.workspaceDir,
       env: params.env ?? params.runtimeHandle?.env,
       applyAutoEnable: params.runtimeHandle?.applyAutoEnable,
-      bundledProviderVitestCompat: params.runtimeHandle?.bundledProviderVitestCompat,
       pluginMetadataSnapshot:
         params.pluginMetadataSnapshot ?? params.runtimeHandle?.pluginMetadataSnapshot,
     });

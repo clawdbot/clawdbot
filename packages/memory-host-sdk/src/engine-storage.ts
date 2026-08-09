@@ -34,11 +34,7 @@ export {
 } from "./host/read-file-shared.js";
 export { resolveMemoryBackendConfig } from "./host/backend-config.js";
 export { resolveMemorySearchStaleness } from "./host/types.js";
-export type {
-  ResolvedMemoryBackendConfig,
-  ResolvedQmdConfig,
-  ResolvedQmdMcporterConfig,
-} from "./host/backend-config.js";
+export type { ResolvedMemoryBackendConfig } from "./host/backend-config.js";
 export type {
   MemoryEmbeddingProbeResult,
   MemoryEntryProvenance,

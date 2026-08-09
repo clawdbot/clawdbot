@@ -19,7 +19,7 @@ import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
-import { ChatPaneHeader } from "./chat-pane-header.ts";
+import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   createChatPaneSessionActionCallbacks,
   readChatPaneMutationAccess,
@@ -74,7 +74,7 @@ import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
-export class ChatPane extends ChatPaneHeader {
+export class ChatPane extends ChatPaneBrowserAnnotationRender {
   override render() {
     const state = this.state;
     if (!state) {
@@ -407,7 +407,8 @@ export class ChatPane extends ChatPaneHeader {
             state,
             selectedSession,
             agentDefaultModel,
-            mutationAccess: mutationAccess.runtimePatch,
+            modelAccess: mutationAccess.model,
+            effortAccess: mutationAccess.effort,
             preferencesBrowserOnly:
               this.context.runtimeConfig.state.connected &&
               this.context.runtimeConfig.canPatch === false,
@@ -445,10 +446,13 @@ export class ChatPane extends ChatPaneHeader {
         void this.resolveCurrentSessionSuggestion(suggestion, resolution),
       canAcceptTaskSuggestions:
         state.connected &&
-        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.accept") === true,
       canDismissTaskSuggestions:
         state.connected &&
-        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.dismiss") ===
+          true,
       onAcceptTaskSuggestion: (suggestion) => void this.acceptTaskSuggestion(suggestion),
       onDismissTaskSuggestion: (suggestion) => void this.dismissTaskSuggestion(suggestion),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
@@ -483,6 +487,7 @@ export class ChatPane extends ChatPaneHeader {
         state.chatAttachments = next;
         state.requestUpdate?.();
       },
+      onRemoveAttachment: this.removeBrowserAnnotation,
       onSend: () =>
         catalogKey
           ? void this.continueCatalogSession(catalogKey)

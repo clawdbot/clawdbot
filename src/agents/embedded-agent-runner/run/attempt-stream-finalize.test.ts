@@ -12,6 +12,7 @@ vi.mock("./attempt-stream-settle.js", () => ({
   settleEmbeddedAttemptStream: mocks.settleStream,
 }));
 
+import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
 import { SessionManager } from "../../sessions/index.js";
 import { finalizeEmbeddedAttemptStreamPhase } from "./attempt-stream-finalize.js";
 
@@ -102,6 +103,66 @@ beforeEach(() => {
 });
 
 describe("finalizeEmbeddedAttemptStreamPhase", () => {
+  it("does not settle a provider failure before partial presentation finishes", async () => {
+    let resolvePartial: (() => void) | undefined;
+    const onPartialReply = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvePartial = resolve;
+        }),
+    );
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-partial-provider-failure",
+      onBeforeTerminalDelivery: async () => undefined,
+      onPartialReply,
+    });
+    const failedAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "partial answer" }],
+      stopReason: "error",
+      errorMessage: "provider failed after partial",
+      provider: "test-provider",
+      model: "test-model",
+    };
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "partial answer" },
+    });
+    emit({ type: "message_end", message: failedAssistant });
+    emit({ type: "agent_end", messages: [failedAssistant], willRetry: false });
+
+    const fixture = createFixture({
+      waitForPendingEvents: subscription.waitForPendingEvents,
+      getBeforeAgentFinalizeRevisionReason: () => undefined,
+    });
+    mocks.settleStream.mockResolvedValue({
+      promptError: new Error("provider failed after partial"),
+      promptErrorSource: "prompt",
+      timedOutDuringCompaction: false,
+      compactionOccurredThisAttempt: false,
+      messagesSnapshot: [failedAssistant],
+      sessionIdUsed: "session-1",
+      lastAssistant: failedAssistant,
+      currentAttemptAssistant: failedAssistant,
+      currentAttemptCompletedAssistant: failedAssistant,
+      attemptUsage: undefined,
+      cacheBreak: null,
+      lastCallUsage: undefined,
+      promptCache: undefined,
+    });
+    mocks.completeAfterTurn.mockResolvedValue({ sessionIdUsed: "session-1" });
+
+    const finalize = finalizeEmbeddedAttemptStreamPhase(fixture.input);
+    await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(mocks.settleStream).not.toHaveBeenCalled();
+
+    resolvePartial?.();
+    await finalize;
+    expect(mocks.settleStream).toHaveBeenCalledOnce();
+  });
+
   it("rewinds the exact rejected branch before the hidden retry can choose NO_REPLY", async () => {
     const sessionManager = SessionManager.inMemory();
     const promptId = sessionManager.appendMessage({

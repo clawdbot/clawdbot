@@ -354,6 +354,14 @@ receipt_matches() {
     node -e '${VERIFY_INSTALL_JS}' "$install_dir" "$hash" "$install"
 }
 
+finish_with_receipt() {
+  # A durable receipt makes retries independent of this operation's upload.
+  rm -f -- "$upload"
+  printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' receipt
+  cat "$receipt"
+  printf '\n'
+}
+
 read_lock_owner() {
   if [ -L "$lock" ]; then
     readlink "$lock" 2>/dev/null || true
@@ -365,9 +373,7 @@ read_lock_owner() {
 attempt=0
 while ! ln -s "$lock_identity" "$lock" 2>/dev/null; do
   if receipt_matches; then
-    printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' receipt
-    cat "$receipt"
-    printf '\n'
+    finish_with_receipt
     exit 0
   fi
   owner=$(read_lock_owner)
@@ -442,9 +448,7 @@ for stale_staging in "$root"/.staging-"$hash"-*; do
 done
 
 if receipt_matches; then
-  printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' receipt
-  cat "$receipt"
-  printf '\n'
+  finish_with_receipt
   exit 0
 fi
 
@@ -506,9 +510,7 @@ printf '%s\n' "$receipt_json" > "$staging/${BOOTSTRAP_RECEIPT}"
 chmod 600 "$staging/${BOOTSTRAP_RECEIPT}"
 rm -rf "$install_dir"
 mv "$staging" "$install_dir"
-printf '%s\t%s\t' '${BOOTSTRAP_OUTPUT_TAG}' receipt
-cat "$receipt"
-printf '\n'
+finish_with_receipt
 `;
 
 type ResolvedWorkerSshIdentity = WorkerSshIdentity;

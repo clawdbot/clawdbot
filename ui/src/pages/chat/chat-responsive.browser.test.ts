@@ -487,7 +487,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                             <div class="context-usage__limits">
                               <div class="context-usage__limit">
                                 <div class="context-usage__limit-head">
-                                  <span class="context-usage__limit-label">Weekly · all models</span>
+                                  <span class="context-usage__limit-label">Weekly</span>
                                   <span class="context-usage__limit-meta"><strong>72%</strong></span>
                                 </div>
                                 <div class="context-usage__limit-bar"><span style="width: 72%"></span></div>
@@ -823,7 +823,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("pins the collapsed session rail to the pane header edge", async () => {
+  it("insets the collapsed session rail from the pane header edge", async () => {
     const page = await openBrowserPage(922, 282);
     try {
       const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
@@ -846,7 +846,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const header = await getBoundingBox(page, ".chat-pane__header");
       const observer = await getBoundingBox(page, ".chat-session-rail");
 
-      expect(observer.y).toBeCloseTo(header.y + header.height, 0);
+      expect(observer.y).toBeCloseTo(header.y + header.height + 12, 0);
     } finally {
       await closeBrowserPage(page);
     }

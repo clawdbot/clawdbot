@@ -61,6 +61,7 @@ export type SteerSendDependencies = {
       runId: string;
       expectedRunId?: string;
       expectedLeafEntryId?: string | null;
+      replyToId?: string;
     },
   ) => Promise<SteerChatSendResult>;
 };
@@ -338,6 +339,7 @@ export async function sendQueuedChatMessageWithQueueMode(
     text: item.text,
     createdAt: item.createdAt,
     attachments: item.attachments,
+    replyToId: item.replyToId,
     sendRunId: claimed.sendRunId,
     sessionKey: claimed.sessionKey,
     agentId: claimed.agentId,
@@ -370,6 +372,7 @@ export async function sendQueuedChatMessageWithQueueMode(
     {
       canApplyError: () => visibleSessionMatches(host, itemSessionKey, item.agentId),
       ...(queueMode ? { queueMode } : {}),
+      ...(claimed.replyToId ? { replyToId: claimed.replyToId } : {}),
       ...(steerTarget
         ? {
             expectedRunId: steerTarget.runId,

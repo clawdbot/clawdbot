@@ -3,7 +3,6 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
-import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
@@ -167,14 +166,6 @@ function toManifestOwnerRecord(plugin: PluginRegistryRecord) {
     origin: plugin.origin,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
   };
-}
-
-export function withBundledProviderVitestCompat(params: {
-  config: PluginLoadOptions["config"];
-  pluginIds: readonly string[];
-  env?: PluginLoadOptions["env"];
-}): PluginLoadOptions["config"] {
-  return withBundledPluginVitestCompat(params);
 }
 
 export function resolveBundledProviderCompatPluginIds(params: {

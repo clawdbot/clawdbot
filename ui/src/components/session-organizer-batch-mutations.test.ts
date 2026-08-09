@@ -33,7 +33,7 @@ function createHarness(
 ) {
   let current = params.current ?? true;
   let requestCount = 0;
-  const request = vi.fn(async (_method: string, rawParams?: unknown) => {
+  const request = vi.fn(async (_method: string, rawParams?: unknown, _options?: unknown) => {
     const patchParams = rawParams as SessionsPatchManyParams;
     const requestFailure = params.requestFailure;
     requestCount += 1;
@@ -112,6 +112,10 @@ describe("patchSessionRows", () => {
     );
 
     expect(harness.request).toHaveBeenCalledTimes(2);
+    expect(harness.request.mock.calls.map((call) => call[2])).toEqual([
+      { timeoutMs: 10 * 60_000 },
+      { timeoutMs: 10 * 60_000 },
+    ]);
     expect(harness.request.mock.calls.map(([, params]) => params)).toEqual([
       {
         targets: rows.slice(0, 100).map((row) => ({ key: row.key, agentId: "main" })),
@@ -206,10 +210,16 @@ describe("patchSessionRows", () => {
       ).resolves.toBe(fallbackRows);
 
       expect(harness.request).toHaveBeenCalledOnce();
-      expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
-        targets: [{ key: rows[0]!.key, agentId: "main" }],
-        patch: { archived },
-      });
+      const requestCall = harness.request.mock.calls[0]!;
+      expect(requestCall.slice(0, 2)).toEqual([
+        "sessions.patchMany",
+        {
+          targets: [{ key: rows[0]!.key, agentId: "main" }],
+          patch: { archived },
+        },
+      ]);
+      expect(requestCall).toHaveLength(archived ? 3 : 2);
+      expect(requestCall[2]).toEqual(archived ? { timeoutMs: 10 * 60_000 } : undefined);
       expect(fallback).toHaveBeenCalledOnce();
       expect(harness.refreshReplacement).not.toHaveBeenCalled();
       expect(harness.publishSessionMutationError).not.toHaveBeenCalled();

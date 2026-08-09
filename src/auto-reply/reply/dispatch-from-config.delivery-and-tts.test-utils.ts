@@ -11,6 +11,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -38,7 +39,8 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
-import { usesFullReplyRuntime, usesPublishedReplyRuntime } from "./reply-config-runtime-mode.js";
+import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -970,32 +972,53 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "msteams", Surface: "msteams" });
-    setRuntimeConfigSnapshot({
+    const runtimeCfg = {
       agents: { defaults: { userTimezone: "UTC" } },
       messages: { suppressToolErrors: true },
-    });
+    } satisfies OpenClawConfig;
+    const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
+    const preparedLookup = vi
+      .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockResolvedValue(
+        Object.freeze({
+          agentId: "main",
+          agentDir: "/tmp/prepared-agent",
+          workspaceDir: "/tmp/prepared-workspace",
+          config: runtimeCfg,
+          modelCatalog: { entries: [], routeVariants: [] },
+          inboundPluginRegistry: createTestRegistry([]),
+        }),
+      );
 
     const overrideCfg = {
       agents: { defaults: { userTimezone: "America/New_York" } },
     } as OpenClawConfig;
 
     let receivedCfg: OpenClawConfig | undefined;
+    let receivedPreparedRuntime: unknown;
     const replyResolver = async (
       _ctx: MsgContext,
       _opts?: GetReplyOptions,
       cfgArg?: OpenClawConfig,
+      preparedRuntime?: unknown,
     ) => {
       receivedCfg = cfgArg;
+      receivedPreparedRuntime = preparedRuntime;
       return { text: "hi" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      configOverride: overrideCfg,
-    });
+    try {
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver,
+        configOverride: overrideCfg,
+        usePublishedModelRuntime: true,
+      });
+    } finally {
+      preparedLookup.mockRestore();
+    }
 
     expect(receivedCfg).not.toBe(cfg);
     expect(receivedCfg).not.toBe(overrideCfg);
@@ -1003,6 +1026,7 @@ describe("dispatchReplyFromConfig", () => {
       agents: { defaults: { userTimezone: "America/New_York" } },
       messages: { suppressToolErrors: true },
     });
+    expect(receivedPreparedRuntime).toBeUndefined();
   });
 
   it("keeps the caller config exact before a runtime snapshot is published", async () => {
@@ -1024,10 +1048,9 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(receivedCfg).toBe(cfg);
     expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
-    expect(usesPublishedReplyRuntime(receivedCfg)).toBe(false);
   });
 
-  it("marks the committed runtime snapshot for published-owner reply resolution", async () => {
+  it("does not independently reread the committed runtime config snapshot", async () => {
     setNoAbort();
     const runtimeCfg = {
       agents: { defaults: { userTimezone: "America/New_York" } },
@@ -1045,11 +1068,12 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
-    expect(receivedCfg).toBe(runtimeCfg);
-    expect(usesPublishedReplyRuntime(receivedCfg)).toBe(true);
+    expect(receivedCfg).toBe(emptyConfig);
+    expect(receivedCfg).not.toBe(runtimeCfg);
+    expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
   });
 
-  it("marks a channel-captured config for published-owner resolution before a snapshot exists", async () => {
+  it("keeps a channel-captured config full when no prepared runtime exists", async () => {
     setNoAbort();
     const cfg = {
       agents: { defaults: { userTimezone: "America/Los_Angeles" } },
@@ -1068,7 +1092,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(receivedCfg).toBe(cfg);
-    expect(usesPublishedReplyRuntime(receivedCfg)).toBe(true);
+    expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
   });
 
   it("drops a removed Firecrawl SecretRef from Discord replies after config reload", async () => {
@@ -1093,7 +1117,19 @@ describe("dispatchReplyFromConfig", () => {
     const runtimeCfg = {
       agents: { defaults: { userTimezone: "America/Edmonton" } },
     } as OpenClawConfig;
-    setRuntimeConfigSnapshot(runtimeCfg);
+    const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
+    const preparedLookup = vi
+      .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockResolvedValue(
+        Object.freeze({
+          agentId: "main",
+          agentDir: "/tmp/prepared-agent",
+          workspaceDir: "/tmp/prepared-workspace",
+          config: runtimeCfg,
+          modelCatalog: { entries: [], routeVariants: [] },
+          inboundPluginRegistry: createTestRegistry([]),
+        }),
+      );
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
 
@@ -1103,14 +1139,24 @@ describe("dispatchReplyFromConfig", () => {
       _opts?: GetReplyOptions,
       cfgArg?: OpenClawConfig,
     ) => {
-      receivedCfg = cfgArg;
-      if (cfgArg?.plugins?.entries?.firecrawl) {
+      receivedCfg = getPreparedReplyDispatchRuntime()?.config ?? cfgArg;
+      if (receivedCfg?.plugins?.entries?.firecrawl) {
         throw new Error("stale Firecrawl SecretRef reached reply resolution");
       }
       return { text: "hi" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    try {
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver,
+        usePublishedModelRuntime: true,
+      });
+    } finally {
+      preparedLookup.mockRestore();
+    }
 
     expect(receivedCfg).toBe(runtimeCfg);
     expect(receivedCfg?.plugins?.entries?.firecrawl).toBeUndefined();

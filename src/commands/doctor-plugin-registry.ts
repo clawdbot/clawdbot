@@ -37,6 +37,7 @@ import {
 } from "./doctor-plugin-host-links.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
+  InvalidPluginInstallRecordStateError,
   migratePluginRegistryForInstall,
   preflightPluginRegistryInstallMigration,
   type PluginRegistryInstallMigrationParams,
@@ -584,7 +585,16 @@ function assertNeverPluginRegistryIssue(issue: never): never {
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryDoctorRepairResult> {
-  const preflight = preflightPluginRegistryInstallMigration(params);
+  let preflight: ReturnType<typeof preflightPluginRegistryInstallMigration>;
+  try {
+    preflight = preflightPluginRegistryInstallMigration(params);
+  } catch (error) {
+    if (!(error instanceof InvalidPluginInstallRecordStateError)) {
+      throw error;
+    }
+    note(error.message, "Plugin registry");
+    return { config: params.config };
+  }
 
   const migrationParams = {
     ...params,

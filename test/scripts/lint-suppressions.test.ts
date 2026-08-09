@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectLintDisableDirectives,
   isMaxLinesRule,
-} from "../../scripts/check-max-lines-ratchet.mjs";
+} from "../../scripts/check-max-lines-ratchet.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 
@@ -198,8 +198,6 @@ describe("production lint suppressions", () => {
         "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/qa-lab/src/gateway-child.ts|preserve-caught-error|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
-        "scripts/changed-lanes.mjs|typescript/no-base-to-string|2",
-        "scripts/changed-lanes.mjs|typescript/restrict-template-expressions|2",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
@@ -225,7 +223,6 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/facade-runtime.ts|typescript/no-unnecessary-type-parameters|3",
         "src/plugin-sdk/json-store.ts|typescript-eslint/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/qa-runner-runtime.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/plugin-sdk/test-helpers/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",

@@ -2178,6 +2178,7 @@ async function runSerializedClaudeLiveSessionTurn(
   const replyBackendHandle: ReplyBackendHandle | undefined = params.context.params.replyOperation
     ? {
         kind: "cli",
+        runId: params.context.params.runId,
         cancel: abort,
       }
     : undefined;

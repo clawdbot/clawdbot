@@ -734,25 +734,28 @@ describe("applySubagentWaitOutcome", () => {
     });
   });
 
-  it("keeps explicit cancellation distinct from timeout outcomes", () => {
-    const applied = applySubagentWaitOutcome({
-      wait: {
-        status: "timeout",
+  it.each(["rpc", "superseded"] as const)(
+    "keeps explicit %s cancellation distinct from timeout outcomes",
+    (stopReason) => {
+      const applied = applySubagentWaitOutcome({
+        wait: {
+          status: "timeout",
+          startedAt: 100,
+          endedAt: 150,
+          stopReason,
+        },
+        outcome: undefined,
+      });
+
+      expect(applied.outcome).toEqual({
+        status: "error",
+        error: "subagent run terminated",
         startedAt: 100,
         endedAt: 150,
-        stopReason: "rpc",
-      },
-      outcome: undefined,
-    });
-
-    expect(applied.outcome).toEqual({
-      status: "error",
-      error: "subagent run terminated",
-      startedAt: 100,
-      endedAt: 150,
-      elapsedMs: 50,
-    });
-  });
+        elapsedMs: 50,
+      });
+    },
+  );
 
   it("treats aborted ok wait snapshots as terminated subagent errors", () => {
     const applied = applySubagentWaitOutcome({

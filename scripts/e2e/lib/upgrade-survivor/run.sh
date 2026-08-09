@@ -812,7 +812,7 @@ seed_state() {
 }
 
 apply_baseline_config_recipe() {
-  node scripts/e2e/lib/upgrade-survivor/config-recipe.mjs apply \
+  node --import tsx scripts/e2e/lib/upgrade-survivor/config-recipe.mts apply \
     --summary "$CONFIG_COVERAGE_JSON" \
     --baseline-version "$baseline_version"
 }

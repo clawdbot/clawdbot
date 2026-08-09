@@ -96,6 +96,7 @@ export async function resolveAgentRuntimeConfig(
           config: sourceConfig,
           assignmentConfig: cfg,
           includeConfigRefs: false,
+          ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
         }),
       { config: cfg },
     );

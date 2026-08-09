@@ -1421,6 +1421,7 @@ export interface WorkerEnvironments {
   bootstrap_openclaw_version: string | null;
   bootstrap_protocol_features_json: string | null;
   created_at_ms: number;
+  desktop_json: string | null;
   destroy_requested_at_ms: number | null;
   environment_id: string;
   idle_since_at_ms: number | null;
@@ -1431,6 +1432,7 @@ export interface WorkerEnvironments {
   profile_snapshot_json: string;
   provider_id: string;
   provision_operation_id: string;
+  shared_host: number | null;
   ssh_host: string | null;
   ssh_host_key: string | null;
   ssh_key_ref_json: string | null;
@@ -1573,6 +1575,7 @@ export interface Worktrees {
   removed_at: number | null;
   repo_fingerprint: string;
   repo_root: string;
+  run_end_cleanup_json: string | null;
   snapshot_ref: string | null;
 }
 

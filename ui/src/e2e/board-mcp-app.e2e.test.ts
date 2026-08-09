@@ -196,7 +196,10 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
   });
 
   it("renders a pinned app and proactively renews its board lease", async () => {
-    const context = await browser.newContext({ permissions: ["local-network-access"] });
+    const context = await browser.newContext({
+      colorScheme: "dark",
+      permissions: ["local-network-access"],
+    });
     contexts.add(context);
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -228,6 +231,21 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       })
       .toBeGreaterThan(0);
     await waitForMountedApp(page);
+    const widgetBackgrounds = await page.evaluate(() => {
+      const widgetElement = document.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+      const frame = document
+        .querySelector("mcp-app-view")
+        ?.shadowRoot?.querySelector<HTMLIFrameElement>("iframe");
+      if (!widgetElement || !frame) {
+        throw new Error("dashboard MCP App frame is missing");
+      }
+      return {
+        frame: getComputedStyle(frame).backgroundColor,
+        widget: getComputedStyle(widgetElement).backgroundColor,
+      };
+    });
+    expect(widgetBackgrounds.frame).toBe(widgetBackgrounds.widget);
+    expect(widgetBackgrounds.frame).not.toBe("rgba(0, 0, 0, 0)");
     await expect
       .poll(async () => (await gateway.getRequests("board.widget.appView")).length, {
         timeout: 15_000,

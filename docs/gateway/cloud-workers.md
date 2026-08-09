@@ -12,7 +12,7 @@ Cloud workers let a session run its agent loop on a throwaway cloud machine whil
 When the work is done (or the box dies), the machine is discarded. The durable state — transcript, workspace commits, placement records — lives with the Gateway.
 
 <Note>
-Cloud workers are opt-in and invisible until you configure a profile. Unconfigured installs see no new RPCs, config, or UI.
+Cloud workers are opt-in. Until you configure a profile, clients hide the Cloud destination and the Gateway does not advertise `sessions.dispatch`. The `cloudWorkers` config schema and the read-only `environments.list` and `environments.status` methods remain available for configuration and environment discovery.
 </Note>
 
 ## What runs where
@@ -29,10 +29,10 @@ The box needs no inbound ports except `sshd`: the Gateway connects out via pinne
 
 ## Requirements
 
-- A worker provider plugin. The bundled `crabbox` plugin drives the [Crabbox](https://github.com/openclaw/crabbox) CLI, which brokers leases across cloud backends (AWS, Hetzner, and others). Install the `crabbox` binary for the operating-system user that runs the Gateway and put it on that user's `PATH`, or set `settings.binary` to its absolute path. AWS admission requires Crabbox 0.38.1 or newer.
+- A worker provider plugin. The bundled `crabbox` plugin drives the [Crabbox](https://github.com/openclaw/crabbox) CLI, which brokers leases across cloud backends (AWS, Hetzner, and others). Install Crabbox 0.41.1 or newer for the operating-system user that runs the Gateway and put it on that user's `PATH`, or set `settings.binary` to its absolute path. Cloud workers require Crabbox's fixed lease ID contract; older binaries fail before allocation.
 - For Crabbox AWS workers, the effective `aws.instanceProfile` must be empty. The provider checks `crabbox config show --json` before allocation, then requires `crabbox inspect --json` to report `providerMetadata.instanceProfileAttached: false` from EC2 `DescribeInstances`. Leases with an instance role or without authoritative metadata are stopped and rejected.
 - Node.js on the leased machine. Bare cloud images usually lack it — install it in the profile's `setup` command.
-- A session with a session-owned managed worktree (create one with `worktree: true`). Dispatch moves that worktree's contents; plain directories sync as a manifest mirror.
+- A live, registry-owned session managed worktree (create one with `worktree: true`). Cloud dispatch does not accept an arbitrary plain directory. After dispatch admission, the workspace transport may use manifest mirroring if Git metadata later becomes unavailable; this transport behavior does not make plain directories dispatchable.
 
 ### Coordinator-backed Crabbox
 
@@ -98,13 +98,16 @@ Add a profile under `cloudWorkers.profiles` in `openclaw.json`:
 
 Profile fields:
 
-| Key        | Meaning                                                                                                                                                                                                                                        |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provider` | Worker provider id registered by a plugin (`crabbox` for the bundled plugin).                                                                                                                                                                  |
-| `install`  | `bundle` (default) ships the running Gateway's build; `npm` installs the exact released Gateway version with pinned integrity. `npm` requires the Gateway to run from a packaged release.                                                      |
-| `settings` | Provider-owned JSON. For crabbox: `provider` (backend), `class` (machine class), `ttl`, `idleTimeout` (Go durations), optional `setup` and absolute `binary` path. OpenClaw forces public SSH and disables managed Tailscale for these leases. |
+| Key        | Meaning                                                                                                                                                                                                                                                                       |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider` | Worker provider id registered by a plugin (`crabbox` for the bundled plugin).                                                                                                                                                                                                 |
+| `install`  | `bundle` (default) ships the running Gateway's build; `npm` installs the exact released Gateway version with pinned integrity. `npm` requires the Gateway to run from a packaged release.                                                                                     |
+| `settings` | Provider-owned JSON. For crabbox: `provider` (backend), `class` (machine class), `ttl`, `idleTimeout` (Go durations), optional `setup`, optional `desktop` (boolean), and absolute `binary` path. OpenClaw forces public SSH and disables managed Tailscale for these leases. |
+| `lifetime` | Optional stored policy (`idleTimeoutMinutes`, `maxLifetimeMinutes`).                                                                                                                                                                                                          |
 
-Crabbox inspect reports a primary SSH port and may advertise ordered fallback ports. OpenClaw persists that order across Gateway restarts. Its shared pinned SSH transport uses the current candidate first and retries the remaining advertised ports when a fresh authenticated connection fails at the SSH transport layer. It never invents an unadvertised port. If your network policy pins SSH ingress, allow at least one advertised Crabbox candidate.
+Crabbox inspect reports a primary SSH port and may advertise ordered fallback ports. OpenClaw persists that order across Gateway restarts. Its shared pinned SSH transport rotates candidates only for replay-safe operations: idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed on their current candidate and are not replayed on another port. OpenClaw never invents an unadvertised port. If your network policy pins SSH ingress, allow at least one advertised Crabbox candidate.
+
+OpenClaw derives one canonical `cbx_...` lease ID from the durable provision operation and passes it to `crabbox warmup --lease-id`; the deterministic slug is display metadata only. If warmup commits but its response is lost, Gateway reconciliation repeats the same fixed-ID operation and Crabbox returns or adopts only the exactly attested lease. Intent drift, terminal ID reuse, and ambiguous unverified resources fail closed without allocating a replacement. A legacy dispatch interrupted before OpenClaw recorded a lease ID cannot be identified safely and fails visibly instead of falling back to slug adoption.
 
 ### The setup command
 
@@ -149,7 +152,7 @@ Cloud workers run the OpenClaw agent runtime. Models mapped to an external runti
 
 The equivalent RPC flow is:
 
-Create a session with a managed worktree, then dispatch it (the RPC requires `operator.admin` and only exists when profiles are configured):
+Create a session with a managed worktree, then dispatch it. The RPC requires `operator.admin` and is advertised only while at least one worker profile is configured:
 
 ```bash
 openclaw gateway call sessions.create \
@@ -170,6 +173,8 @@ While a fenced result is still reconciling, a new turn waits up to 15 seconds fo
 
 When the work is complete and no turn is running, open the session menu and choose **Stop cloud worker…**. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before deleting the session.
 
+Archiving a non-main cloud-worker session with an active placement also performs this safe stop and reclaim before the Gateway records it as archived. If the placement is still transitioning or failed without proof that its environment is gone, the session remains unarchived; wait for the placement to settle, then retry. Restoring the session retains the reclaimed placement metadata so the next turn can dispatch a fresh worker with the same workspace profile.
+
 For a broken or runaway attached worker, an operator can call `environments.destroy` with `{ "force": true }` as a last resort. Forced teardown durably marks the placement failed and abandons any unreconciled remote result before destroying the environment.
 
 The equivalent administrative RPC is:
@@ -181,6 +186,18 @@ openclaw gateway call sessions.reclaim \
 ```
 
 Placement moves through a durable state machine (`local → requested → provisioning → syncing → starting → active`), so a Gateway restart mid-dispatch reconciles instead of leaking machines. A failed model turn keeps the active placement available for a retry. Workspace path conflicts keep the local version, apply the rest of the cloud result, and preserve the staged cloud ref for inspection; other reconciliation or lifecycle failures retain their durable recovery fence and diagnostic tail until recovery can safely retry or reclaim the environment.
+
+## Desktop (interactive)
+
+Cloud Worker Desktop is an experimental Labs feature and is off by default. Enable **Cloud Worker Desktop** in **Settings → Agents & Tools → Labs**, or set `cloudWorkers.desktop: true`, then restart the Gateway for the Desktop panel to appear.
+
+Set `"desktop": true` in a crabbox profile's `settings` to lease worker boxes with an interactive desktop (TigerVNC on the box loopback with a per-lease password). The Labs gate enables the observer surface and panel; the profile setting gives newly leased workers the desktop capability. Desktop is a warm-time capability: it cannot be added to an already-provisioned environment, so enable it on the profile before dispatching.
+
+Operators with `operator.admin` access watch and control the desktop from the Control UI **Desktop** panel (also in the command palette). The panel lists desktop-capable environments from `environments.list` and connects through the Gateway, which forwards the box's loopback VNC over the same pinned SSH transport used for worker traffic — the desktop is never exposed on the box's network, and the VNC password is delivered only inside the authenticated `worker.desktop.observe` RPC result, never stored by the Gateway.
+
+Connections start view-only. **Take control** requests an input-capable connection; only one controller is active at a time, and taking control disconnects the previous controller (they are downgraded to view-only). Up to 8 observers can watch one environment. The desktop forward starts on first observe and shuts down about a minute after the last observer disconnects; stopping or reclaiming the environment tears it down immediately.
+
+Desktop observe is not supported when the Gateway itself runs on Windows.
 
 ## Security model
 
@@ -198,9 +215,9 @@ Placement moves through a durable state machine (`local → requested → provis
 - **Cloud destinations are hidden or an RPC is denied** — the connected operator lacks `operator.admin`. Reconnect with admin scope; configuring a profile does not grant that scope.
 - **"Cloud worker turns require the OpenClaw runtime"** — choose a direct model whose configured runtime is OpenClaw. Models mapped to external Codex or Claude CLI runtimes do not support worker inference.
 - **"Worker bootstrap requires Node.js on the leased host"** — add a Node install to `settings.setup` (see above).
-- **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.38.1 or newer; older binaries do not expose the authoritative `providerMetadata.instanceProfileAttached` contract required for AWS admission.
+- **AWS instance-role attestation fails** — clear `aws.instanceProfile` (and `CRABBOX_AWS_INSTANCE_PROFILE`, if set). Install Crabbox 0.41.1 or newer; older binaries do not satisfy the fixed-ID and authoritative `providerMetadata.instanceProfileAttached` contracts required for AWS admission.
 - **Dispatch fails with a provider or bootstrap error** — `environments.list` intentionally omits internal `lastError`. Inspect the session with `sessions.describe`; a failed placement may expose a bounded `recoveryError`. When deeper diagnosis is necessary, an operator on the Gateway host can inspect the durable worker state read-only. Do not edit the state database to bypass lifecycle fencing.
-- **No SSH candidate is reachable** — compare the Gateway host's current outbound IPv4 with Crabbox's effective `aws.sshCIDRs` in `crabbox config show --json`. If the matching `/32` is absent, correct Crabbox's configuration and rerun `crabbox doctor --provider aws --json` before retrying; the coordinator's reverse-proxy or request-source address is not necessarily the Gateway's direct SSH source. Then ensure the Gateway's outbound route and the worker ingress policy permit at least one advertised candidate. OpenClaw already tries Crabbox's ordered ports with the same identity and pinned host key.
+- **No SSH candidate is reachable** — compare the Gateway host's current outbound IPv4 with Crabbox's effective `aws.sshCIDRs` in `crabbox config show --json`. If the matching `/32` is absent, correct Crabbox's configuration and rerun `crabbox doctor --provider aws --json` before retrying; the coordinator's reverse-proxy or request-source address is not necessarily the Gateway's direct SSH source. Then ensure the Gateway's outbound route and the worker ingress policy permit at least one advertised candidate. OpenClaw rotates the ordered ports with the same identity and pinned host key only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed on the next port.
 - **Client timeout while dispatching** — `openclaw gateway call` defaults to a 10s timeout; pass `--timeout` generously (dispatch keeps running server-side either way, and a retry while provisioning is rejected with `session cannot dispatch from placement provisioning`).
 - **Worker reclaimed after upgrading from a 2026.7.2 beta** — those betas used the older worker launch contract. On restart, OpenClaw destroys an idle incompatible worker, keeps the session and workspace, marks the placement reclaimed, and provisions a current worker on the next dispatch or turn. A beta worker interrupted while still starting is marked failed after cleanup; retry the dispatch to provision it with the current contract.
 - **Cloud workspace conflict notice** — the turn completed and kept the local version of each listed path. Use the staged-ref commands in the notice to inspect or take the cloud version; no retry is required for the non-conflicting changes, which are already applied.

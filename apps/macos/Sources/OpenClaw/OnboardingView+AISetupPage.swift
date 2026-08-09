@@ -33,8 +33,6 @@ extension OnboardingView {
             ScrollView {
                 OnboardingAISetupView(
                     model: self.aiSetup,
-                    systemAgentChat: self.systemAgentState.chat,
-                    showSystemAgentChat: self.$systemAgentState.isPresented,
                     returnToGatewayAuthentication: { self.returnToGatewayAuthentication() },
                     retryConfiguredGatewayProbe: { self.retryConfiguredGatewayProbe() })
                     .padding(.vertical, 4)
@@ -74,9 +72,6 @@ extension OnboardingView {
     }
 
     func prepareSystemAgentHandoff() {
-        systemAgentState.chat.onAgentHandoff = { [self] agentDraft in
-            self.finish(agentDraft: agentDraft)
-        }
         aiSetup.onPendingActivationDeadline = { [self] deadline, routeIdentity in
             let currentRouteIdentity = self.aiSetupRouteIdentityProvider()
             guard currentRouteIdentity == routeIdentity else { return }
@@ -88,7 +83,7 @@ extension OnboardingView {
             aiSetup.onConnected = { [self] in
                 // Activation already persisted the resume marker before its RPC.
                 self.configuredGatewayProbe.cancelPendingActivationRecheck()
-                self.systemAgentState.presentAndStart()
+                self.finish()
             }
         }
     }
@@ -112,9 +107,7 @@ extension OnboardingView {
                   !Task.isCancelled
             else { return }
             self.configuredGatewayProbe.cancelPendingActivationRecheck()
-            // `onConnected` already owns presentation. Await that exact start
-            // task without starting a replacement route's chat after suspension.
-            await self.systemAgentState.waitForStartIfNeeded()
+            self.finish()
         }
     }
 

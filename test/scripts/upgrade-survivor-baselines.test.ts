@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseArgs, resolveBaselines } from "../../scripts/resolve-upgrade-survivor-baselines.mjs";
+import { parseArgs, resolveBaselines } from "../../scripts/resolve-upgrade-survivor-baselines.mts";
 
 function withReleaseFixture<T>(releases: unknown[], fn: (file: string) => T): T {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-upgrade-baselines-"));

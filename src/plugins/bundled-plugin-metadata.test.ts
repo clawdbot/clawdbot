@@ -430,13 +430,6 @@ describe("bundled plugin metadata", () => {
     });
   });
 
-  it("keeps CUA's doctor contract sidecar on the bundled public surface", () => {
-    const cua = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "cua-computer");
-    expectArtifactPresence(cua?.publicSurfaceArtifacts, {
-      contains: ["doctor-contract-api.js"],
-    });
-  });
-
   it("keeps iMessage message-tool discovery on a narrow public surface", () => {
     const imessage = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "imessage");
     expectArtifactPresence(imessage?.publicSurfaceArtifacts, {

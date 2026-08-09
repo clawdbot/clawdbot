@@ -10,17 +10,138 @@ import { loadBundledPluginManifestRegistry } from "./manifest-registry.js";
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const SOURCE_MODULE_EXTENSIONS = [".ts", ".mts", ".cts", ".js", ".mjs", ".cjs"] as const;
 const FORBIDDEN_SPECIFIER = "openclaw/plugin-sdk/agent-runtime";
+type ClosureKind = "doctor-contract" | "legacy-setup";
 // Static value imports only; type-only and lazy dynamic imports of these stay allowed.
-const FORBIDDEN_SPECIFIER_REASONS = new Map([
+// Rules scoped to "doctor-contract" protect doctor enumeration cold-load cost;
+// legacy-setup closures (telegram sent-message-cache, discord thread-bindings.state)
+// still share sync runtime modules with these barrels and are a named follow-up.
+const FORBIDDEN_SPECIFIER_RULES = new Map<string, { reason: string; kinds: Set<ClosureKind> }>([
   [
     FORBIDDEN_SPECIFIER,
-    "the deprecated broad barrel makes doctor enumeration cold-load the core agents graph; " +
-      "use openclaw/plugin-sdk/agent-scope-runtime or another focused subpath",
+    {
+      reason:
+        "the deprecated broad barrel makes doctor enumeration cold-load the core agents graph; " +
+        "use openclaw/plugin-sdk/agent-scope-runtime or another focused subpath",
+      kinds: new Set(["doctor-contract", "legacy-setup"]),
+    },
   ],
   [
-    "openclaw/plugin-sdk/runtime-doctor",
-    "the heavy doctor barrel makes doctor enumeration cold-load the state-db/kysely graph; " +
-      "use openclaw/plugin-sdk/runtime-doctor-migrations, or defer heavy helpers behind a dynamic import",
+    "openclaw/plugin-sdk/doctor-repair-runtime",
+    {
+      reason:
+        "install-path, uninstall, and state-db schema repair cold-load the state-db/kysely graph; " +
+        "use openclaw/plugin-sdk/runtime-doctor-migrations, or defer the repair behind a dynamic import",
+      kinds: new Set(["doctor-contract", "legacy-setup"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/ssrf-runtime",
+    {
+      reason:
+        "the SSRF runtime barrel cold-loads DNS, proxy state, and logging; " +
+        "legacy private-network config migration lives in openclaw/plugin-sdk/runtime-doctor-migrations",
+      kinds: new Set(["doctor-contract", "legacy-setup"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/provider-model-shared",
+    {
+      reason:
+        "the provider-model barrel cold-loads replay/endpoint/catalog helpers; " +
+        "use openclaw/plugin-sdk/model-ref-parse for provider/model reference parsing",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/acp-runtime",
+    {
+      reason:
+        "the ACP runtime barrel cold-loads the ACP control-plane manager and backend registry; " +
+        "keep legacy-state row shapes in a plugin-local leaf module",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/conversation-runtime",
+    {
+      reason:
+        "the deprecated conversation barrel cold-loads binding-routing and the session-binding registry; " +
+        "keep legacy-state row shapes in a plugin-local leaf module",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/provider-auth",
+    {
+      reason:
+        "the provider-auth barrel cold-loads the auth-profile store, provider runtime, and plugin " +
+        "install graph (execa, kysely, commander); use openclaw/plugin-sdk/secret-provider-alias " +
+        "for the default secret provider alias",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/channel-secret-basic-runtime",
+    {
+      reason:
+        "the channel-secret barrel cold-loads secret-ref/account-routing modules; " +
+        "the canonical record guard is openclaw/plugin-sdk/string-coerce-runtime",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/plugin-state-store-runtime",
+    {
+      reason:
+        "opening a keyed plugin-state store cold-loads the state-db/kysely graph; " +
+        "keep the store behind the migration context or a dynamic import inside async bodies",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/session-store-runtime",
+    {
+      reason:
+        "the session-store barrel makes doctor enumeration cold-load the session-accessor/kysely graph; " +
+        "defer it behind a dynamic import inside async migration bodies",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/logging-core",
+    {
+      reason:
+        "the logging barrel makes doctor enumeration cold-load the diagnostic/config graph; " +
+        "use openclaw/plugin-sdk/security-runtime for redaction helpers",
+      kinds: new Set(["doctor-contract", "legacy-setup"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/realtime-voice",
+    {
+      reason:
+        "the realtime-voice barrel makes doctor enumeration cold-load the agent-consult/session graph; " +
+        "use openclaw/plugin-sdk/realtime-voice-activation for activation-name helpers",
+      kinds: new Set(["doctor-contract", "legacy-setup"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/channel-outbound",
+    {
+      reason:
+        "the channel-outbound barrel makes doctor enumeration cold-load the reply-pipeline/channel-registry graph; " +
+        "use openclaw/plugin-sdk/channel-streaming-config for streaming config helpers",
+      kinds: new Set(["doctor-contract"]),
+    },
+  ],
+  [
+    "openclaw/plugin-sdk/memory-host-core",
+    {
+      reason:
+        "the memory-host barrel makes doctor enumeration cold-load the event-store/kysely graph; " +
+        "use openclaw/plugin-sdk/agent-scope-runtime for agent scope resolvers",
+      kinds: new Set(["doctor-contract", "legacy-setup"]),
+    },
   ],
 ]);
 const LEGACY_SETUP_PROPERTIES = new Set([
@@ -33,6 +154,7 @@ type ClosureEntry = {
   pluginId: string;
   pluginRoot: string;
   entryPath: string;
+  kind: ClosureKind;
 };
 
 type ModuleReference = ReturnType<typeof collectModuleReferencesFromSource>[number];
@@ -148,7 +270,7 @@ function collectStaticValueReferences(filePath: string, source: string): ModuleR
   return collectModuleReferencesFromSource(source, {
     fileName: filePath,
     acceptSpecifier: (specifier) =>
-      FORBIDDEN_SPECIFIER_REASONS.has(specifier) || specifier.startsWith("."),
+      FORBIDDEN_SPECIFIER_RULES.has(specifier) || specifier.startsWith("."),
   }).filter((reference) =>
     staticValueReferenceKeys.has(`${reference.kind}\0${reference.line}\0${reference.specifier}`),
   );
@@ -163,8 +285,19 @@ function collectClosureEntries(): ClosureEntry[] {
   for (const record of loadBundledPluginManifestRegistry({ env }).plugins) {
     const pluginRoot = path.resolve(record.rootDir);
     const doctorContractPath = resolvePluginDoctorContractArtifactPath(pluginRoot);
-    if (doctorContractPath) {
-      entries.push({ pluginId: record.id, pluginRoot, entryPath: doctorContractPath });
+    // A declaration listing no surface gates the artifact off every enumeration
+    // path, exactly as `resolvePluginDoctorContracts` does, so its closure cost
+    // is never paid. Absent declarations still load eagerly and are enforced.
+    const declaresAnyDoctorSurface =
+      !record.doctorContract ||
+      Object.values(record.doctorContract).some((value) => value ?? false);
+    if (doctorContractPath && declaresAnyDoctorSurface) {
+      entries.push({
+        pluginId: record.id,
+        pluginRoot,
+        entryPath: doctorContractPath,
+        kind: "doctor-contract",
+      });
     }
 
     if (record.channels.length === 0) {
@@ -185,7 +318,7 @@ function collectClosureEntries(): ClosureEntry[] {
     for (const specifier of collectLegacySetupSpecifiers(setupEntryPath)) {
       const entryPath = resolveRelativeSourceModule(setupEntryPath, specifier);
       if (entryPath && isInsideRoot(pluginRoot, entryPath)) {
-        entries.push({ pluginId: record.id, pluginRoot, entryPath });
+        entries.push({ pluginId: record.id, pluginRoot, entryPath, kind: "legacy-setup" });
       }
     }
   }
@@ -205,10 +338,10 @@ function collectForbiddenClosureImports(entry: ClosureEntry): string[] {
     visited.add(filePath);
     const source = fs.readFileSync(filePath, "utf8");
     for (const reference of collectStaticValueReferences(filePath, source)) {
-      const reason = FORBIDDEN_SPECIFIER_REASONS.get(reference.specifier);
-      if (reason) {
+      const rule = FORBIDDEN_SPECIFIER_RULES.get(reference.specifier);
+      if (rule?.kinds.has(entry.kind)) {
         violations.push(
-          `${entry.pluginId}: ${formatRepoPath(filePath)}:${reference.line} imports ${reference.specifier}; ${reason}`,
+          `${entry.pluginId}: ${formatRepoPath(filePath)}:${reference.line} imports ${reference.specifier}; ${rule.reason}`,
         );
         continue;
       }
@@ -258,6 +391,83 @@ function collectHeavyRuntimeDoctorMigrationImports(): string[] {
   return violations;
 }
 
+const PLUGIN_SDK_SPECIFIER_PREFIX = "openclaw/plugin-sdk/";
+
+function isKyselySpecifier(specifier: string): boolean {
+  return specifier === "kysely" || specifier.startsWith("kysely/");
+}
+
+// The transitive walk follows relative imports (plugin-local, core src, and the
+// deep-relative package bridges) plus openclaw/plugin-sdk/* subpaths. Other bare
+// specifiers are node builtins or npm/workspace packages; only the repo root
+// depends on kysely, so every kysely edge is reachable through this resolution.
+function collectTraversalValueReferences(filePath: string, source: string): ModuleReference[] {
+  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+  const staticValueReferenceKeys = collectStaticValueReferenceKeys(sourceFile);
+  return collectModuleReferencesFromSource(source, {
+    fileName: filePath,
+    acceptSpecifier: (specifier) =>
+      isKyselySpecifier(specifier) ||
+      specifier.startsWith(".") ||
+      specifier.startsWith(PLUGIN_SDK_SPECIFIER_PREFIX),
+  }).filter((reference) =>
+    staticValueReferenceKeys.has(`${reference.kind}\0${reference.line}\0${reference.specifier}`),
+  );
+}
+
+function resolveTraversalModule(filePath: string, specifier: string): string | null {
+  if (specifier.startsWith(".")) {
+    return resolveRelativeSourceModule(filePath, specifier);
+  }
+  if (specifier.startsWith(PLUGIN_SDK_SPECIFIER_PREFIX)) {
+    const subpath = specifier.slice(PLUGIN_SDK_SPECIFIER_PREFIX.length);
+    return resolveRelativeSourceModule(
+      path.join(REPO_ROOT, "src/plugin-sdk", "entrypoint-anchor.ts"),
+      `./${subpath}`,
+    );
+  }
+  return null;
+}
+
+// Cached per file: null = kysely unreachable; otherwise the first found import
+// chain from this file to a kysely value import (repo-relative, entry first).
+const kyselyReachabilityByFile = new Map<string, string[] | null>();
+
+function findKyselyChain(filePath: string, inProgress: Set<string>): string[] | null {
+  const cached = kyselyReachabilityByFile.get(filePath);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (inProgress.has(filePath)) {
+    // Cycle back-edge: the ancestor still explores its remaining children, so
+    // skipping here cannot hide a kysely edge.
+    return null;
+  }
+  inProgress.add(filePath);
+  let chain: string[] | null = null;
+  const source = fs.readFileSync(filePath, "utf8");
+  for (const reference of collectTraversalValueReferences(filePath, source)) {
+    if (isKyselySpecifier(reference.specifier)) {
+      chain = [`${formatRepoPath(filePath)}:${reference.line} imports ${reference.specifier}`];
+      break;
+    }
+    const resolvedPath = resolveTraversalModule(filePath, reference.specifier);
+    if (!resolvedPath || !isInsideRoot(REPO_ROOT, resolvedPath)) {
+      continue;
+    }
+    const childChain = findKyselyChain(resolvedPath, inProgress);
+    if (childChain) {
+      chain = [`${formatRepoPath(filePath)}:${reference.line} -> ${reference.specifier}`].concat(
+        childChain,
+      );
+      break;
+    }
+  }
+  inProgress.delete(filePath);
+  kyselyReachabilityByFile.set(filePath, chain);
+  return chain;
+}
+
 describe("doctor contract import closures", () => {
   it("classifies only static value module edges", () => {
     const source = [
@@ -284,5 +494,20 @@ describe("doctor contract import closures", () => {
 
   it("keeps the runtime doctor migration helper off state DB and plugin-state graphs", () => {
     expect(collectHeavyRuntimeDoctorMigrationImports()).toStrictEqual([]);
+  });
+
+  // The exhaustive backstop: no doctor-contract or legacy-setup closure may reach
+  // the kysely package through any static value import chain, regardless of which
+  // barrel introduces the edge. Type-only and dynamic imports stay allowed.
+  it("keeps kysely statically unreachable from every plugin closure", () => {
+    const violations = collectClosureEntries()
+      .flatMap((entry) => {
+        const chain = findKyselyChain(entry.entryPath, new Set());
+        return chain
+          ? [`${entry.pluginId}: closure reaches kysely via\n    ${chain.join("\n    ")}`]
+          : [];
+      })
+      .toSorted();
+    expect(violations).toStrictEqual([]);
   });
 });

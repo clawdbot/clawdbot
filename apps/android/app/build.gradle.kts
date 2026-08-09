@@ -152,7 +152,9 @@ abstract class StageCanvasA2uiTask
         workingDir(root)
         commandLine(
           "node",
-          "scripts/sync-native-a2ui.mjs",
+          "--import",
+          "tsx",
+          "scripts/sync-native-a2ui.mts",
           "--write",
           "--output",
           outputDirectory
@@ -172,8 +174,8 @@ val stageCanvasA2ui =
     sourceFiles.from(
       openClawRepositoryRoot.resolve("package.json"),
       openClawRepositoryRoot.resolve("pnpm-lock.yaml"),
-      openClawRepositoryRoot.resolve("scripts/bundle-a2ui.mjs"),
-      openClawRepositoryRoot.resolve("scripts/sync-native-a2ui.mjs"),
+      openClawRepositoryRoot.resolve("scripts/bundle-a2ui.mts"),
+      openClawRepositoryRoot.resolve("scripts/sync-native-a2ui.mts"),
       openClawRepositoryRoot.resolve("extensions/canvas/package.json"),
       openClawRepositoryRoot.resolve("extensions/canvas/scripts/bundle-a2ui.mjs"),
       openClawRepositoryRoot.resolve("extensions/canvas/src/host/a2ui/index.html"),

@@ -176,10 +176,11 @@ function readTuiPtyCase(value: unknown, index: number): TuiPtyCase {
     );
   }
   try {
-    new RegExp(testNamePattern);
+    RegExp(testNamePattern);
   } catch (error) {
     throw new Error(
       `execution.config.tuiPtyCases[${index}].testNamePattern is invalid: ${formatErrorMessage(error)}`,
+      { cause: error },
     );
   }
   return { coverageId, testFile, testNamePattern };

@@ -28,6 +28,8 @@ function firstMockArg(
 }
 
 vi.mock("./channel-resolution.js", () => ({
+  normalizeDeliverableOutboundChannel: (value?: string | null) =>
+    typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined,
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
   resetOutboundChannelResolutionStateForTest: vi.fn(),
 }));
@@ -121,6 +123,7 @@ async function runPollAction(params: {
       threadId?: string;
     };
     ctx?: {
+      plugin?: ChannelPlugin;
       inboundEventKind?: string;
       idempotencyKey?: string;
       params?: Record<string, unknown>;
@@ -195,6 +198,8 @@ describe("runMessageAction poll handling", () => {
     expect(call?.durationHours).toBe(2);
     expect(call?.threadId).toBe("42");
     expect(call?.ctx?.params?.threadId).toBe("42");
+    expect(call?.ctx?.plugin).toBe(pollerTestPlugin);
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledTimes(1);
   });
 
   it.each([0, -1, 1.5, "1.5", "soon"])(

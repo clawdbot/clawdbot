@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { createAgentTurnIo } from "../agent-turn/io.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 
 function runPreflight(
@@ -56,7 +57,7 @@ function runPreflight(
       lane: "subagent",
       ...(options?.includeCollectorFields === false ? {} : { swarmCollector, swarmOutputSchema }),
     },
-    respond,
+    io: createAgentTurnIo(respond),
     context: {
       getRuntimeConfig: () =>
         options?.requesterOnlyEnabled
@@ -377,7 +378,7 @@ describe("agent request restart recovery preflight", () => {
           sourceTool,
         },
       },
-      respond,
+      io: createAgentTurnIo(respond),
       context: {
         getRuntimeConfig: () => ({}),
         dedupe: new Map(),

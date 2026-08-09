@@ -18,7 +18,8 @@ export async function appendSessionAudit(params: {
     sessionId: params.target.entry.sessionId,
     storePath: params.target.storePath,
   };
-  SessionManager.open({ ...identity, sessionKey: params.target.sessionKey }).appendMessage(
+  SessionManager.appendMessageToTranscript(
+    { ...identity, sessionKey: params.target.sessionKey },
     {
       role: "custom",
       customType: "openclaw.system-note",

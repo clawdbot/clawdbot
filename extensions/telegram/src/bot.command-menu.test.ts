@@ -60,7 +60,9 @@ function registeredCommands(callIndex = -1): Array<{ command: string; descriptio
   if (!call) {
     throw new Error(`expected setMyCommands call ${callIndex}`);
   }
-  return call[0] as Array<{ command: string; description: string }>;
+  return (call[0] as Array<{ command: string; description: string }>).map(
+    ({ command, description }) => ({ command, description }),
+  );
 }
 
 describe("createTelegramBot command menu", () => {

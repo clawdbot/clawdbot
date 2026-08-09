@@ -60,17 +60,6 @@ export async function flushMicrotasks(rounds = 3): Promise<void> {
   }
 }
 
-export function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve: (() => void) | undefined;
-  const promise = new Promise<void>((next) => {
-    resolve = next;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
-
 export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");

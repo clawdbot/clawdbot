@@ -4501,7 +4501,7 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeAll();
   });
 
-  it("getOrCreateRequesterScoped returns undefined without senderId and never creates static transports", async () => {
+  it("rejects anonymous requester identities before touching existing requester state", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
     resolverTesting.setMcpServerConnectionResolversForTest([
       {
@@ -4516,7 +4516,10 @@ describe("requester-scoped MCP connection resolution", () => {
       include?: string[];
       exclude?: string[];
     }> = [];
+    const dispose = vi.fn(async () => {});
+    let nowMs = 100_000;
     const createRuntime: RuntimeFactory = (params) => {
+      const createdAt = nowMs;
       created.push({
         requesterScope: params.requesterScope,
         include: params.includeServerNames ? [...params.includeServerNames] : undefined,
@@ -4528,9 +4531,15 @@ describe("requester-scoped MCP connection resolution", () => {
         workspaceDir: params.workspaceDir,
         configFingerprint: params.configFingerprint ?? "fingerprint",
         requesterScope: params.requesterScope,
+        get lastUsedAt() {
+          return createdAt;
+        },
+        markUsed: () => {},
+        dispose,
       };
     };
-    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const now = vi.fn(() => nowMs);
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime, now });
     const cfg = {
       mcp: {
         servers: {
@@ -4540,24 +4549,59 @@ describe("requester-scoped MCP connection resolution", () => {
       },
     };
 
-    await expect(
-      manager.getOrCreateRequesterScoped({
-        sessionId: "session-scoped-only",
-        workspaceDir: "/workspace",
-        cfg: cfg as never,
-      }),
-    ).resolves.toBeUndefined();
-    expect(created).toEqual([]);
-
+    const sessionId = "session-scoped-only";
+    const sessionKey = "agent:main:session-scoped-only";
     const scoped = await manager.getOrCreateRequesterScoped({
-      sessionId: "session-scoped-only",
+      sessionId,
+      sessionKey,
       workspaceDir: "/workspace",
       cfg: cfg as never,
       requesterSenderId: "sender-a",
       messageChannel: "telegram",
     });
     expect(scoped?.requesterScope?.requesterSenderId).toBe("sender-a");
-    // Only the requester partition — no bare static runtime entry.
+    await vi.waitFor(() =>
+      expect(testing.getBookkeepingSizes(manager).requesterWorkChains).toBe(0),
+    );
+    const runtimeKeys = manager.listRuntimeKeys();
+    const bookkeeping = testing.getBookkeepingSizes(manager);
+    expect(runtimeKeys).toHaveLength(1);
+    expect(runtimeKeys[0]).toMatch(/^\{/);
+    expect(manager.resolveSessionId(sessionKey)).toBe(sessionId);
+    expect(created).toHaveLength(1);
+    expect(bookkeeping).toMatchObject({
+      runtimes: 1,
+      connectionMeta: 1,
+      requesterWorkChains: 0,
+      sessionKeys: 1,
+      idleTtl: 1,
+    });
+
+    now.mockClear();
+    nowMs += testing.resolveSessionMcpRuntimeIdleTtlMs() + 1;
+    for (const [requesterSenderId, attemptedSessionId] of [
+      [undefined, "session-missing"],
+      ["  ", "session-blank"],
+      [null, "session-null"],
+    ] as const) {
+      await expect(
+        manager.getOrCreateRequesterScoped({
+          sessionId: attemptedSessionId,
+          sessionKey,
+          requesterSenderId,
+          workspaceDir: "/workspace",
+          cfg: cfg as never,
+        }),
+      ).resolves.toBeUndefined();
+      expect(manager.resolveSessionId(sessionKey)).toBe(sessionId);
+    }
+
+    expect(now).not.toHaveBeenCalled();
+    expect(dispose).not.toHaveBeenCalled();
+    expect(manager.listRuntimeKeys()).toEqual(runtimeKeys);
+    expect(testing.getBookkeepingSizes(manager)).toEqual(bookkeeping);
+    // The existing requester partition remains the only runtime; no static or
+    // anonymous replacement runtime was created.
     expect(created).toEqual([
       {
         requesterScope: {
@@ -4568,7 +4612,6 @@ describe("requester-scoped MCP connection resolution", () => {
         exclude: undefined,
       },
     ]);
-    expect(manager.listRuntimeKeys().every((key) => key.startsWith("{"))).toBe(true);
 
     await manager.disposeAll();
   });

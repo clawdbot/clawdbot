@@ -28,6 +28,7 @@ const {
   refreshRemoteModelCatalogMock,
   scheduleGatewaySigusr1RestartMock,
   startManagedServiceUpdateHandoffMock,
+  versionMock,
 } = vi.hoisted(() => ({
   detectRespawnSupervisorMock: vi.fn(),
   getRuntimeConfigMock: vi.fn(() => ({})),
@@ -48,6 +49,7 @@ const {
     command: "openclaw update --yes --channel beta --timeout 2700",
     logPath: "/tmp/openclaw-handoff.log",
   })),
+  versionMock: { value: "1.0.0" },
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -111,7 +113,9 @@ vi.mock("./update-check.js", async () => {
 });
 
 vi.mock("../version.js", () => ({
-  VERSION: "1.0.0",
+  get VERSION() {
+    return versionMock.value;
+  },
 }));
 
 vi.mock("../process/exec.js", () => ({
@@ -229,6 +233,7 @@ describe("update-startup", () => {
   }
 
   beforeEach(async () => {
+    versionMock.value = "1.0.0";
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
     testState = await createOpenClawTestState({
@@ -779,6 +784,49 @@ describe("update-startup", () => {
     await expectPathMissing(path.join(tempDir, "update-check.json"));
   });
 
+  it("uses the extended-stable selector for an installed final extended-stable package", async () => {
+    versionMock.value = "2026.6.33";
+    mockPackageUpdateStatus("extended-stable", "2026.7.33");
+    const onUpdateAvailableChange = vi.fn();
+
+    await runGatewayUpdateCheck({
+      cfg: {},
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      onUpdateAvailableChange,
+    });
+
+    expect(resolveNpmChannelTag).toHaveBeenCalledWith({
+      channel: "extended-stable",
+      timeoutMs: 2500,
+    });
+    expect(onUpdateAvailableChange).toHaveBeenCalledWith({
+      currentVersion: "2026.6.33",
+      latestVersion: "2026.7.33",
+      channel: "extended-stable",
+    });
+  });
+
+  it("does not query extended-stable when configless startup hints are disabled", async () => {
+    versionMock.value = "2026.6.33";
+    mockPackageInstallStatus();
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { checkOnStart: false, auto: { enabled: true } } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      runAutoUpdate,
+    });
+
+    expect(checkUpdateStatus).toHaveBeenCalledOnce();
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(readPersistedUpdateCheckState()).toBeNull();
+  });
+
   it("discovers and deduplicates an exact extended-stable update without auto-applying", async () => {
     const onUpdateAvailableChange = vi.fn();
     const runAutoUpdate = createAutoUpdateSuccessMock();
@@ -970,6 +1018,24 @@ describe("update-startup", () => {
       lastAvailableTag: "extended-stable",
     });
     expectStableAutoRolloutStatePreserved();
+  });
+
+  it("uses the verified package install kind for a configless extended-stable release", async () => {
+    versionMock.value = "2026.6.33";
+    mockPackageInstallStatus();
+    mockNpmChannelTag("extended-stable", "2026.6.34");
+
+    await runGatewayUpdateCheck({
+      cfg: {},
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(resolveNpmChannelTag).toHaveBeenCalledWith({
+      channel: "extended-stable",
+      timeoutMs: 2500,
+    });
   });
 
   it("skips all extended-stable work in Nix mode", async () => {

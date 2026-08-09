@@ -6,13 +6,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
-import { privateLocalOnlyPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import { privateLocalOnlyPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
 const PREPARE_PACKAGE_PATH = path.resolve(
   TEST_DIR,
-  "../../scripts/e2e/lib/npm-telegram-live/prepare-package.mjs",
+  "../../scripts/e2e/lib/npm-telegram-live/prepare-package.mts",
 );
 const tempRoots: string[] = [];
 
@@ -292,7 +292,7 @@ describe("package Telegram live Docker E2E", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     expect(script).toContain('cp "$ROOT_DIR/package.json" "$harness_package_json"');
     expect(script).toContain(
-      'node "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.mjs" "$harness_package_json"',
+      'node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.mts" "$harness_package_json"',
     );
     expect(script).toContain('-v "$harness_package_json:/app/package.json:ro"');
     expect(script).toContain('-v "$ROOT_DIR/dist:/app/dist:ro"');

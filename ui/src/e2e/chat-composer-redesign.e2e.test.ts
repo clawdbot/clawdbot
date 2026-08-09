@@ -176,7 +176,7 @@ suite.define(() => {
             ?.replace(/\s+/g, " ")
             .trim(),
         )
-        .toBe("Weekly · all models 72%");
+        .toBe("Weekly 72%");
       await contextUsage.click();
 
       await effort.click();

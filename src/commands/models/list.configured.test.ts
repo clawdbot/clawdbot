@@ -26,6 +26,7 @@ vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogSnapshot: mocks.loadPreparedModelCatalogSnapshot,
 }));
 

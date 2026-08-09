@@ -9,6 +9,7 @@ import {
   buildPluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
@@ -75,6 +76,7 @@ const {
   setSessionStoreEntriesForTest,
   setMessageReactionSpy,
   setMyCommandsSpy,
+  syncTelegramMenuCommands,
   telegramBotDepsForTest,
   throttlerSpy,
   useSpy,
@@ -83,6 +85,7 @@ type BuildModelsProviderDataMock = ReturnType<
   typeof vi.fn<NonNullable<typeof telegramBotDepsForTest.buildModelsProviderData>>
 >;
 const { resolveTelegramFetch } = await import("./fetch.js");
+const { defaultTelegramNativeCommandDeps } = await import("./bot-native-command-deps.runtime.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
 const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
 const { getTelegramSequentialConstraints } = await import("./sequential-key.js");
@@ -100,7 +103,6 @@ const { clearTelegramRuntimeForTest, resetTelegramAccountThrottlersForTest } =
 const { setTelegramRuntime } = await import("./runtime.js");
 const {
   buildTelegramGroupFrom,
-  buildTelegramThreadParams,
   buildTypingThreadParams,
   resolveTelegramForumFlag,
   resetTelegramForumFlagCacheForTest,
@@ -374,16 +376,6 @@ function makeGenericCallbackContext(params: { id: string; updateId?: number }) {
       reply_markup: { inline_keyboard: [[{ text: "Skip tonight", callback_data: data }]] },
     },
   });
-}
-
-function createDeferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
@@ -2088,7 +2080,10 @@ describe("createTelegramBot", () => {
     });
   });
 
-  it("terminalizes native callbacks after inline buttons are disabled", async () => {
+  it.each([
+    ["ordinary native command", "tgcmd:/fast status"],
+    ["native Codex login", "tgcmd:/login codex"],
+  ])("terminalizes %s callbacks after inline buttons are disabled", async (_name, data) => {
     const pluginHandler = vi.fn(async () => ({ handled: true }));
     registerPluginInteractiveHandler("disabled-native-collision", {
       channel: "telegram",
@@ -2109,11 +2104,11 @@ describe("createTelegramBot", () => {
     await getCallbackHandler()(
       makeCallbackRetryContext({
         id: "cbq-disabled-native",
-        data: "tgcmd:/fast status",
+        data,
         messageId: 10,
         message: {
           reply_markup: {
-            inline_keyboard: [[{ text: "Status", callback_data: "tgcmd:/fast status" }]],
+            inline_keyboard: [[{ text: "Action", callback_data: data }]],
           },
         },
       }),
@@ -2129,6 +2124,87 @@ describe("createTelegramBot", () => {
       "This action is no longer available.",
       undefined,
     );
+  });
+
+  it("keeps the login action when the callback sender is not an owner", async () => {
+    loadConfig.mockReturnValue({
+      commands: { native: true, ownerAllowFrom: ["999"] },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    await getCallbackHandler()(
+      makeCallbackRetryContext({
+        id: "cbq-login-nonowner",
+        data: "tgcmd:/login codex",
+        messageId: 10,
+        message: {
+          reply_markup: {
+            inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
+          },
+        },
+      }),
+    );
+
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      "Only a configured OpenClaw owner can start Codex login from Telegram.",
+      {},
+    );
+  });
+
+  it("lets an owner start Codex login from a pairing-policy DM callback", async () => {
+    const runModelsAuthLoginFlow = vi
+      .spyOn(defaultTelegramNativeCommandDeps, "runModelsAuthLoginFlow")
+      .mockImplementation(async (params) => {
+        await params.prompter.deviceCode?.({
+          title: "OpenAI Codex device code",
+          code: "OWNER-CODE",
+          message: "URL: https://auth.openai.com/codex/device",
+        });
+        return {
+          providerId: "openai",
+          methodId: "device-code",
+          profiles: [{ profileId: "openai:codex", provider: "openai", mode: "oauth" }],
+        };
+      });
+    loadConfig.mockReturnValue({
+      commands: { native: true, ownerAllowFrom: ["9"] },
+      channels: { telegram: { dmPolicy: "pairing" } },
+      agents: { list: [{ id: "main", default: true }] },
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+      await getCallbackHandler()(
+        makeCallbackRetryContext({
+          id: "cbq-login-owner",
+          data: "tgcmd:/login codex",
+          messageId: 10,
+          message: {
+            reply_markup: {
+              inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
+            },
+          },
+        }),
+      );
+
+      expect(runModelsAuthLoginFlow).toHaveBeenCalledOnce();
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        1234,
+        expect.stringContaining("Code: <code>OWNER-CODE</code>"),
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+    } finally {
+      runModelsAuthLoginFlow.mockRestore();
+    }
   });
 
   it.each([
@@ -3061,8 +3137,8 @@ describe("createTelegramBot", () => {
   it("dedupes a replayed Telegram message after handler recreation while dispatch is pending", async () => {
     configureOpenDm();
 
-    const firstDispatchStarted = createDeferred();
-    const finishFirstDispatch = createDeferred();
+    const firstDispatchStarted = createDeferred<void>();
+    const finishFirstDispatch = createDeferred<void>();
     replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onReplyStart?.();
       firstDispatchStarted.resolve();
@@ -3470,6 +3546,36 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     }),
     makeMessagePolicyCase({
+      name: "inherits root per-group sender access in multi-account config",
+      telegram: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["111111111"],
+        groups: {
+          "-100123456789": { allowFrom: ["123456789"], requireMention: false },
+        },
+        accounts: {
+          default: { botToken: "123:default" },
+          shadow: { enabled: false },
+        },
+      },
+      expectedReplyCount: 1,
+    }),
+    makeMessagePolicyCase({
+      name: "enforces root per-group sender access in multi-account config",
+      telegram: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["123456789"],
+        groups: {
+          "-100123456789": { allowFrom: ["111111111"], requireMention: false },
+        },
+        accounts: {
+          default: { botToken: "123:default" },
+          shadow: { enabled: false },
+        },
+      },
+      expectedReplyCount: 0,
+    }),
+    makeMessagePolicyCase({
       name: "blocks group messages when allowFrom is configured with @username entries (numeric IDs required)",
       telegram: {
         groupPolicy: "allowlist",
@@ -3691,6 +3797,122 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(2);
     expect(replySpy.mock.calls.at(1)?.[0].SessionKey).toContain("agent:topic-b:");
     expect(replySpy.mock.calls.at(1)?.[0].SessionKey).toContain("thread:124:99");
+  });
+
+  it("authorizes and routes channel-DM messages with the canonical topic identity", async () => {
+    const chatId = -100123456700;
+    loadConfig.mockReturnValue({
+      agents: { list: [{ id: "channel-topic-agent" }] },
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["701"],
+          groups: {
+            [String(chatId)]: {
+              allowFrom: ["701"],
+              requireMention: false,
+              topics: {
+                "77": {
+                  agentId: "channel-topic-agent",
+                  allowFrom: ["700"],
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await dispatchMessage({
+      me: { id: 999, username: "openclaw_bot" },
+      message: {
+        chat: {
+          id: chatId,
+          type: "supergroup",
+          title: "Channel Inbox",
+          is_direct_messages: true,
+        },
+        from: { id: 700, first_name: "Ada" },
+        text: "route this topic",
+        date: 1736380800,
+        message_id: 7700,
+        direct_messages_topic: { topic_id: 77 },
+        message_thread_id: 999,
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.MessageThreadId).toBe(77);
+    expect(payload.OriginatingTo).toBe(`telegram:${chatId}:direct-topic:77`);
+    expect(payload.SessionKey).toContain("agent:channel-topic-agent:");
+    expect(payload.SessionKey).toContain(":topic:77");
+  });
+
+  it.each([
+    {
+      name: "topic allows and base chat denies",
+      baseAllowFrom: ["701"],
+      topicAllowFrom: ["700"],
+      expectedCalls: 1,
+    },
+    {
+      name: "topic denies and base chat allows",
+      baseAllowFrom: ["700"],
+      topicAllowFrom: ["701"],
+      expectedCalls: 0,
+    },
+  ])("authorizes channel-DM callbacks from the canonical topic: $name", async (testCase) => {
+    const chatId = -100123456701;
+    const pluginHandler = vi.fn(async () => ({ handled: true }));
+    expect(
+      registerPluginInteractiveHandler("channel-topic-actions", {
+        channel: "telegram",
+        namespace: "channel-topic",
+        handler: pluginHandler,
+      }),
+    ).toEqual({ ok: true });
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: testCase.baseAllowFrom,
+          groups: {
+            [String(chatId)]: {
+              allowFrom: testCase.baseAllowFrom,
+              topics: { "77": { allowFrom: testCase.topicAllowFrom } },
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    await getCallbackHandler()({
+      callbackQuery: {
+        id: `channel-topic-${testCase.expectedCalls}`,
+        data: "channel-topic:run",
+        from: { id: 700, first_name: "Ada" },
+        message: {
+          chat: {
+            id: chatId,
+            type: "supergroup",
+            title: "Channel Inbox",
+            is_direct_messages: true,
+          },
+          date: 1736380800,
+          message_id: 7701,
+          direct_messages_topic: { topic_id: 77 },
+          message_thread_id: 999,
+        },
+      },
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(pluginHandler).toHaveBeenCalledTimes(testCase.expectedCalls);
+    clearPluginInteractiveHandlers();
   });
 
   it("routes non-default account DMs to the per-account fallback session without explicit bindings", async () => {
@@ -4191,7 +4413,7 @@ describe("createTelegramBot", () => {
       { type: "emoji", emoji: EYES_EMOJI },
     ]);
   });
-  it("clears native commands when disabled", () => {
+  it("syncs one empty native command menu when disabled", () => {
     resetHarnessSpies();
     loadConfig.mockReturnValue({
       commands: { native: false },
@@ -4199,10 +4421,12 @@ describe("createTelegramBot", () => {
 
     createTelegramBot({ token: "tok" });
 
+    expect(syncTelegramMenuCommands).toHaveBeenCalledOnce();
+    expect(syncTelegramMenuCommands).toHaveBeenCalledWith(
+      expect.objectContaining({ commandsToRegister: [] }),
+    );
+    expect(setMyCommandsSpy).toHaveBeenCalledOnce();
     expect(setMyCommandsSpy).toHaveBeenCalledWith([]);
-    expect(setMyCommandsSpy).toHaveBeenCalledWith([], {
-      scope: { type: "all_group_chats" },
-    });
   });
   it("handles requireMention when mentions do and do not resolve", async () => {
     const cases = [
@@ -4472,27 +4696,6 @@ describe("createTelegramBot", () => {
     );
     expect(buildTypingThreadParams(resolvedThreadId)).toEqual({ message_thread_id: 1 });
   });
-  it("threads forum replies only when a topic id exists", () => {
-    expect(
-      buildTelegramThreadParams(
-        resolveTelegramThreadSpec({
-          isGroup: true,
-          isForum: true,
-          messageThreadId: undefined,
-        }),
-      ),
-    ).toBeUndefined();
-    expect(
-      buildTelegramThreadParams(
-        resolveTelegramThreadSpec({
-          isGroup: true,
-          isForum: true,
-          messageThreadId: 99,
-        }),
-      ),
-    ).toEqual({ message_thread_id: 99 });
-  });
-
   const allowFromEdgeCases: MessagePolicyCase[] = [
     makeMessagePolicyCase({
       name: "allows direct messages regardless of groupPolicy",

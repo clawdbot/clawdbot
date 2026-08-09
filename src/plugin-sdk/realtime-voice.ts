@@ -9,6 +9,7 @@ export type {
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceGatewayControl,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceCloseReason,

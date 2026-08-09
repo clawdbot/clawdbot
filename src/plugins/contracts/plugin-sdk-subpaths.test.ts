@@ -829,7 +829,6 @@ describe("plugin-sdk subpath exports", () => {
       "QUEUED_USER_MESSAGE_MARKER",
     ]);
     expectSourceMentions("channel-test-helpers", [
-      "assertBundledChannelEntries",
       "formatEnvelopeTimestamp",
       "expectPairingReplyText",
     ]);

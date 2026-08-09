@@ -8,6 +8,9 @@ enum GatewayLaunchAgentManager {
 
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
     private static let disableLaunchAgentMarker = ".openclaw/disable-launchagent"
+    /// A first-run daemon command may wait behind state integrity checks and the shared startup-
+    /// migration lease. Keep the app from killing healthy migration work before it can finish.
+    static let startupMigrationTolerance: TimeInterval = 120
 
     private static var disableLaunchAgentMarkerURL: URL {
         #if DEBUG
@@ -130,7 +133,7 @@ enum GatewayLaunchAgentManager {
             self.logger.info("launchd restart skipped (disable marker set)")
             return nil
         }
-        return await self.runDaemonCommand(["restart"], timeout: 20)
+        return await self.runDaemonCommand(["restart"])
     }
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
@@ -234,7 +237,7 @@ extension GatewayLaunchAgentManager {
 
     private static func runDaemonCommand(
         _ args: [String],
-        timeout: Double = 15,
+        timeout: Double = Self.startupMigrationTolerance,
         quiet: Bool = false) async -> String?
     {
         let result = await self.runDaemonCommandResult(args, timeout: timeout, quiet: quiet)

@@ -209,14 +209,18 @@ export function createWorkerSessionPlacementStore(
       const identity = normalizeIdentity(input);
       return write((db) => {
         const current = ensureLocal(db, identity, now());
-        if (current.state !== "local" && current.state !== "reclaimed") {
+        if (
+          current.state !== "local" &&
+          current.state !== "reclaimed" &&
+          current.state !== "failed"
+        ) {
           throw new Error(
             `Cannot dispatch session ${identity.sessionId} from placement ${current.state}`,
           );
         }
         const updatedAtMs = now();
         // Preserve an in-flight local claim while closing admission. Reclaimed
-        // placement has no live owner and starts a fresh worker generation.
+        // and failed placements have no live worker owner and start a fresh generation.
         const result = executeSqliteQuerySync(
           db,
           query(db)

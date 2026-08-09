@@ -136,6 +136,7 @@ vi.mock("../agents/model-auth.js", async (importOriginal) => {
 });
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: loadModelCatalog,
   loadPreparedModelCatalogOwnerSnapshot: async (params: { agentDir?: string; config?: object }) => {
     const entries = await loadModelCatalog(params);

@@ -3,6 +3,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -10,7 +11,6 @@ import {
 } from "../../agents/auth-profiles.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { modelsHandlers } from "./models.js";

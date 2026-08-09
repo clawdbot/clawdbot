@@ -9,7 +9,16 @@ import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   replaceOversizedChatHistoryMessages,
 } from "./server-methods/chat-history-budget.js";
-import { buildSessionHistorySnapshot } from "./session-history-state.js";
+import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
+
+function projectHistoryTransports(message: Record<string, unknown>) {
+  const websocket = replaceOversizedChatHistoryMessages({
+    messages: projectChatDisplayMessages([message]),
+    maxSingleMessageBytes: CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
+  }).messages;
+  const sse = buildSessionHistorySnapshot({ rawMessages: [message], limit: 5 }).history.messages;
+  return [websocket, sse];
+}
 
 describe("oversized multimodal chat history", () => {
   it.each([
@@ -35,14 +44,7 @@ describe("oversized multimodal chat history", () => {
         { type: "text", text: "keep suffix text" },
       ],
     };
-    const projected = projectChatDisplayMessages([message]);
-    const websocket = replaceOversizedChatHistoryMessages({
-      messages: projected,
-      maxSingleMessageBytes: CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-    }).messages;
-    const sse = buildSessionHistorySnapshot({ rawMessages: [message], limit: 5 }).history.messages;
-
-    for (const messages of [websocket, sse]) {
+    for (const messages of projectHistoryTransports(message)) {
       expect(messages).toMatchObject([
         {
           role: "user",
@@ -66,6 +68,129 @@ describe("oversized multimodal chat history", () => {
       projectChatDisplayMessages([{ role: "user", content: [{ type: "image", source }] }]),
     ).toEqual([{ role: "user", content: [{ type: "image", source }] }]);
   });
+
+  it("omits persisted top-level audio data from WebSocket and SSE history", () => {
+    const audio = Buffer.from("persisted audio bytes");
+    const encoded = audio.toString("base64");
+    const message = {
+      role: "user",
+      content: [
+        { type: "text", text: "keep prefix text" },
+        { type: "audio", mimeType: "audio/wav", data: encoded },
+        { type: "text", text: "keep suffix text" },
+      ],
+    };
+
+    for (const messages of projectHistoryTransports(message)) {
+      expect(messages).toEqual([
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "keep prefix text" },
+            { type: "audio", mimeType: "audio/wav", omitted: true, bytes: audio.length },
+            { type: "text", text: "keep suffix text" },
+          ],
+        },
+      ]);
+      expect(JSON.stringify(messages)).not.toContain(encoded);
+    }
+  });
+
+  it("removes private audio payloads and local references while preserving safe refs", () => {
+    const privateMarker = "private-audio-reference";
+    const safeAudio = [
+      {
+        type: "audio",
+        url: "https://example.invalid/audio.wav",
+        openUrl: "http://example.invalid/audio.wav",
+        audio_url: "media://inbound/audio.wav",
+        source: { type: "url", url: "/api/chat/media/outgoing/audio.wav" },
+      },
+      { type: "audio", url: "/media/audio.wav", openUrl: "/__openclaw__/audio/clip.wav" },
+    ];
+    const message = {
+      role: "user",
+      content: [
+        {
+          type: "audio",
+          data: { rawSecret: privateMarker },
+          url: `data:audio/wav;base64,${privateMarker}`,
+          openUrl: `file:///tmp/${privateMarker}.wav`,
+          audio_url: `~/${privateMarker}.wav`,
+          path: `/tmp/${privateMarker}.wav`,
+          file: privateMarker,
+          filePath: String.raw`C:\private-audio-reference.wav`,
+          localPath: String.raw`\\server\share\private-audio-reference.wav`,
+          source: {
+            type: "opaque",
+            codec: "pcm",
+            data: new Uint8Array([111, 112, 113]),
+            url: `/tmp/${privateMarker}-source.wav`,
+            path: `/tmp/${privateMarker}-source.wav`,
+            file: privateMarker,
+            filePath: String.raw`D:\private-audio-reference.wav`,
+            localPath: String.raw`\\server\share\private-audio-reference-source.wav`,
+          },
+        },
+        { type: "audio", url: String.raw`C:\a.wav`, source: { url: String.raw`\\s\a.wav` } },
+        ...safeAudio,
+      ],
+    };
+    const original = structuredClone(message);
+
+    for (const messages of projectHistoryTransports(message)) {
+      expect(messages).toEqual([
+        {
+          role: "user",
+          content: [
+            {
+              type: "audio",
+              omitted: true,
+              source: { type: "opaque", codec: "pcm", omitted: true },
+            },
+            { type: "audio", omitted: true, source: { omitted: true } },
+            ...safeAudio,
+          ],
+        },
+      ]);
+      expect(JSON.stringify(messages)).not.toContain(privateMarker);
+      expect(JSON.stringify(messages)).not.toContain('"0":111');
+    }
+    expect(message).toEqual(original);
+  });
+
+  it("sanitizes newly appended audio before returning an incremental SSE message", () => {
+    const encoded = Buffer.from("incremental SSE audio").toString("base64");
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "audio-session", sessionKey: "agent:main:audio-session" },
+      rawMessages: [],
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "keep incremental text" },
+          { type: "audio", mimeType: "audio/ogg", data: encoded },
+        ],
+      },
+      messageId: "audio-message",
+    });
+
+    expect(appended?.message).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "keep incremental text" },
+        {
+          type: "audio",
+          mimeType: "audio/ogg",
+          omitted: true,
+          bytes: Buffer.from("incremental SSE audio").length,
+        },
+      ],
+    });
+    expect(JSON.stringify(appended?.message)).not.toContain(encoded);
+  });
 });
 
 describe("private transcript metadata projection", () => {
@@ -79,14 +204,7 @@ describe("private transcript metadata projection", () => {
         upstreamUserText: "private decorated prompt ".repeat(12_000),
       },
     };
-    const projected = projectChatDisplayMessages([message]);
-    const websocket = replaceOversizedChatHistoryMessages({
-      messages: projected,
-      maxSingleMessageBytes: CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-    }).messages;
-    const sse = buildSessionHistorySnapshot({ rawMessages: [message], limit: 5 }).history.messages;
-
-    for (const messages of [websocket, sse]) {
+    for (const messages of projectHistoryTransports(message)) {
       expect(messages).toEqual([
         {
           role: "user",

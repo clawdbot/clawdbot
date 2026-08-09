@@ -5,7 +5,7 @@
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { formatError } from "./server-utils.js";
 
-type TalkConnectionCleanupKind = "realtime-relay" | "transcription-relay";
+type TalkConnectionCleanupKind = "browser-control" | "realtime-relay" | "transcription-relay";
 
 export type UnifiedTalkSessionRecord =
   | {

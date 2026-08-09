@@ -19,22 +19,26 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 /**
- * Additive Claw provenance columns that only a writable open can ensure. A
- * same-version database written before them stays readable so read-only
- * planning surfaces are not refused before they can report anything.
+ * Additive Claw provenance and worker-environment columns that only a writable
+ * open can ensure. A same-version database written before them stays readable
+ * so read-only planning surfaces are not refused before they can report anything.
  */
 export const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
   "claw_installs.bootstrap_content_digest",
   "claw_installs.bootstrap_source_path",
+  "worker_environments.desktop_json",
   "claw_package_refs.extension_adapter_identity",
   "claw_package_refs.extension_detected_format",
   "claw_package_refs.extension_format",
   "claw_package_refs.extension_id",
   "claw_package_refs.extension_mapped_json",
   "claw_package_refs.extension_unavailable_json",
+  "worker_environments.shared_host",
+  "worktrees.run_end_cleanup_json",
 ] as const;
 
 const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
+  allowCompatibleAdditiveColumns: true,
   allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
   allowedMissingColumns: CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
   allowedColumnDefinitions: {
@@ -67,6 +71,8 @@ const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
       "target_agent_id TEXT NOT NULL DEFAULT 'main'",
     ],
     "operator_approvals.resolution_ref": ["resolution_ref TEXT"],
+    "worker_environments.desktop_json": ["desktop_json TEXT"],
+    "worker_environments.shared_host": ["shared_host INTEGER CHECK (shared_host IN (0, 1))"],
   },
 } satisfies SqliteSchemaCompatibility;
 

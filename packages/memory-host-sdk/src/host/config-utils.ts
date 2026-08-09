@@ -12,83 +12,17 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 export { normalizeAgentId };
-export { splitShellArgs } from "../../../../src/utils/shell-argv.js";
 
-// Shared OpenClaw config helpers used by memory host, QMD, and agent context code.
+// Shared OpenClaw config helpers used by memory host and agent context code.
 
-/** Chat shape used by memory send-policy matching. */
-type ChatType = "direct" | "group" | "channel";
 type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
-/** Memory backend selected by user config. */
-export type MemoryBackend = "builtin" | "qmd";
 /** Citation injection behavior for memory search results. */
 export type MemoryCitationsMode = "auto" | "on" | "off";
-/** QMD command mode used for search calls. */
-export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
-/** QMD startup policy for background indexing. */
-export type MemoryQmdStartupMode = "off" | "idle" | "immediate";
-
-/** Action returned by a session send-policy rule. */
-type SessionSendPolicyAction = "allow" | "deny";
-/** Match criteria for one memory send-policy rule. */
-type SessionSendPolicyMatch = {
-  channel?: string;
-  chatType?: ChatType;
-  keyPrefix?: string;
-  rawKeyPrefix?: string;
-};
-/** One ordered rule in session send-policy config. */
-type SessionSendPolicyRule = {
-  action: SessionSendPolicyAction;
-  match?: SessionSendPolicyMatch;
-};
-/** Memory send-policy config with default action and ordered rules. */
-export type SessionSendPolicyConfig = {
-  default?: SessionSendPolicyAction;
-  rules?: SessionSendPolicyRule[];
-};
-
-/** QMD collection path plus optional display name and glob pattern. */
-export type MemoryQmdIndexPath = {
-  path: string;
-  name?: string;
-  pattern?: string;
-};
-
-/** QMD session export config. */
-type MemoryQmdSessionConfig = {
-  enabled?: boolean;
-  exportDir?: string;
-  retentionDays?: number;
-};
-
-/** Search and injection limits for QMD memory results. */
-type MemoryQmdLimitsConfig = {
-  maxResults?: number;
-  maxSnippetChars?: number;
-  maxInjectedChars?: number;
-  timeoutMs?: number;
-};
-
-/** Full QMD-backed memory config. */
-export type MemoryQmdConfig = {
-  command?: string;
-  searchMode?: MemoryQmdSearchMode;
-  rerank?: boolean;
-  searchTool?: string;
-  includeDefaultMemory?: boolean;
-  paths?: MemoryQmdIndexPath[];
-  sessions?: MemoryQmdSessionConfig;
-  limits?: MemoryQmdLimitsConfig;
-  scope?: SessionSendPolicyConfig;
-};
 
 /** Top-level memory config shared by host and runtime callers. */
 type MemoryConfig = {
-  backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   search?: MemorySearchConfig;
-  qmd?: MemoryQmdConfig;
 };
 
 /** Per-agent memory search enablement and extra collection paths. */
@@ -96,9 +30,6 @@ type MemorySearchConfig = {
   enabled?: boolean;
   rememberAcrossConversations?: boolean;
   extraPaths?: string[];
-  qmd?: {
-    extraCollections?: MemoryQmdIndexPath[];
-  };
 };
 
 /** Agent context limits that bound memory file reads. */
@@ -215,7 +146,7 @@ function resolveRequiredHomeDir(
 }
 
 /** Resolve standalone memory-host paths without importing core home-directory policy. */
-export function resolveMemoryHostUserPath(
+function resolveMemoryHostUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,

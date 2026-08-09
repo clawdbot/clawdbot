@@ -2973,6 +2973,49 @@ describe("memory index", () => {
     );
   });
 
+  it("supplements thin strict FTS results for conversational queries", async () => {
+    const cases = [
+      {
+        query: "that thing we discussed about the API",
+        strictFile: "strict-english.md",
+        strictText: "That thing we discussed about the API belongs in the first draft.",
+        recallFile: "recall-english.md",
+        recallText: "API authentication uses short-lived OAuth tokens.",
+      },
+      {
+        query: "ayer hablamos sobre estrategia de despliegue",
+        strictFile: "strict-spanish.md",
+        strictText: "Ayer hablamos sobre estrategia de despliegue para la primera region.",
+        recallFile: "recall-spanish.md",
+        recallText: "La estrategia de despliegue requiere una ventana de mantenimiento.",
+      },
+    ] as const;
+    for (const entry of cases) {
+      await fs.writeFile(path.join(memoryDir, entry.strictFile), entry.strictText);
+      await fs.writeFile(path.join(memoryDir, entry.recallFile), entry.recallText);
+    }
+
+    const manager = await getPersistentManager(
+      createCfg({
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      }),
+    );
+    await manager.sync({ reason: "test" });
+    const provider = Reflect.get(manager, "provider") as {
+      embedQuery: (text: string) => Promise<number[]>;
+    };
+    const embedQuerySpy = vi.spyOn(provider, "embedQuery");
+
+    for (const entry of cases) {
+      const results = await manager.search(entry.query, { maxResults: 6 });
+      expect(results.some((result) => result.path.endsWith(`memory/${entry.recallFile}`))).toBe(
+        true,
+      );
+    }
+    expect(embedQuerySpy).toHaveBeenCalledTimes(cases.length);
+  });
+
   it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
     const cfg = createCfg({
       minScore: 0.35,
