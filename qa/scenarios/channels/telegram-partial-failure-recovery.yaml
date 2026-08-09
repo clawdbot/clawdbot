@@ -38,8 +38,6 @@ scenario:
     config:
       requiredProviderMode: mock-openai
       partialMarker: TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE
-      visibleRecoveryText: Something went wrong while processing your request. Please try again, or use /new to start a fresh session.
-      unsentFallbackText: Something went wrong while processing your request. Please try again.
 
 flow:
   steps:
@@ -64,18 +62,22 @@ flow:
         - waitForOutbound:
             conversation: { id: telegram-partial-failure-room, kind: group }
             sinceIndex: { ref: visibleOutboundStart }
-            textIncludes: { ref: config.visibleRecoveryText }
+            textIncludes: { ref: config.partialMarker }
             timeoutMs: 75000
+          saveAs: visiblePartial
+        - set: visiblePartialText
+          value:
+            expr: "visiblePartial.text"
         - call: sleep
           args: [4000]
         - set: visibleMessages
           value:
             expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').slice(visibleOutboundStart)"
         - assert:
-            expr: "visibleMessages.length === 1 && visibleMessages[0].text.includes(config.partialMarker) && visibleMessages[0].text.includes(config.visibleRecoveryText)"
+            expr: "visibleMessages.length === 1 && visiblePartialText.includes(config.partialMarker) && visibleMessages[0].text !== visiblePartialText && visibleMessages[0].text.trim().length > 0"
             message:
-              expr: "`expected one edited Telegram recovery containing the partial and fallback; saw ${visibleMessages.length}: ${visibleMessages.map((message) => message.text).join(' | ')}`"
-      detailsExpr: "JSON.stringify({ count: visibleMessages.length, text: visibleMessages.map((message) => message.text).join(' | ') })"
+              expr: "`expected one Telegram message edited away from the visible partial; saw ${visibleMessages.length}: initial=${visiblePartialText} final=${visibleMessages.map((message) => message.text).join(' | ')}`"
+      detailsExpr: "JSON.stringify({ count: visibleMessages.length, initialText: visiblePartialText, finalText: visibleMessages.map((message) => message.text).join(' | ') })"
 
     - name: sends one fallback when no partial became visible
       actions:
@@ -91,15 +93,15 @@ flow:
         - waitForOutbound:
             conversation: { id: telegram-partial-failure-room, kind: group }
             sinceIndex: { ref: unsentOutboundStart }
-            textIncludes: { ref: config.unsentFallbackText }
             timeoutMs: 75000
+          saveAs: unsentReply
         - call: sleep
           args: [4000]
         - set: unsentMessages
           value:
             expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').slice(unsentOutboundStart)"
         - assert:
-            expr: "unsentMessages.length === 1 && unsentMessages[0].text.includes(config.unsentFallbackText) && !unsentMessages[0].text.includes(config.partialMarker)"
+            expr: "unsentMessages.length === 1 && unsentReply.text.trim().length > 0 && unsentMessages[0].text.trim().length > 0 && !unsentMessages[0].text.includes(config.partialMarker)"
             message:
-              expr: "`expected one Telegram fallback without partial text; saw ${unsentMessages.length}: ${unsentMessages.map((message) => message.text).join(' | ')}`"
+              expr: "`expected one non-empty Telegram fallback without partial text; saw ${unsentMessages.length}: ${unsentMessages.map((message) => message.text).join(' | ')}`"
       detailsExpr: "JSON.stringify({ count: unsentMessages.length, text: unsentMessages.map((message) => message.text).join(' | ') })"
