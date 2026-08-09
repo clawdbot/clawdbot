@@ -682,6 +682,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
         minUniqueQueries: params.config.minUniqueQueries,
         recencyHalfLifeDays,
         maxAgeDays: params.config.maxAgeDays,
+        requireProvenance: true,
         nowMs: sweepNowMs,
       });
       totalCandidates += candidates.length;
@@ -720,6 +721,16 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
       });
       totalApplied += applied.applied;
       reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
+      const rejectionCounts = new Map<string, number>();
+      for (const { reason } of applied.rejectedCandidates) {
+        rejectionCounts.set(reason, (rejectionCounts.get(reason) ?? 0) + 1);
+      }
+      const rejectionSummary = [...rejectionCounts]
+        .map(([reason, count]) => `${reason}=${count}`)
+        .join(", ");
+      if (rejectionSummary) {
+        reportLines.push(`- Rejected after ranking: ${rejectionSummary}.`);
+      }
       if (params.config.verboseLogging) {
         const appliedSummary =
           applied.appliedCandidates.length > 0

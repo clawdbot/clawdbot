@@ -165,6 +165,8 @@ export type RankShortTermPromotionOptions = {
   minUniqueQueries?: number;
   maxAgeDays?: number;
   includePromoted?: boolean;
+  /** Require explicit provenance when ranking for consolidation. */
+  requireProvenance?: boolean;
   recencyHalfLifeDays?: number;
   weights?: Partial<PromotionWeights>;
   nowMs?: number;

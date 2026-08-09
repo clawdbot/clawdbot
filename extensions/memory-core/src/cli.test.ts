@@ -2578,7 +2578,7 @@ describe("memory cli", () => {
     });
   });
 
-  it("names the filter for each candidate rejected during promote apply", async () => {
+  it("names the filter for each ranked candidate rejected during promote apply", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const relativePath = "memory/2026-04-02.md";
       await writeDailyMemoryNote(workspaceDir, "2026-04-02", [
@@ -2658,7 +2658,7 @@ describe("memory cli", () => {
         "0",
       ]);
 
-      expectLogged(log, `Skipped ${relativePath}:1-1: origin filter (untrusted).`);
+      expectNotLogged(log, `${relativePath}:1-1`);
       expectLogged(log, `Skipped ${relativePath}:2-2: signal threshold (1 < 2).`);
       expectLogged(log, `Skipped ${relativePath}:3-3: contamination filter after rehydration.`);
       expectNotLogged(log, "No candidates met apply criteria.");
@@ -2706,7 +2706,7 @@ describe("memory cli", () => {
     });
   });
 
-  it("preserves score order for mixed applied and rejected promotion output", async () => {
+  it("filters statically ineligible candidates before promote apply output", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const relativePath = "memory/2026-04-03.md";
       await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
@@ -2781,11 +2781,11 @@ describe("memory cli", () => {
           rejectedCandidates: Array<{ candidate: { startLine: number } }>;
         };
       }>(writeJson);
-      expect(payload?.candidates.map((candidate) => candidate.startLine)).toEqual([1, 2]);
+      expect(payload?.candidates.map((candidate) => candidate.startLine)).toEqual([2]);
       expect(payload?.apply.appliedCandidates.map((candidate) => candidate.startLine)).toEqual([2]);
       expect(
         payload?.apply.rejectedCandidates.map((rejection) => rejection.candidate.startLine),
-      ).toEqual([1]);
+      ).toEqual([]);
 
       const store = await shortTermTesting.readRecallStore(workspaceDir, new Date().toISOString());
       for (const entry of Object.values(store.entries)) {
@@ -2798,10 +2798,8 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(args);
       const output = loggedOutput(log);
-      const rejectedIndex = output.indexOf(`${relativePath}:1-1`);
-      const appliedIndex = output.indexOf(`${relativePath}:2-2`);
-      expect(rejectedIndex).toBeGreaterThanOrEqual(0);
-      expect(rejectedIndex).toBeLessThan(appliedIndex);
+      expect(output).not.toContain(`${relativePath}:1-1`);
+      expect(output).toContain(`${relativePath}:2-2`);
     });
   });
 

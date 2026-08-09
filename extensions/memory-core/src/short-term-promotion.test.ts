@@ -9,7 +9,7 @@ import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-run
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { deriveConceptTags } from "./concept-vocabulary.js";
-import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
+import { resolvePromotionStaticRejection } from "./dreaming-consolidation-candidates.js";
 
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
@@ -861,7 +861,7 @@ describe("short-term promotion", () => {
       expect(ranked[0]?.uniqueQueries).toBe(3);
       expect(ranked[0]?.recallDays).toEqual(queryDays);
       expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
-      expect(ranked[0] && isPromotionOriginBlocked(ranked[0])).toBe(false);
+      expect(ranked[0] && resolvePromotionStaticRejection(ranked[0])).toBeNull();
     });
   });
 

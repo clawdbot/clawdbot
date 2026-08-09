@@ -16,7 +16,7 @@ import {
 } from "./dreaming-consolidation-artifacts.js";
 import {
   isConsolidationCandidateEligible,
-  isPromotionOriginBlocked,
+  resolvePromotionStaticRejection,
 } from "./dreaming-consolidation-candidates.js";
 import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-consolidation.js";
 import {
@@ -49,7 +49,6 @@ import {
   type ShortTermRecallEntry,
 } from "./short-term-promotion-types.js";
 import {
-  isContaminatedDreamingSnippet,
   normalizeSnippet,
   toFiniteNonNegativeInt,
   toFiniteScore,
@@ -173,7 +172,7 @@ function withAuthoritativeProvenance(
   candidate: PromotionCandidate,
   provenance: PromotionCandidate["provenance"],
 ): PromotionCandidate {
-  if (isPromotionOriginBlocked(candidate)) {
+  if (resolvePromotionStaticRejection(candidate) === "origin_blocked") {
     return candidate;
   }
   const next = { ...candidate };
@@ -183,6 +182,15 @@ function withAuthoritativeProvenance(
     delete next.provenance;
   }
   return next;
+}
+
+async function readDailyFileProvenanceByPath(workspaceDir: string) {
+  const entries = await readMemoryCoreWorkspaceEntries<{
+    fileHash: string;
+    originClass: "agent" | "untrusted";
+    observedAt: number;
+  }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir });
+  return new Map(entries.map((entry) => [entry.key.replaceAll("\\", "/"), entry.value]));
 }
 
 function withDailyFileQuarantine(
@@ -257,15 +265,9 @@ export async function applyShortTermPromotions(
   );
   const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
+  const staticEligibilityOptions = { requireProvenance: Boolean(options.consolidation) };
 
-  const dailyProvenanceEntries = await readMemoryCoreWorkspaceEntries<{
-    fileHash: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir });
-  const dailyProvenanceByPath = new Map(
-    dailyProvenanceEntries.map((entry) => [entry.key.replaceAll("\\", "/"), entry.value]),
-  );
+  const dailyProvenanceByPath = await readDailyFileProvenanceByPath(workspaceDir);
   const store = await withShortTermLock(workspaceDir, async () => readStore(workspaceDir, nowIso));
   const currentCandidates = options.candidates.map((candidate) => {
     const entry = store.entries[candidate.key];
@@ -289,27 +291,26 @@ export async function applyShortTermPromotions(
   const eligible = currentCandidates.filter((candidate) => {
     const latest = store.entries[candidate.key];
     const queryCount = Math.max(candidate.uniqueQueries, candidate.recallDays.length);
-    // Explicit untrusted/system origins never promote on ANY path (append or
-    // consolidation): recall frequency must never launder externally-derived
-    // content into MEMORY.md. Workspace memory files index as 'agent', so
-    // legitimate daily-note candidates stay eligible.
-    const reason = isPromotionOriginBlocked(candidate)
-      ? `origin filter (${candidate.provenance?.originClass})`
+    const staticRejection = resolvePromotionStaticRejection(candidate, staticEligibilityOptions);
+    const reason = staticRejection
+      ? staticRejection === "origin_blocked"
+        ? `origin filter (${candidate.provenance?.originClass})`
+        : staticRejection === "contaminated_snippet"
+          ? "contamination filter"
+          : `static eligibility filter (${staticRejection})`
       : options.consolidation && (!latest || !isConsolidationCandidateEligible(candidate))
         ? "consolidation origin/session filter"
-        : isContaminatedDreamingSnippet(candidate.snippet)
-          ? "contamination filter"
-          : candidate.promotedAt || latest?.promotedAt
-            ? "already promoted"
-            : candidate.score < minScore
-              ? `score threshold (${candidate.score.toFixed(3)} < ${minScore})`
-              : candidate.signalCount < minRecallCount
-                ? `signal threshold (${candidate.signalCount} < ${minRecallCount})`
-                : queryCount < minUniqueQueries
-                  ? `query threshold (${queryCount} < ${minUniqueQueries})`
-                  : maxAgeDays >= 0 && candidate.ageDays > maxAgeDays
-                    ? `age threshold (${candidate.ageDays.toFixed(1)}d > ${maxAgeDays}d)`
-                    : undefined;
+        : candidate.promotedAt || latest?.promotedAt
+          ? "already promoted"
+          : candidate.score < minScore
+            ? `score threshold (${candidate.score.toFixed(3)} < ${minScore})`
+            : candidate.signalCount < minRecallCount
+              ? `signal threshold (${candidate.signalCount} < ${minRecallCount})`
+              : queryCount < minUniqueQueries
+                ? `query threshold (${queryCount} < ${minUniqueQueries})`
+                : maxAgeDays >= 0 && candidate.ageDays > maxAgeDays
+                  ? `age threshold (${candidate.ageDays.toFixed(1)}d > ${maxAgeDays}d)`
+                  : undefined;
     if (reason) {
       rejectionReasons.set(candidate.key, reason);
     }
@@ -334,7 +335,7 @@ export async function applyShortTermPromotions(
     if (
       sourceFingerprintBefore === sourceFingerprintAfter &&
       rehydrated &&
-      !isContaminatedDreamingSnippet(rehydrated.snippet)
+      !resolvePromotionStaticRejection(rehydrated, staticEligibilityOptions)
     ) {
       rehydratedSelected.push(rehydrated);
       plannedSourceFingerprints.set(candidate.key, sourceFingerprintAfter);
@@ -421,7 +422,10 @@ export async function applyShortTermPromotions(
   const promotionLockTarget = await resolveMemoryPromotionLockTarget(workspaceDir);
   await withFileLock(promotionLockTarget, MEMORY_WRITE_LOCK_OPTIONS, async () => {
     await withShortTermLock(workspaceDir, async () => {
-      const latestStore = await readStore(workspaceDir, nowIso);
+      const [latestStore, latestDailyProvenanceByPath] = await Promise.all([
+        readStore(workspaceDir, nowIso),
+        readDailyFileProvenanceByPath(workspaceDir),
+      ]);
       const authoritativeSelected: PromotionCandidate[] = [];
       for (const candidate of rehydratedSelected) {
         const entry = latestStore.entries[candidate.key];
@@ -433,12 +437,20 @@ export async function applyShortTermPromotions(
           const sourceUnchanged =
             plannedSourceFingerprints.get(candidate.key) ===
             (await promotionSourceFingerprint(workspaceDir, candidate));
-          if (
-            wasDirectCandidate &&
-            sourceUnchanged &&
-            !isContaminatedDreamingSnippet(candidate.snippet)
-          ) {
-            authoritativeSelected.push(candidate);
+          const currentCandidate = withDailyFileQuarantine(candidate, latestDailyProvenanceByPath);
+          const staticRejection = resolvePromotionStaticRejection(
+            currentCandidate,
+            staticEligibilityOptions,
+          );
+          if (wasDirectCandidate && sourceUnchanged && !staticRejection) {
+            authoritativeSelected.push(currentCandidate);
+          } else {
+            rejectionReasons.set(
+              candidate.key,
+              staticRejection
+                ? `static eligibility changed (${staticRejection})`
+                : "candidate changed during apply",
+            );
           }
           continue;
         }
@@ -453,13 +465,23 @@ export async function applyShortTermPromotions(
         if (storeChanged || sourceChanged) {
           continue;
         }
-        const currentCandidate = withAuthoritativeProvenance(candidate, entry.provenance);
-        if (options.consolidation && !isConsolidationCandidateEligible(currentCandidate)) {
+        const currentCandidate = withDailyFileQuarantine(
+          withAuthoritativeProvenance(candidate, entry.provenance),
+          latestDailyProvenanceByPath,
+        );
+        const staticRejection = resolvePromotionStaticRejection(
+          currentCandidate,
+          staticEligibilityOptions,
+        );
+        if (staticRejection) {
+          rejectionReasons.set(candidate.key, `static eligibility changed (${staticRejection})`);
           continue;
         }
-        if (!isContaminatedDreamingSnippet(currentCandidate.snippet)) {
-          authoritativeSelected.push(currentCandidate);
+        if (options.consolidation && !isConsolidationCandidateEligible(currentCandidate)) {
+          rejectionReasons.set(candidate.key, "consolidation origin/session filter");
+          continue;
         }
+        authoritativeSelected.push(currentCandidate);
       }
       memoryWritePath = await resolveMemoryWritePath(memoryPath);
       existingMemory = await fs.readFile(memoryWritePath, "utf-8").catch((err: unknown) => {

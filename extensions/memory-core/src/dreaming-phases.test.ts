@@ -1204,7 +1204,7 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
-  it("keeps edited flush-quarantined daily files untrusted", async () => {
+  it("excludes flush-quarantined daily files from promotion ranking", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const relativePath = `memory/${DREAMING_TEST_DAY}.md`;
     const filePath = path.join(workspaceDir, relativePath);
@@ -1258,10 +1258,7 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
-    expect(candidates.length).toBeGreaterThan(0);
-    expect(candidates.every((candidate) => candidate.provenance?.originClass === "untrusted")).toBe(
-      true,
-    );
+    expect(candidates).toHaveLength(0);
   });
 
   it("checkpoints session transcript ingestion and skips unchanged transcripts", async () => {
@@ -1373,15 +1370,7 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
     });
-    expect(ranked.map((candidate) => candidate.path)).toContain(
-      "memory/.dreams/session-corpus/2026-04-05.txt",
-    );
-    expect(
-      ranked.find((candidate) => candidate.path.includes("session-corpus"))?.provenance,
-    ).toMatchObject({ sessionKind: "interactive" });
-    const snippets = ranked.map((candidate) => candidate.snippet);
-    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
-    expectIncludesSubstring(snippets, "Set retention to 365 days.");
+    expect(ranked.filter((candidate) => candidate.path.includes("session-corpus"))).toHaveLength(0);
   });
 
   it("redacts sensitive session content before writing session corpus", async () => {
@@ -3042,6 +3031,11 @@ describe("memory-core dreaming phases", () => {
           score: 0.88,
           snippet: "Documented Ollama provider setup.",
           source: "memory",
+          provenance: {
+            originClass: "agent",
+            sessionKind: "interactive",
+            observedAt: nowMs,
+          },
         },
       ],
     });
