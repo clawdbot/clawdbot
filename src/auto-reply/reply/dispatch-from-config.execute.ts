@@ -1,7 +1,6 @@
 import {
   hasOutboundReplyContent,
   isFastModeAutoProgressPayload,
-  resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
@@ -22,7 +21,12 @@ import {
   type InternalReplyResolverOptions,
   createReplyDispatchEvent,
 } from "./dispatch-from-config.events.js";
-import { shouldDeliverDespiteSourceReplySuppression } from "./dispatch-from-config.payloads.js";
+import {
+  hasAskUserPayload,
+  readAskUserQuestionId,
+  requiresDurableToolResultDelivery,
+  shouldDeliverDespiteSourceReplySuppression,
+} from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
@@ -41,7 +45,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     flushPendingCommentaryProgress,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
-    hasAskUserPayload,
     hookRunner,
     isDispatchOperationAborted,
     markInboundDedupeReplayUnsafe,
@@ -216,20 +219,33 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       state.shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
                     const isForcedToolProgress =
                       state.shouldDeliverForcedToolProgressDespiteSourceSuppression();
-                    const progressCallbackForwarded = state.shouldForwardToolResultProgressCallback(
-                      payload,
-                      isFastModeAutoProgress,
-                    );
-                    if (progressCallbackForwarded) {
-                      await onToolResultFromReplyOptions?.(payload);
+                    const forceToolResultProgress =
+                      params.replyOptions?.forceToolResultProgress === true;
+                    const requiresDurableToolResult =
+                      forceToolResultProgress && requiresDurableToolResultDelivery(payload);
+                    const shouldForwardToolResultProgress = isFastModeAutoProgress
+                      ? shouldForwardProgressCallback({
+                          forwardWhenSourceDeliverySuppressed: true,
+                        })
+                      : forceToolResultProgress
+                        ? !requiresDurableToolResult &&
+                          !state.shouldEmitVerboseProgress() &&
+                          shouldForwardProgressCallback({
+                            forwardWhenSourceDeliverySuppressed: true,
+                          })
+                        : state.shouldSendToolSummaries() && shouldForwardProgressCallback();
+                    const toolResultProgressCallback = shouldForwardToolResultProgress
+                      ? onToolResultFromReplyOptions
+                      : undefined;
+                    if (toolResultProgressCallback) {
+                      await toolResultProgressCallback(payload);
                     }
                     if (isDispatchOperationAborted()) {
                       return;
                     }
                     if (
-                      isFastModeAutoProgress &&
-                      progressCallbackForwarded &&
-                      onToolResultFromReplyOptions
+                      toolResultProgressCallback &&
+                      (isFastModeAutoProgress || forceToolResultProgress)
                     ) {
                       return;
                     }
@@ -284,19 +300,14 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       !isFastModeAutoProgressPayload(deliveryPayload) &&
                       !isForcedToolProgress
                     ) {
-                      const hasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
-                      if (
-                        !hasMedia &&
-                        !state.hasExecApprovalPayload(deliveryPayload) &&
-                        !hasAskUserPayload(deliveryPayload)
-                      ) {
+                      if (!requiresDurableToolResultDelivery(deliveryPayload)) {
                         return;
                       }
                     }
                     if (deliveryPayload.isError === true) {
                       markVisibleToolErrorProgress();
                     }
-                    const askUserQuestionId = state.readAskUserQuestionId(deliveryPayload);
+                    const askUserQuestionId = readAskUserQuestionId(deliveryPayload);
                     if (
                       askUserQuestionId !== undefined &&
                       !(await isAskUserPromptPending(askUserQuestionId))

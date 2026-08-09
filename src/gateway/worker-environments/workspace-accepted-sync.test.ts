@@ -4,9 +4,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { waitForChildClose, waitForDead, waitForFile } from "../../../test/helpers/process-wait.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
-import { createDeferred } from "../../shared/deferred.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerWorkspaceCommand,

@@ -90,10 +90,6 @@ class LabsPage extends OpenClawLightDomElement {
       });
       if (!patched) {
         this.saveError = runtimeConfig.state.lastError ?? t("labsPage.saveFailed");
-        return;
-      }
-      if (this.context.runtimeConfig === runtimeConfig) {
-        await runtimeConfig.refresh();
       }
     } catch (error) {
       this.saveError = String(error);

@@ -108,7 +108,7 @@
       ]
     },
     "assetScripts": {
-      "build": "node ../../scripts/build-discord-activity-sdk.mjs"
+      "build": "node --import tsx ../../scripts/build-discord-activity-sdk.mts"
     },
     "release": {
       "publishToClawHub": true,

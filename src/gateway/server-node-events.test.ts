@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -16,7 +17,6 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";

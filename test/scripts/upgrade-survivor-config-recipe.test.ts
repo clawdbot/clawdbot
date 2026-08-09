@@ -13,9 +13,9 @@ import {
   resolveUpgradeSurvivorConfigStepsForBaseline,
   resolveUpgradeSurvivorOpenClawCommand,
   runUpgradeSurvivorOpenClawStep,
-} from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mjs";
+} from "../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 
-const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mjs";
+const RECIPE_PATH = "scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
 
 describe("upgrade survivor config recipe command resolution", () => {
   it("compares baseline versions with the shared release parser", () => {
@@ -169,7 +169,16 @@ process.exit(0);
 
       execFileSync(
         process.execPath,
-        [RECIPE_PATH, "apply", "--summary", summaryPath, "--baseline-version", "2026.4.21"],
+        [
+          "--import",
+          "tsx",
+          RECIPE_PATH,
+          "apply",
+          "--summary",
+          summaryPath,
+          "--baseline-version",
+          "2026.4.21",
+        ],
         {
           env: {
             ...process.env,

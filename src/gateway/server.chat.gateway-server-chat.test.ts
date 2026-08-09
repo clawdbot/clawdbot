@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -17,7 +18,6 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import * as sessionLifecycleState from "./session-lifecycle-state.js";

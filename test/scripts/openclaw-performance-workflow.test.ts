@@ -309,7 +309,8 @@ describe("OpenClaw performance workflow", () => {
 
   it("builds only the QA and startup artifacts required by source probes", () => {
     const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
-    const build = "OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance";
+    const build =
+      "OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts sourcePerformance";
 
     expect(run).toContain("module.BUILD_ALL_PROFILES?.sourcePerformance");
     expect(run).toContain(build);
@@ -850,7 +851,7 @@ esac
     const runKova = findStep("Run Kova");
 
     expect(runKova.run).toContain(
-      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "${gate_args[@]}"',
+      'node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mts" "${gate_args[@]}"',
     );
     expect(runKova.run).not.toContain("report.summary?.statuses ?? {}");
     expect(runKova.run).toContain(
@@ -1010,9 +1011,9 @@ esac
 
   it("finalizes Kova artifacts before failing evidence integrity", () => {
     const run = findStep("Run Kova").run ?? "";
-    const evidence = run.indexOf("scripts/lib/kova-workflow-evidence.mjs");
+    const evidence = run.indexOf("scripts/lib/kova-workflow-evidence.mts");
     const bundle = run.indexOf('kova report bundle "$report_json"');
-    const summary = run.indexOf("scripts/kova-ci-summary.mjs");
+    const summary = run.indexOf("scripts/kova-ci-summary.mts");
     const integrityExit = run.indexOf(
       'if [[ "$evidence_status" != "0" || "$bundle_status" != "0" || "$summary_status" != "0" ]]',
     );
@@ -1030,8 +1031,8 @@ esac
   it("runs the trusted lane evidence validator before tolerating gate failures", () => {
     const runKova = findStep("Run Kova");
     const run = runKova.run ?? "";
-    const evidenceValidator = run.indexOf("scripts/lib/kova-workflow-evidence.mjs");
-    const trustedGateAdapter = run.indexOf("scripts/lib/kova-report-gate.mjs");
+    const evidenceValidator = run.indexOf("scripts/lib/kova-workflow-evidence.mts");
+    const trustedGateAdapter = run.indexOf("scripts/lib/kova-report-gate.mts");
 
     expect(evidenceValidator).toBeGreaterThan(-1);
     expect(trustedGateAdapter).toBeGreaterThan(evidenceValidator);
@@ -1049,14 +1050,14 @@ esac
     );
     expect(run).toContain("gate_args+=(--require-instrumented-performance-contract)");
     expect(run).toContain(
-      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "${gate_args[@]}"',
+      'node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mts" "${gate_args[@]}"',
     );
     expect(run.indexOf('gate_args=("$report_json")')).toBeLessThan(
       run.indexOf("gate_args+=(--require-instrumented-performance-contract)"),
     );
     expect(run.indexOf("gate_args+=(--require-instrumented-performance-contract)")).toBeLessThan(
       run.indexOf(
-        'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "${gate_args[@]}"',
+        'node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mts" "${gate_args[@]}"',
       ),
     );
   });
@@ -1081,9 +1082,10 @@ esac
 
     expect(workflow.jobs?.kova?.env).not.toHaveProperty("OPENCLAW_OCM_RUNTIME_BUILD_PROFILE");
     expect(configure.run).toContain(
-      'npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mjs"',
+      'npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mts"',
     );
-    expect(configure.run).toContain("OCM_INTERNAL_NPM_BIN=$npm_wrapper");
+    expect(configure.run).toContain("OCM_INTERNAL_NPM_BIN=$npm_adapter");
+    expect(configure.run).toContain("OPENCLAW_OCM_NPM_WRAPPER=$npm_wrapper");
     expect(configure.run).toContain(
       'if [[ -f "${GITHUB_WORKSPACE}/packages/ai/package.json" ]]; then',
     );

@@ -3,19 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
-import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
-import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mjs";
+import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import {
   detectVitestHostInfo as detectVitestHostInfoImpl,
   isCiLikeEnv,
-  resolveLocalVitestMaxWorkers as resolveLocalVitestMaxWorkersImpl,
   resolveLocalVitestScheduling as resolveLocalVitestSchedulingImpl,
-} from "../../scripts/lib/vitest-local-scheduling.mjs";
+} from "../../scripts/lib/vitest-local-scheduling.mts";
 import type {
   LocalVitestScheduling,
   VitestHostInfo,
-} from "../../scripts/lib/vitest-local-scheduling.mjs";
+} from "../../scripts/lib/vitest-local-scheduling.mts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -46,7 +45,7 @@ export function resolveLocalVitestMaxWorkers(
   system: VitestHostInfo = detectVitestHostInfo(),
   pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
 ): number {
-  return resolveLocalVitestMaxWorkersImpl(env, system, pool);
+  return resolveLocalVitestSchedulingImpl(env, system, pool).maxWorkers;
 }
 
 export function resolveLocalVitestScheduling(

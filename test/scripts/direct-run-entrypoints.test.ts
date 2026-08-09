@@ -12,7 +12,7 @@ const DIRECT_RUN_SCRIPTS = [
   "scripts/e2e/lib/package-compat.mjs",
   "scripts/generate-bundled-channel-config-metadata.ts",
   "scripts/plan-release-workflow-matrix.mjs",
-  "scripts/run-additional-boundary-checks.mjs",
+  "scripts/run-additional-boundary-checks.mts",
   "scripts/verify-docker-attestations.mjs",
 ] as const;
 
@@ -37,8 +37,8 @@ const EXECUTABLE_ENTRYPOINTS = [
   },
   {
     args: ["--help"],
-    output: "Usage: node scripts/run-additional-boundary-checks.mjs",
-    script: "scripts/run-additional-boundary-checks.mjs",
+    output: "Usage: node --import tsx scripts/run-additional-boundary-checks.mts",
+    script: "scripts/run-additional-boundary-checks.mts",
     status: 0,
   },
   {
@@ -50,7 +50,11 @@ const EXECUTABLE_ENTRYPOINTS = [
 ] as const;
 
 function runEntrypoint(entrypoint: (typeof EXECUTABLE_ENTRYPOINTS)[number]) {
-  return spawnSync(process.execPath, [path.resolve(entrypoint.script), ...entrypoint.args], {
+  const script = path.resolve(entrypoint.script);
+  const args = script.endsWith(".mts")
+    ? ["--import", "tsx", script, ...entrypoint.args]
+    : [script, ...entrypoint.args];
+  return spawnSync(process.execPath, args, {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {

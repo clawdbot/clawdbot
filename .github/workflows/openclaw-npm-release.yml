@@ -358,7 +358,7 @@ jobs:
           for package_dir in "${package_dirs[@]}"; do
             runtime_args+=(--package "$package_dir")
           done
-          node scripts/check-plugin-npm-runtime-builds.mjs "${runtime_args[@]}"
+          node --import tsx scripts/check-plugin-npm-runtime-builds.mts "${runtime_args[@]}"
 
           for package_dir in "${package_dirs[@]}"; do
             OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD=0 \
@@ -387,7 +387,7 @@ jobs:
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: |
           set -euo pipefail
-          node scripts/generate-dependency-release-evidence.mjs \
+          node --import tsx scripts/generate-dependency-release-evidence.mts \
             --release-ref "$RELEASE_REF" \
             --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
             --output-dir "$RUNNER_TEMP/openclaw-release-dependency-evidence" \

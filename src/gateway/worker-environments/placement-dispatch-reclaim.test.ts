@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -27,7 +26,7 @@ describe("worker placement dispatch reclaim", () => {
   let placementStore: PlacementStore;
 
   beforeEach(async () => {
-    root = tempDirs.make("openclaw-dispatch-", await fs.realpath(os.tmpdir()));
+    root = tempDirs.make("openclaw-dispatch-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });

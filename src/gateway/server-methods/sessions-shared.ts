@@ -17,14 +17,6 @@ import {
   type PluginSessionOwnershipAction,
 } from "../session-plugin-ownership.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
-import type {
-  GatewaySessionStoreTarget,
-  GatewaySessionStoreTargetWithStore,
-} from "../session-utils-contracts.js";
-import type {
-  GatewaySessionStoreCache,
-  GatewaySessionStoreDiscoveryCache,
-} from "../session-utils-store-lookup.js";
 import {
   resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -157,54 +149,16 @@ export function rejectPluginRuntimeSessionOwnershipMismatch(params: {
   return true;
 }
 
-type GatewaySessionTargetOptions = {
-  agentId?: string;
-  exactRead?: boolean;
-  storeCache?: GatewaySessionStoreCache;
-  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-};
-
-type HydratedGatewaySessionTargetOptions = GatewaySessionTargetOptions &
-  (
-    | { exactRead: true }
-    | { storeCache: GatewaySessionStoreCache }
-    | { targetDiscoveryCache: GatewaySessionStoreDiscoveryCache }
-  );
-
 export function resolveGatewaySessionTargetFromKey(
   key: string,
   cfg: OpenClawConfig,
-  opts: HydratedGatewaySessionTargetOptions,
-): { cfg: OpenClawConfig; target: GatewaySessionStoreTargetWithStore; storePath: string };
-export function resolveGatewaySessionTargetFromKey(
-  key: string,
-  cfg: OpenClawConfig,
-  opts?: GatewaySessionTargetOptions,
-): { cfg: OpenClawConfig; target: GatewaySessionStoreTarget; storePath: string };
-export function resolveGatewaySessionTargetFromKey(
-  key: string,
-  cfg: OpenClawConfig,
-  opts?: GatewaySessionTargetOptions,
+  opts?: { agentId?: string },
 ) {
-  const targetOptions = {
+  const target = resolveGatewaySessionStoreTarget({
     cfg,
     key,
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-  };
-  const needsStore =
-    opts?.exactRead === true ||
-    opts?.storeCache !== undefined ||
-    opts?.targetDiscoveryCache !== undefined;
-  const target = needsStore
-    ? resolveGatewaySessionStoreTargetWithStore({
-        ...targetOptions,
-        ...(opts?.exactRead === true ? { exactRead: true } : {}),
-        ...(opts?.storeCache !== undefined ? { storeCache: opts.storeCache } : {}),
-        ...(opts?.targetDiscoveryCache !== undefined
-          ? { targetDiscoveryCache: opts.targetDiscoveryCache }
-          : {}),
-      })
-    : resolveGatewaySessionStoreTarget(targetOptions);
+  });
   return { cfg, target, storePath: target.storePath };
 }
 

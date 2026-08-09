@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -28,7 +29,6 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { getCommandLaneSnapshot, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
-import { createDeferred } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,

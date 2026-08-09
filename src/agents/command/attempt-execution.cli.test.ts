@@ -1314,6 +1314,17 @@ describe("CLI attempt execution", () => {
       );
       await replaceSessionEntry({ sessionKey, storePath }, concurrentEntry);
       sessionStore[sessionKey] = concurrentEntry;
+      const clearBeforeFreshRetry = runArgs.onBeforeFreshCliSessionRetry;
+      expect(clearBeforeFreshRetry).toBeTypeOf("function");
+      await expect(
+        (
+          clearBeforeFreshRetry as (params: {
+            provider: string;
+            reason: "timeout";
+            sessionId: string;
+          }) => Promise<boolean>
+        )({ provider: "claude-cli", reason: "timeout", sessionId: forkedCliSessionId }),
+      ).resolves.toBe(false);
       throw recoveryError;
     });
 

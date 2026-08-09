@@ -718,9 +718,7 @@ describe("release validation no-push transport", () => {
     );
     expect(validatePackage.run).toContain("package/dist/build-info.json");
     expect(validatePackage.run).toContain('[[ "$package_source_sha" == "$SELECTED_SHA" ]]');
-    expect(validatePackage.run).toContain(
-      'validator=".release-harness/scripts/check-openclaw-package-tarball.mjs"',
-    );
+    expect(validatePackage.run).toContain("scripts/check-openclaw-package-tarball.mjs");
     const targetedRun = step(
       job(workflow, "validate_docker_lanes"),
       "Run targeted Docker E2E lanes",

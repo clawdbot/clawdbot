@@ -10,7 +10,7 @@ import {
   runManagedCommand,
   signalExitCode,
   terminateManagedChild,
-} from "../../scripts/lib/managed-child-process.mjs";
+} from "../../scripts/lib/managed-child-process.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -537,7 +537,7 @@ fs.writeFileSync(process.argv[1], String(child.pid));
       const childPidPath = path.join(dir, "child.pid");
       const descendantPidPath = path.join(dir, "descendant.pid");
       const runnerReadyPath = path.join(dir, "runner.ready");
-      const helperUrl = pathToFileURL(path.resolve("scripts/lib/managed-child-process.mjs")).href;
+      const helperUrl = pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href;
 
       fs.writeFileSync(
         childPath,

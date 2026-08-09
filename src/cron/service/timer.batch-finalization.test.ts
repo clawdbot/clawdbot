@@ -1,11 +1,11 @@
 // Completed cron work must become durable before unrelated batch work drains.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  createDeferred,
   createDueIsolatedJob,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
@@ -207,7 +207,7 @@ describe("cron batch outcome finalization", () => {
       original.name = "removed original scheduled job";
       await saveCronStore(store.storePath, { version: 1, jobs: [original] });
 
-      const started = createDeferred<void>();
+      const started = createDeferred();
       const release = createDeferred<{ status: "ok"; summary: string }>();
       const events: Array<{ action: string; jobId: string; job?: CronJob }> = [];
       const state = createBatchState({
@@ -527,7 +527,7 @@ describe("cron batch outcome finalization", () => {
     });
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const runStarted = createDeferred<void>();
+    const runStarted = createDeferred();
     const releaseRun = createDeferred<{ status: "ok"; summary: string }>();
     const state = createBatchState({
       storePath: store.storePath,
@@ -572,8 +572,8 @@ describe("cron batch outcome finalization", () => {
       });
       await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-      const terminalWriteStarted = createDeferred<void>();
-      const releaseTerminalWrite = createDeferred<void>();
+      const terminalWriteStarted = createDeferred();
+      const releaseTerminalWrite = createDeferred();
       const save = cronStoreModule.saveCronJobsStore;
       const saveSpy = vi
         .spyOn(cronStoreModule, "saveCronJobsStore")
@@ -628,8 +628,8 @@ describe("cron batch outcome finalization", () => {
       });
       await saveCronStore(store.storePath, { version: 1, jobs: [first, second] });
 
-      const terminalWriteFailed = createDeferred<void>();
-      const secondStarted = createDeferred<void>();
+      const terminalWriteFailed = createDeferred();
+      const secondStarted = createDeferred();
       const releaseSecond = createDeferred<{ status: "ok"; summary: string }>();
       const save = cronStoreModule.saveCronJobsStore;
       let rejectedTerminalWrite = false;
@@ -767,7 +767,7 @@ describe("cron batch outcome finalization", () => {
       });
       await saveCronStore(store.storePath, { version: 1, jobs: [first, second] });
 
-      const secondStarted = createDeferred<void>();
+      const secondStarted = createDeferred();
       const releaseSecond = createDeferred<{ status: "ok"; summary: string }>();
       const events: Array<{ action: string; jobId: string; status?: string }> = [];
       const state = createBatchState({
@@ -843,7 +843,7 @@ describe("cron batch outcome finalization", () => {
       if (!lastJob) {
         throw new Error("expected a final cron stress-test job");
       }
-      const finalRunStarted = createDeferred<void>();
+      const finalRunStarted = createDeferred();
       const releaseFinalRun = createDeferred<{ status: "ok"; summary: string }>();
       const state = createBatchState({
         storePath: store.storePath,

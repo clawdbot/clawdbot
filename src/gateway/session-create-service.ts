@@ -81,7 +81,7 @@ import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "./session-utils.js";
-import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
+import { projectSessionsPatchEntry, resolveSessionPatchModelSelection } from "./sessions-patch.js";
 
 type TrustedCatalogSessionTarget = {
   model: string;
@@ -906,9 +906,13 @@ export async function createGatewaySession(params: {
             };
           }
         }
-        const patched = await applySessionsPatchToStore({
+        const patched = await projectSessionsPatchEntry({
           cfg: params.cfg,
-          store: sessionEntries,
+          existingEntry: sessionEntries[target.canonicalKey],
+          isLabelInUse: (label) =>
+            Object.entries(sessionEntries).some(
+              ([sessionKey, entry]) => sessionKey !== target.canonicalKey && entry.label === label,
+            ),
           storeKey: target.canonicalKey,
           agentId: target.agentId,
           patch: {
@@ -923,6 +927,7 @@ export async function createGatewaySession(params: {
         if (!patched.ok) {
           return patched;
         }
+        sessionEntries[target.canonicalKey] = patched.entry;
         const spawnedCwd = normalizeOptionalString(params.spawnedCwd);
         const execNode = normalizeOptionalString(params.execNode);
         const execCwd = normalizeOptionalString(params.execCwd);

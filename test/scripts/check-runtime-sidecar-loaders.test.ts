@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectTsdownEntrySources,
   findRuntimeSidecarLoaderViolations,
-} from "../../scripts/check-runtime-sidecar-loaders.mjs";
+} from "../../scripts/check-runtime-sidecar-loaders.mts";
 
 describe("check-runtime-sidecar-loaders", () => {
   it("flags hidden createRequire runtime sidecars that are not build entries", () => {

@@ -1,6 +1,7 @@
 // Tests reply turn admission decisions for active, queued, and aborted runs.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
@@ -69,14 +70,6 @@ function admitTestReplyTurn(
     Partial<Pick<Parameters<typeof admitReplyTurn>[0], "kind" | "resetTriggered">>,
 ) {
   return admitReplyTurn({ kind: "visible", resetTriggered: false, ...overrides });
-}
-
-function createDeferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function createSessionStore(entries: Record<string, object>): string {

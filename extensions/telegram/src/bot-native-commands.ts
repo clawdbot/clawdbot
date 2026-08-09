@@ -115,7 +115,10 @@ import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
-import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import {
+  resolveTelegramDirectToolPolicy,
+  resolveTelegramGroupPromptSettings,
+} from "./group-config-helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
@@ -1709,6 +1712,14 @@ export const registerTelegramNativeCommands = ({
           From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
           To: `slash:${senderId || chatId}`,
           ChatType: isGroup ? "group" : "direct",
+          ConversationToolPolicy: isGroup
+            ? undefined
+            : resolveTelegramDirectToolPolicy({
+                directConfig: groupConfig,
+                senderId,
+                senderName: buildSenderName(msg),
+                senderUsername,
+              }),
           ConversationLabel: conversationLabel,
           GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
           GroupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,

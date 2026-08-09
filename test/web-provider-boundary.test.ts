@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   collectWebFetchProviderBoundaryViolations,
   main as webFetchMain,
-} from "../scripts/check-web-fetch-provider-boundaries.mjs";
+} from "../scripts/check-web-fetch-provider-boundaries.mts";
 import {
   collectWebSearchProviderBoundaryInventory,
   main as webSearchMain,
-} from "../scripts/check-web-search-provider-boundaries.mjs";
+} from "../scripts/check-web-search-provider-boundaries.mts";
 import { createCapturedIo } from "./helpers/captured-io.js";
 
 const webFetchViolationsPromise = collectWebFetchProviderBoundaryViolations();

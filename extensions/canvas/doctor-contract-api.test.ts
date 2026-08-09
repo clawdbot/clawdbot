@@ -1,25 +1,25 @@
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 
-const tempDirs: string[] = [];
 const migration = stateMigrations[0];
+const canvasDoctorWorkspaceRoot = resolvePreferredOpenClawTmpDir();
 
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
-
-async function createTempDir(label: string): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(tmpdir(), label));
-  tempDirs.push(dir);
-  return dir;
+function createCanvasDoctorWorkspace(kind: "state" | "custom") {
+  return tempWorkspace({
+    rootDir: canvasDoctorWorkspaceRoot,
+    prefix: `openclaw-canvas-doctor-${kind}-`,
+  });
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function migrationParams(params: {
   stateDir: string;
@@ -45,7 +45,8 @@ function migrationParams(params: {
 
 describe("Canvas doctor state migration", () => {
   it("ignores the default core document root", async () => {
-    const stateDir = await createTempDir("openclaw-canvas-doctor-state-");
+    await using stateWorkspace = await createCanvasDoctorWorkspace("state");
+    const stateDir = stateWorkspace.dir;
     await fs.mkdir(path.join(stateDir, "canvas", "documents", "cv_default"), {
       recursive: true,
     });
@@ -54,8 +55,10 @@ describe("Canvas doctor state migration", () => {
   });
 
   it("moves custom-root documents into the stable core layout", async () => {
-    const stateDir = await createTempDir("openclaw-canvas-doctor-state-");
-    const customRoot = await createTempDir("openclaw-canvas-doctor-custom-");
+    await using stateWorkspace = await createCanvasDoctorWorkspace("state");
+    await using customWorkspace = await createCanvasDoctorWorkspace("custom");
+    const stateDir = stateWorkspace.dir;
+    const customRoot = customWorkspace.dir;
     const legacyDocumentDir = path.join(customRoot, "documents", "cv_existing");
     await fs.mkdir(path.join(legacyDocumentDir, "collection.media"), { recursive: true });
     await fs.writeFile(path.join(legacyDocumentDir, "index.html"), "<p>existing</p>", "utf8");
@@ -90,8 +93,10 @@ describe("Canvas doctor state migration", () => {
   });
 
   it("leaves a conflicting legacy document in place", async () => {
-    const stateDir = await createTempDir("openclaw-canvas-doctor-state-");
-    const customRoot = await createTempDir("openclaw-canvas-doctor-custom-");
+    await using stateWorkspace = await createCanvasDoctorWorkspace("state");
+    await using customWorkspace = await createCanvasDoctorWorkspace("custom");
+    const stateDir = stateWorkspace.dir;
+    const customRoot = customWorkspace.dir;
     const legacyDocumentDir = path.join(customRoot, "documents", "cv_conflict");
     const coreDocumentDir = path.join(stateDir, "canvas", "documents", "cv_conflict");
     await fs.mkdir(legacyDocumentDir, { recursive: true });
@@ -112,8 +117,10 @@ describe("Canvas doctor state migration", () => {
   });
 
   it("cleans partial copies and retries the migration", async () => {
-    const stateDir = await createTempDir("openclaw-canvas-doctor-state-");
-    const customRoot = await createTempDir("openclaw-canvas-doctor-custom-");
+    await using stateWorkspace = await createCanvasDoctorWorkspace("state");
+    await using customWorkspace = await createCanvasDoctorWorkspace("custom");
+    const stateDir = stateWorkspace.dir;
+    const customRoot = customWorkspace.dir;
     const legacyDocumentDir = path.join(customRoot, "documents", "cv_retry");
     const coreDocumentsDir = path.join(stateDir, "canvas", "documents");
     const coreDocumentDir = path.join(coreDocumentsDir, "cv_retry");

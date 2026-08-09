@@ -5,6 +5,7 @@ import http from "node:http";
 import path from "node:path";
 import OpenAI from "openai";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
@@ -17,7 +18,6 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
   waitForActiveGatewayRootWork,
 } from "../process/gateway-work-admission.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";

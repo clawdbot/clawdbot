@@ -1,12 +1,10 @@
 // Tests Telegram native Codex login command behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ModelsAuthLoginFlowOptions } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createDeferred,
-  createTelegramGroupCommandContext,
-} from "./bot-native-commands.fixture-test-support.js";
+import { createTelegramGroupCommandContext } from "./bot-native-commands.fixture-test-support.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,

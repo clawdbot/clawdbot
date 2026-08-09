@@ -55,6 +55,21 @@ const dependencyManifestFields = [
   "libc",
 ];
 
+/**
+ * @typedef {{
+ *   body?: string,
+ *   created_at?: string,
+ *   html_url?: string,
+ *   user?: { login?: string },
+ * }} GuardComment
+ * @typedef {{ login: string, source: string }} GuardActorCandidate
+ * @typedef {{ path: string, fields: string[] }} DependencyManifestChange
+ * @typedef {{ kind: "not-attempted" } |
+ *   { kind: "blocked-by-dependency-manifest-fields", changes: DependencyManifestChange[] } |
+ *   { kind: "blocked-by-other-dependency-files", files: string[] } |
+ *   { kind: "failed", reason: string }} AutoscrubStatus
+ */
+
 export function isDependencyFile(filename) {
   return (
     filename.endsWith("package-lock.json") ||
@@ -86,6 +101,13 @@ export function isRemovalOnlyDependencyGraphChange(changes) {
   return changes.length > 0 && changes.every((change) => change.change_type === "removed");
 }
 
+/**
+ * @param {{
+ *   dependencyFiles?: string[],
+ *   lockfileChanges: string[],
+ *   dependencyManifestChanges?: DependencyManifestChange[],
+ * }} options
+ */
 export function shouldAutoscrubDependencyLockfiles({
   dependencyFiles = [],
   lockfileChanges,
@@ -174,6 +196,14 @@ function* dependencyOverrideCandidates({ comments, expectedSha, newerThan }) {
   }
 }
 
+/**
+ * @param {{
+ *   comments: GuardComment[],
+ *   expectedSha: string | null,
+ *   isSecurityMember: (login: string) => boolean,
+ *   newerThan?: string,
+ * }} options
+ */
 export function findDependencyOverrideCommand({
   comments,
   expectedSha,
@@ -188,6 +218,14 @@ export function findDependencyOverrideCommand({
   return null;
 }
 
+/**
+ * @param {{
+ *   comments: GuardComment[],
+ *   expectedSha: string | null,
+ *   isSecurityMember: (login: string) => Promise<boolean>,
+ *   newerThan?: string,
+ * }} input
+ */
 export async function findDependencyOverrideCommandAsync(input) {
   for (const candidate of dependencyOverrideCandidates(input)) {
     if (await input.isSecurityMember(candidate.login)) {
@@ -368,6 +406,15 @@ export function renderClearedDependencyGuardComment({ headSha }) {
   ].join("\n");
 }
 
+/**
+ * @param {{
+ *   baseBranch?: string,
+ *   headSha?: string,
+ *   lockfileChanges: string[],
+ *   dependencyManifestChanges: DependencyManifestChange[],
+ *   autoscrubStatus?: AutoscrubStatus | null,
+ * }} options
+ */
 export function renderBlockedDependencyComment({
   baseBranch,
   headSha,
@@ -462,6 +509,12 @@ export function dependencyGuardTrustedActorCandidates({ pullRequest, event, curr
   return guardTrustedActorCandidates({ pullRequest, event, currentHeadSha });
 }
 
+/**
+ * @param {{
+ *   candidates: GuardActorCandidate[],
+ *   isDependencyApprover: (login: string) => Promise<string | null>,
+ * }} options
+ */
 export async function findTrustedDependencyGuardActor({ candidates, isDependencyApprover }) {
   for (const candidate of candidates) {
     const role = await isDependencyApprover(candidate.login);

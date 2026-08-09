@@ -4,7 +4,7 @@ import fs, { globSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mjs";
+import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
 import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS,
@@ -30,7 +30,7 @@ import {
   shouldRetryVitestNoOutputTimeout,
   withRetryNoOutputTimeout,
   writeVitestIncludeFile,
-} from "../../scripts/test-projects.test-support.mjs";
+} from "../../scripts/test-projects.test-support.mts";
 import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { toRepoPath } from "../../src/test-utils/repo-files.js";
 import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
@@ -310,11 +310,24 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(
       [
         "scripts/check-changed.mjs",
-        "scripts/test-projects.test-support.d.mts",
-        "scripts/test-projects.test-support.mjs",
+        "scripts/check-changed.mts",
+        "scripts/test-projects.test-support.mts",
         "test/scripts/changed-lanes.test.ts",
       ],
       ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
+    );
+  });
+
+  it("keeps changed-lanes shim and implementation edits on changed-lanes tests", () => {
+    for (const scriptPath of ["scripts/changed-lanes.mjs", "scripts/changed-lanes.mts"]) {
+      expectChangedTargets([scriptPath], ["test/scripts/changed-lanes.test.ts"]);
+    }
+  });
+
+  it("routes shared TypeScript CLI shim changes through wrapper tests", () => {
+    expectChangedTargets(
+      ["scripts/lib/tsx-cli-shim.mjs"],
+      ["test/scripts/direct-run-entrypoints.test.ts"],
     );
   });
 
@@ -389,7 +402,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("routes top-level scripts through conventional owner tests", () => {
     expectChangedTargets(
-      ["scripts/bench-test-changed.mjs"],
+      ["scripts/bench-test-changed.mts"],
       ["test/scripts/bench-test-changed.test.ts"],
     );
     expectChangedTargets(
@@ -412,7 +425,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ["test/e2e/qa-lab/runtime/openwebui-probe.e2e.test.ts"],
     );
     expectChangedTargets(
-      ["scripts/lib/docker-e2e-plan.mjs"],
+      ["scripts/lib/docker-e2e-plan.mts"],
       [
         "test/scripts/docker-e2e-plan.test.ts",
         "test/scripts/docker-all-scheduler.test.ts",
@@ -450,7 +463,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/e2e/lib/codex-media-path/scenario.sh": [
         "test/scripts/codex-media-path-client.test.ts",
       ],
-      "scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs": [
+      "scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts": [
         "test/scripts/codex-media-path-client.test.ts",
         "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
       ],
@@ -460,11 +473,11 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/e2e/lib/codex-media-path/write-config.mjs": [
         "test/scripts/codex-media-path-client.test.ts",
       ],
-      "scripts/e2e/lib/gateway-network/limits.mjs": ["test/scripts/gateway-network-client.test.ts"],
-      "scripts/e2e/lib/gateway-network/ws-frames.mjs": [
+      "scripts/e2e/lib/gateway-network/limits.mts": ["test/scripts/gateway-network-client.test.ts"],
+      "scripts/e2e/lib/gateway-network/ws-frames.mts": [
         "test/scripts/gateway-network-client.test.ts",
       ],
-      "scripts/e2e/lib/npm-telegram-live/prepare-package.mjs": [
+      "scripts/e2e/lib/npm-telegram-live/prepare-package.mts": [
         "test/scripts/npm-telegram-live.test.ts",
       ],
       "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs": [
@@ -894,7 +907,7 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("routes unmatched script changes to the tooling suite instead of skipping tests", () => {
-    const targets = ["scripts/check-no-raw-http2-imports.mjs"];
+    const targets = ["scripts/check-no-raw-http2-imports.mts"];
 
     expectChangedTargets(targets, ["test/vitest/vitest.tooling.config.ts"]);
     expectSingleVitestRunPlan(
@@ -977,17 +990,17 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("keeps extension batch runner edits on extension script tests", () => {
     expectChangedTargets(
-      ["scripts/test-extension-batch.mjs"],
+      ["scripts/test-extension-batch.mts"],
       ["test/scripts/test-extension.test.ts"],
     );
   });
 
   it("keeps check runner edits on check runner tests", () => {
-    expectChangedTargets(["scripts/check.mjs"], ["test/scripts/check.test.ts"]);
+    expectChangedTargets(["scripts/check.mts"], ["test/scripts/check.test.ts"]);
   });
 
   it("keeps build runner edits on build runner tests", () => {
-    expectChangedTargets(["scripts/build-all.mjs"], ["test/scripts/build-all.test.ts"]);
+    expectChangedTargets(["scripts/build-all.mts"], ["test/scripts/build-all.test.ts"]);
   });
 
   it("keeps force-test runner edits on its safe CLI tests", () => {
@@ -995,23 +1008,23 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps live-test runner edits on live-test runner tests", () => {
-    expectChangedTargets(["scripts/test-live.mjs"], ["test/scripts/test-live.test.ts"]);
+    expectChangedTargets(["scripts/test-live.mts"], ["test/scripts/test-live.test.ts"]);
   });
 
   it("keeps tsdown build runner edits on tsdown build tests", () => {
-    expectChangedTargets(["scripts/tsdown-build.mjs"], ["test/scripts/tsdown-build.test.ts"]);
+    expectChangedTargets(["scripts/tsdown-build.mts"], ["test/scripts/tsdown-build.test.ts"]);
   });
 
   it("keeps verify runner edits on verify runner tests", () => {
-    expectChangedTargets(["scripts/verify.mjs"], ["test/scripts/verify.test.ts"]);
+    expectChangedTargets(["scripts/verify.mts"], ["test/scripts/verify.test.ts"]);
   });
 
   it("keeps sharded oxlint runner edits on oxlint runner tests", () => {
-    expectChangedTargets(["scripts/run-oxlint-shards.mjs"], ["test/scripts/run-oxlint.test.ts"]);
+    expectChangedTargets(["scripts/run-oxlint-shards.mts"], ["test/scripts/run-oxlint.test.ts"]);
   });
 
   it("keeps env wrapper edits on env wrapper tests", () => {
-    expectChangedTargets(["scripts/run-with-env.mjs"], ["test/scripts/run-with-env.test.ts"]);
+    expectChangedTargets(["scripts/run-with-env.mts"], ["test/scripts/run-with-env.test.ts"]);
   });
 
   it("keeps Crabbox config edits on package acceptance tests", () => {
@@ -1065,19 +1078,32 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps Crabbox runner script edits on their regression tests", () => {
     for (const scriptPath of [
       "scripts/crabbox-wrapper.mjs",
-      "scripts/crabbox-wrapper-providers.mjs",
+      "scripts/crabbox-wrapper.mts",
+      "scripts/crabbox-wrapper-providers.mts",
+      "scripts/crabbox-routing-policy.mts",
+      "scripts/testbox-lease-freshness.mts",
     ]) {
-      expectChangedTargets([scriptPath], ["test/scripts/crabbox-wrapper.test.ts"]);
+      expectChangedTargets(
+        [scriptPath],
+        scriptPath === "scripts/crabbox-routing-policy.mts"
+          ? ["test/scripts/crabbox-wrapper.test.ts", "test/scripts/crabbox-routing-policy.test.ts"]
+          : scriptPath === "scripts/testbox-lease-freshness.mts"
+            ? [
+                "test/scripts/crabbox-wrapper.test.ts",
+                "test/scripts/testbox-lease-freshness.test.ts",
+              ]
+            : ["test/scripts/crabbox-wrapper.test.ts"],
+      );
     }
   });
 
   it("keeps build stamp script edits on the build stamp regression test", () => {
-    expectChangedTargets(["scripts/build-stamp.mjs"], ["src/infra/build-stamp.test.ts"]);
+    expectChangedTargets(["scripts/build-stamp.mts"], ["src/infra/build-stamp.test.ts"]);
   });
 
   it("keeps bundled plugin metadata copier edits on runtime owner tests", () => {
     expectChangedTargets(
-      ["scripts/copy-bundled-plugin-metadata.mjs"],
+      ["scripts/copy-bundled-plugin-metadata.mts"],
       ["src/plugins/copy-bundled-plugin-metadata.test.ts", "src/infra/run-node.test.ts"],
     );
   });
@@ -1273,7 +1299,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("keeps workflow sanity script edits on workflow guard tests", () => {
     expectChangedTargets(
-      ["scripts/check-workflows.mjs"],
+      ["scripts/check-workflows.mts"],
       [
         "test/scripts/check-composite-action-input-interpolation.test.ts",
         "test/scripts/check-no-conflict-markers.test.ts",
@@ -1307,17 +1333,17 @@ describe("scripts/test-projects changed-target routing", () => {
     );
 
     expectChangedTargets(
-      ["scripts/check-dependency-pins.mjs"],
+      ["scripts/check-dependency-pins.mts"],
       ["test/scripts/check-dependency-pins.test.ts"],
     );
 
     expectChangedTargets(
-      ["scripts/dependency-vulnerability-gate.mjs"],
+      ["scripts/dependency-vulnerability-gate.mts"],
       ["test/scripts/dependency-vulnerability-gate.test.ts"],
     );
 
     expectChangedTargets(
-      ["scripts/dependency-changes-report.mjs"],
+      ["scripts/dependency-changes-report.mts"],
       ["test/scripts/dependency-changes-report.test.ts"],
     );
 
@@ -1353,7 +1379,7 @@ describe("scripts/test-projects changed-target routing", () => {
     );
 
     expectChangedTargets(
-      ["scripts/dependency-ownership-surface-report.mjs"],
+      ["scripts/dependency-ownership-surface-report.mts"],
       ["test/scripts/dependency-ownership-surface-report.test.ts"],
     );
 
@@ -1367,16 +1393,16 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(["scripts/docs-link-audit.mjs"], ["src/scripts/docs-link-audit.test.ts"]);
 
     expectChangedTargets(
-      ["scripts/check-changelog-attributions.mjs"],
+      ["scripts/check-changelog-attributions.mts"],
       ["test/scripts/check-changelog-attributions.test.ts"],
     );
   });
 
   it("keeps package, release, and install tooling edits on owner tests", () => {
     const expectedTargets = Object.entries({
-      "scripts/generate-npm-package-lock.mjs": ["test/scripts/generate-npm-package-lock.test.ts"],
-      "scripts/npm-runner.d.mts": ["test/scripts/npm-runner.test.ts"],
-      "scripts/pnpm-runner.d.mts": ["test/scripts/pnpm-runner.test.ts"],
+      "scripts/generate-npm-package-lock.mts": ["test/scripts/generate-npm-package-lock.test.ts"],
+      "scripts/npm-runner.mts": ["test/scripts/npm-runner.test.ts"],
+      "scripts/pnpm-runner.mts": ["test/scripts/pnpm-runner.test.ts"],
       "scripts/lib/cross-os-release-checks/runtime.ts": [
         "test/scripts/openclaw-cross-os-release-checks.test.ts",
       ],
@@ -1397,7 +1423,12 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/package-openclaw-for-docker.mjs": [
         "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
       ],
+      "scripts/package-openclaw-for-docker.mts": [
+        "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
+      ],
       "scripts/ios-run.sh": ["test/scripts/ios-run.test.ts"],
+      "scripts/ios-write-swift-filelist.mjs": ["test/scripts/ios-run.test.ts"],
+      "scripts/ios-write-swift-filelist.mts": ["test/scripts/ios-run.test.ts"],
       "scripts/ios-write-version-xcconfig.sh": ["test/scripts/ios-version.test.ts"],
       "scripts/create-dmg.sh": ["test/scripts/create-dmg.test.ts"],
       "scripts/make_appcast.sh": ["test/scripts/make-appcast.test.ts"],
@@ -1432,6 +1463,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/openclaw-npm-postpublish-verify.test.ts",
       ],
       "scripts/verify-pr-hosted-gates.mjs": ["test/scripts/verify-pr-hosted-gates.test.ts"],
+      "scripts/verify-pr-hosted-gates.mts": ["test/scripts/verify-pr-hosted-gates.test.ts"],
       "scripts/postinstall-bundled-plugins.mjs": [
         "test/scripts/postinstall-bundled-plugins.test.ts",
       ],
@@ -1446,42 +1478,6 @@ describe("scripts/test-projects changed-target routing", () => {
         mode: "targets",
         targets,
       });
-    }
-  });
-
-  it("routes script declaration edits through implementation owner tests", () => {
-    const declarationMirrors = new Map([
-      ["scripts/check.d.mts", "scripts/check.mjs"],
-      ["scripts/build-stamp.d.mts", "scripts/build-stamp.mjs"],
-      ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
-      ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
-      ["scripts/docs-link-audit.d.mts", "scripts/docs-link-audit.mjs"],
-      [
-        "scripts/lib/bundled-plugin-build-entries.d.mts",
-        "scripts/lib/bundled-plugin-build-entries.mjs",
-      ],
-      ["scripts/lib/config-boundary-guard.d.mts", "scripts/lib/config-boundary-guard.mjs"],
-      ["scripts/lib/arg-utils.d.mts", "scripts/lib/arg-utils.mjs"],
-      [
-        "scripts/lib/extension-source-classifier.d.mts",
-        "scripts/lib/extension-source-classifier.mjs",
-      ],
-      [
-        "scripts/lib/local-build-metadata-paths.d.mts",
-        "scripts/lib/local-build-metadata-paths.mjs",
-      ],
-      ["scripts/lib/local-build-metadata.d.mts", "scripts/lib/local-build-metadata.mjs"],
-      ["scripts/lib/plugin-sdk-entries.d.mts", "scripts/lib/plugin-sdk-entries.mjs"],
-      ["scripts/lib/vitest-local-scheduling.d.mts", "scripts/lib/vitest-local-scheduling.mjs"],
-      ["scripts/run-node.d.mts", "scripts/run-node.mjs"],
-      ["scripts/stage-bundled-plugin-runtime.d.mts", "scripts/stage-bundled-plugin-runtime.mjs"],
-      ["scripts/watch-node.d.mts", "scripts/watch-node.mjs"],
-    ]);
-
-    for (const [declarationPath, implementationPath] of declarationMirrors) {
-      expect(resolveChangedTestTargetPlan([declarationPath]), declarationPath).toEqual(
-        resolveChangedTestTargetPlan([implementationPath]),
-      );
     }
   });
 
@@ -1574,14 +1570,11 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("keeps shared script library edits on owner tests", () => {
     const expectedTargets = Object.entries({
-      "scripts/lib/local-heavy-check-runtime.d.mts": [
+      "scripts/lib/local-heavy-check-runtime.mts": [
         "test/scripts/local-heavy-check-runtime.test.ts",
       ],
-      "scripts/lib/local-heavy-check-runtime.mjs": [
-        "test/scripts/local-heavy-check-runtime.test.ts",
-      ],
-      "scripts/lib/managed-child-process.mjs": ["test/scripts/managed-child-process.test.ts"],
-      "scripts/lib/failed-trailer.mjs": [
+      "scripts/lib/managed-child-process.mts": ["test/scripts/managed-child-process.test.ts"],
+      "scripts/lib/failed-trailer.mts": [
         "test/scripts/run-oxlint.test.ts",
         "test/scripts/run-tsgo.test.ts",
         "test/scripts/run-vitest.test.ts",
@@ -1591,13 +1584,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/managed-child-process.test.ts",
         "test/scripts/run-with-env.test.ts",
       ],
-      "scripts/lib/windows-taskkill.d.mts": [
-        "test/scripts/managed-child-process.test.ts",
-        "test/scripts/run-with-env.test.ts",
-      ],
-      "scripts/lib/source-file-scan-cache.mjs": ["test/scripts/source-file-scan-cache.test.ts"],
+      "scripts/lib/source-file-scan-cache.mts": ["test/scripts/source-file-scan-cache.test.ts"],
       "scripts/lib/dev-tooling-safety.ts": ["test/scripts/dev-tooling-safety.test.ts"],
-      "scripts/lib/local-build-metadata.mjs": [
+      "scripts/lib/local-build-metadata.mts": [
         "src/infra/build-stamp.test.ts",
         "test/scripts/runtime-postbuild-stamp.test.ts",
         "src/infra/run-node.test.ts",
@@ -1608,7 +1597,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/check-openclaw-package-tarball.test.ts",
         "test/scripts/openclaw-cross-os-release-checks.test.ts",
       ],
-      "scripts/lib/local-build-metadata-paths.mjs": [
+      "scripts/lib/local-build-metadata-paths.mts": [
         "src/infra/build-stamp.test.ts",
         "test/scripts/runtime-postbuild-stamp.test.ts",
         "src/infra/run-node.test.ts",
@@ -1619,7 +1608,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/check-openclaw-package-tarball.test.ts",
         "test/scripts/openclaw-cross-os-release-checks.test.ts",
       ],
-      "scripts/lib/deprecated-plugin-sdk-usage.mjs": [
+      "scripts/lib/deprecated-plugin-sdk-usage.mts": [
         "test/scripts/check-deprecated-api-usage.test.ts",
       ],
       "scripts/lib/dependency-ownership.json": [
@@ -1655,7 +1644,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ts-topology.test.ts",
         "test/vitest/vitest.tooling.config.ts",
       ],
-      "scripts/lib/plugin-sdk-entries.mjs": [
+      "scripts/lib/plugin-sdk-entries.mts": [
         "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
         "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
@@ -1704,6 +1693,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/lib/direct-run.mjs": [
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/direct-run-entrypoints.test.ts",
+        "src/scripts/ci-changed-scope.test.ts",
         "test/scripts/pr-operation-lock.test.ts",
         "test/scripts/pr-wrappers.test.ts",
       ],
@@ -1712,11 +1702,23 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-npm-runtime-build-args.test.ts",
         "test/plugin-npm-runtime-build.test.ts",
       ],
+      "scripts/lib/plugin-npm-runtime-build.mts": [
+        "test/scripts/plugin-npm-runtime-build-args.test.ts",
+        "test/plugin-npm-runtime-build.test.ts",
+      ],
       "scripts/lib/plugin-npm-package-manifest.mjs": [
         "test/scripts/plugin-npm-package-manifest-args.test.ts",
         "test/plugin-npm-package-manifest.test.ts",
       ],
-      "scripts/lib/arg-utils.mjs": ["test/scripts/arg-utils.test.ts"],
+      "scripts/lib/plugin-npm-package-manifest.mts": [
+        "test/scripts/plugin-npm-package-manifest-args.test.ts",
+        "test/plugin-npm-package-manifest.test.ts",
+      ],
+      "scripts/lib/arg-utils.runtime.mjs": [
+        "test/scripts/arg-utils.test.ts",
+        "test/scripts/android-release-signing.test.ts",
+      ],
+      "scripts/lib/arg-utils.mts": ["test/scripts/arg-utils.test.ts"],
       "scripts/lib/android-version.ts": [
         "test/scripts/android-version.test.ts",
         "test/scripts/android-pin-version.test.ts",
@@ -1890,15 +1892,11 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/upgrade-survivor-baselines.test.ts",
         "test/scripts/upgrade-survivor-config-recipe.test.ts",
       ],
-      "scripts/lib/npm-pack-budget.mjs": [
+      "scripts/lib/npm-pack-budget.mts": [
         "test/release-check.test.ts",
         "test/scripts/test-install-sh-docker.test.ts",
       ],
-      "scripts/lib/npm-pack-budget.d.mts": [
-        "test/release-check.test.ts",
-        "test/scripts/test-install-sh-docker.test.ts",
-      ],
-      "scripts/lib/workspace-bootstrap-smoke.mjs": [
+      "scripts/lib/workspace-bootstrap-smoke.mts": [
         "test/release-check.test.ts",
         "test/openclaw-npm-release-check.test.ts",
       ],
@@ -1933,41 +1931,44 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/validate-release-publish-approval.mjs": [
         "test/scripts/validate-release-publish-approval.test.ts",
       ],
-      "scripts/lib/plugin-package-dependencies.mjs": [
+      "scripts/lib/plugin-package-dependencies.mts": [
         "test/scripts/plugin-package-dependencies.test.ts",
       ],
-      "scripts/lib/plugin-npm-runtime-assets.mjs": [
+      "scripts/lib/plugin-npm-runtime-assets.mts": [
         "test/scripts/plugin-npm-runtime-build-args.test.ts",
       ],
-      "scripts/lib/generated-text-asset.mjs": [
+      "scripts/lib/generated-text-asset.mts": [
         "extensions/browser/scripts/build-copilot-runtime.test.ts",
         "test/scripts/build-diffs-viewer-runtime.test.ts",
         "test/scripts/bundled-plugin-assets.test.ts",
       ],
-      "scripts/lib/static-extension-assets.mjs": [
+      "scripts/lib/static-extension-assets.mts": [
         "test/scripts/bundled-plugin-assets.test.ts",
         "test/scripts/runtime-postbuild.test.ts",
         "src/infra/run-node.test.ts",
         "test/scripts/plugin-npm-runtime-build-args.test.ts",
       ],
-      "scripts/lib/test-group-report.mjs": ["test/scripts/test-group-report.test.ts"],
+      "scripts/lib/test-group-report.mts": ["test/scripts/test-group-report.test.ts"],
       "scripts/lib/stable-release-closeout.mjs": ["test/stable-release-closeout.test.ts"],
-      "scripts/lib/extension-source-classifier.mjs": [
+      "scripts/lib/extension-source-classifier.mts": [
         "test/scripts/extension-source-classifier.test.ts",
         "src/channels/plugins/contracts/channel-import-guardrails.test.ts",
       ],
       "scripts/lib/ts-topology/analyze.ts": ["test/scripts/ts-topology.test.ts"],
       "scripts/lib/ts-topology/reports.ts": ["test/scripts/ts-topology.test.ts"],
       "scripts/lib/ts-topology/scope.ts": ["test/scripts/ts-topology.test.ts"],
-      "scripts/lib/repo-root.mjs": ["test/scripts/ts-guard-utils.test.ts"],
-      "scripts/lib/ts-guard-utils.mjs": ["test/scripts/ts-guard-utils.test.ts"],
-      "scripts/lib/tsgo-sparse-guard.mjs": [
+      "scripts/lib/repo-root.mjs": [
+        "test/scripts/ts-guard-utils.test.ts",
+        "test/scripts/android-release-signing.test.ts",
+      ],
+      "scripts/lib/ts-guard-utils.mts": ["test/scripts/ts-guard-utils.test.ts"],
+      "scripts/lib/tsgo-sparse-guard.mts": [
         "test/scripts/run-tsgo.test.ts",
         "test/scripts/changed-lanes.test.ts",
       ],
       "scripts/write-package-dist-inventory.ts": ["test/scripts/test-install-sh-docker.test.ts"],
-      "scripts/lib/format-generated-module.mjs": ["test/scripts/format-generated-module.test.ts"],
-      "scripts/lib/bundled-plugin-source-utils.mjs": [
+      "scripts/lib/format-generated-module.mts": ["test/scripts/format-generated-module.test.ts"],
+      "scripts/lib/bundled-plugin-source-utils.mts": [
         "test/scripts/bundled-plugin-source-utils.test.ts",
       ],
       "scripts/lib/bundled-runtime-sidecar-paths.json": [
@@ -1980,8 +1981,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/bundled-plugin-build-entries.test.ts",
         "test/release-check.test.ts",
       ],
-      "scripts/lib/changed-extensions.mjs": ["test/scripts/test-extension.test.ts"],
-      "scripts/lib/extension-vitest-paths.mjs": ["test/scripts/test-extension.test.ts"],
+      "scripts/lib/changed-extensions.mts": ["test/scripts/test-extension.test.ts"],
+      "scripts/lib/extension-vitest-paths.mts": ["test/scripts/test-extension.test.ts"],
     });
 
     for (const [source, targets] of expectedTargets) {
@@ -1994,23 +1995,23 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("keeps plugin SDK boundary tooling edits on owner tests", () => {
     const expectedTargets = Object.entries({
-      "scripts/check-extension-plugin-sdk-boundary.mjs": [
+      "scripts/check-extension-plugin-sdk-boundary.mts": [
         "test/extension-import-boundaries.test.ts",
       ],
-      "scripts/check-sdk-package-extension-import-boundary.mjs": [
+      "scripts/check-sdk-package-extension-import-boundary.mts": [
         "test/extension-import-boundaries.test.ts",
       ],
-      "scripts/check-plugin-extension-import-boundary.mjs": [
+      "scripts/check-plugin-extension-import-boundary.mts": [
         "test/plugin-extension-import-boundary.test.ts",
       ],
-      "scripts/lib/config-boundary-guard.mjs": [
+      "scripts/lib/config-boundary-guard.mts": [
         "src/plugins/contracts/config-boundary-guard.test.ts",
         "src/plugins/contracts/deprecated-internal-config-api.test.ts",
       ],
       "scripts/lib/extension-package-boundary.ts": [
         "src/plugins/contracts/extension-package-project-boundaries.test.ts",
       ],
-      "scripts/check-src-extension-import-boundary.mjs": [
+      "scripts/check-src-extension-import-boundary.mts": [
         "test/extension-import-boundaries.test.ts",
       ],
       "scripts/lib/guard-inventory-utils.mjs": [
@@ -2022,7 +2023,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/extension-import-boundary-checker.test.ts",
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
       ],
-      "scripts/check-test-helper-extension-import-boundary.mjs": [
+      "scripts/check-test-helper-extension-import-boundary.mts": [
         "test/test-helper-extension-import-boundary.test.ts",
       ],
       "scripts/write-plugin-sdk-entry-dts.ts": [
@@ -2043,25 +2044,25 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes explicit tooling implementation files to owner tests", () => {
     expect(
       findUnmatchedExplicitTestTargets([
-        "scripts/build-all.mjs",
-        "scripts/check.mjs",
-        "scripts/check-dynamic-import-warts.mjs",
-        "scripts/run-oxlint-shards.mjs",
+        "scripts/build-all.mts",
+        "scripts/check.mts",
+        "scripts/check-dynamic-import-warts.mts",
+        "scripts/run-oxlint-shards.mts",
         "scripts/test-force.ts",
-        "scripts/tsdown-build.mjs",
-        "scripts/verify.mjs",
+        "scripts/tsdown-build.mts",
+        "scripts/verify.mts",
       ]),
     ).toEqual([]);
 
     expect(
       buildVitestRunPlans([
-        "scripts/build-all.mjs",
-        "scripts/check.mjs",
-        "scripts/check-dynamic-import-warts.mjs",
-        "scripts/run-oxlint-shards.mjs",
+        "scripts/build-all.mts",
+        "scripts/check.mts",
+        "scripts/check-dynamic-import-warts.mts",
+        "scripts/run-oxlint-shards.mts",
         "scripts/test-force.ts",
-        "scripts/tsdown-build.mjs",
-        "scripts/verify.mjs",
+        "scripts/tsdown-build.mts",
+        "scripts/verify.mts",
       ]),
     ).toEqual([
       {
@@ -2392,7 +2393,7 @@ describe("scripts/test-projects changed-target routing", () => {
     const targets = [
       "scripts/e2e/kitchen-sink-plugin-docker.sh",
       "scripts/e2e/kitchen-sink-rpc-docker.sh",
-      "scripts/e2e/kitchen-sink-rpc-walk.mjs",
+      "scripts/e2e/kitchen-sink-rpc-walk.mts",
       "scripts/e2e/onboard-docker.sh",
       "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs",
       "scripts/e2e/plugin-lifecycle-matrix-docker.sh",
@@ -2845,18 +2846,22 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("prints wrapper help without starting a broad local suite", () => {
-    const result = spawnSync(process.execPath, ["scripts/test-projects.mjs", "--help"], {
-      encoding: "utf8",
-      timeout: 5_000,
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/test-projects.mts", "--help"],
+      {
+        encoding: "utf8",
+        timeout: 5_000,
+      },
+    );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: node scripts/test-projects.mjs");
+    expect(result.stdout).toContain("Usage: node --import tsx scripts/test-projects.mts");
     expect(result.stderr).not.toContain("[test] starting");
   });
 
   it("lets buffered failure diagnostics drain before the dispatcher exits", () => {
-    const source = fs.readFileSync("scripts/test-projects.mjs", "utf8");
+    const source = fs.readFileSync("scripts/test-projects.mts", "utf8");
 
     expect(source).not.toContain("process.exit(");
   });
@@ -3676,7 +3681,9 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(spec?.preflightPnpmArgs).toEqual([
       "exec",
       "node",
-      "scripts/ensure-playwright-chromium.mjs",
+      "--import",
+      "tsx",
+      "scripts/ensure-playwright-chromium.mts",
     ]);
   });
 
@@ -3781,7 +3788,7 @@ describe("scripts/test-projects changed-target routing", () => {
     const before = readFileSync.mock.calls.length;
     const plan = resolveChangedTestTargetPlan([
       ".crabbox.yaml",
-      "scripts/check.mjs",
+      "scripts/check.mts",
       "src/gateway/server.impl.ts",
     ]);
     const repoSourceReads = readFileSync.mock.calls
@@ -5136,10 +5143,9 @@ describe("scripts/test-projects Vitest cache isolation", () => {
 });
 
 describe("scripts/test-projects channel contract lane patterns", () => {
-  // test-projects.test-support.mjs must stay loader-free plain JS, so it
-  // duplicates the per-config channel-contract patterns instead of importing
-  // vitest.contracts-shared.ts. Drift silently drops contract files from lane
-  // routing (it happened once), so pin both enumerations to each other.
+  // The planner imports the loader-free contract pattern owner, while Vitest
+  // re-exports the same values from its typed config helper. Pin that seam so
+  // changed-test routing cannot silently drop contract files.
   it("stays in sync with the vitest.contracts-shared lane enumerations", () => {
     expect(Object.fromEntries(CHANNEL_CONTRACT_CONFIG_PATTERNS)).toEqual({
       "test/vitest/vitest.contracts-channel-surface.config.ts": channelSurfaceContractPatterns,

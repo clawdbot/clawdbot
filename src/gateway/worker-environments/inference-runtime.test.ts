@@ -186,6 +186,7 @@ function setup(entry: SessionEntry = sessionEntry) {
     allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
     config,
+    authModes: {},
     metadataSnapshot: { plugins: [] } as never,
     modelCatalog: {
       entries: [

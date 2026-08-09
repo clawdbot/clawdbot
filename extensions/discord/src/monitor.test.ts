@@ -1,4 +1,5 @@
 // Discord tests cover monitor plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { createRequireRecord, typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -103,21 +104,6 @@ describe("registerDiscordListener", () => {
 });
 
 describe("DiscordMessageListener", () => {
-  function createDeferred() {
-    let resolve: (() => void) | null = null;
-    const promise = new Promise<void>((done) => {
-      resolve = done;
-    });
-    return {
-      promise,
-      resolve: () => {
-        if (typeof resolve === "function") {
-          (resolve as () => void)();
-        }
-      },
-    };
-  }
-
   async function flushAsyncWork() {
     await Promise.resolve();
     await Promise.resolve();
@@ -125,7 +111,7 @@ describe("DiscordMessageListener", () => {
 
   it("waits for the durable handler handoff", async () => {
     let handlerResolved = false;
-    const deferred = createDeferred();
+    const deferred = createDeferred<void>();
     const handler = vi.fn(async () => {
       await deferred.promise;
       handlerResolved = true;
@@ -149,8 +135,8 @@ describe("DiscordMessageListener", () => {
   });
 
   it("dispatches subsequent events concurrently without blocking on prior handler", async () => {
-    const first = createDeferred();
-    const second = createDeferred();
+    const first = createDeferred<void>();
+    const second = createDeferred<void>();
     let runCount = 0;
     const handler = vi.fn(async () => {
       runCount += 1;
@@ -206,7 +192,7 @@ describe("DiscordMessageListener", () => {
   });
 
   it("does not apply its own slow-listener logging", async () => {
-    const deferred = createDeferred();
+    const deferred = createDeferred<void>();
     const handler = vi.fn(() => deferred.promise);
     const logger = {
       warn: vi.fn(),

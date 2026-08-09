@@ -13,7 +13,7 @@ import {
   GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
   GATEWAY_STARTUP_UNAVAILABLE_REASON,
 } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { createDeferred } from "../../test-utils/deferred.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import {
   attachGatewayWsForTest,

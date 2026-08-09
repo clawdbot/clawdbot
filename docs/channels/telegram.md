@@ -173,6 +173,23 @@ In groups and forum topics, an explicit mention of the configured bot handle (fo
     Common confusion: DM pairing approval does not mean "this sender is authorized everywhere." Pairing grants DM access only. If no command owner exists yet, the first approved pairing also sets `commands.ownerAllowFrom`, giving owner-only commands and exec approvals an explicit operator account. Group sender authorization still comes from explicit config allowlists.
     To be authorized for both DMs and group commands with one identity: put your numeric Telegram user ID in `channels.telegram.allowFrom`, and for owner-only commands make sure `commands.ownerAllowFrom` contains `telegram:<your user id>`.
 
+    Use `channels.telegram.direct.<chatId>.tools` to set the built-in tool policy for one DM. `toolsBySender` selects a sender-specific policy by typed sender key such as `channel:telegram:<userId>` or `id:<userId>`:
+
+```json5
+{
+  channels: {
+    telegram: {
+      direct: {
+        "*": { tools: { deny: ["write", "edit"] } },
+        "603767951": { tools: {} },
+      },
+    },
+  },
+}
+```
+
+    A matching `toolsBySender` entry replaces `tools` for that DM. An exact chat entry replaces the whole `"*"` entry; it does not inherit wildcard fields. Account-level `direct` replaces the root `direct` map when present and inherits it only when omitted. The selected direct policy, global policy, per-agent policy, `tools.toolsBySender`, and `agents.<id>.tools.toolsBySender` apply as intersecting layers; a deny in any layer still blocks the tool. Codex uses policy-filtered OpenClaw tools for explicitly restricted turns and keeps its native tool surface for default profile narrowing. ACP-bound sessions reject a restrictive direct policy when their runtime cannot enforce it.
+
     ### Finding your Telegram user ID
 
     Safer (no third-party bot): DM your bot, run `openclaw logs --follow`, read `from.id`.
@@ -967,7 +984,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 <Accordion title="High-signal Telegram fields">
 
 - startup/auth: `enabled`, `botToken`, `tokenFile` (must be a regular file; symlinks are rejected), `accounts.*`
-- access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`, top-level `bindings[]` (`type: "acp"`)
+- access control: `dmPolicy`, `allowFrom`, `direct.*.tools`, `direct.*.toolsBySender`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`, top-level `bindings[]` (`type: "acp"`)
 - topic defaults: `groups.<chatId>.topics."*"` applies to unmatched forum topics; exact topic IDs override it
 - exec approvals: `execApprovals`, `accounts.*.execApprovals`
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`

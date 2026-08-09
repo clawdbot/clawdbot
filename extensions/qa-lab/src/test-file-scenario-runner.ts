@@ -143,7 +143,7 @@ function playwrightSteps(
   return [
     {
       command: process.execPath,
-      args: ["scripts/ensure-playwright-chromium.mjs"],
+      args: ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"],
     },
     {
       command: process.execPath,

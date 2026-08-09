@@ -1956,39 +1956,50 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ).toEqual([{ task_id: "task-index-repair" }]);
   });
 
-  it("repairs the same-version worktree cleanup column with physical index drift", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = materializeCurrentStateDatabase(stateDir);
+  it.each([
+    { columnName: "run_end_cleanup_json", tableName: "worktrees" },
+    { columnName: "shared_host", tableName: "worker_environments" },
+  ])(
+    "appends same-version $columnName to $tableName before schema validation",
+    ({ columnName, tableName }) => {
+      const stateDir = createTempStateDir();
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
 
-    const { DatabaseSync } = requireNodeSqlite();
-    const shippedSchema = new DatabaseSync(databasePath);
-    try {
-      shippedSchema.exec("ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;");
-      expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
-    } finally {
-      shippedSchema.close();
-    }
-    createTaskRunStatusIndexPhysicalDrift(databasePath);
+      const { DatabaseSync } = requireNodeSqlite();
+      const shippedSchema = new DatabaseSync(databasePath);
+      let canonicalColumnOrder: string[];
+      try {
+        canonicalColumnOrder = (
+          shippedSchema.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>
+        ).map((column) => column.name);
+        shippedSchema.exec(`ALTER TABLE ${tableName} DROP COLUMN ${columnName};`);
+        expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
+          OPENCLAW_STATE_SCHEMA_VERSION,
+        );
+      } finally {
+        shippedSchema.close();
+      }
+      createTaskRunStatusIndexPhysicalDrift(databasePath);
 
-    const reopened = openOpenClawStateDatabase({ env });
-    const columns = reopened.db.prepare("PRAGMA table_info(worktrees)").all() as Array<{
-      name: string;
-    }>;
-    expect(columns.map((column) => column.name)).toContain("run_end_cleanup_json");
-    expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
-      integrity_check: "ok",
-    });
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT task_id FROM task_runs INDEXED BY idx_task_runs_status WHERE status = 'running'",
-        )
-        .all(),
-    ).toEqual([{ task_id: "task-index-repair" }]);
-  });
+      const reopened = openOpenClawStateDatabase({ env });
+      const columns = reopened.db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
+        name: string;
+      }>;
+      expect(columns.map((column) => column.name)).toEqual(canonicalColumnOrder);
+      expect(canonicalColumnOrder.at(-1)).toBe(columnName);
+      expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(
+        reopened.db
+          .prepare(
+            "SELECT task_id FROM task_runs INDEXED BY idx_task_runs_status WHERE status = 'running'",
+          )
+          .all(),
+      ).toEqual([{ task_id: "task-index-repair" }]);
+    },
+  );
 
   it("does not add Claw bootstrap columns before rejecting unrelated index corruption", () => {
     const stateDir = createTempStateDir();

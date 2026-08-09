@@ -46,8 +46,8 @@ import {
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata.mjs";
-import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mjs";
+} from "../../scripts/lib/local-build-metadata.mts";
+import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
