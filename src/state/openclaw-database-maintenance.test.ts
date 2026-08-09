@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { ensureMemoryIndexSchema } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -50,6 +51,71 @@ describe("OpenClaw database maintenance schema validation", () => {
       ).not.toThrow();
     } finally {
       database.close();
+    }
+  });
+
+  it("keeps a newer nullable global column compatible with the previous schema", () => {
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace("  run_end_cleanup_json TEXT,\n", "");
+    const database = createGlobalDatabase();
+    try {
+      expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
+      expect(() =>
+        assertSqliteSchemaContains(database, "previous global schema", previousSchema, {
+          allowCompatibleAdditiveColumns: true,
+        }),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("accepts compatible future columns in global and agent databases", () => {
+    const globalDatabase = createGlobalDatabase();
+    const agentDatabase = createAgentDatabase();
+    try {
+      globalDatabase.exec("ALTER TABLE worktrees ADD COLUMN future_note TEXT;");
+      agentDatabase.exec("ALTER TABLE conversations ADD COLUMN future_note TEXT;");
+
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(globalDatabase, {
+          pathname: "global.sqlite",
+        }),
+      ).not.toThrow();
+      expect(() =>
+        assertOpenClawAgentDatabaseForMaintenance(agentDatabase, {
+          agentId: "worker-1",
+          pathname: "agent.sqlite",
+        }),
+      ).not.toThrow();
+    } finally {
+      agentDatabase.close();
+      globalDatabase.close();
+    }
+  });
+
+  it("rejects constrained future columns in global and agent databases", () => {
+    const globalDatabase = createGlobalDatabase();
+    const agentDatabase = createAgentDatabase();
+    try {
+      globalDatabase.exec("ALTER TABLE worktrees ADD COLUMN future_note TEXT NOT NULL DEFAULT '';");
+      agentDatabase.exec(
+        "ALTER TABLE conversations ADD COLUMN future_note TEXT NOT NULL DEFAULT '';",
+      );
+
+      expect(() =>
+        assertOpenClawStateDatabaseForMaintenance(globalDatabase, {
+          pathname: "global.sqlite",
+        }),
+      ).toThrow("column definitions differ for worktrees");
+      expect(() =>
+        assertOpenClawAgentDatabaseForMaintenance(agentDatabase, {
+          agentId: "worker-1",
+          pathname: "agent.sqlite",
+        }),
+      ).toThrow("column definitions differ for conversations");
+    } finally {
+      agentDatabase.close();
+      globalDatabase.close();
     }
   });
 

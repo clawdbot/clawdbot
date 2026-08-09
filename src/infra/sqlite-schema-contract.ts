@@ -80,6 +80,8 @@ export type SqliteSchemaCompatibility = {
    * requires a temporary default that the clean schema does not retain.
    */
   allowedColumnDefinitions?: Readonly<Record<string, readonly string[]>>;
+  /** Allow future bare nullable STRICT datatype columns on stable canonical tables. */
+  allowCompatibleAdditiveColumns?: boolean;
   /**
    * Exact owner-defined trigger groups that may be absent when their derived
    * or lazily ensured schema is absent, but must be complete and canonical
@@ -128,6 +130,7 @@ export function assertSqliteSchemaContains(
       actualTable.definition,
       expectedTable.definition,
       compatibility,
+      !allowedMissingTables.has(tableName),
     );
     if (definitionMismatch) {
       mismatches.push(`${definitionMismatch} differ for ${tableName}`);
@@ -436,19 +439,23 @@ function compareTableDefinitions(
   actual: SqliteTableDefinition | null,
   expected: SqliteTableDefinition | null,
   compatibility: SqliteSchemaCompatibility,
+  allowCompatibleAdditiveColumns: boolean,
 ): "column definitions" | "table constraints" | "table definition" | null {
   if (!actual || !expected) {
     return actual === expected ? null : "table definition";
   }
   const allowedMissingColumns = new Set(compatibility.allowedMissingColumns ?? []);
-  const allowedMissingCount = [...expected.columns].filter(
-    ([columnName]) =>
-      !actual.columns.has(columnName) && allowedMissingColumns.has(`${tableName}.${columnName}`),
-  ).length;
-  if (actual.columns.size + allowedMissingCount !== expected.columns.size) {
-    return "column definitions";
-  }
-  if ([...actual.columns].some(([columnName]) => !expected.columns.has(columnName))) {
+  const unexpectedColumns = [...actual.columns].filter(
+    ([columnName]) => !expected.columns.has(columnName),
+  );
+  if (
+    unexpectedColumns.some(
+      ([, definition]) =>
+        !allowCompatibleAdditiveColumns ||
+        !compatibility.allowCompatibleAdditiveColumns ||
+        !isCompatibleAdditiveColumnDefinition(definition),
+    )
+  ) {
     return "column definitions";
   }
   for (const [columnName, expectedDefinition] of expected.columns) {
@@ -465,6 +472,18 @@ function compareTableDefinitions(
     }
   }
   return isEqual(actual.constraints, expected.constraints) ? null : "table constraints";
+}
+
+const SQLITE_STRICT_DATATYPES = new Set(["ANY", "BLOB", "INT", "INTEGER", "REAL", "TEXT"]);
+
+function isCompatibleAdditiveColumnDefinition(definition: string): boolean {
+  const name = readSqlToken(definition, 0);
+  const type = name ? readSqlToken(definition, name.end) : null;
+  return Boolean(
+    type?.keyword &&
+    SQLITE_STRICT_DATATYPES.has(type.keyword) &&
+    definition.slice(type.end).trim().length === 0,
+  );
 }
 
 function parseTableDefinition(sql: string | null, tableName: string): SqliteTableDefinition {

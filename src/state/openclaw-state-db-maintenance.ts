@@ -36,6 +36,7 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
 ] as const;
 
 const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
+  allowCompatibleAdditiveColumns: true,
   allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
   allowedMissingColumns: CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
   allowedColumnDefinitions: {

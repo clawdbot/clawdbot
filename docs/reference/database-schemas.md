@@ -27,6 +27,8 @@ Each database records its schema in two places:
 
 OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. `openclaw update` also refuses a package or source target whose declared schema support is older than an on-disk database. Target packages published before schema metadata was added cannot be preflighted.
 
+Changes that older builds can safely ignore may remain at the same schema version. New columns qualify only when they use a bare nullable SQLite `STRICT` datatype, such as `cleanup_json TEXT`, with no default or constraints. Older writers can omit those columns, while the schema verifier still rejects changed canonical columns and additive columns that introduce defaults, `NOT NULL`, keys, uniqueness, checks, references, collations, or generated values.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
 
 ## Agent schema history

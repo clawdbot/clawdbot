@@ -145,6 +145,69 @@ describe("assertSqliteSchemaContains", () => {
     }
   });
 
+  it.each(["ANY", "BLOB", "INT", "INTEGER", "REAL", "TEXT"])(
+    "accepts a compatible future additive %s column only when enabled",
+    (type) => {
+      const database = createDatabase(CANONICAL_SCHEMA);
+      try {
+        database.exec(`ALTER TABLE children ADD COLUMN future_note ${type};`);
+
+        expect(() =>
+          assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA),
+        ).toThrow("column definitions differ for children");
+        expect(() =>
+          assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA, {
+            allowCompatibleAdditiveColumns: true,
+          }),
+        ).not.toThrow();
+      } finally {
+        database.close();
+      }
+    },
+  );
+
+  it("keeps allowlisted missing additive columns compatible in the upgrade direction", () => {
+    const futureSchema = CANONICAL_SCHEMA.replace(
+      "    value TEXT,",
+      "    value TEXT,\n    note TEXT,",
+    );
+    const database = createDatabase(CANONICAL_SCHEMA);
+    try {
+      expect(() => assertSqliteSchemaContains(database, "test database", futureSchema)).toThrow(
+        "column definitions differ for children",
+      );
+      expect(() =>
+        assertSqliteSchemaContains(database, "test database", futureSchema, {
+          allowedMissingColumns: ["children.note"],
+        }),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([
+    "TEXT DEFAULT NULL",
+    "TEXT NOT NULL DEFAULT ''",
+    "TEXT CHECK (length(future_note) > 0)",
+    "TEXT COLLATE NOCASE",
+    "TEXT REFERENCES parents(id)",
+    "TEXT GENERATED ALWAYS AS (value) VIRTUAL",
+  ])("rejects a future additive column declared as %s", (declaration) => {
+    const database = createDatabase(CANONICAL_SCHEMA);
+    try {
+      database.exec(`ALTER TABLE children ADD COLUMN future_note ${declaration};`);
+
+      expect(() =>
+        assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA, {
+          allowCompatibleAdditiveColumns: true,
+        }),
+      ).toThrow("column definitions differ for children");
+    } finally {
+      database.close();
+    }
+  });
+
   it("accepts only allowlisted missing lazy-additive tables", () => {
     const migratedSchema = CANONICAL_SCHEMA.replace(
       / {2}CREATE TABLE events \([\s\S]*?\n {2}\);\n/u,
