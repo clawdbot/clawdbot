@@ -1,7 +1,7 @@
 import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -16,7 +16,7 @@ function createChild() {
     stdin: PassThrough;
     stdout: PassThrough;
     stderr: PassThrough;
-    kill: ReturnType<typeof vi.fn>;
+    kill: Mock<(signal?: NodeJS.Signals | number) => boolean>;
   };
   child.stdin = new PassThrough();
   child.stdout = new PassThrough();
