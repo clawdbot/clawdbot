@@ -8,7 +8,7 @@ import {
   checkNativeA2uiResources,
   getNativeA2uiResourcePaths,
   syncNativeA2uiResources,
-} from "../../scripts/sync-native-a2ui.mjs";
+} from "../../scripts/sync-native-a2ui.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -19,7 +19,7 @@ async function writeA2uiFixture(dir: string, bundle = "console.log('a2ui');\n") 
   await fs.writeFile(path.join(dir, "a2ui.bundle.js"), bundle, "utf8");
 }
 
-describe("scripts/sync-native-a2ui.mjs", () => {
+describe("scripts/sync-native-a2ui.mts", () => {
   it("resolves the plugin-owned source and native build owners", () => {
     const paths = getNativeA2uiResourcePaths("/repo");
 
@@ -42,12 +42,12 @@ describe("scripts/sync-native-a2ui.mjs", () => {
     await Promise.all([
       fs.writeFile(
         paths.linuxBuildFile,
-        '.args(["scripts/sync-native-a2ui.mjs", "--write", "--output"])',
+        '.args(["--import", "tsx", "scripts/sync-native-a2ui.mts", "--write", "--output"])',
       ),
       fs.writeFile(
         paths.androidBuildFile,
         [
-          'commandLine("node", "scripts/sync-native-a2ui.mjs", "--write", "--output")',
+          'commandLine("node", "--import", "tsx", "scripts/sync-native-a2ui.mts", "--write", "--output")',
           "addGeneratedSourceDirectory(stageCanvasA2ui, StageCanvasA2uiTask::outputDirectory)",
         ].join("\n"),
       ),
@@ -55,7 +55,7 @@ describe("scripts/sync-native-a2ui.mjs", () => {
         paths.iosProjectFile,
         [
           "Stage Canvas A2UI resources",
-          "scripts/sync-native-a2ui.mjs --write --output",
+          "node --import tsx scripts/sync-native-a2ui.mts --write --output",
           "pwd -P",
           "$BUILT_PRODUCTS_DIR/OpenClawKit_OpenClawKit.bundle",
           "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH",

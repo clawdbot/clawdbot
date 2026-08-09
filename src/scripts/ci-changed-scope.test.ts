@@ -14,7 +14,7 @@ const {
   parseArgs,
   shouldRunNativeI18n,
   writeGitHubOutput,
-} = await import("../../scripts/ci-changed-scope.mjs");
+} = await import("../../scripts/ci-changed-scope.mts");
 
 const markerPaths: string[] = [];
 const tempDirs: string[] = [];
@@ -262,6 +262,7 @@ describe("detectChangedScope", () => {
     for (const helperPath of [
       "scripts/ios-team-id.sh",
       "scripts/ios-write-swift-filelist.mjs",
+      "scripts/ios-write-swift-filelist.mts",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
       "scripts/lib/release-version.mjs",
@@ -511,7 +512,7 @@ describe("detectChangedScope", () => {
       runControlUiI18n: false,
       runUiTests: false,
     });
-    expect(detectChangedScope(["scripts/npm-runner.mjs"])).toEqual({
+    expect(detectChangedScope(["scripts/npm-runner.mts"])).toEqual({
       runNode: true,
       runMacos: false,
       runIosBuild: false,
@@ -522,7 +523,7 @@ describe("detectChangedScope", () => {
       runControlUiI18n: false,
       runUiTests: false,
     });
-    expect(detectChangedScope(["scripts/lib/format-generated-module.mjs"])).toEqual({
+    expect(detectChangedScope(["scripts/lib/format-generated-module.mts"])).toEqual({
       runNode: true,
       runMacos: false,
       runIosBuild: false,
@@ -687,7 +688,7 @@ describe("detectChangedScope", () => {
       runControlUiI18n: false,
       runUiTests: false,
     });
-    expect(detectChangedScope(["scripts/ci-changed-scope.mjs"])).toEqual({
+    expect(detectChangedScope(["scripts/ci-changed-scope.mts"])).toEqual({
       runNode: true,
       runMacos: false,
       runIosBuild: false,
@@ -866,7 +867,7 @@ describe("detectChangedScope", () => {
     "ui/src/pages/chat/chat-realtime.test.ts",
     "ui/package.json",
     "test/vitest/vitest.shared.config.ts",
-    "scripts/ensure-playwright-chromium.mjs",
+    "scripts/ensure-playwright-chromium.mts",
   ])("runs control-ui tests for %s", (changedPath) => {
     expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
   });
@@ -881,7 +882,7 @@ describe("detectChangedScope", () => {
         bundledCapabilityMetadataPath,
         "src/plugins/contracts/registry.ts",
         "src/plugins/contracts/tts-contract-suites.ts",
-        "scripts/test-projects.test-support.mjs",
+        "scripts/test-projects.test-support.mts",
         "test/scripts/test-projects.test.ts",
       ]),
     ).toEqual({
@@ -895,9 +896,9 @@ describe("detectChangedScope", () => {
     expect(
       detectNodeFastScope([
         "scripts/check-changed.mjs",
-        "scripts/ci-changed-scope.mjs",
-        "scripts/run-vitest.mjs",
-        "scripts/test-projects.test-support.d.mts",
+        "scripts/ci-changed-scope.mts",
+        "scripts/run-vitest.mts",
+        "scripts/test-projects.test-support.mts",
         "src/commands/status.scan-result.test.ts",
         "src/scripts/ci-changed-scope.control-ui.test.ts",
         "src/scripts/ci-changed-scope.native-i18n.test.ts",

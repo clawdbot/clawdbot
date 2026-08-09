@@ -50,7 +50,7 @@ every human `Thanks @...` attribution.
    writing grouped prose:
 
    ```bash
-   node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+   node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
      --base <base-tag> \
      --target <target-ref> \
      --main-ref origin/main \
@@ -200,7 +200,7 @@ every human `Thanks @...` attribution.
 - after the manifest-driven rewrite, regenerate and verify the complete
   contribution record before committing:
   ```bash
-  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
     --base <base-tag> \
     --target <target-ref> \
     --main-ref origin/main \
@@ -228,7 +228,7 @@ every human `Thanks @...` attribution.
 - after the GitHub release or prerelease is published, verify every matching
   release page against the same source section:
   ```bash
-  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
     --base <base-tag> \
     --target <target-ref> \
     --version <YYYY.M.PATCH> \
@@ -238,7 +238,7 @@ every human `Thanks @...` attribution.
 - add one `--release-tag` for every beta and stable page in the train; a
   `### Release verification` tail is permitted, but any other body drift
   fails the check
-- `scripts/render-github-release-notes.mjs` is the canonical release-body
+- `scripts/render-github-release-notes.mts` is the canonical release-body
   renderer used by candidate validation, publish, and verification. When the
   complete `## YYYY.M.PATCH` section fits GitHub's 125,000-character limit and
   the renderer's matching 125,000-byte safety ceiling, the body must contain

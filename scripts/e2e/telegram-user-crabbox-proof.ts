@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { sleep } from "../lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
-import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
+import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 import { telegramBotApi } from "./telegram-bot-api.ts";
 

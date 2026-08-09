@@ -9,7 +9,7 @@ import {
   extractControlUiStartupAssetPaths,
   formatControlUiPerformanceReport,
   runControlUiPerformanceCheck,
-} from "../../scripts/check-control-ui-performance.mjs";
+} from "../../scripts/check-control-ui-performance.mts";
 
 const tempDirs: string[] = [];
 
@@ -215,7 +215,7 @@ describe("Control UI performance budgets", () => {
       ),
     ).toContain("startup JS gzip vs baseline");
     expect(formatControlUiPerformanceReport(metrics, looseBudgets, baseline)).toContain(
-      '11025 B exceeds baseline 10000 B + tolerance 1024 B (limit 11024 B); intentionally raise the baseline with node scripts/check-control-ui-performance.mjs --update-baseline --startup-js-bytes 11025 --reason "<reason>"',
+      '11025 B exceeds baseline 10000 B + tolerance 1024 B (limit 11024 B); intentionally raise the baseline with node --import tsx scripts/check-control-ui-performance.mts --update-baseline --startup-js-bytes 11025 --reason "<reason>"',
     );
   });
 
@@ -268,8 +268,8 @@ describe("Control UI performance budgets", () => {
     fs.mkdirSync(scriptsDir, { recursive: true });
     fs.mkdirSync(configDir, { recursive: true });
     fs.mkdirSync(assetsDir, { recursive: true });
-    const scriptPath = path.join(scriptsDir, "check-control-ui-performance.mjs");
-    fs.copyFileSync(path.resolve("scripts/check-control-ui-performance.mjs"), scriptPath);
+    const scriptPath = path.join(scriptsDir, "check-control-ui-performance.mts");
+    fs.copyFileSync(path.resolve("scripts/check-control-ui-performance.mts"), scriptPath);
     fs.writeFileSync(
       path.join(distDir, "index.html"),
       '<script type="module" src="./assets/index-a.js"></script>\n' +
@@ -285,10 +285,14 @@ describe("Control UI performance budgets", () => {
       fs.writeFileSync(`${assetPath}.br`, Buffer.alloc(sizes.brotliBytes));
     }
 
-    const result = spawnSync(process.execPath, [fs.realpathSync(scriptPath), "--update-baseline"], {
-      cwd: rootDir,
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", fs.realpathSync(scriptPath), "--update-baseline"],
+      {
+        cwd: rootDir,
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status, result.stderr).toBe(0);
     expect(

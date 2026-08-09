@@ -13,7 +13,7 @@ const {
   resolveRoute,
   runDocsLinkAuditCli,
   sanitizeDocsConfigForEnglishOnly,
-} = await import("../../scripts/docs-link-audit.mjs");
+} = await import("../../scripts/docs-link-audit.mts");
 
 describe("docs-link-audit", () => {
   function tempEntries(prefix: string): Set<string> {

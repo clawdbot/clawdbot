@@ -6,8 +6,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATHS = [
-  "scripts/test-cli-startup-bench-budget.mjs",
-  "scripts/test-update-cli-startup-bench.mjs",
+  "scripts/test-cli-startup-bench-budget.mts",
+  "scripts/test-update-cli-startup-bench.mts",
 ];
 
 describe("CLI startup benchmark script spawners", () => {
@@ -22,14 +22,14 @@ describe("CLI startup benchmark script spawners", () => {
 
   it("builds the source CLI before generating a startup budget report", () => {
     const source = fs.readFileSync(
-      path.resolve(process.cwd(), "scripts/test-cli-startup-bench-budget.mjs"),
+      path.resolve(process.cwd(), "scripts/test-cli-startup-bench-budget.mts"),
       "utf8",
     );
 
     expect(source).toContain(
-      'spawnSync(process.execPath, ["scripts/ensure-cli-startup-build.mjs"]',
+      'spawnSync(process.execPath, ["--import", "tsx", "scripts/ensure-cli-startup-build.mts"]',
     );
-    expect(source.indexOf("scripts/ensure-cli-startup-build.mjs")).toBeLessThan(
+    expect(source.indexOf("scripts/ensure-cli-startup-build.mts")).toBeLessThan(
       source.indexOf("scripts/bench-cli-startup.ts"),
     );
   });
@@ -183,7 +183,9 @@ describe("CLI startup benchmark script spawners", () => {
         execFileSync(
           process.execPath,
           [
-            "scripts/test-cli-startup-bench-budget.mjs",
+            "--import",
+            "tsx",
+            "scripts/test-cli-startup-bench-budget.mts",
             "--baseline",
             baselinePath,
             "--report",
@@ -199,7 +201,9 @@ describe("CLI startup benchmark script spawners", () => {
         execFileSync(
           process.execPath,
           [
-            "scripts/test-cli-startup-bench-budget.mjs",
+            "--import",
+            "tsx",
+            "scripts/test-cli-startup-bench-budget.mts",
             "--baseline",
             baselinePath,
             "--report",
@@ -251,7 +255,9 @@ describe("CLI startup benchmark script spawners", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -299,7 +305,9 @@ describe("CLI startup benchmark script spawners", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -354,7 +362,9 @@ describe("CLI startup benchmark script spawners", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -420,7 +430,7 @@ describe("CLI startup benchmark script spawners", () => {
         [
           "--import",
           archShimPath,
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -449,7 +459,7 @@ describe("CLI startup benchmark script spawners", () => {
         [
           "--import",
           archShimPath,
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -468,7 +478,7 @@ describe("CLI startup benchmark script spawners", () => {
         [
           "--import",
           archShimPath,
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -519,7 +529,9 @@ describe("CLI startup benchmark script spawners", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -560,7 +572,9 @@ describe("CLI startup benchmark script spawners", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -580,14 +594,18 @@ describe("CLI startup benchmark script spawners", () => {
   });
 
   it("rejects malformed startup budget env vars before reading reports", () => {
-    const result = spawnSync(process.execPath, ["scripts/test-cli-startup-bench-budget.mjs"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT: "20pct",
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/test-cli-startup-bench-budget.mts"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT: "20pct",
+        },
       },
-    });
+    );
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -600,7 +618,13 @@ describe("CLI startup benchmark script spawners", () => {
   it("rejects malformed startup budget CLI values before reading reports", () => {
     const malformed = spawnSync(
       process.execPath,
-      ["scripts/test-cli-startup-bench-budget.mjs", "--max-duration-regression-pct", "1e2ms"],
+      [
+        "--import",
+        "tsx",
+        "scripts/test-cli-startup-bench-budget.mts",
+        "--max-duration-regression-pct",
+        "1e2ms",
+      ],
       { cwd: process.cwd(), encoding: "utf8" },
     );
     expect(malformed.status).toBe(1);
@@ -612,7 +636,12 @@ describe("CLI startup benchmark script spawners", () => {
 
     const missing = spawnSync(
       process.execPath,
-      ["scripts/test-cli-startup-bench-budget.mjs", "--max-first-output-regression-pct"],
+      [
+        "--import",
+        "tsx",
+        "scripts/test-cli-startup-bench-budget.mts",
+        "--max-first-output-regression-pct",
+      ],
       { cwd: process.cwd(), encoding: "utf8" },
     );
     expect(missing.status).toBe(1);

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --import tsx
 
 import { execFileSync, spawnSync } from "node:child_process";
 import {
@@ -20,7 +20,7 @@ import {
   parseShippedBaselineExclusions,
   releaseNotesVersionForTag,
   verifyGithubReleaseNotes,
-} from "../../../../scripts/render-github-release-notes.mjs";
+} from "../../../../scripts/render-github-release-notes.mts";
 
 const repo = "openclaw/openclaw";
 const githubSnapshotSchemaVersion = 1;
@@ -78,7 +78,7 @@ function fail(message) {
 
 function printUsage() {
   console.log(`Usage:
-  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \\
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \\
     --base <tag-or-sha> --target <tag-or-sha> --version <version> [options]
 
 Required:

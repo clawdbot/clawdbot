@@ -3,7 +3,7 @@ changelog_helper_root() {
 }
 
 changelog_attribution_script() {
-  printf '%s\n' "$(changelog_helper_root)/scripts/check-changelog-attributions.mjs"
+  printf '%s\n' "$(changelog_helper_root)/scripts/check-changelog-attributions.mts"
 }
 
 normalize_pr_changelog_entries() {
@@ -164,13 +164,13 @@ EOF_NODE
 }
 
 validate_changelog_attribution_policy() {
-  node "$(changelog_attribution_script)" CHANGELOG.md
+  node --import tsx "$(changelog_attribution_script)" CHANGELOG.md
 }
 
 changelog_thanks_required_for_contributor() {
   local contrib="${1:-}"
   [ -n "$contrib" ] || return 1
-  node "$(changelog_attribution_script)" --is-forbidden-handle "$contrib" && return 1
+  node --import tsx "$(changelog_attribution_script)" --is-forbidden-handle "$contrib" && return 1
 
   return 0
 }
@@ -178,7 +178,7 @@ changelog_thanks_required_for_contributor() {
 changelog_explicit_human_thanks_required_for_contributor() {
   local contrib="${1:-}"
   [ -n "$contrib" ] || return 1
-  node "$(changelog_attribution_script)" --requires-explicit-human-thanks "$contrib"
+  node --import tsx "$(changelog_attribution_script)" --requires-explicit-human-thanks "$contrib"
 }
 
 validate_changelog_entry_for_pr() {

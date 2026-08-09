@@ -1,5 +1,5 @@
 // Plugin npm manifest tests validate generated plugin package manifests.
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, win32 } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,7 +10,7 @@ import {
   resolvePluginNpmCommand,
   runPluginNpmCiWithRetry,
   withAugmentedPluginNpmManifestForPackage,
-} from "../scripts/lib/plugin-npm-package-manifest.mjs";
+} from "../scripts/lib/plugin-npm-package-manifest.mts";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -196,7 +196,7 @@ describe("plugin npm package manifest staging", () => {
       { error: timeoutError, status: null },
       { error: undefined, status: 0 },
     ];
-    const spawnOptions: Array<Record<string, unknown>> = [];
+    const spawnOptions: SpawnSyncOptions[] = [];
     let cleanupCalls = 0;
 
     const result = runPluginNpmCiWithRetry(
@@ -207,7 +207,7 @@ describe("plugin npm package manifest staging", () => {
           cleanupCalls += 1;
         },
         pluginDir: "whatsapp",
-        spawn: (_args: string[], options: Record<string, unknown>) => {
+        spawn: (_args: string[], options: SpawnSyncOptions) => {
           spawnOptions.push(options);
           return spawnResults.shift();
         },
@@ -679,7 +679,7 @@ describe("plugin npm package manifest staging", () => {
 
     const nodeModulesPath = join(packageDir, "node_modules");
     const manifestModuleUrl = new URL(
-      "../scripts/lib/plugin-npm-package-manifest.mjs",
+      "../scripts/lib/plugin-npm-package-manifest.mts",
       import.meta.url,
     ).href;
     const childSource = `
@@ -706,11 +706,15 @@ withAugmentedPluginNpmManifestForPackage(
   },
 );
 `;
-    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", childSource], {
-      cwd: repoDir,
-      encoding: "utf8",
-      env: process.env,
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", childSource],
+      {
+        cwd: repoDir,
+        encoding: "utf8",
+        env: process.env,
+      },
+    );
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("pack-json\n");

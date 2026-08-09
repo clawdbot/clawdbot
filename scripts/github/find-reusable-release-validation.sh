@@ -19,7 +19,7 @@ REPO_DIR="."
 MAX_CANDIDATES=12
 GITHUB_OUTPUT_FILE="${GITHUB_OUTPUT:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PREFLIGHT="${SCRIPT_DIR}/../release-preflight.mjs"
+PREFLIGHT="${SCRIPT_DIR}/../release-preflight.mts"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 VALIDATOR="${OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:-${REPO_ROOT}/scripts/release-ci-summary.mjs}"
 
@@ -165,7 +165,7 @@ fi
 
 # Exact-target reuse still requires internally consistent version stamps
 # (for example package.json must agree with the macOS plist).
-if ! (cd "$REPO_DIR" && node "$PREFLIGHT" --macos-versions-only >&2); then
+if ! (cd "$REPO_DIR" && node --import tsx "$PREFLIGHT" --macos-versions-only >&2); then
   no_reuse "target version metadata is inconsistent"
 fi
 

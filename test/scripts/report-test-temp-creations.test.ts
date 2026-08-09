@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   collectTempCreationFindingsFromDiff,
   formatGithubWarning,
-} from "../../scripts/report-test-temp-creations.mjs";
+} from "../../scripts/report-test-temp-creations.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
@@ -360,14 +360,19 @@ describe("report-test-temp-creations", () => {
   it("prints help with usage, outputs, and examples", () => {
     const output = execFileSync(
       process.execPath,
-      [path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"), "--help"],
+      [
+        "--import",
+        "tsx",
+        path.join(repoRoot, "scripts", "report-test-temp-creations.mts"),
+        "--help",
+      ],
       {
         cwd: repoRoot,
         encoding: "utf8",
       },
     );
 
-    expect(output).toContain("Usage: node scripts/report-test-temp-creations.mjs");
+    expect(output).toContain("Usage: node --import tsx scripts/report-test-temp-creations.mts");
     expect(output).toContain("Outputs:");
     expect(output).toContain("--no-merge-base");
     expect(output).toContain("Examples:");
@@ -428,7 +433,13 @@ describe("report-test-temp-creations", () => {
 
     const result = spawnSync(
       process.execPath,
-      [path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"), "--staged", "--json"],
+      [
+        "--import",
+        "tsx",
+        path.join(repoRoot, "scripts", "report-test-temp-creations.mts"),
+        "--staged",
+        "--json",
+      ],
       {
         cwd: root,
         encoding: "utf8",
@@ -486,7 +497,9 @@ describe("report-test-temp-creations", () => {
     const result = spawnSync(
       process.execPath,
       [
-        path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"),
+        "--import",
+        "tsx",
+        path.join(repoRoot, "scripts", "report-test-temp-creations.mts"),
         "--staged",
         "--fail-on-findings",
       ],
@@ -525,7 +538,9 @@ describe("report-test-temp-creations", () => {
     const result = spawnSync(
       process.execPath,
       [
-        path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"),
+        "--import",
+        "tsx",
+        path.join(repoRoot, "scripts", "report-test-temp-creations.mts"),
         "--base",
         "main",
         "--head",

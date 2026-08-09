@@ -257,7 +257,7 @@ its report:
 ```
 
 Artifact `path` is relative to the manifest's directory; `targetPath` is
-relative to the configured R2/S3 artifact prefix. `scripts/mantis/publish-pr-evidence.mjs`
+relative to the configured R2/S3 artifact prefix. `scripts/mantis/publish-pr-evidence.mts`
 rejects path traversal and skips entries with `"required": false` when the
 file is missing.
 
@@ -284,7 +284,7 @@ enabled by default in the Discord/Slack/Telegram GitHub workflows.
 
 ## GitHub automation
 
-`scripts/mantis/publish-pr-evidence.mjs` is the reusable publisher. Workflows
+`scripts/mantis/publish-pr-evidence.mts` is the reusable publisher. Workflows
 call it with the manifest, target PR, artifact target root, comment marker,
 artifact URL, run URL, and request source. It uploads declared artifacts to
 the Mantis R2 bucket, builds a summary-first PR comment with inline

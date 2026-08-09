@@ -92,7 +92,7 @@ openclaw_live_stage_source_tree() {
   fi
 
   local scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
-  node "$scripts_dir/live-docker-stage-private-sdk-exports.mjs" "$dest_dir"
+  node --import tsx "$scripts_dir/live-docker-stage-private-sdk-exports.mts" "$dest_dir"
 }
 
 openclaw_live_link_runtime_tree() {

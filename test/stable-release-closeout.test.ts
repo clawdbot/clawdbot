@@ -3,7 +3,7 @@ import {
   extractStableChangelogSection,
   parseStableReleaseTag,
   verifyStableMainCloseout,
-} from "../scripts/lib/stable-release-closeout.mjs";
+} from "../scripts/lib/stable-release-closeout.mts";
 
 const release = {
   tagName: "v2026.6.8",

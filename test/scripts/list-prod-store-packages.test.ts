@@ -5,11 +5,11 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
-const scriptPath = resolve("scripts/list-prod-store-packages.mjs");
+const scriptPath = resolve("scripts/list-prod-store-packages.mts");
 const tempDirs: string[] = [];
 
 function runListProdStorePackages(input: unknown, cwd = process.cwd()) {
-  return spawnSync(process.execPath, [scriptPath], {
+  return spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
     cwd,
     encoding: "utf8",
     input: JSON.stringify(input),
@@ -17,7 +17,7 @@ function runListProdStorePackages(input: unknown, cwd = process.cwd()) {
 }
 
 function runListProdStorePackagesRaw(input: string, cwd = process.cwd()) {
-  return spawnSync(process.execPath, [scriptPath], {
+  return spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
     cwd,
     encoding: "utf8",
     input,

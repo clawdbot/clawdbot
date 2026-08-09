@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   computePluginSdkApiBaselineHashFileContent,

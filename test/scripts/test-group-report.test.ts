@@ -12,7 +12,7 @@ import {
   renderGroupedTestComparison,
   resolveGroupKey,
   resolveTestArea,
-} from "../../scripts/lib/test-group-report.mjs";
+} from "../../scripts/lib/test-group-report.mts";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   parseTestGroupReportArgs,
@@ -25,7 +25,7 @@ import {
   runReportPlans,
   signalTestGroupReportChild,
   spawnText,
-} from "../../scripts/test-group-report.mjs";
+} from "../../scripts/test-group-report.mts";
 import { withEnv } from "../../src/test-utils/env.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
@@ -213,7 +213,15 @@ describe("scripts/test-group-report aggregation", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["scripts/test-group-report.mjs", "--report", missingReport, "--output", output],
+        [
+          "--import",
+          "tsx",
+          "scripts/test-group-report.mts",
+          "--report",
+          missingReport,
+          "--output",
+          output,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -239,7 +247,15 @@ describe("scripts/test-group-report aggregation", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["scripts/test-group-report.mjs", "--report", reportPath, "--output", output],
+        [
+          "--import",
+          "tsx",
+          "scripts/test-group-report.mts",
+          "--report",
+          reportPath,
+          "--output",
+          output,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -263,7 +279,9 @@ describe("scripts/test-group-report aggregation", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-group-report.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-group-report.mts",
           "--config",
           missingConfig,
           "--allow-failures",
@@ -675,7 +693,16 @@ describe("scripts/test-group-report comparison", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["scripts/test-group-report.mjs", "--compare", beforePath, afterPath, "--output", output],
+        [
+          "--import",
+          "tsx",
+          "scripts/test-group-report.mts",
+          "--compare",
+          beforePath,
+          afterPath,
+          "--output",
+          output,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -711,7 +738,16 @@ describe("scripts/test-group-report comparison", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["scripts/test-group-report.mjs", "--compare", beforePath, afterPath, "--output", output],
+        [
+          "--import",
+          "tsx",
+          "scripts/test-group-report.mts",
+          "--compare",
+          beforePath,
+          afterPath,
+          "--output",
+          output,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -1052,7 +1088,7 @@ describe("scripts/test-group-report child process guard", () => {
 
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const childPidPath = path.join(tempDir, "child.pid");
-    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mjs")).href;
+    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mts")).href;
     let childPid: number | undefined;
     try {
       const childScript = [
@@ -1104,7 +1140,7 @@ describe("scripts/test-group-report child process guard", () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const childPidPath = path.join(tempDir, "child.pid");
     const readyPath = path.join(tempDir, "child.ready");
-    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mjs")).href;
+    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mts")).href;
     let childPid: number | undefined;
     let runner: ReturnType<typeof spawn> | undefined;
     try {

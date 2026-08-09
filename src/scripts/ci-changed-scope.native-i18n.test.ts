@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 const { assertNativeGeneratedArtifactsIsolated, shouldRunNativeI18n, shouldStrictNativeI18n } =
-  await import("../../scripts/ci-changed-scope.mjs");
+  await import("../../scripts/ci-changed-scope.mts");
 
 describe("native i18n changed scope", () => {
   it("routes Android flavor sources through native i18n", () => {

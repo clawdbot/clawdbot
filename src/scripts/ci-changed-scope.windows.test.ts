@@ -1,7 +1,7 @@
 // Windows CI scope tests cover paths with platform-specific runtime contracts.
 import { describe, expect, it } from "vitest";
 
-const { detectChangedScope } = await import("../../scripts/ci-changed-scope.mjs");
+const { detectChangedScope } = await import("../../scripts/ci-changed-scope.mts");
 
 describe("detectChangedScope Windows routing", () => {
   it("routes SQLite transcript archive changes to Windows", () => {

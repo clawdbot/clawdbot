@@ -8,7 +8,7 @@ import {
   publishArtifactFiles,
   renderEvidenceComment,
   shouldPublishPrComment,
-} from "../../scripts/mantis/publish-pr-evidence.mjs";
+} from "../../scripts/mantis/publish-pr-evidence.mts";
 
 const tempDirs: string[] = [];
 

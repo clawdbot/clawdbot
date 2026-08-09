@@ -181,7 +181,7 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile \\");
     const storeSeedIndex = dockerfile.indexOf(
-      "node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add",
+      "node --import tsx scripts/list-prod-store-packages.mts | xargs -r pnpm store add",
     );
     const pruneIndex = dockerfile.indexOf("CI=true pnpm prune --prod \\");
 

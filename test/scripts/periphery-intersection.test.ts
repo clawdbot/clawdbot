@@ -10,7 +10,7 @@ import {
   intersectFindings,
   parseRepoLocation,
   validateFindings,
-} from "../../scripts/periphery-intersection.mjs";
+} from "../../scripts/periphery-intersection.mts";
 
 const WORKFLOW_PATH = ".github/workflows/shared-openclawkit-periphery.yml";
 const FINDING_SOURCE = "../shared/OpenClawKit/Sources/OpenClawKit/Example.swift";

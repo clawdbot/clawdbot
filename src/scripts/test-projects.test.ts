@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
+import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../../scripts/run-vitest.mts";
 
 const {
   applyParallelVitestCachePaths,
@@ -17,15 +18,8 @@ const {
   resolveChangedTargetArgs,
   resolveChangedTestTargetPlan,
   resolveParallelFullSuiteConcurrency,
-} = await import("../../scripts/test-projects.test-support.mjs");
+} = await import("../../scripts/test-projects.test-support.mts");
 
-const runVitestModulePath = "../../scripts/run-vitest.mjs";
-const { resolveVitestCliEntry, resolveVitestNodeArgs } = (await import(
-  runVitestModulePath
-)) as unknown as {
-  resolveVitestCliEntry: () => string;
-  resolveVitestNodeArgs: (env: NodeJS.ProcessEnv) => string[];
-};
 const VITEST_NODE_PREFIX = [
   "exec",
   "node",
