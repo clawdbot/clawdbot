@@ -223,7 +223,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   margin: 0;
   min-height: 40px;
   padding: 0 12px;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   border-radius: var(--radius-md);
   white-space: nowrap;
   flex: 0 0 auto;
@@ -323,7 +323,7 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   .shell--mobile-nav .nav-item {
-    font-size: 12px;
+    font-size: var(--control-ui-text-sm);
   }
 
   /* Hide the entire content-header on mobile chat — controls are in mobile gear menu */
@@ -642,7 +642,7 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
 
   .nav-item {
     padding: 6px 8px;
-    font-size: 12px; /* was 11px */
+    font-size: var(--control-ui-text-sm); /* was 11px */
   }
 
   .content {
