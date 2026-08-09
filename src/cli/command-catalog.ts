@@ -103,6 +103,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   {
+    commandPath: ["database"],
+    // Release-local database inspection must not observe default state or load runtime policy.
+    policy: {
+      configGuard: "skip",
+      loadPlugins: "never",
+      hideBanner: true,
+      ensureCliPath: false,
+      networkProxy: "bypass",
+    },
+  },
+  {
     commandPath: ["crestodian"], // hidden alias
     policy: { configGuard: "skip", loadPlugins: "never", ensureCliPath: false },
   },

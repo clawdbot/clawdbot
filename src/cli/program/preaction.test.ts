@@ -217,6 +217,22 @@ describe("registerPreActionHooks", () => {
       .command("create")
       .option("--json")
       .action(() => {});
+    const database = programLocal.command("database");
+    database
+      .command("preflight")
+      .argument("<path>")
+      .option("--json")
+      .action(() => {});
+    const ownership = database.command("ownership");
+    ownership
+      .command("status")
+      .option("--json")
+      .action(() => {});
+    ownership
+      .command("claim")
+      .requiredOption("--manager <id>")
+      .option("--json")
+      .action(() => {});
     programLocal
       .command("doctor")
       .option("--lint")
@@ -585,6 +601,24 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "qa", "suite"],
     });
 
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "preflight", args: ["database", "preflight", "/tmp/copy.sqlite", "--json"] },
+    { name: "ownership status", args: ["database", "ownership", "status", "--json"] },
+    {
+      name: "ownership claim",
+      args: ["database", "ownership", "claim", "--manager", "gateway-supervisor", "--json"],
+    },
+  ])("keeps database $name isolated from startup state", async ({ args }) => {
+    await runPreAction({
+      parseArgv: args,
+      processArgv: ["node", "openclaw", ...args],
+    });
+
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });

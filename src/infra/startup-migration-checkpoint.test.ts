@@ -1,7 +1,7 @@
 // Startup migration checkpoint tests cover shared-state version records and leases.
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -11,6 +11,10 @@ import {
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  OpenClawStateExternalOwnershipError,
+  STATE_SUPERVISION_KEY,
+} from "../state/openclaw-state-ownership.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -31,6 +35,7 @@ import {
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
 });
 
 const startupMigrationTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -266,6 +271,85 @@ describe("startup migration checkpoint", () => {
 
     const next = acquireStartupMigrationLease({ env, nowMs: 1002, owner: "second" });
     next.release();
+  });
+
+  it("rechecks external ownership inside the final lease write transaction", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    runOpenClawStateWriteTransaction(() => undefined, { env });
+    closeOpenClawStateDatabaseForTest();
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const { DatabaseSync } = requireNodeSqlite();
+    const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
+      | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
+      | undefined;
+    if (!originalExec) {
+      throw new Error("DatabaseSync.exec descriptor is unavailable");
+    }
+    // Schema setup commits before the lease helper starts its own transaction.
+    // Claim at that exact boundary so the final transaction must fence the new owner.
+    let immediateTransactionCount = 0;
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
+      this: import("node:sqlite").DatabaseSync,
+      sql: string,
+    ) {
+      if (sql === "BEGIN IMMEDIATE" && ++immediateTransactionCount === 2) {
+        const claimant = new DatabaseSync(databasePath);
+        try {
+          claimant
+            .prepare(
+              `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+               VALUES (?, ?, ?)`,
+            )
+            .run(
+              STATE_SUPERVISION_KEY,
+              JSON.stringify({
+                version: 1,
+                mode: "external",
+                managerId: "race-manager",
+                claimedAt: 1,
+              }),
+              1,
+            );
+        } finally {
+          claimant.close();
+        }
+      }
+      return originalExec.call(this, sql);
+    });
+
+    try {
+      expect(() => acquireStartupMigrationLease({ env, owner: "unmarked", nowMs: 1 })).toThrow(
+        OpenClawStateExternalOwnershipError,
+      );
+    } finally {
+      exec.mockRestore();
+    }
+
+    const verify = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        verify
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM state_leases
+             WHERE scope = 'startup-migrations' AND lease_key = 'global'`,
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(
+        verify
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM schema_meta
+             WHERE meta_key IN ('state-migrations', 'startup-migrations')`,
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      verify.close();
+    }
   });
 
   it("waits for a live same-host startup migration lease to be released", async () => {

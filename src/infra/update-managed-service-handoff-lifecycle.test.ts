@@ -13,6 +13,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -179,7 +180,10 @@ async function runHelperWithExistingSentinel(params: {
   sentinel?: unknown;
   deepStatePath?: boolean;
   parentExitTimeoutMs?: number;
-  whileHelperRunning?: (env: NodeJS.ProcessEnv) => Promise<void> | void;
+  whileHelperRunning?: (
+    env: NodeJS.ProcessEnv,
+    context: { logPath: string },
+  ) => Promise<void> | void;
 }) {
   const { execFile } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -212,7 +216,7 @@ async function runHelperWithExistingSentinel(params: {
     },
   });
 
-  const [, args] = spawnMock.mock.calls.at(-1) as unknown as [
+  const [, args, spawnOptions] = spawnMock.mock.calls.at(-1) as unknown as [
     string,
     string[],
     { env: NodeJS.ProcessEnv; detached?: boolean; cwd?: string },
@@ -228,6 +232,7 @@ async function runHelperWithExistingSentinel(params: {
     writeRestartSentinelRow(env, params.sentinel);
   }
   const helperParamsPath = path.join(tmpDir, "helper-params.json");
+  const logPath = path.join(tmpDir, "handoff.log");
   await fs.writeFile(
     helperParamsPath,
     `${JSON.stringify(
@@ -235,7 +240,7 @@ async function runHelperWithExistingSentinel(params: {
         ...helperParams,
         parentPid: process.pid,
         parentExitTimeoutMs: params.parentExitTimeoutMs ?? 1,
-        logPath: path.join(tmpDir, "handoff.log"),
+        logPath,
         sensitivePaths: [],
       },
       null,
@@ -245,19 +250,24 @@ async function runHelperWithExistingSentinel(params: {
 
   const resultPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolve) => {
-      execFile(process.execPath, [helperScriptPath, helperParamsPath], { cwd: tmpDir }, (err) => {
-        const childError = err as (NodeJS.ErrnoException & { signal?: NodeJS.Signals }) | null;
-        resolve({
-          code: typeof childError?.code === "number" ? childError.code : 0,
-          signal: childError?.signal ?? null,
-        });
-      });
+      execFile(
+        process.execPath,
+        [helperScriptPath, helperParamsPath],
+        { cwd: tmpDir, env: spawnOptions.env },
+        (err) => {
+          const childError = err as (NodeJS.ErrnoException & { signal?: NodeJS.Signals }) | null;
+          resolve({
+            code: typeof childError?.code === "number" ? childError.code : 0,
+            signal: childError?.signal ?? null,
+          });
+        },
+      );
     },
   );
-  await params.whileHelperRunning?.(env);
+  await params.whileHelperRunning?.(env, { logPath });
   const result = await resultPromise;
 
-  return { result, env };
+  return { result, env, logPath };
 }
 
 async function createLegacyRestartSentinelTable(env: NodeJS.ProcessEnv): Promise<void> {
@@ -763,6 +773,151 @@ describe("managed service update handoff", () => {
       const mode = (await fs.stat(resolveOpenClawStateSqlitePath(env))).mode & 0o777;
       expect(mode).toBe(0o600);
     }
+  });
+
+  it("refuses fallback writes to externally owned state without the supervisor marker", async () => {
+    let before:
+      | {
+          bytes: Buffer;
+          entries: string[];
+          ctimeMs: number;
+          ino: number;
+          mode: number;
+          mtimeMs: number;
+        }
+      | undefined;
+    const { result, env, logPath } = await runHelperWithExistingSentinel({
+      prepareStateDatabase: async (stateEnv) => {
+        const externalEnv = { ...stateEnv, OPENCLAW_SUPERVISOR_MODE: "external" };
+        claimOpenClawStateOwnership("gateway-supervisor", { env: externalEnv });
+        closeOpenClawStateDatabaseForTest();
+        const databasePath = resolveOpenClawStateSqlitePath(stateEnv);
+        const stat = await fs.stat(databasePath);
+        before = {
+          bytes: await fs.readFile(databasePath),
+          entries: (await fs.readdir(path.dirname(databasePath))).toSorted(),
+          ctimeMs: stat.ctimeMs,
+          ino: stat.ino,
+          mode: stat.mode,
+          mtimeMs: stat.mtimeMs,
+        };
+      },
+    });
+
+    expect(result).toEqual({ code: 1, signal: null });
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const stat = await fs.stat(databasePath);
+    expect({
+      bytes: await fs.readFile(databasePath),
+      entries: (await fs.readdir(path.dirname(databasePath))).toSorted(),
+      ctimeMs: stat.ctimeMs,
+      ino: stat.ino,
+      mode: stat.mode,
+      mtimeMs: stat.mtimeMs,
+    }).toEqual(before);
+    await expect(fs.readFile(logPath, "utf8")).resolves.toMatch(
+      /gateway-supervisor.*OPENCLAW_SUPERVISOR_MODE=external/u,
+    );
+  });
+
+  it("rechecks external ownership after waiting for the state write lock", async () => {
+    const pendingSentinel = {
+      version: 1,
+      revision: 100,
+      payload: {
+        kind: "update",
+        status: "skipped",
+        ts: 100,
+        stats: {
+          handoffId: "handoff-ownership-race",
+          reason: "managed-service-handoff-started",
+        },
+      },
+    };
+    const ownership = {
+      version: 1,
+      mode: "external",
+      managerId: "race-supervisor",
+      claimedAt: Date.now(),
+    };
+    let claimant: import("node:sqlite").DatabaseSync | undefined;
+    let claimantTransactionOpen = false;
+    let beforeSentinelRow: unknown;
+    let helperResult: Awaited<ReturnType<typeof runHelperWithExistingSentinel>> | undefined;
+    try {
+      helperResult = await runHelperWithExistingSentinel({
+        handoffId: "handoff-ownership-race",
+        metaHandoffId: "handoff-ownership-race",
+        parentExitTimeoutMs: 1,
+        prepareStateDatabase: async (stateEnv) => {
+          writeRestartSentinelRow(stateEnv, pendingSentinel);
+          closeOpenClawStateDatabaseForTest();
+          const sqlite = await import("node:sqlite");
+          claimant = new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath(stateEnv));
+          claimant.exec("BEGIN IMMEDIATE;");
+          claimantTransactionOpen = true;
+          claimant
+            .prepare(
+              "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+            )
+            .run("gateway.supervision", JSON.stringify(ownership), ownership.claimedAt);
+          beforeSentinelRow = claimant
+            .prepare("SELECT * FROM gateway_restart_sentinel WHERE sentinel_key = ?")
+            .get("current");
+        },
+        whileHelperRunning: async (_stateEnv, { logPath }) => {
+          await vi.waitFor(
+            async () => {
+              await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
+                "did not exit before handoff timeout",
+              );
+            },
+            { interval: 5, timeout: 2_000 },
+          );
+          await new Promise<void>((resolve) => setTimeout(resolve, 100));
+          if (!claimant) {
+            throw new Error("expected the ownership claimant transaction to remain open");
+          }
+          claimant.exec("COMMIT;");
+          claimantTransactionOpen = false;
+          claimant.close();
+          claimant = undefined;
+        },
+      });
+    } finally {
+      if (claimantTransactionOpen) {
+        try {
+          claimant?.exec("ROLLBACK;");
+        } catch {}
+      }
+      try {
+        claimant?.close();
+      } catch {}
+    }
+
+    if (!helperResult) {
+      throw new Error("expected the detached helper to return a result");
+    }
+    expect(helperResult.result).toEqual({ code: 1, signal: null });
+    const databasePath = resolveOpenClawStateSqlitePath(helperResult.env);
+    const sqlite = await import("node:sqlite");
+    const verifyDb = new sqlite.DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const ownershipRow = verifyDb
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+        .get("gateway.supervision") as { value_json?: unknown } | undefined;
+      expect(ownershipRow?.value_json).toBe(JSON.stringify(ownership));
+      expect(
+        verifyDb
+          .prepare("SELECT * FROM gateway_restart_sentinel WHERE sentinel_key = ?")
+          .get("current"),
+      ).toEqual(beforeSentinelRow);
+    } finally {
+      verifyDb.close();
+    }
+    await expect(fs.readFile(helperResult.logPath, "utf8")).resolves.toMatch(
+      /race-supervisor.*OPENCLAW_SUPERVISOR_MODE=external/u,
+    );
   });
 
   it.runIf(process.platform === "win32")(

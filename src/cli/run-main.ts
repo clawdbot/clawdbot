@@ -1155,6 +1155,7 @@ async function runCliWithPreparedOutputMode(
   const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
   const isGatewayRunInvocation = isGatewayRunInvocationArgv(normalizedArgv);
+  const isDatabaseInvocation = normalizedInvocation.commandPath[0] === "database";
   // Gateway pre-bootstrap owns state/config dotenv selection. This phase only
   // needs the workspace file, so avoid importing the loader when it is absent.
   const loadGlobalEnv = !isGatewayRunInvocation;
@@ -1165,6 +1166,7 @@ async function runCliWithPreparedOutputMode(
 
   if (
     !isHelpOrVersionInvocation &&
+    !isDatabaseInvocation &&
     !isAgentExecInvocation(normalizedInvocation.commandPath) &&
     shouldLoadCliDotEnv(loadGlobalEnv)
   ) {
@@ -1212,12 +1214,14 @@ async function runCliWithPreparedOutputMode(
   }).skipConfigGuard;
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
-      bestEffortConfigPromise = import("../config/io.js").then(({ readBestEffortConfig }) =>
-        readBestEffortConfig({
-          ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
-          ...(skipBestEffortConfigObservation ? { observe: false } : {}),
-          skipPluginValidation: true,
-        }),
+      bestEffortConfigPromise = import("../config/io.js").then((configIo) =>
+        normalizedInvocation.primary === "update"
+          ? configIo.readSourceConfigBestEffort()
+          : configIo.readBestEffortConfig({
+              ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
+              ...(skipBestEffortConfigObservation ? { observe: false } : {}),
+              skipPluginValidation: true,
+            }),
       );
     }
     return await bestEffortConfigPromise;
@@ -1226,6 +1230,7 @@ async function runCliWithPreparedOutputMode(
     (trace): trace is ReturnType<typeof createGatewayStartupTrace> => Boolean(trace),
   );
   if (
+    !isDatabaseInvocation &&
     (await Promise.all(startupTraces.map((trace) => trace.requiresDiagnosticsConfig()))).some(
       Boolean,
     )
@@ -1452,7 +1457,7 @@ async function runCliWithPreparedOutputMode(
       return;
     }
 
-    if (!isHelpOrVersionInvocation) {
+    if (!isHelpOrVersionInvocation && !isDatabaseInvocation) {
       await bootstrapCliProxyCaptureAndDispatcher(startupTrace, {
         ensureDispatcher: shouldUseCliEnvProxy,
       });
