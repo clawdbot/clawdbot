@@ -9,6 +9,7 @@ import { z } from "zod";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   listImportedBundledPluginFacadeIds,
+  loadFacadeModuleAtLocationSync,
   loadBundledPluginPublicSurfaceModuleSync,
   MissingPublicSurfaceError,
   resetFacadeLoaderStateForTest,
@@ -27,6 +28,18 @@ type FacadeLoaderSourceTransformFactory = NonNullable<
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const trustedBundledPluginFixtureRoots: string[] = [];
 let trustedPluginIdCounter = 0;
+
+function captureThrownError(run: () => unknown): Error {
+  try {
+    run();
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("Expected function to throw");
+}
 
 function forceNodeRuntimeVersionsForTest(): () => void {
   const originalVersions = process.versions;
@@ -282,60 +295,36 @@ describe("plugin-sdk facade loader", () => {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
-    expect(() =>
+    const error = captureThrownError(() =>
       loadBundledPluginPublicSurfaceModuleSync({
         dirName: "browser",
         artifactBasename: "browser-maintenance.js",
       }),
-    ).toThrow(MissingPublicSurfaceError);
-  });
+    );
 
-  it("MissingPublicSurfaceError is distinguishable from generic Error", () => {
-    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    try {
-      loadBundledPluginPublicSurfaceModuleSync({
-        dirName: "browser",
-        artifactBasename: "browser-maintenance.js",
-      });
-    } catch (err) {
-      expect(err instanceof MissingPublicSurfaceError).toBe(true);
-      expect(err instanceof Error).toBe(true);
-    }
+    expect(error).toBeInstanceOf(MissingPublicSurfaceError);
+    expect(error.message).toBe(
+      "Unable to resolve bundled plugin public surface browser/browser-maintenance.js",
+    );
   });
 
   it("open failures are not classified as MissingPublicSurfaceError", () => {
-    const fixture = createBundledPluginFixture({
-      prefix: "openclaw-facade-loader-open-fail-",
-      marker: "open-failure",
-    });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
+    const tempRoot = createTempDirSync("openclaw-facade-loader-boundary-fail-");
+    const boundaryRoot = path.join(tempRoot, "plugin");
+    const outsidePath = path.join(tempRoot, "outside.js");
+    fs.mkdirSync(boundaryRoot, { recursive: true });
+    fs.writeFileSync(outsidePath, 'export const marker = "outside";\n', "utf8");
 
-    // Write a file that exists but causes openRootFileSync to fail (permission
-    // denials, hardlink rejection, or other I/O errors are real open failures,
-    // not missing artifacts).  Removing read permission on the fixture triggers
-    // a distinct error class.
-    const apiPath = path.join(fixture.bundledPluginsDir, fixture.pluginId, "api.js");
-    try {
-      fs.chmodSync(apiPath, 0o000);
-      expect(() =>
-        loadBundledPluginPublicSurfaceModuleSync({
-          dirName: fixture.pluginId,
-          artifactBasename: "api.js",
-        }),
-      ).toThrow(Error);
-      // The error must NOT be MissingPublicSurfaceError.
-      try {
-        loadBundledPluginPublicSurfaceModuleSync({
-          dirName: fixture.pluginId,
-          artifactBasename: "api.js",
-        });
-      } catch (err) {
-        expect(err).not.toBeInstanceOf(MissingPublicSurfaceError);
-      }
-    } finally {
-      fs.chmodSync(apiPath, 0o644);
-    }
+    const error = captureThrownError(() =>
+      loadFacadeModuleAtLocationSync({
+        location: { modulePath: outsidePath, boundaryRoot },
+        trackedPluginId: "boundary-failure",
+      }),
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(MissingPublicSurfaceError);
+    expect(error.message).toBe(`Unable to open bundled plugin public surface ${outsidePath}`);
   });
 
   it("shares loaded facade ids with facade-runtime", () => {
