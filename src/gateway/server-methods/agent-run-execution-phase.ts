@@ -40,7 +40,7 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import type { AgentTurnContext, AgentTurnPrincipal } from "../agent-turn/types.js";
+import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "../agent-turn/types.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -66,7 +66,6 @@ import { createAgentRunModelSelectionHandler } from "./agent-run-model-selection
 import { resolveSessionRuntimeCwd } from "./agent-session-reset.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export function startAgentRunExecution(params: {
   prepared: PreparedAgentRunDispatch;
@@ -112,7 +111,7 @@ export function startAgentRunExecution(params: {
   execApprovalFollowupApprovalId?: string;
   client: AgentTurnPrincipal | null;
   context: AgentTurnContext;
-  respond: GatewayRequestHandlerOptions["respond"];
+  io: AgentTurnIo;
   releaseCronContinuationClaimWithRecovery: (
     outcome?: { terminalOutcome: AgentRunTerminalOutcome },
     onRecovered?: () => void,
@@ -143,17 +142,19 @@ export function startAgentRunExecution(params: {
           runId: params.runId,
           stopReason,
         });
-        params.respond(
-          true,
-          {
-            runId: params.runId,
-            status: "timeout" as const,
-            summary: "aborted",
-            stopReason,
-            timeoutPhase: "queue" as const,
-            providerStarted: false,
-          },
-          undefined,
+        params.io.emitFinal(
+          [
+            true,
+            {
+              runId: params.runId,
+              status: "timeout" as const,
+              summary: "aborted",
+              stopReason,
+              timeoutPhase: "queue" as const,
+              providerStarted: false,
+            },
+            undefined,
+          ],
           { runId: params.runId },
         );
         return;
@@ -492,7 +493,7 @@ export function startAgentRunExecution(params: {
                 onRecovered,
               )
           : undefined,
-        respond: params.respond,
+        io: params.io,
         context: params.context,
         taskTrackingMode: prepared.dispatchTaskTrackingMode,
         restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
@@ -514,7 +515,7 @@ export function startAgentRunExecution(params: {
         keys: params.agentDedupeKeys,
         entry: { ts: Date.now(), ok: false, payload, error },
       });
-      params.respond(false, payload, error, {
+      params.io.emitFinal([false, payload, error], {
         runId: params.runId,
         error: formatForLog(err),
       });

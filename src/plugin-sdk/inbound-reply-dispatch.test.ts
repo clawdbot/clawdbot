@@ -6,6 +6,11 @@ import type { RecordInboundSession } from "../channels/session.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const deliverInboundReplyWithMessageSendContext = vi.hoisted(() => vi.fn());
+const dispatchReplyFromConfig = vi.hoisted(() => vi.fn());
+
+vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({
+  dispatchReplyFromConfig,
+}));
 
 vi.mock("../channels/turn/kernel.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../channels/turn/kernel.js")>();
@@ -33,6 +38,7 @@ import {
   hasFinalInboundReplyDispatch,
   hasVisibleInboundReplyDispatch,
   dispatchInboundReplyWithBase,
+  dispatchReplyFromConfigWithSettledDispatcher,
   recordInboundSessionAndDispatchReply,
   resolveInboundReplyDispatchCounts,
 } from "./inbound-reply-dispatch.js";
@@ -44,6 +50,33 @@ function readFirstMockArg(fn: unknown): unknown {
 describe("recordInboundSessionAndDispatchReply", () => {
   beforeEach(() => {
     deliverInboundReplyWithMessageSendContext.mockReset();
+    dispatchReplyFromConfig.mockReset();
+  });
+
+  it("uses the prepared Gateway runtime in the settled dispatcher wrapper", async () => {
+    const dispatcher = {
+      markComplete: vi.fn(),
+      waitForIdle: vi.fn(async () => undefined),
+    } as unknown as Parameters<
+      typeof dispatchReplyFromConfigWithSettledDispatcher
+    >[0]["dispatcher"];
+    const onSettled = vi.fn();
+    dispatchReplyFromConfig.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    await dispatchReplyFromConfigWithSettledDispatcher({
+      cfg: {} as OpenClawConfig,
+      ctxPayload: {} as FinalizedMsgContext,
+      dispatcher,
+      onSettled,
+    });
+
+    expect(readFirstMockArg(dispatchReplyFromConfig)).toMatchObject({
+      usePublishedModelRuntime: true,
+    });
+    expect(onSettled).toHaveBeenCalledOnce();
   });
 
   it("delegates record and dispatch through the channel turn kernel once", async () => {

@@ -223,7 +223,6 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/facade-runtime.ts|typescript/no-unnecessary-type-parameters|3",
         "src/plugin-sdk/json-store.ts|typescript-eslint/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/qa-runner-runtime.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/plugin-sdk/test-helpers/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
