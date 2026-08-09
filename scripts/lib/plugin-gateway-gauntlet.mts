@@ -515,6 +515,7 @@ function collectGatewayCpuObservations(params: {
     if (!isRecord(result)) {
       continue;
     }
+    const id = normalizeString(result.id) || "unknown";
     const cpuCoreMax = metricMax(result.summary, "cpuCoreRatio");
     const wallMax = metricMax(result.summary, "readyzMs") ?? metricMax(result.summary, "healthzMs");
     if (
@@ -525,7 +526,7 @@ function collectGatewayCpuObservations(params: {
     ) {
       observations.push({
         kind: "startup-cpu-hot",
-        id: result.id,
+        id,
         cpuCoreRatioMax: cpuCoreMax,
         wallMsMax: wallMax,
       });
