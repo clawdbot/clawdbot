@@ -6,17 +6,21 @@ import {
 } from "./project-memory-bootstrap.js";
 
 const runtimeMocks = vi.hoisted(() => ({
+  getSelectedRuntime: vi.fn(),
   getManager: vi.fn(),
   listCurated: vi.fn(),
   search: vi.fn(),
 }));
 
-vi.mock("../plugins/memory-state.js", () => ({
-  getMemoryRuntime: () => ({ getMemorySearchManager: runtimeMocks.getManager }),
+vi.mock("../plugins/memory-runtime.js", () => ({
+  getSelectedMemoryRuntime: runtimeMocks.getSelectedRuntime,
 }));
 
 describe("project memory bootstrap", () => {
   beforeEach(() => {
+    runtimeMocks.getSelectedRuntime
+      .mockReset()
+      .mockReturnValue({ getMemorySearchManager: runtimeMocks.getManager });
     runtimeMocks.getManager.mockReset();
     runtimeMocks.listCurated.mockReset();
     runtimeMocks.search.mockReset();
@@ -97,8 +101,16 @@ describe("project memory bootstrap", () => {
 
   it("keeps sessions without an active repository unchanged", async () => {
     await expect(prepareEntries(entries, [])).resolves.toEqual([]);
+    expect(runtimeMocks.getSelectedRuntime).not.toHaveBeenCalled();
     expect(runtimeMocks.getManager).not.toHaveBeenCalled();
     expect(buildProjectMemoryWriteInstruction(undefined)).toBe("");
+  });
+
+  it("acquires project bootstrap memory through the selected-runtime seam", async () => {
+    await prepareEntries(entries);
+
+    expect(runtimeMocks.getSelectedRuntime).toHaveBeenCalledOnce();
+    expect(runtimeMocks.getManager).toHaveBeenCalledOnce();
   });
 
   it("filters tagged raw entries fail-closed with the all-keys rule", () => {
