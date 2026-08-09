@@ -3,6 +3,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
@@ -57,7 +58,14 @@ describe("embedded run durable writer admission", () => {
       updatedAt: 1,
     } as InternalSessionEntry);
 
-    const cancelA = vi.fn();
+    const takeoverOrder: string[] = [];
+    const readWriter = () =>
+      (
+        loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }) as
+          | InternalSessionEntry
+          | undefined
+      )?.activeWriterRunId;
+    const cancelA = vi.fn(() => takeoverOrder.push(`cancel:${readWriter()}`));
     setActiveEmbeddedRun(
       sessionId,
       {
@@ -91,6 +99,7 @@ describe("embedded run durable writer admission", () => {
     let supersededOutcome: AgentRunTerminalOutcome | undefined;
     const unsubscribe = onAgentEvent((event) => {
       if (event.runId === "run-a" && event.stream === "lifecycle" && event.data.phase === "end") {
+        takeoverOrder.push(`record:${readWriter()}`);
         supersededOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
           phase: "end",
           data: event.data,
@@ -131,6 +140,7 @@ describe("embedded run durable writer admission", () => {
     }
 
     expect(cancelA).toHaveBeenCalledWith("superseded");
+    expect(takeoverOrder).toEqual(["record:run-b", "cancel:run-b"]);
     expect(supersededOutcome).toMatchObject({
       reason: "superseded",
       status: "error",
@@ -173,5 +183,75 @@ describe("embedded run durable writer admission", () => {
       storePath: fixture.storePath(),
     });
     expect(staleAppend).toMatchObject({ ok: false, code: "session-rebound" });
+  });
+
+  it("leaves the incumbent live when the replacement claim does not commit", async () => {
+    await replaceSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }, {
+      activeWriterRunId: "run-a",
+      lifecycleRevision,
+      sessionId,
+      updatedAt: 1,
+    } as InternalSessionEntry);
+    const cancelA = vi.fn();
+    setActiveEmbeddedRun(
+      sessionId,
+      {
+        kind: "embedded",
+        runId: "run-a",
+        cancel: cancelA,
+        abort: vi.fn(),
+        isCompacting: () => false,
+        isStreaming: () => true,
+        queueMessage: async () => {},
+      },
+      sessionKey,
+      sessionKey,
+    );
+    const lifecycleEvents: unknown[] = [];
+    const unsubscribe = onAgentEvent((event) => {
+      if (event.runId === "run-a" && event.stream === "lifecycle") {
+        lifecycleEvents.push(event);
+      }
+    });
+    vi.spyOn(sessionAccessor, "updateSessionEntry").mockRejectedValueOnce(
+      new Error("replacement claim conflict"),
+    );
+    let params: RunEmbeddedAgentParams & { sessionFile: string } = {
+      agentId: "main",
+      prompt: "hello",
+      runId: "run-b",
+      sessionFile: sessionKey,
+      sessionId,
+      sessionKey,
+      sessionTarget: { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() },
+      timeoutMs: 30_000,
+      workspaceDir: "/tmp",
+      enqueue: async (task) => await task(),
+    };
+    const controller = createEmbeddedRunLaneController({
+      getLifecycleGeneration: () => getAgentEventLifecycleGeneration(),
+      getParams: () => params,
+      globalLane: "writer-global-conflict",
+      initialQueuedLifecycleGeneration: getAgentEventLifecycleGeneration(),
+      sessionLane: "writer-session-conflict",
+      setLifecycleGeneration: () => {},
+      setParams: (next) => {
+        params = next;
+      },
+    });
+
+    try {
+      await expect(
+        controller.enqueueSession(() => controller.enqueueGlobal(async () => completedResult)),
+      ).rejects.toThrow("replacement claim conflict");
+    } finally {
+      unsubscribe();
+    }
+
+    expect(cancelA).not.toHaveBeenCalled();
+    expect(lifecycleEvents).toEqual([]);
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
+    ).toMatchObject({ activeWriterRunId: "run-a" });
   });
 });

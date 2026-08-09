@@ -267,7 +267,31 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   }
 
   const previousWriterRunId = normalizeOptionalString(snapshot.entry.activeWriterRunId);
+  const claimed = await updateSessionEntry(
+    {
+      ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
+      sessionKey: snapshot.sessionKey,
+      storePath: snapshot.storePath,
+    },
+    (entry) => {
+      if (
+        entry.sessionId !== expectedSessionId ||
+        entry.lifecycleRevision !== expectedLifecycleRevision
+      ) {
+        throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
+      }
+      return {
+        activeWriterRunId: params.runId,
+      } as Partial<InternalSessionEntry> as Partial<SessionEntry>;
+    },
+    { skipMaintenance: true },
+  );
+  if (!claimed || (claimed as InternalSessionEntry).activeWriterRunId !== params.runId) {
+    throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
+  }
   if (previousWriterRunId && previousWriterRunId !== params.runId) {
+    // The replacement must own the durable row before the incumbent is made
+    // terminal. A failed claim leaves the still-authoritative run untouched.
     const superseded = supersedeEmbeddedAgentRunByRunId(previousWriterRunId, () => {
       const previousLifecycleGeneration =
         getAgentRunContext(previousWriterRunId)?.lifecycleGeneration;
@@ -298,29 +322,6 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
         `previousRunId=${redactRunIdentifier(sanitizeForLog(previousWriterRunId))} ` +
         `nextRunId=${redactRunIdentifier(sanitizeForLog(params.runId))} live=${superseded}`,
     );
-  }
-
-  const claimed = await updateSessionEntry(
-    {
-      ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
-      sessionKey: snapshot.sessionKey,
-      storePath: snapshot.storePath,
-    },
-    (entry) => {
-      if (
-        entry.sessionId !== expectedSessionId ||
-        entry.lifecycleRevision !== expectedLifecycleRevision
-      ) {
-        throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
-      }
-      return {
-        activeWriterRunId: params.runId,
-      } as Partial<InternalSessionEntry> as Partial<SessionEntry>;
-    },
-    { skipMaintenance: true },
-  );
-  if (!claimed || (claimed as InternalSessionEntry).activeWriterRunId !== params.runId) {
-    throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
   }
   return {
     expectedLifecycleRevision,
