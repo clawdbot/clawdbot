@@ -661,14 +661,21 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
   if (!stateDir) {
     throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
   }
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: { default: true } } };
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (!configPath) {
     throw new Error("OPENCLAW_CONFIG_PATH is required for gateway session tests");
   }
   await fs.writeFile(
     configPath,
-    JSON.stringify({ acp: { defaultAgent: "claude", allowedAgents: ["gemini"] } }, null, 2),
+    JSON.stringify(
+      {
+        agents: { entries: { main: { default: true } } },
+        acp: { defaultAgent: "claude", allowedAgents: ["gemini"] },
+      },
+      null,
+      2,
+    ),
     "utf-8",
   );
   testState.sessionConfig = {

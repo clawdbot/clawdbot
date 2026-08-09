@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { mutateConfigFileWithRetry } from "../config/config.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -42,14 +42,14 @@ it("keeps a fresh named workspace pending through the first run setup", async ()
 });
 
 describe("agent roster persistence", () => {
-  async function addWorkerToConfig(config: unknown): Promise<OpenClawConfig> {
+  async function addWorkerToConfig(config: OpenClawConfig): Promise<OpenClawConfig> {
     const state = await createOpenClawTestState({
       layout: "state-only",
       scenario: "empty",
       label: "agent-roster-write",
     });
     try {
-      await state.writeConfig(config);
+      await state.writeConfig(withCanonicalTestAgentRoster(config));
       const result = await createAgent({ name: "Worker", workspace: state.path("worker") });
       expect(result).toMatchObject({ status: "created", agentId: "worker" });
       return JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
@@ -59,7 +59,7 @@ describe("agent roster persistence", () => {
     }
   }
 
-  it("writes injected main and a new worker as one complete keyed roster", async () => {
+  it("preserves canonical main and writes a new worker as one complete keyed roster", async () => {
     const persisted = await addWorkerToConfig({ gateway: { mode: "local" } });
 
     expect(persisted.agents?.entries).toMatchObject({
@@ -71,49 +71,20 @@ describe("agent roster persistence", () => {
     ).toHaveLength(1);
   });
 
-  it("replaces a legacy list with the complete keyed roster", async () => {
+  it("preserves the existing keyed roster while adding a worker", async () => {
     const persisted = await addWorkerToConfig({
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "ops", workspace: "/srv/ops" },
-        ],
+        entries: {
+          main: { default: true },
+          ops: { workspace: "/srv/ops" },
+        },
       },
     });
 
-    expect(persisted.agents).not.toHaveProperty("list");
     expect(persisted.agents?.entries).toMatchObject({
       main: { default: true },
       ops: { workspace: "/srv/ops" },
       worker: { workspace: expect.any(String) },
     });
-  });
-
-  it("preserves a legacy list byte-for-byte during a non-roster mutation", async () => {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      scenario: "empty",
-      label: "legacy-roster-non-roster-write",
-    });
-    const list = [
-      { id: "main", default: true },
-      { id: "ops", workspace: "/srv/ops" },
-    ];
-    try {
-      await state.writeConfig({ agents: { list }, gateway: { port: 18789 } });
-      await mutateConfigFileWithRetry({
-        mutate: (config) => {
-          config.gateway = { ...config.gateway, port: 19001 };
-        },
-      });
-
-      const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-      expect(JSON.stringify(persisted.agents?.list)).toBe(JSON.stringify(list));
-      expect(persisted.agents).not.toHaveProperty("entries");
-      expect(persisted.gateway?.port).toBe(19001);
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      await state.cleanup();
-    }
   });
 });

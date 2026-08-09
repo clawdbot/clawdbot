@@ -104,6 +104,7 @@ describe("doctor config flow steps", () => {
 
     expect(migrateLegacyConfigMock).toHaveBeenCalledWith(sourceConfig, {
       authoredRaw: { mcp: { $include: "./mcp.json5" } },
+      includeOwnedAgentRoster: false,
       resolvedRaw: sourceConfig,
     });
     expect(result.state.pendingChanges).toBe(true);

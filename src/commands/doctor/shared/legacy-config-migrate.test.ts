@@ -31,7 +31,9 @@ function migrateLegacyConfigForTest(
     migration.apply(next, changes, context);
   }
   const visibleChanges = changes.filter(
-    (change) => change !== "Moved agents.list → keyed agents.entries.",
+    (change) =>
+      change !== "Moved agents.list → keyed agents.entries." &&
+      !change.startsWith("Migrated agents.entries by "),
   );
   const agents = next.agents as Record<string, unknown> | undefined;
   const entries = agents?.entries as Record<string, Record<string, unknown>> | undefined;
@@ -2286,6 +2288,7 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.config?.agents?.defaults).toStrictEqual({});
     expect(res.config?.agents?.list?.[0]).toEqual({
       id: "reviewer",
+      default: true,
     });
   });
 
@@ -2342,6 +2345,7 @@ describe("legacy migrate sandbox scope aliases", () => {
     });
     expect(res.config?.agents?.list?.[0]).toEqual({
       id: "paige",
+      default: true,
       model: "anthropic/claude-sonnet-4-6",
       models: {
         "anthropic/claude-sonnet-4-6": {
@@ -2409,6 +2413,7 @@ describe("legacy migrate sandbox scope aliases", () => {
     });
     expect(res.config?.agents?.list?.[0]).toEqual({
       id: "worker",
+      default: true,
       embeddedAgent: {
         executionContract: "strict-agentic",
       },

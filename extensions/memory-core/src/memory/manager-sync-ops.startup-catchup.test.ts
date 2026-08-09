@@ -434,7 +434,14 @@ describe("session startup catch-up", () => {
   async function configureTestSessionStore(storePath: string): Promise<void> {
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        agents: { entries: { main: { default: true } } },
+        session: { store: storePath },
+      }),
+      "utf-8",
+    );
     setStartupConfigPath(configPath);
     clearRuntimeConfigSnapshot();
     clearConfigCache();

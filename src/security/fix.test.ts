@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
 import { fixSecurityFootguns } from "./fix.js";
 
 const isWindows = process.platform === "win32";
@@ -41,7 +42,8 @@ describe("security fix", () => {
   }) => {
     const stateDir = await createStateDir(params.prefix);
     const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, `${JSON.stringify(params.cfg, null, 2)}\n`, "utf-8");
+    const config = withCanonicalTestAgentRoster(params.cfg);
+    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
     const res = await fixSecurityFootguns({
       env: createFixEnv(stateDir, configPath),
       stateDir,

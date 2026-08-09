@@ -5,6 +5,8 @@ import {
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
+import { collectMissingPersistedAgentRosterIssue } from "./agent-roster-validation.js";
+import { createFreshOpenClawConfig } from "./fresh-config.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { materializeConfigForLoad } from "./io.context.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
@@ -26,7 +28,6 @@ import {
   warnIfConfigFromFuture,
   warnOnConfigMiskeys,
 } from "./io.warnings.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
@@ -55,7 +56,7 @@ export function loadConfigFromContext(
           timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
         });
       }
-      return migratePersistedImplicitMainRoster({}).config as OpenClawConfig;
+      return createFreshOpenClawConfig();
     }
     const raw = deps.fs.readFileSync(configPath, "utf-8");
     const parsed = deps.json5.parse(raw);
@@ -64,8 +65,7 @@ export function loadConfigFromContext(
       deps.env,
       deps.lowerPrecedenceEnv,
     );
-    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
-    const effectiveConfigRaw = rosterMigration.config;
+    const effectiveConfigRaw = readResolution.resolvedConfigRaw;
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;
     const snapshotParsed = parsed;
@@ -74,9 +74,6 @@ export function loadConfigFromContext(
       deps.logger.warn(
         `Config (${configPath}): missing env var "${warning.varName}" at ${warning.configPath} - feature using this value will be unavailable`,
       );
-    }
-    for (const diagnostic of rosterMigration.diagnostics) {
-      deps.logger.warn(`Config (${configPath}): ${diagnostic}`);
     }
     warnOnConfigMiskeys(validationConfigRaw, deps.logger);
     if (typeof validationConfigRaw !== "object" || validationConfigRaw === null) {
@@ -109,13 +106,17 @@ export function loadConfigFromContext(
       effectiveConfigRaw,
       env: deps.env,
     });
-    const validated = validateConfigObjectWithPlugins(validationConfigRaw, {
-      env: deps.env,
-      pluginValidation: context.options.pluginValidation,
-      loadPluginMetadataSnapshot: pluginMetadata.load,
-      sourceRaw: snapshotParsed,
-      preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
-    });
+    const rosterIssues = collectMissingPersistedAgentRosterIssue(validationConfigRaw);
+    const validated =
+      rosterIssues.length > 0
+        ? { ok: false as const, issues: rosterIssues, warnings: [] }
+        : validateConfigObjectWithPlugins(validationConfigRaw, {
+            env: deps.env,
+            pluginValidation: context.options.pluginValidation,
+            loadPluginMetadataSnapshot: pluginMetadata.load,
+            sourceRaw: snapshotParsed,
+            preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
+          });
     if (!validated.ok) {
       context.observeLoadConfigSnapshot(
         createConfigFileSnapshot({

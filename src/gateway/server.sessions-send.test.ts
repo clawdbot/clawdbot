@@ -10,6 +10,7 @@ import {
   loadSessionEntry,
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -33,6 +34,15 @@ let server: Awaited<ReturnType<typeof startGatewayServer>>;
 let gatewayPort: number;
 const gatewayToken = "test-gateway-token-1234567890";
 let envSnapshot: ReturnType<typeof captureEnv>;
+
+async function writeGatewayConfigFixture(
+  configPath: string,
+  config: OpenClawConfig,
+): Promise<void> {
+  const persistedConfig = withCanonicalTestAgentRoster(config);
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, `${JSON.stringify(persistedConfig, null, 2)}\n`, "utf-8");
+}
 
 type SessionSendTool = ReturnType<typeof createOpenClawTools>[number];
 const SESSION_SEND_E2E_TIMEOUT_MS = 10_000;
@@ -521,12 +531,9 @@ describe("sessions_send label lookup", () => {
       if (!configPath) {
         throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
       }
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ tools: { sessions: { visibility: "all" } } }, null, 2) + "\n",
-        "utf-8",
-      );
+      await writeGatewayConfigFixture(configPath, {
+        tools: { sessions: { visibility: "all" } },
+      });
 
       const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
       spy.mockImplementation(async (opts: unknown) =>
@@ -592,15 +599,14 @@ describe("sessions_send agent targeting", () => {
           },
         },
         agents: {
-          list: [{ id: "main", default: true }, { id: "orion" }],
+          entries: { main: { default: true }, orion: {} },
         },
       };
 
       testState.sessionStorePath = path.join(dir, "sessions.json");
       testState.agentsConfig = config.agents;
       try {
-        await fs.mkdir(path.dirname(configPath), { recursive: true });
-        await fs.writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+        await writeGatewayConfigFixture(configPath, config);
         await writeSessionStore({
           entries: {
             main: {
@@ -727,11 +733,11 @@ describe("sessions_send direct-message requester routing", () => {
           agentToAgent: { enabled: true },
         },
         agents: {
-          list: [
-            { id: "main", default: true },
-            { id: targetAgentId },
-            ...(bindingAgentId ? [{ id: bindingAgentId }] : []),
-          ],
+          entries: {
+            main: { default: true },
+            [targetAgentId]: {},
+            ...(bindingAgentId ? { [bindingAgentId]: {} } : {}),
+          },
         },
       };
 
@@ -739,8 +745,7 @@ describe("sessions_send direct-message requester routing", () => {
       testState.agentsConfig = config.agents;
       testState.sessionConfig = config.session;
       try {
-        await fs.mkdir(path.dirname(configPath), { recursive: true });
-        await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+        await writeGatewayConfigFixture(configPath, config);
         await writeSessionStore({
           entries: {
             "agent:main:main": { sessionId: "dm-scope-main", updatedAt: Date.now() },

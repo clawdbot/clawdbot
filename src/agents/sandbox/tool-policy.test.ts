@@ -2,7 +2,7 @@
 // guidance for sandboxed agent sessions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
+import { withCanonicalTestAgentRoster } from "../../config/test-fixtures.js";
 import { resolveSandboxConfigForAgent as resolveSandboxConfigForAgentBase } from "./config.js";
 import {
   formatSandboxToolPolicyBlockedMessage as formatSandboxToolPolicyBlockedMessageBase,
@@ -14,7 +14,7 @@ import {
 } from "./tool-policy.js";
 
 function loadedConfig(config: OpenClawConfig | undefined): OpenClawConfig {
-  return migratePersistedImplicitMainRoster(config ?? {}).config as OpenClawConfig;
+  return withCanonicalTestAgentRoster(config ?? {});
 }
 
 function resolveSandboxConfigForAgent(config: OpenClawConfig, agentId: string) {

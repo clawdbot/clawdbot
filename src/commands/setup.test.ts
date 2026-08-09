@@ -236,6 +236,7 @@ describe("setupCommand", () => {
             defaults: {
               workspace,
             },
+            entries: { main: { default: true } },
           },
         }),
       );
@@ -367,7 +368,7 @@ describe("setupCommand", () => {
     });
   });
 
-  it("persists a roster when existing setup settings already match", async () => {
+  it("refuses a persisted config whose roster still needs Doctor migration", async () => {
     await withTempHome(async (home) => {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const configDir = path.join(home, ".openclaw");
@@ -391,7 +392,9 @@ describe("setupCommand", () => {
       await setupCommand(undefined, runtime, deps);
 
       const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-      expect(config.agents?.entries).toEqual({ main: { default: true } });
+      expect(config.agents?.entries).toBeUndefined();
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor"));
+      expect(runtime.exit).toHaveBeenCalledWith(1);
     });
   });
 
@@ -416,6 +419,7 @@ describe("setupCommand", () => {
               workspace,
               skipOptionalBootstrapFiles: ["IDENTITY.md", "USER.md"],
             },
+            entries: { main: { default: true } },
           },
         }),
       );
@@ -445,7 +449,9 @@ describe("setupCommand", () => {
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
         configPath,
-        JSON.stringify({ agents: { defaults: { workspace } } }),
+        JSON.stringify({
+          agents: { defaults: { workspace }, entries: { main: { default: true } } },
+        }),
         "utf-8",
       );
       deps.replaceConfigFile.mockImplementationOnce(async (params) => {

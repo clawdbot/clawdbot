@@ -8,6 +8,8 @@ import {
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { runSecretsAudit } from "./audit.js";
 
@@ -38,7 +40,11 @@ function countNonEmptyLines(value: string): number {
 }
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const contents =
+    path.basename(filePath) === "openclaw.json"
+      ? withCanonicalTestAgentRoster(value as OpenClawConfig)
+      : value;
+  await fs.writeFile(filePath, `${JSON.stringify(contents, null, 2)}\n`, "utf8");
 }
 
 function writeAuthStore(fixture: AuditFixture, value: unknown): void {
@@ -411,42 +417,34 @@ describe("secrets audit", () => {
       { encoding: "utf8", mode: 0o700 },
     );
 
-    await fs.writeFile(
-      fixture.configPath,
-      `${JSON.stringify(
-        {
-          secrets: {
-            providers: {
-              execmain: {
-                source: "exec",
-                command: execScriptPath,
-                jsonOnly: true,
-                passEnv: ["PATH"],
-              },
-            },
-          },
-          models: {
-            providers: {
-              openai: {
-                baseUrl: "https://api.openai.com/v1",
-                api: "openai-completions",
-                apiKey: { source: "exec", provider: "execmain", id: "providers/openai/apiKey" },
-                models: [{ id: "gpt-5", name: "gpt-5" }],
-              },
-              moonshot: {
-                baseUrl: "https://api.moonshot.cn/v1",
-                api: "openai-completions",
-                apiKey: { source: "exec", provider: "execmain", id: "providers/moonshot/apiKey" },
-                models: [{ id: "moonshot-v1-8k", name: "moonshot-v1-8k" }],
-              },
-            },
+    await writeJsonFile(fixture.configPath, {
+      secrets: {
+        providers: {
+          execmain: {
+            source: "exec",
+            command: execScriptPath,
+            jsonOnly: true,
+            passEnv: ["PATH"],
           },
         },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "exec", provider: "execmain", id: "providers/openai/apiKey" },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+          moonshot: {
+            baseUrl: "https://api.moonshot.cn/v1",
+            api: "openai-completions",
+            apiKey: { source: "exec", provider: "execmain", id: "providers/moonshot/apiKey" },
+            models: [{ id: "moonshot-v1-8k", name: "moonshot-v1-8k" }],
+          },
+        },
+      },
+    });
 
     const report = await runSecretsAudit({ env: fixture.env, allowExec: true });
     expect(report.summary.unresolvedRefCount).toBeGreaterThanOrEqual(2);

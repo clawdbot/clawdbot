@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../config/home-env.test-harness.js";
+import { withCanonicalTestAgentRoster } from "../../config/test-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
@@ -155,7 +156,7 @@ describe("handleCommands /plugins install", () => {
   });
 
   it("installs an arbitrary npm package after a trailing --force acknowledgement", async () => {
-    const policyConfig: OpenClawConfig = {
+    const policyConfig: OpenClawConfig = withCanonicalTestAgentRoster({
       commands: { text: true, plugins: true },
       plugins: { enabled: true },
       security: {
@@ -168,7 +169,7 @@ describe("handleCommands /plugins install", () => {
           },
         },
       },
-    };
+    });
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,
       pluginId: "policy-plugin",
@@ -202,10 +203,7 @@ describe("handleCommands /plugins install", () => {
       const installParams = mockFirstObjectArg(installPluginFromNpmSpecMock);
       expectObjectFields(installParams, {
         spec: "@acme/policy-plugin@1.0.0",
-        config: {
-          ...policyConfig,
-          agents: { entries: { main: { default: true } } },
-        },
+        config: policyConfig,
         mode: "update",
       });
       expect(installParams).not.toHaveProperty("expectedPluginId");
@@ -220,7 +218,7 @@ describe("handleCommands /plugins install", () => {
   });
 
   it("allows npm packages matched by the official catalog", async () => {
-    const policyConfig: OpenClawConfig = {
+    const policyConfig: OpenClawConfig = withCanonicalTestAgentRoster({
       commands: { text: true, plugins: true },
       plugins: { enabled: true },
       security: {
@@ -233,7 +231,7 @@ describe("handleCommands /plugins install", () => {
           },
         },
       },
-    };
+    });
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,
       pluginId: "brave",
@@ -265,10 +263,7 @@ describe("handleCommands /plugins install", () => {
       expect(result?.reply?.text).toContain('Installed plugin "brave"');
       expectObjectFields(mockFirstObjectArg(installPluginFromNpmSpecMock), {
         spec: "@openclaw/brave-plugin",
-        config: {
-          ...policyConfig,
-          agents: { entries: { main: { default: true } } },
-        },
+        config: policyConfig,
         expectedPluginId: "brave",
         trustedSourceLinkedOfficialInstall: true,
       });
@@ -908,7 +903,10 @@ describe("handleCommands /plugins install", () => {
   it("refuses installs through a root include before package installer side effects", async () => {
     await withTempHome("openclaw-command-plugins-home-", async (home) => {
       const sharedConfigPath = path.join(home, ".openclaw", "shared.json5");
-      await fs.writeFile(sharedConfigPath, `${JSON.stringify({ plugins: {} }, null, 2)}\n`);
+      await fs.writeFile(
+        sharedConfigPath,
+        `${JSON.stringify(withCanonicalTestAgentRoster({ plugins: {} }), null, 2)}\n`,
+      );
       await fs.writeFile(
         path.join(home, ".openclaw", "openclaw.json"),
         `${JSON.stringify({ $include: "./shared.json5" }, null, 2)}\n`,

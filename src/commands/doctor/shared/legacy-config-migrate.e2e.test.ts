@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { resolveModelEntries } from "../../../media-understanding/resolve.js";
+import { planDoctorAgentRosterMigration } from "./agent-roster-migration.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
@@ -15,14 +16,18 @@ describe("legacy config migration end to end", () => {
       },
     });
     expect(duplicate.next).toEqual({
-      agents: { entries: { main: { name: "first" }, "main-2": { name: "second" } } },
+      agents: {
+        entries: { main: { name: "first", default: true }, "main-2": { name: "second" } },
+      },
     });
     expect(applyLegacyDoctorMigrations(duplicate.next)).toEqual({ next: null, changes: [] });
 
     const canonicalWins = applyLegacyDoctorMigrations({
       agents: { entries: { main: { name: "canonical" } }, list: [{ id: "main", name: "old" }] },
     });
-    expect(canonicalWins.next).toEqual({ agents: { entries: { main: { name: "canonical" } } } });
+    expect(canonicalWins.next).toEqual({
+      agents: { entries: { main: { name: "canonical", default: true } } },
+    });
 
     const prototypeId = applyLegacyDoctorMigrations({
       agents: { list: [{ id: "__proto__", name: "prototype-safe" }] },
@@ -35,8 +40,60 @@ describe("legacy config migration end to end", () => {
       agents: { list: [{ id: "Team Ops", name: "normalized" }] },
     });
     expect(normalizedId.next).toEqual({
-      agents: { entries: { "team-ops": { name: "normalized" } } },
+      agents: { entries: { "team-ops": { name: "normalized", default: true } } },
     });
+  });
+
+  it.each([
+    {
+      label: "missing roster",
+      config: { gateway: { mode: "local" } },
+      entries: { main: { default: true } },
+    },
+    {
+      label: "empty roster",
+      config: { agents: { entries: {} } },
+      entries: { main: { default: true } },
+    },
+    {
+      label: "zero defaults",
+      config: { agents: { entries: { ops: {}, research: {} } } },
+      entries: { ops: { default: true }, research: {} },
+    },
+    {
+      label: "multiple defaults",
+      config: {
+        agents: {
+          entries: { ops: {}, research: { default: true }, writer: { default: true } },
+        },
+      },
+      entries: { ops: {}, research: { default: true }, writer: {} },
+    },
+  ])("repairs $label once", ({ config, entries }) => {
+    const migrated = planDoctorAgentRosterMigration(config);
+    expect((migrated.config as { agents?: { entries?: unknown } }).agents?.entries).toEqual(
+      entries,
+    );
+    expect(planDoctorAgentRosterMigration(migrated.config).changes).toEqual([]);
+  });
+
+  it("drops malformed legacy rows and deterministically renames duplicate ids", () => {
+    const migrated = applyLegacyDoctorMigrations({
+      agents: {
+        list: [null, {}, { id: "Team Ops" }, { id: "Team Ops", default: true }],
+      },
+    });
+
+    expect(migrated.next).toEqual({
+      agents: {
+        entries: {
+          agent: {},
+          "team-ops": {},
+          "team-ops-2": { default: true },
+        },
+      },
+    });
+    expect(applyLegacyDoctorMigrations(migrated.next)).toEqual({ next: null, changes: [] });
   });
 
   it("keeps agents.defaults.tts outside the schema", () => {
@@ -174,6 +231,7 @@ describe("legacy config migration end to end", () => {
 
   it("repairs unsupported OTel grpc once and is then a no-op", () => {
     const result = migrateLegacyConfig({
+      agents: { entries: { main: { default: true } } },
       diagnostics: {
         otel: {
           enabled: true,

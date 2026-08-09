@@ -1,6 +1,6 @@
 // Doctor repair sequence coordinator for config, auth, plugin, and warning repairs.
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
@@ -21,6 +21,7 @@ import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-side
 import { maybeRepairPluginOpenClawHostLinks } from "../doctor-plugin-host-links.js";
 import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-registry.js";
 import { migrateLegacySkillWorkshopProposals } from "../doctor-skill-workshop-sqlite.js";
+import { createDoctorRosterInspectionConfig } from "./shared/agent-roster-migration.js";
 import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
@@ -74,10 +75,10 @@ export async function runDoctorRepairSequence(params: {
   const warningNotes: string[] = [];
   const env = params.env ?? process.env;
   const resolveCurrentPluginMetadataScope = () => {
-    const config = state.candidate;
+    const inspection = createDoctorRosterInspectionConfig(state.candidate);
     return {
-      config,
-      workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config), env),
+      config: inspection.config,
+      workspaceDir: resolveAgentWorkspaceDir(inspection.config, inspection.defaultAgentId, env),
     };
   };
   const sanitizeLines = (lines: string[]) => lines.map((line) => sanitizeForLog(line)).join("\n");

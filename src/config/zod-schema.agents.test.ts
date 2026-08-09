@@ -1,9 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { validateConfigObject } from "./validation.js";
 import { AgentsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("agent roster defaults", () => {
-  it("rejects an empty roster after load-time migration", () => {
+  it("does not inject a roster in generic validation", () => {
+    const result = validateConfigObject({ gateway: { mode: "local" } });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.agents?.entries).toBeUndefined();
+    }
+  });
+
+  it("rejects an empty authored roster", () => {
     expect(AgentsSchema.safeParse({ entries: {} }).success).toBe(false);
   });
 

@@ -153,21 +153,28 @@ function resolveLayout(
   };
 }
 
+function withScenarioAgentRoster(config: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    agents: { entries: { main: { default: true } } },
+    ...config,
+  };
+}
+
 function scenarioConfig(options: OpenClawTestStateOptions): Record<string, unknown> | undefined {
   const scenario = options.scenario ?? "empty";
   if (scenario === "minimal" || scenario === "external-service") {
-    return {};
+    return withScenarioAgentRoster();
   }
   if (scenario === "update-stable") {
-    return {
+    return withScenarioAgentRoster({
       update: {
         channel: "stable",
       },
       plugins: {},
-    };
+    });
   }
   if (scenario === "upgrade-survivor") {
-    return {
+    return withScenarioAgentRoster({
       update: {
         channel: "stable",
       },
@@ -191,10 +198,10 @@ function scenarioConfig(options: OpenClawTestStateOptions): Record<string, unkno
           whatsapp: { enabled: true },
         },
       },
-    };
+    });
   }
   if (scenario === "gateway-loopback") {
-    return {
+    return withScenarioAgentRoster({
       gateway: {
         port: options.gateway?.port ?? 18789,
         auth: {
@@ -205,7 +212,7 @@ function scenarioConfig(options: OpenClawTestStateOptions): Record<string, unkno
           enabled: false,
         },
       },
-    };
+    });
   }
   return undefined;
 }

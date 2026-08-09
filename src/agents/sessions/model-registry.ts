@@ -592,9 +592,7 @@ export class ModelRegistry {
           if (this.pluginCatalogs) {
             pluginCatalogs = this.pluginCatalogs;
           } else {
-            const loaded = loadPersistedPluginModelCatalogs(dirname(modelsJsonPath));
-            pluginCatalogs = loaded.catalogs;
-            pluginCatalogErrors.push(...loaded.warnings);
+            pluginCatalogs = loadPersistedPluginModelCatalogs(dirname(modelsJsonPath));
           }
         } catch (error) {
           pluginCatalogErrors.push(

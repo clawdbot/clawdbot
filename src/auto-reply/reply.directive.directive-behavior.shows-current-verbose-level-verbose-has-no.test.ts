@@ -3,8 +3,8 @@ import "./reply.directive.directive-behavior.e2e-mocks.js";
 import { describe, expect, it } from "vitest";
 import type { ModelAliasIndex } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
 import { installDirectiveBehaviorE2EHooks } from "./reply.directive.directive-behavior.e2e-harness.js";
 import { runEmbeddedAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
 import { handleDirectiveOnly } from "./reply/directive-handling.impl.js";
@@ -47,7 +47,7 @@ async function runDirectiveStatus(
     ...restOverrides
   } = overrides;
   const result = await handleDirectiveOnly({
-    cfg: migratePersistedImplicitMainRoster(overrideCfg ?? cfg).config as OpenClawConfig,
+    cfg: withCanonicalTestAgentRoster(overrideCfg ?? cfg),
     directives: parseInlineDirectives(body),
     sessionEntry: effectiveSessionEntry,
     sessionStore: effectiveSessionStore,

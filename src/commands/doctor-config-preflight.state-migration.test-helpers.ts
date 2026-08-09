@@ -1,3 +1,5 @@
+import { vi } from "vitest";
+
 export type StateMigrationResult = {
   migrated: boolean;
   skipped: boolean;
@@ -28,6 +30,31 @@ export type StartupConvergenceResult = {
   smokeFailures: StartupSmokeFailure[];
   installRecords: Record<string, unknown>;
 };
+
+export function mockLegacyPluginModelCatalogDetection(): void {
+  vi.doMock("./doctor-plugin-model-catalog-detection.js", () => ({
+    detectLegacyPluginModelCatalogs: vi.fn(async () => ({
+      detected: [],
+      migrations: [],
+      warnings: [],
+    })),
+    findLegacyPluginCatalogStartupRefusal: vi.fn(async () => undefined),
+    formatLegacyPluginModelCatalogStartupRefusal: vi.fn(),
+  }));
+}
+
+export const currentCheckpointPluginVerificationStages = [
+  "doctor.config-preflight.startup-checkpoint-import",
+  "doctor.config-preflight.pristine-state-plan-import",
+  "doctor.config-preflight.pristine-state-plan",
+  "doctor.config-preflight.config-snapshot",
+  "doctor.config-preflight.legacy-plugin-model-catalog-detection-import",
+  "doctor.config-preflight.legacy-plugin-model-catalog-detection",
+  "doctor.config-preflight.plugin-plan-import",
+  "doctor.config-preflight.plugin-plan",
+  "doctor.config-preflight.plugin-payload-verification-import",
+  "doctor.config-preflight.plugin-payload-verification",
+] as const;
 
 export const stateCheckpointOptions = {
   migrateState: true,

@@ -8,6 +8,7 @@ import type { Model } from "../../llm/types.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { requireCanonicalModelCatalogState } from "./legacy-catalog-preflight.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
@@ -87,6 +88,7 @@ export async function modelsListCommand(
   });
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveDefaultAgentDir(cfg);
+  await requireCanonicalModelCatalogState({ config: cfg, agentDir, env: process.env });
   const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const metadataSnapshot = loadManifestMetadataSnapshot({

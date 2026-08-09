@@ -396,7 +396,7 @@ describe("gateway server chat", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     testState.agentsConfig = {
-      list: [{ id: "main", default: true }, { id: "orion" }],
+      entries: { main: { default: true }, orion: {} },
     };
     try {
       await writeSessionStore({ entries: {} });
@@ -1950,10 +1950,10 @@ describe("gateway server chat", () => {
         thinkingDefault: "low",
       };
       testState.agentsConfig = {
-        list: [
-          { id: "main", default: true },
-          { id: "alpha", thinkingDefault: "minimal" },
-        ],
+        entries: {
+          main: { default: true },
+          alpha: { thinkingDefault: "minimal" },
+        },
       };
       await writeSessionStore({
         entries: {

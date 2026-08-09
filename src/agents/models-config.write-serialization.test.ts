@@ -20,7 +20,7 @@ import {
 } from "./plugin-model-catalog.js";
 
 function listPersistedPluginModelCatalogs(agentDir: string) {
-  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
+  return loadPersistedPluginModelCatalogs(agentDir);
 }
 
 function readRawCatalogCacheRow(
@@ -302,7 +302,7 @@ describe("models-config write serialization", () => {
     });
   });
 
-  it("migrates released provider credentials before model planning can regenerate a catalog", async () => {
+  it("does not import released sidecars during model planning", async () => {
     await withModelsTempHome(async (home) => {
       const agentDir = path.join(home, "agent");
       const relativePath = encodePluginModelCatalogRelativePath("zai");
@@ -321,19 +321,19 @@ describe("models-config write serialization", () => {
       await fs.mkdir(path.dirname(sourcePath), { recursive: true });
       await fs.writeFile(sourcePath, contents, "utf8");
       planOpenClawModelsJsonMock.mockImplementation(async () => {
-        expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+        expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([]);
         return { action: "skip" };
       });
 
       await ensureOpenClawModelsJson({}, agentDir);
 
       expect(planOpenClawModelsJsonMock).toHaveBeenCalledOnce();
-      await expectMissingPath(fs.access(sourcePath));
-      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+      await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(contents);
+      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([]);
     });
   });
 
-  it("refuses to regenerate provider catalogs while released credentials cannot be read", async () => {
+  it("does not inspect unreadable released sidecars during model planning", async () => {
     if (process.getuid?.() === 0) {
       return;
     }
@@ -352,10 +352,8 @@ describe("models-config write serialization", () => {
       await fs.chmod(sourcePath, 0o000);
 
       try {
-        await expect(ensureOpenClawModelsJson({}, agentDir)).rejects.toThrow(
-          "Cannot safely prepare provider models until legacy catalog migration succeeds",
-        );
-        expect(planOpenClawModelsJsonMock).not.toHaveBeenCalled();
+        await expect(ensureOpenClawModelsJson({}, agentDir)).resolves.toBeDefined();
+        expect(planOpenClawModelsJsonMock).toHaveBeenCalledOnce();
       } finally {
         await fs.chmod(sourcePath, 0o600);
       }

@@ -1056,6 +1056,7 @@ describe("doctor repair sequencing", () => {
             model: `${workspaceProvider}/model`,
             workspace: workspaceDir,
           },
+          entries: { main: { default: true } },
         },
       },
       env: process.env,

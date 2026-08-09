@@ -17,7 +17,6 @@ import {
 } from "../agents/model-selection-shared.js";
 import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import { containsEnvVarReference, resolveConfigEnvVars } from "../config/env-substitution.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -42,6 +41,15 @@ type ConfigModelRefCheckResult = {
   refsTotal: number;
   errors: string[];
 };
+
+function withDraftAgentRoster(config: OpenClawConfig): OpenClawConfig {
+  return hasAgentRosterProperty(config)
+    ? config
+    : {
+        ...config,
+        agents: { ...config.agents, entries: { main: { default: true } } },
+      };
+}
 
 function isPathPrefix(prefix: readonly string[], path: readonly string[]): boolean {
   return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
@@ -464,15 +472,12 @@ export async function checkTouchedTextModelRefs(params: {
   createModelRefResolver?: () => Promise<ConfigModelRefResolver>;
   redactDependencyValues?: boolean;
 }): Promise<ConfigModelRefCheckResult> {
-  // Config mutation validation sees authored pre-roster objects, unlike normal
-  // runtime callers. Materialize only the absent-roster compatibility shape;
-  // explicit empty or malformed rosters must remain visible to schema repair.
-  const config = hasAgentRosterProperty(params.config)
-    ? params.config
-    : (migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig);
+  // Draft mutation validation may run before a fresh config commits its roster.
+  // Explicit empty or malformed rosters remain visible to schema validation.
+  const config = withDraftAgentRoster(params.config);
   const previousConfig =
     params.previousConfig && !hasAgentRosterProperty(params.previousConfig)
-      ? (migratePersistedImplicitMainRoster(params.previousConfig).config as OpenClawConfig)
+      ? withDraftAgentRoster(params.previousConfig)
       : params.previousConfig;
   const validationParams = { ...params, config, previousConfig };
   const authoredRefs = collectTouchedTextModelRefs(validationParams);
@@ -522,10 +527,10 @@ export async function checkTouchedTextModelRefs(params: {
   );
   const validationRosterConfig = hasAgentRosterProperty(validationConfig)
     ? validationConfig
-    : (migratePersistedImplicitMainRoster(validationConfig).config as OpenClawConfig);
+    : withDraftAgentRoster(validationConfig);
   const validationPreviousRosterConfig =
     validationPreviousConfig && !hasAgentRosterProperty(validationPreviousConfig)
-      ? (migratePersistedImplicitMainRoster(validationPreviousConfig).config as OpenClawConfig)
+      ? withDraftAgentRoster(validationPreviousConfig)
       : validationPreviousConfig;
   const refsByKey = new Map(
     collectTouchedTextModelRefs({

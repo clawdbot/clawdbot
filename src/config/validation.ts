@@ -24,7 +24,6 @@ import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import {
@@ -72,8 +71,7 @@ export function validateConfigObjectWithPlugins(
   raw: unknown,
   params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
-  const migrated = migratePersistedImplicitMainRoster(raw).config;
-  return validateConfigObjectWithPluginsBase(migrated, {
+  return validateConfigObjectWithPluginsBase(raw, {
     applyDefaults: true,
     env: params?.env,
     pluginValidation: params?.pluginValidation ?? "full",
@@ -88,8 +86,7 @@ export function validateConfigObjectRawWithPlugins(
   raw: unknown,
   params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
-  const migrated = migratePersistedImplicitMainRoster(raw).config;
-  return validateConfigObjectWithPluginsBase(migrated, {
+  return validateConfigObjectWithPluginsBase(raw, {
     applyDefaults: false,
     env: params?.env,
     pluginValidation: params?.pluginValidation ?? "full",

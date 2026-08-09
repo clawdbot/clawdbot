@@ -1662,15 +1662,11 @@ describe("doctor config flow", () => {
     });
   });
 
-  it("plans persistence of the injected main roster during doctor repair", async () => {
+  it("repairs and plans persistence of a root-owned missing roster", async () => {
     const result = await runDoctorConfigWithInput({
-      config: {
-        agents: {
-          entries: { main: { default: true, workspace: "/tmp/migrated-main" } },
-        },
-        gateway: { mode: "local" },
-      },
+      config: { gateway: { mode: "local" } },
       parsedConfig: { gateway: { mode: "local" } },
+      sourceConfigBeforeMigrations: { gateway: { mode: "local" } },
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1678,10 +1674,10 @@ describe("doctor config flow", () => {
     expect(result.shouldWriteConfig).toBe(true);
     expect(result.explicitSetPaths).toEqual([["agents", "entries"]]);
     expect(result.cfg.agents?.entries).toEqual({
-      main: { default: true, workspace: "/tmp/migrated-main" },
+      main: { default: true },
     });
     expect(terminalNoteMock).toHaveBeenCalledWith(
-      "Prepared agents.entries with exactly one explicit default agent for persistence.",
+      "Created agents.entries.main as the explicit default agent.",
       "Doctor changes",
     );
     expect(terminalNoteMock).not.toHaveBeenCalledWith(
@@ -1836,10 +1832,12 @@ describe("doctor config flow", () => {
     expect(result.cfg.agents).toEqual({ entries: { ops: { default: true } } });
   });
 
-  it("preserves a roster supplied by an included config during repair", async () => {
+  it("leaves an included legacy roster for manual repair", async () => {
+    const legacyRoster = { agents: { list: [{ id: "ops", default: true }] } };
     const result = await runDoctorConfigWithInput({
-      config: { agents: { entries: { ops: { default: true } } } },
+      config: legacyRoster,
       parsedConfig: { $include: "./agents.json" },
+      sourceConfigBeforeMigrations: legacyRoster,
       agentRosterIncludeOwned: true,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
@@ -1847,12 +1845,17 @@ describe("doctor config flow", () => {
 
     expect(result.shouldWriteConfig).toBe(false);
     expect(result.explicitSetPaths).toBeUndefined();
-    expect(result.cfg.agents?.entries).toEqual({ ops: { default: true } });
+    expect(result.cfg.agents?.list).toEqual([{ id: "ops", default: true }]);
+    expect(result.cfg.agents?.entries).toBeUndefined();
+    expect(terminalNoteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Edit the included file"),
+      "Doctor warnings",
+    );
   });
 
   it("preserves ownership of an explicitly empty included roster", async () => {
     const result = await runDoctorConfigWithInput({
-      config: { agents: { entries: { main: { default: true } } } },
+      config: { agents: { entries: {} } },
       parsedConfig: { $include: "./agents.json" },
       sourceConfigBeforeMigrations: { agents: { entries: {} } },
       agentRosterIncludeOwned: true,
@@ -1861,15 +1864,21 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(false);
-    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
+    expect(result.explicitSetPaths).toBeUndefined();
+    expect(result.cfg.agents?.entries).toEqual({});
+    expect(terminalNoteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Edit the included file"),
+      "Doctor warnings",
+    );
+    expect(terminalNoteMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("Created agents.entries.main"),
+      "Doctor changes",
+    );
   });
 
   it("persists an injected roster when a root include contributes only channels", async () => {
     const result = await runDoctorConfigWithInput({
-      config: {
-        agents: { entries: { main: { default: true } } },
-        channels: { telegram: { enabled: true } },
-      },
+      config: { channels: { telegram: { enabled: true } } },
       parsedConfig: { $include: "./channels.json" },
       sourceConfigBeforeMigrations: { channels: { telegram: { enabled: true } } },
       repair: true,
@@ -1883,10 +1892,7 @@ describe("doctor config flow", () => {
   it("repairs a locally authored roster when unrelated includes exist", async () => {
     const result = await runDoctorConfigWithInput({
       config: {
-        agents: {
-          defaults: { workspace: "/tmp/ops" },
-          entries: { main: { default: true } },
-        },
+        agents: { defaults: { workspace: "/tmp/ops" }, entries: {} },
       },
       parsedConfig: { $include: "./channels.json", agents: { entries: {} } },
       sourceConfigBeforeMigrations: {
@@ -1906,8 +1912,9 @@ describe("doctor config flow", () => {
 
   it("repairs a missing roster when only a nested channel include exists", async () => {
     const result = await runDoctorConfigWithInput({
-      config: { agents: { entries: { main: { default: true } } } },
+      config: { channels: { telegram: { enabled: true } } },
       parsedConfig: { channels: { $include: "./channels.json" } },
+      sourceConfigBeforeMigrations: { channels: { telegram: { enabled: true } } },
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });

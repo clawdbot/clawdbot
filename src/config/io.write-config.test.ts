@@ -27,9 +27,11 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
-  writeConfigFile,
+  type ConfigWriteOptions,
+  writeConfigFile as writeConfigFileBase,
 } from "./io.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { withCanonicalTestAgentRoster } from "./test-fixtures.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
@@ -88,12 +90,22 @@ function createConfigIO(options: ConfigIoOptions = {}) {
     // Route real SQLite state through Vitest's worker DB without adding a key to config env snapshots.
     Object.defineProperty(env, "NODE_ENV", { configurable: true, value: "test" });
   }
-  return createObservedConfigIO({
+  const io = createObservedConfigIO({
     observe: false,
     ...options,
     env,
   });
+  return {
+    ...io,
+    writeConfigFile: (config: OpenClawConfig, writeOptions?: ConfigWriteOptions) =>
+      io.writeConfigFile(withCanonicalTestAgentRoster(config), writeOptions),
+  };
 }
+
+const writeConfigFile = (
+  config: OpenClawConfig,
+  options?: Parameters<typeof writeConfigFileBase>[1],
+) => writeConfigFileBase(withCanonicalTestAgentRoster(config), options);
 
 describe("config io write", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-io-" });
@@ -195,18 +207,35 @@ describe("config io write", () => {
 
   const formatConfig = (config: unknown) => `${JSON.stringify(config, null, 2)}\n`;
 
+  const formatRootConfig = (config: Record<string, unknown>) => {
+    const authored = withCanonicalTestAgentRoster(config as OpenClawConfig);
+    if (authored !== config) {
+      Object.assign(config, authored);
+    }
+    return formatConfig(authored);
+  };
+
   const readPersistedConfig = async (configPath: string): Promise<OpenClawConfig> =>
     JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
 
-  const writeConfigJson = async (configPath: string, config: unknown) => {
-    await fs.writeFile(configPath, formatConfig(config), "utf-8");
+  const writeConfigJson = async (
+    configPath: string,
+    config: unknown,
+    kind: "root" | "fragment" = "root",
+  ) => {
+    const authored =
+      kind === "root" ? withCanonicalTestAgentRoster(config as OpenClawConfig) : config;
+    if (kind === "root" && authored !== config && config && typeof config === "object") {
+      Object.assign(config, authored);
+    }
+    await fs.writeFile(configPath, formatConfig(authored), "utf-8");
   };
 
   const writeConfigFixture = async (home: string, config: unknown) => {
     const configPath = configPathForHome(home);
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await writeConfigJson(configPath, config);
-    return { configPath, raw: formatConfig(config) };
+    return { configPath, raw: await fs.readFile(configPath, "utf8") };
   };
 
   const createHomeConfigIO = (home: string, options: ConfigIoOptions = {}) =>
@@ -491,7 +520,7 @@ describe("config io write", () => {
       gateway: { mode: "local" },
       agents: { entries: { main: { default: true }, "discord-dm": {} } },
     } satisfies ConfigFileSnapshot["config"];
-    const cleanRaw = formatConfig(cleanConfig);
+    const cleanRaw = formatRootConfig(cleanConfig);
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, `Found and updated: False\n${cleanRaw}`, "utf-8");
     const warn = vi.fn();
@@ -532,7 +561,7 @@ describe("config io write", () => {
       gateway: { mode: "local" },
       agents: { entries: { main: { default: true }, "discord-dm": {} } },
     } satisfies ConfigFileSnapshot["config"];
-    const cleanRaw = formatConfig(cleanConfig);
+    const cleanRaw = formatRootConfig(cleanConfig);
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(configPath, `Found and updated: False\n${cleanRaw}`, "utf-8");
     const chmodError = Object.assign(new Error("EPERM: chmod denied"), { code: "EPERM" });
@@ -574,7 +603,7 @@ describe("config io write", () => {
         gateway: { mode: "local" },
         agents: { entries: { main: { default: true } } },
       } satisfies ConfigFileSnapshot["config"];
-      const cleanRaw = formatConfig(cleanConfig);
+      const cleanRaw = formatRootConfig(cleanConfig);
       const warn = vi.fn();
       const io = createHomeConfigIO(home, {
         env: { VITEST: "true" } as NodeJS.ProcessEnv,
@@ -618,7 +647,7 @@ describe("config io write", () => {
       tools: { profile: "messaging" },
       commands: { restart: false },
     } satisfies ConfigFileSnapshot["config"];
-    const originalRaw = formatConfig(original);
+    const originalRaw = formatRootConfig(original);
     await fs.writeFile(configPath, originalRaw, "utf-8");
     const warn = vi.fn();
     const io = createHomeConfigIO(home, {
@@ -672,7 +701,7 @@ describe("config io write", () => {
         meta: { lastTouchedVersion: "2026.4.30" },
         gateway: { mode: "local", port: 18789 },
       } satisfies ConfigFileSnapshot["config"];
-      const originalRaw = formatConfig(original);
+      const originalRaw = formatRootConfig(original);
       await fs.writeFile(configPath, originalRaw, "utf-8");
       const io = createHomeConfigIO(home, {
         configPath,
@@ -719,6 +748,7 @@ describe("config io write", () => {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       const original = {
         meta: { lastTouchedVersion: "2026.4.23" },
+        agents: { entries: { main: { default: true } } },
         gateway: { mode: "local" },
         channels: {
           telegram: {
@@ -829,7 +859,7 @@ describe("config io write", () => {
           },
         },
       } satisfies ConfigFileSnapshot["config"];
-      const originalRaw = formatConfig(original);
+      const originalRaw = formatRootConfig(original);
       await fs.writeFile(configPath, originalRaw, "utf-8");
       const io = createHomeConfigIO(home, {
         env: { VITEST: "true" } as NodeJS.ProcessEnv,
@@ -891,7 +921,7 @@ describe("config io write", () => {
           entries: { main: {} },
         },
       } satisfies ConfigFileSnapshot["sourceConfig"];
-      const originalRaw = formatConfig(original);
+      const originalRaw = formatRootConfig(original);
       await fs.writeFile(configPath, originalRaw, "utf-8");
       const io = createHomeConfigIO(home, {
         env: { VITEST: "true" } as NodeJS.ProcessEnv,
@@ -932,7 +962,7 @@ describe("config io write", () => {
       await io.writeConfigFile(
         {
           gateway: { mode: "local" },
-          agents: { entries: { main: {}, ops: {} } },
+          agents: { entries: { main: { default: true }, ops: {} } },
         },
         { baseSnapshot },
       );
@@ -946,7 +976,7 @@ describe("config io write", () => {
         alias: "GPT",
         params: { transport: "sse", openaiWsWarmup: false },
       });
-      expect(persisted.agents?.entries).toEqual({ main: {}, ops: {} });
+      expect(persisted.agents?.entries).toEqual({ main: { default: true }, ops: {} });
     },
   );
 
@@ -957,7 +987,7 @@ describe("config io write", () => {
       gateway: { mode: "local" },
       channels: { "test-plugin-channel": { enabled: true } },
     };
-    const originalRaw = formatConfig(original);
+    const originalRaw = formatRootConfig(original);
     await fs.writeFile(configPath, originalRaw, "utf-8");
     const io = createFastConfigIO(home);
 
@@ -966,14 +996,8 @@ describe("config io write", () => {
     expect(snapshot.valid).toBe(false);
     expect(snapshot.raw).toBe(originalRaw);
     expect(snapshot.parsed).toEqual(original);
-    expect(snapshot.sourceConfig).toEqual({
-      ...original,
-      agents: { entries: { main: { default: true } } },
-    });
-    expect(snapshot.config).toEqual({
-      ...original,
-      agents: { entries: { main: { default: true } } },
-    });
+    expect(snapshot.sourceConfig).toEqual(original);
+    expect(snapshot.config).toEqual(original);
     expect(snapshot.issues[0]?.message).toContain("unknown channel id: test-plugin-channel");
   });
 
@@ -1099,7 +1123,7 @@ describe("config io write", () => {
     const activeConfigPath = path.join(home, ".openclaw", "active.json");
     await fs.mkdir(path.dirname(expectedConfigPath), { recursive: true });
     await writeConfigJson(expectedConfigPath, { gateway: { mode: "local" } });
-    await fs.writeFile(activeConfigPath, "{}\n", "utf-8");
+    await writeConfigJson(activeConfigPath, {});
 
     await withEnvAsync(
       {
@@ -1146,9 +1170,11 @@ describe("config io write", () => {
       const configPath = configPathForHome(home);
       const includePath = path.join(home, ".openclaw", "extra.json5");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await writeConfigJson(includePath, {
-        $schema: "https://openclaw.ai/config-from-include.json",
-      });
+      await writeConfigJson(
+        includePath,
+        { $schema: "https://openclaw.ai/config-from-include.json" },
+        "fragment",
+      );
       await fs.writeFile(
         configPath,
         `{\n  "$include": "./extra.json5",\n  "gateway": { "mode": "local" }\n}\n`,
@@ -1169,7 +1195,7 @@ describe("config io write", () => {
     });
     const io = createFastConfigIO(home);
     const snapshot = await io.readConfigFileSnapshot();
-    const concurrentRaw = formatConfig({ gateway: { mode: "local", port: 19001 } });
+    const concurrentRaw = formatRootConfig({ gateway: { mode: "local", port: 19001 } });
     await fs.writeFile(configPath, concurrentRaw, "utf-8");
 
     await expect(
@@ -1185,7 +1211,7 @@ describe("config io write", () => {
       const firstConfigPath = path.join(home, ".openclaw", "first.json");
       const secondConfigPath = path.join(home, ".openclaw", "second.json");
       await fs.mkdir(path.dirname(firstConfigPath), { recursive: true });
-      const originalRaw = formatConfig({ gateway: { mode: "local", port: 18789 } });
+      const originalRaw = formatRootConfig({ gateway: { mode: "local", port: 18789 } });
       await fs.writeFile(firstConfigPath, originalRaw, "utf-8");
       await fs.writeFile(secondConfigPath, originalRaw, "utf-8");
       const firstIo = createHomeConfigIO(home, {
@@ -1215,7 +1241,7 @@ describe("config io write", () => {
       const configPath = configPathForHome(home);
       const secondConfigPath = path.join(home, ".openclaw", "second.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      const originalRaw = formatConfig({ gateway: { mode: "local", port: 18789 } });
+      const originalRaw = formatRootConfig({ gateway: { mode: "local", port: 18789 } });
       await fs.writeFile(configPath, originalRaw, "utf-8");
       const io = createFastConfigIO(home, { configPath });
       const snapshot = await io.readConfigFileSnapshot();
@@ -1251,7 +1277,7 @@ describe("config io write", () => {
       });
       const io = createFastConfigIO(home);
       const snapshot = await io.readConfigFileSnapshot();
-      const concurrentRaw = formatConfig({ gateway: { mode: "local", port: 19001 } });
+      const concurrentRaw = formatRootConfig({ gateway: { mode: "local", port: 19001 } });
 
       await expect(
         io.writeConfigFile(
@@ -1276,7 +1302,7 @@ describe("config io write", () => {
     });
     const io = createFastConfigIO(home);
     const snapshot = await io.readConfigFileSnapshot();
-    const concurrentRaw = formatConfig({ gateway: { mode: "local", port: 19001 } });
+    const concurrentRaw = formatRootConfig({ gateway: { mode: "local", port: 19001 } });
     mockMaintainConfigBackups.mockImplementationOnce(async () => {
       await fs.writeFile(configPath, concurrentRaw, "utf-8");
     });
@@ -1309,7 +1335,7 @@ describe("config io write", () => {
     await expect(fs.readFile(configPath, "utf-8")).resolves.toBe("");
   });
 
-  itWithHome("does not persist the injected roster for a non-roster first write", async (home) => {
+  itWithHome("persists the canonical roster for a non-roster first write", async (home) => {
     const configPath = configPathForHome(home);
     const io = createFastConfigIO(home, { configPath });
     const snapshot = await io.readConfigFileSnapshot();
@@ -1327,6 +1353,7 @@ describe("config io write", () => {
       },
       {
         baseSnapshot: snapshot,
+        skipPluginValidation: true,
         preCommitRuntimePreflight: async (config) => {
           preflightConfig = config;
         },
@@ -1336,7 +1363,7 @@ describe("config io write", () => {
     expect(preflightConfig?.agents?.entries).toEqual({ main: { default: true } });
     const persisted = await readPersistedConfig(configPath);
     expect(persisted.agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
-    expect(persisted.agents?.entries).toBeUndefined();
+    expect(persisted.agents?.entries).toEqual({ main: { default: true } });
     expect(persisted.agents?.list).toBeUndefined();
   });
 
@@ -1433,11 +1460,15 @@ describe("config io write", () => {
       const configPath = configPathForHome(home);
       const includePath = path.join(home, ".openclaw", "gateway.json5");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await writeConfigJson(includePath, {
-        mode: "local",
-        auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
-        invalid: true,
-      });
+      await writeConfigJson(
+        includePath,
+        {
+          mode: "local",
+          auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" },
+          invalid: true,
+        },
+        "fragment",
+      );
       await writeConfigJson(configPath, { gateway: { $include: "./gateway.json5" } });
       const originalRootRaw = await fs.readFile(configPath, "utf-8");
       const io = createHomeConfigIO(home, {
@@ -1471,7 +1502,7 @@ describe("config io write", () => {
       const configPath = configPathForHome(home);
       const includePath = path.join(home, ".openclaw", "agent-defaults.json5");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await writeConfigJson(includePath, { maxConcurrent: 1 });
+      await writeConfigJson(includePath, { maxConcurrent: 1 }, "fragment");
       await writeConfigJson(configPath, {
         agents: {
           defaults: { $include: "./agent-defaults.json5", legacyKey: true },
@@ -1635,7 +1666,7 @@ describe("config io write", () => {
       const configPath = configPathForHome(home);
       const pluginsPath = path.join(home, ".openclaw", "plugins.json5");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await writeConfigJson(pluginsPath, { $include: "./missing-entries.json5" });
+      await writeConfigJson(pluginsPath, { $include: "./missing-entries.json5" }, "fragment");
       await writeConfigJson(configPath, { plugins: { $include: "./plugins.json5" } });
       const originalRootRaw = await fs.readFile(configPath, "utf-8");
       const originalPluginsRaw = await fs.readFile(pluginsPath, "utf-8");
@@ -1697,7 +1728,7 @@ describe("config io write", () => {
       const configPath = configPathForHome(home);
       const agentsPath = path.join(home, ".openclaw", "agents.json5");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await writeConfigJson(agentsPath, { entries: { main: { default: true } } });
+      await writeConfigJson(agentsPath, { entries: { main: { default: true } } }, "fragment");
       await writeConfigJson(configPath, {
         agents: { $include: "./agents.json5" },
         plugins: {
@@ -1729,11 +1760,11 @@ describe("config io write", () => {
     });
   });
 
-  itWithHome("repairs invalid config without flattening record-nested includes", async (home) => {
+  itWithHome("rejects repair of an include-owned invalid roster", async (home) => {
     const configPath = configPathForHome(home);
     const includePath = path.join(home, ".openclaw", "main-agent.json5");
     await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await writeConfigJson(includePath, { workspace: "${OPENCLAW_AGENT_WORKSPACE}" });
+    await writeConfigJson(includePath, { workspace: "${OPENCLAW_AGENT_WORKSPACE}" }, "fragment");
     await writeConfigJson(configPath, {
       agents: {
         defaults: { params: { stale: true } },
@@ -1751,22 +1782,17 @@ describe("config io write", () => {
     const snapshot = await io.readConfigFileSnapshot();
     expect(snapshot.valid).toBe(false);
 
-    await io.writeConfigFile({
-      agents: {
-        entries: {
-          main: { default: true, workspace: "/resolved/agent-workspace" },
+    await expect(
+      io.writeConfigFile({
+        agents: {
+          entries: {
+            main: { default: true, workspace: "/resolved/agent-workspace" },
+          },
         },
-      },
-    });
+      }),
+    ).rejects.toThrow("flatten $include-owned config at agents.entries.main");
 
-    await expect(fs.readFile(configPath, "utf-8")).resolves.not.toBe(originalRootRaw);
-    const persistedRoot = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-      agents?: { defaults?: unknown; entries?: Record<string, unknown> };
-    };
-    expect(persistedRoot.agents?.defaults).toBeUndefined();
-    expect(persistedRoot.agents?.entries).toEqual({
-      main: { $include: "./main-agent.json5" },
-    });
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRootRaw);
     await expect(fs.readFile(includePath, "utf-8")).resolves.toContain(
       '"workspace": "${OPENCLAW_AGENT_WORKSPACE}"',
     );
@@ -1883,6 +1909,7 @@ describe("config io write", () => {
         meta?: Record<string, unknown>;
       };
       expect(persisted).toEqual({
+        agents: { entries: { main: { default: true } } },
         gateway: { mode: "local", port: 18789 },
         models: {
           providers: {
@@ -2292,10 +2319,11 @@ describe("config io write", () => {
     const configPath = configPathForHome(home);
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     const initialConfig = {
+      agents: { entries: { main: { default: true } } },
       gateway: { mode: "local", port: 18789 },
       plugins: { entries: { "google-antigravity-auth": { enabled: false } } },
     } satisfies OpenClawConfig;
-    const initialRaw = formatConfig(initialConfig);
+    const initialRaw = formatRootConfig(initialConfig);
     await fs.writeFile(configPath, initialRaw, "utf-8");
     const warn = vi.fn();
     const io = createHomeConfigIO(home, {
@@ -2335,7 +2363,10 @@ describe("config io write", () => {
     async (home) => {
       const configPath = configPathForHome(home);
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
+      const initialConfig = {
+        agents: { entries: { main: { default: true } } },
+        gateway: { mode: "local", port: 18789 },
+      } satisfies OpenClawConfig;
       await writeConfigJson(configPath, initialConfig);
       const baseSnapshot = {
         path: configPath,
@@ -2384,7 +2415,7 @@ describe("config io write", () => {
       const { configPath } = await writeConfigFixture(home, {
         gateway: { mode: "local", port: 18789 },
       });
-      const concurrentRaw = formatConfig({ gateway: { mode: "local", port: 19191 } });
+      const concurrentRaw = formatRootConfig({ gateway: { mode: "local", port: 19191 } });
 
       try {
         await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
@@ -2409,7 +2440,7 @@ describe("config io write", () => {
 
   itWithHome("blocks runtime preflight failures before committing root writes", async (home) => {
     const configPath = configPathForHome(home);
-    const initialRaw = formatConfig({ gateway: { mode: "local" } });
+    const initialRaw = formatRootConfig({ gateway: { mode: "local" } });
     let observedSource: OpenClawConfig | undefined;
 
     await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -2444,7 +2475,7 @@ describe("config io write", () => {
     "runs a caller commit guard after runtime preflight and before the root write",
     async (home) => {
       const configPath = configPathForHome(home);
-      const initialRaw = formatConfig({ gateway: { mode: "local" } });
+      const initialRaw = formatRootConfig({ gateway: { mode: "local" } });
       const events: string[] = [];
 
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -2485,7 +2516,7 @@ describe("config io write", () => {
     "blocks runtime preflight failures before direct config IO commits root writes",
     async (home) => {
       const configPath = configPathForHome(home);
-      const initialRaw = formatConfig({ gateway: { mode: "local" } });
+      const initialRaw = formatRootConfig({ gateway: { mode: "local" } });
       const env = {
         ...process.env,
         OPENCLAW_CONFIG_PATH: configPath,
@@ -2524,7 +2555,7 @@ describe("config io write", () => {
       const configPath = configPathForHome(home);
       const envKey = "OPENCLAW_TEST_RUNTIME_ROLLBACK_ENV";
       const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
-      const initialRaw = formatConfig(initialConfig);
+      const initialRaw = formatRootConfig(initialConfig);
 
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, initialRaw, "utf-8");
@@ -2608,7 +2639,7 @@ describe("config io write", () => {
     async (home) => {
       const configPath = configPathForHome(home);
       const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
-      const initialRaw = formatConfig(initialConfig);
+      const initialRaw = formatRootConfig(initialConfig);
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, initialRaw, "utf-8");
 
@@ -2655,7 +2686,7 @@ describe("config io write", () => {
       const configPath = configPathForHome(home);
       const otherConfigPath = path.join(home, ".openclaw", "other.json");
       const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
-      const initialRaw = formatConfig(initialConfig);
+      const initialRaw = formatRootConfig(initialConfig);
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(configPath, initialRaw, "utf-8");
       const env = {
@@ -2943,7 +2974,7 @@ gateway: { mode: "local", port: 18789 }
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
-        formatConfig({ env: { vars: originalVars }, gateway: { port: 18789 } }),
+        formatRootConfig({ env: { vars: originalVars }, gateway: { port: 18789 } }),
       );
       const io = createFastConfigIO(home);
       const snapshot = await io.readConfigFileSnapshot();

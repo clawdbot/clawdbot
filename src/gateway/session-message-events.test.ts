@@ -1895,7 +1895,7 @@ describe("session.message websocket events", () => {
 
   test("routes selected-agent global transcript updates to matching message subscribers", async () => {
     const storePath = await createSessionStoreFile();
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = { entries: { main: { default: true }, work: {} } };
     const transcriptPath = path.join(path.dirname(storePath), "global-work.jsonl");
     await writeSessionStore({
       entries: {
@@ -2381,7 +2381,7 @@ describe("session.message websocket events", () => {
       storePath,
     });
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: { default: true } } },
       session: { mainKey: "main", store: storePath },
     };
     const ledger: WorkerTranscriptCommitStore = {

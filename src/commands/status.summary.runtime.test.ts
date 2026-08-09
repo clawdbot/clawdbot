@@ -1,7 +1,7 @@
 // Status summary runtime tests cover model context-token resolution.
 import { describe, expect, it } from "vitest";
 import { ANTHROPIC_CONTEXT_1M_TOKENS } from "../agents/context-resolution.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
 import { statusSummaryRuntime } from "../status/summary.runtime.js";
 
 function resolveSessionRuntimeLabel(
@@ -9,7 +9,7 @@ function resolveSessionRuntimeLabel(
 ) {
   return statusSummaryRuntime.resolveSessionRuntimeLabel({
     ...params,
-    cfg: migratePersistedImplicitMainRoster(params.cfg).config as never,
+    cfg: withCanonicalTestAgentRoster(params.cfg) as never,
   });
 }
 

@@ -62,7 +62,7 @@ async function configureNonGlobalMainSession(): Promise<() => Promise<void>> {
     configPath,
     `${JSON.stringify(
       {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: { default: true }, work: {} } },
         session: { store: storePath },
       },
       null,
@@ -79,7 +79,7 @@ async function configureNonGlobalMainSession(): Promise<() => Promise<void>> {
   );
   return async () => {
     testState.sessionStorePath = undefined;
-    await fs.writeFile(configPath, "{}\n", "utf-8");
+    await fs.rm(configPath, { force: true });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
   };

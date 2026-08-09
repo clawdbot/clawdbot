@@ -1,7 +1,7 @@
 // Verifies simple-completion model selection preserves provider, model, and profile refs.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
 import { resolveSimpleCompletionSelectionForAgent as resolveSimpleCompletionSelectionForAgentBase } from "./simple-completion-runtime.js";
 
 function resolveSimpleCompletionSelectionForAgent(
@@ -9,7 +9,7 @@ function resolveSimpleCompletionSelectionForAgent(
 ) {
   return resolveSimpleCompletionSelectionForAgentBase({
     ...params,
-    cfg: migratePersistedImplicitMainRoster(params.cfg).config as OpenClawConfig,
+    cfg: withCanonicalTestAgentRoster(params.cfg),
   });
 }
 

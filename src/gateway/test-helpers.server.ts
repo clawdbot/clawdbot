@@ -18,6 +18,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -201,8 +203,9 @@ async function persistTestSessionConfig(): Promise<void> {
     } else {
       delete config.session;
     }
+    const persistedConfig = withCanonicalTestAgentRoster(config as OpenClawConfig);
     await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+    await fs.writeFile(configPath, `${JSON.stringify(persistedConfig, null, 2)}\n`, "utf-8");
   }
   resetConfigRuntimeState();
   lastSyncedSessionStorePath = testState.sessionStorePath;

@@ -428,6 +428,13 @@ describe("openclaw test instance", () => {
 
       const config = JSON.parse(await fs.readFile(inst.configPath, "utf8"));
       expect(config).toStrictEqual({
+        agents: {
+          entries: {
+            main: {
+              default: true,
+            },
+          },
+        },
         gateway: {
           bind: "loopback",
           port: inst.port,
@@ -450,5 +457,42 @@ describe("openclaw test instance", () => {
     }
 
     await expectPathMissing(inst.state.root);
+  });
+
+  it("inherits the main roster for defaults-only config and preserves explicit entries", async () => {
+    const defaultsOnly = await createOpenClawTestInstance({
+      name: "instance-defaults-only-roster",
+      config: { agents: { defaults: { workspace: "/tmp/default-workspace" } } },
+    });
+    const explicit = await createOpenClawTestInstance({
+      name: "instance-explicit-roster",
+      config: {
+        agents: {
+          entries: { validation: { default: true } },
+        },
+      },
+    });
+    const legacy = await createOpenClawTestInstance({
+      name: "instance-legacy-roster",
+      config: { agents: { list: [{ id: "legacy", default: true }] } },
+    });
+
+    try {
+      const defaultsConfig = JSON.parse(await fs.readFile(defaultsOnly.configPath, "utf8"));
+      expect(defaultsConfig.agents).toEqual({
+        defaults: { workspace: "/tmp/default-workspace" },
+        entries: { main: { default: true } },
+      });
+      const explicitConfig = JSON.parse(await fs.readFile(explicit.configPath, "utf8"));
+      expect(explicitConfig.agents).toEqual({
+        entries: { validation: { default: true } },
+      });
+      const legacyConfig = JSON.parse(await fs.readFile(legacy.configPath, "utf8"));
+      expect(legacyConfig.agents).toEqual({
+        list: [{ id: "legacy", default: true }],
+      });
+    } finally {
+      await Promise.all([defaultsOnly.cleanup(), explicit.cleanup(), legacy.cleanup()]);
+    }
   });
 });

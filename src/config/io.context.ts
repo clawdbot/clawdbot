@@ -34,7 +34,6 @@ import type {
   NormalizedConfigIoDeps,
 } from "./io.types.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
@@ -139,7 +138,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     const env = { ...deps.env } as NodeJS.ProcessEnv;
     const resolvedIncludes = resolveConfigIncludesForRead(candidate, configPath, { ...deps, env });
     const resolution = resolveConfigForRead(resolvedIncludes, env, deps.lowerPrecedenceEnv);
-    return coerceConfig(migratePersistedImplicitMainRoster(resolution.resolvedConfigRaw).config);
+    return coerceConfig(resolution.resolvedConfigRaw);
   }
 
   function prepareRecoveryBackupCandidate(

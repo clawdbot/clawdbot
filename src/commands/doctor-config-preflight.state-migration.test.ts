@@ -8,12 +8,16 @@ import {
 } from "../plugins/runtime-degraded-state.js";
 import { ExitError } from "../runtime.js";
 import {
+  currentCheckpointPluginVerificationStages,
   makeStartupConvergenceResult,
+  mockLegacyPluginModelCatalogDetection,
   stateCheckpointOptions,
   type StartupConvergenceResult,
   type StartupSmokeFailure,
   type StateMigrationResult,
 } from "./doctor-config-preflight.state-migration.test-helpers.js";
+
+mockLegacyPluginModelCatalogDetection();
 
 const autoMigrateLegacyStateDir = vi.hoisted(() =>
   vi.fn(
@@ -336,16 +340,7 @@ describe("runDoctorConfigPreflight state migration", () => {
       measure,
     });
 
-    expect(measuredStages).toEqual([
-      "doctor.config-preflight.startup-checkpoint-import",
-      "doctor.config-preflight.pristine-state-plan-import",
-      "doctor.config-preflight.pristine-state-plan",
-      "doctor.config-preflight.config-snapshot",
-      "doctor.config-preflight.plugin-plan-import",
-      "doctor.config-preflight.plugin-plan",
-      "doctor.config-preflight.plugin-payload-verification-import",
-      "doctor.config-preflight.plugin-payload-verification",
-    ]);
+    expect(measuredStages).toEqual(currentCheckpointPluginVerificationStages);
   });
 
   it.each([

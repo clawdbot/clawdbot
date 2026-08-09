@@ -26,7 +26,7 @@ import {
 } from "./plugin-model-catalog.js";
 
 function listPersistedPluginModelCatalogs(agentDir: string) {
-  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
+  return loadPersistedPluginModelCatalogs(agentDir);
 }
 
 const tempDirs: string[] = [];
@@ -266,16 +266,16 @@ describe("SQLite-backed plugin model catalogs", () => {
     expect(existsSync(join(agentDir, "plugins"))).toBe(false);
   });
 
-  it("automatically migrates a released catalog before the first SQLite read", () => {
+  it("ignores and preserves a released sidecar during runtime SQLite reads", () => {
     const agentDir = createAgentDir();
     const contents = catalogContents("zai", "released-provider-test-key");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(sourcePath, contents, "utf8");
 
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
-    expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(true);
-    expect(existsSync(sourcePath)).toBe(false);
+    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([]);
+    expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
+    expect(readFileSync(sourcePath, "utf8")).toBe(contents);
   });
 
   it("retires migrated credential recovery data after verifying the canonical catalog", () => {
@@ -285,6 +285,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(sourcePath, contents, "utf8");
 
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      detected: 1,
+      migrated: 1,
+      warnings: [],
+    });
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
     const database = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"), {
       readOnly: true,
@@ -320,6 +325,11 @@ describe("SQLite-backed plugin model catalogs", () => {
       database.close();
     }
 
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      detected: 0,
+      migrated: 0,
+      warnings: [],
+    });
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
     const verified = new DatabaseSync(join(agentDir, "openclaw-agent.sqlite"), {
       readOnly: true,
@@ -387,7 +397,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
   });
 
-  it("detects a released catalog that appears after an earlier empty scan", () => {
+  it("Doctor detects a released catalog after an earlier runtime cache miss", () => {
     const agentDir = createAgentDir();
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([]);
 
@@ -396,6 +406,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(sourcePath, contents, "utf8");
 
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      detected: 1,
+      migrated: 1,
+      warnings: [],
+    });
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
     expect(existsSync(sourcePath)).toBe(false);
   });
@@ -407,6 +422,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
     writeFileSync(zaiPath, zai, "utf8");
 
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      detected: 1,
+      migrated: 1,
+      warnings: [],
+    });
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
       { pluginId: "zai", contents: zai },
     ]);
@@ -416,6 +436,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(join(agentDir, "plugins", "anthropic"), { recursive: true });
     writeFileSync(anthropicPath, anthropic, "utf8");
 
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      detected: 1,
+      migrated: 1,
+      warnings: [],
+    });
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
       { pluginId: "anthropic", contents: anthropic },
       { pluginId: "zai", contents: zai },
@@ -432,12 +457,22 @@ describe("SQLite-backed plugin model catalogs", () => {
     const later = catalogContents("zai", "later-released-provider-test-key");
     mkdirSync(pluginDir, { recursive: true });
     writeFileSync(sourcePath, original, "utf8");
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      detected: 1,
+      migrated: 1,
+      warnings: [],
+    });
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
       { pluginId: "zai", contents: original },
     ]);
 
     writeFileSync(sourcePath, later, "utf8");
 
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      detected: 1,
+      migrated: 1,
+      warnings: [],
+    });
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
       { pluginId: "zai", contents: later },
     ]);
@@ -489,6 +524,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     });
 
     expect(existsSync(sourcePath)).toBe(true);
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      detected: 1,
+      migrated: 1,
+      warnings: [],
+    });
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
       { pluginId: "zai", contents: released },
     ]);
@@ -633,6 +673,11 @@ describe("SQLite-backed plugin model catalogs", () => {
       warnings: [expect.stringContaining("Left changed legacy provider catalog in place")],
     });
     expect(readFileSync(sourcePath, "utf8")).toBe(refreshed);
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      detected: 1,
+      migrated: 1,
+      warnings: [],
+    });
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
       { pluginId: "zai", contents: refreshed },
     ]);
@@ -700,6 +745,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     });
     expect(existsSync(claimPath)).toBe(true);
     expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      detected: 1,
+      migrated: 1,
+      warnings: [],
+    });
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
     expect(existsSync(claimPath)).toBe(false);
   });
@@ -732,6 +782,11 @@ describe("SQLite-backed plugin model catalogs", () => {
       chmodSync(claimPath, 0o600);
     }
 
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      detected: 2,
+      migrated: 2,
+      warnings: [],
+    });
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
       { pluginId: "zai", contents: refreshed },
     ]);
@@ -745,6 +800,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     mkdirSync(pluginDir, { recursive: true });
     writeFileSync(claimPath, contents, "utf8");
 
+    expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
+      detected: 1,
+      migrated: 1,
+      warnings: [],
+    });
     expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
     expect(existsSync(claimPath)).toBe(false);
   });
@@ -815,13 +875,13 @@ describe("SQLite-backed plugin model catalogs", () => {
         migrated: 0,
         warnings: [expect.stringContaining("Could not read legacy provider catalog")],
       });
-      expect(loadPersistedPluginModelCatalogs(agentDir)).toEqual({
-        catalogs: [{ pluginId: "anthropic", contents: anthropic }],
-        warnings: [expect.stringContaining("Could not read legacy provider catalog")],
-      });
+      expect(loadPersistedPluginModelCatalogs(agentDir)).toEqual([
+        { pluginId: "anthropic", contents: anthropic },
+      ]);
       expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
         { pluginId: "anthropic", contents: anthropic },
       ]);
+      expect(existsSync(sourcePath)).toBe(true);
     } finally {
       chmodSync(sourcePath, 0o600);
     }

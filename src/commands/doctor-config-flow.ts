@@ -1,11 +1,9 @@
 /** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -20,6 +18,10 @@ import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
 import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
+import {
+  createDoctorRosterInspectionConfig,
+  planDoctorAgentRosterMigration,
+} from "./doctor/shared/agent-roster-migration.js";
 import {
   applyLegacyCompatibilityStep,
   applyUnknownConfigKeyStep,
@@ -168,14 +170,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     pluginMetadataSnapshotState.current = undefined;
     pluginMetadataSnapshotScope.invalidate();
   };
-  const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T =>
-    runWithPluginMetadataSnapshot(
+  const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T => {
+    const inspection = createDoctorRosterInspectionConfig(config);
+    return runWithPluginMetadataSnapshot(
       {
-        config,
-        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
+        config: inspection.config,
+        workspaceDir: resolveAgentWorkspaceDir(inspection.config, inspection.defaultAgentId),
       },
       run,
     );
+  };
   let state: DoctorConfigMutationState = {
     cfg: baseCfg,
     candidate: structuredClone(baseCfg),
@@ -209,6 +213,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const sourceLastTouchedVersion =
     typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
 
+  const rosterMigrationSource =
+    snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.parsed;
+  const rosterMigration = planDoctorAgentRosterMigration(rosterMigrationSource);
+  const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
+  const includeOwnedRosterNeedsManualRepair =
+    snapshot.exists && includeOwnsRoster && rosterMigration.changes.length > 0;
   const legacyStep = runWithCurrentPluginMetadata(state.candidate, () =>
     applyLegacyCompatibilityStep({
       snapshot,
@@ -219,33 +229,35 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   );
   state = legacyStep.state;
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
-  const legacyMigrationBlocksWrite = legacyStep.blocksWrite === true;
-  const rosterMigrationNeeded = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed].some(
-    (source) => source !== undefined && migratePersistedImplicitMainRoster(source).changed,
-  );
-  const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
-  if (snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster) {
-    // Runtime roster normalization is read-only; doctor --fix owns persistence.
-    const migrated = migratePersistedImplicitMainRoster(state.candidate).config as OpenClawConfig;
-    const migratedRoster = readAgentRosterProperty(migrated);
-    const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
-    const { list: _legacyList, ...candidateAgents } = state.candidate.agents ?? {};
-    const rosterRepair = {
-      config: {
-        ...state.candidate,
-        agents: {
-          ...candidateAgents,
-          entries: migratedEntries as NonNullable<OpenClawConfig["agents"]>["entries"],
+  let legacyMigrationBlocksWrite = legacyStep.blocksWrite === true;
+  if (snapshot.exists && rosterMigration.changes.length > 0) {
+    if (includeOwnedRosterNeedsManualRepair) {
+      legacyMigrationBlocksWrite = true;
+      note(
+        [
+          "The agent roster is owned by an included config and needs migration.",
+          "Edit the included file so agents.entries contains exactly one default=true entry, then run openclaw doctor --fix again.",
+          "No roster files were changed.",
+        ].join("\n"),
+        "Doctor warnings",
+      );
+    } else {
+      const candidateRosterMigration = planDoctorAgentRosterMigration(state.candidate);
+      const rosterChanges =
+        candidateRosterMigration.changes.length > 0
+          ? candidateRosterMigration.changes
+          : ["Prepared agents.entries with exactly one explicit default agent for persistence."];
+      applyConfigMutation(
+        {
+          config: candidateRosterMigration.config as OpenClawConfig,
+          changes: rosterChanges,
         },
-      },
-      changes: ["Prepared agents.entries with exactly one explicit default agent for persistence."],
-    };
-    applyConfigMutation(rosterRepair, {
-      fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
-    });
-    // Read-time normalization already exposes this roster in the runtime shape.
-    // Preserve doctor's write intent so the atomic writer does not restore the authored omission.
-    explicitSetPaths.push(["agents", "entries"]);
+        {
+          fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
+        },
+      );
+      explicitSetPaths.push(["agents", "entries"]);
+    }
   }
   applyConfigMutation(materializeDefaultAgentRoles(state.candidate), {
     fixHint: `Run "${doctorFixCommand}" to persist explicit ambient agent targets.`,
@@ -435,7 +447,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     fixHint: `Run "${doctorFixCommand}" to rotate hooks.token away from Gateway auth.`,
   });
 
-  if (shouldRepair) {
+  if (shouldRepair && !includeOwnedRosterNeedsManualRepair) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const repairSequence = await runDoctorRepairSequence({
       state,
@@ -456,7 +468,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       changeNotes: repairSequence.changeNotes,
       warningNotes: repairSequence.warningNotes,
     });
-  } else {
+  } else if (!shouldRepair && !includeOwnedRosterNeedsManualRepair) {
     const { collectDoctorPreviewNotes } = await import("./doctor/shared/preview-warnings.js");
     const collectPreviewNotes = async () =>
       await collectDoctorPreviewNotes({

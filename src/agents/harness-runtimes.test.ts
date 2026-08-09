@@ -1,6 +1,6 @@
 // Covers config scanning for agent harness runtime requirements.
 import { describe, expect, it } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectConfiguredAgentHarnessRuntimes as collectConfiguredAgentHarnessRuntimesBase } from "./harness-runtimes.js";
 
@@ -8,10 +8,7 @@ function collectConfiguredAgentHarnessRuntimes(
   config: OpenClawConfig,
   options?: Parameters<typeof collectConfiguredAgentHarnessRuntimesBase>[1],
 ) {
-  return collectConfiguredAgentHarnessRuntimesBase(
-    migratePersistedImplicitMainRoster(config).config as OpenClawConfig,
-    options,
-  );
+  return collectConfiguredAgentHarnessRuntimesBase(withCanonicalTestAgentRoster(config), options);
 }
 
 describe("collectConfiguredAgentHarnessRuntimes", () => {

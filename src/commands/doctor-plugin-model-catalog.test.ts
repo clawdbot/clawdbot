@@ -13,11 +13,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { detectLegacyPluginModelCatalogs } from "./doctor-plugin-model-catalog-detection.js";
 import { maybeMigrateLegacyPluginModelCatalogs } from "./doctor-plugin-model-catalog.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 function listPersistedPluginModelCatalogs(agentDir: string) {
-  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
+  return loadPersistedPluginModelCatalogs(agentDir);
 }
 
 const tempDirs: string[] = [];
@@ -79,6 +80,53 @@ afterEach(() => {
 });
 
 describe("doctor generated plugin model catalog migration", () => {
+  it("detects only exact marker-backed sidecars without mutating files or SQLite", async () => {
+    const agentDir = createAgentDir();
+    const canonical = writeLegacyCatalog(agentDir, "zai", generatedCatalog("zai"));
+    const pluginDir = path.dirname(canonical);
+    const claim = path.join(pluginDir, "catalog.json.doctor-importing-previous-process");
+    const nearClaim = path.join(pluginDir, "catalog.json.doctor-importing");
+    const unmarked = path.join(pluginDir, "other.json");
+    fs.writeFileSync(claim, generatedCatalog("zai"), "utf8");
+    fs.writeFileSync(nearClaim, generatedCatalog("zai"), "utf8");
+    fs.writeFileSync(unmarked, generatedCatalog("zai"), "utf8");
+    const authored = writeLegacyCatalog(
+      agentDir,
+      "authored",
+      JSON.stringify({ providers: { authored: { apiKey: "do-not-touch" } } }),
+    );
+    const malformed = writeLegacyCatalog(agentDir, "malformed", "{not-json");
+    const before = new Map(
+      [canonical, claim, nearClaim, unmarked, authored, malformed].map((pathname) => [
+        pathname,
+        fs.readFileSync(pathname, "utf8"),
+      ]),
+    );
+
+    const result = await detectLegacyPluginModelCatalogs({
+      cfg: {} as OpenClawConfig,
+      agentDirs: [agentDir],
+    });
+
+    expect(result.detected.map((entry) => path.basename(entry.relativePath))).toEqual([
+      "catalog.json.doctor-importing-previous-process",
+      "catalog.json",
+    ]);
+    expect(result.detected[0]).not.toHaveProperty("contents");
+    expect(
+      result.migrations.map((migration) => ({
+        agentDir: migration.agentDir,
+        pluginId: migration.pluginId,
+        relativePath: migration.relativePath,
+      })),
+    ).toEqual(result.detected);
+    expect(result.warnings).toEqual([]);
+    for (const [pathname, contents] of before) {
+      expect(fs.readFileSync(pathname, "utf8")).toBe(contents);
+    }
+    expect(fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
+  });
+
   it("does not create agent SQLite for a legacy-free profile", async () => {
     const agentDir = createAgentDir();
 
@@ -116,6 +164,27 @@ describe("doctor generated plugin model catalog migration", () => {
     expect(fs.existsSync(claimPath)).toBe(false);
   });
 
+  it("imports a newer canonical sidecar after a differing retained claim", async () => {
+    const agentDir = createAgentDir();
+    const retained = generatedCatalog("zai", "retained-zai-provider-test-key");
+    const canonical = generatedCatalog("zai", "canonical-zai-provider-test-key");
+    const pluginDir = path.join(agentDir, "plugins", "zai");
+    const claimPath = path.join(pluginDir, "catalog.json.doctor-importing-previous-process");
+    const canonicalPath = path.join(pluginDir, "catalog.json");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(claimPath, retained, "utf8");
+    fs.writeFileSync(canonicalPath, canonical, "utf8");
+
+    await expect(
+      maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
+    ).resolves.toEqual({ detected: 2, migrated: 2, warnings: [] });
+    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+      { pluginId: "zai", contents: canonical },
+    ]);
+    expect(fs.existsSync(claimPath)).toBe(false);
+    expect(fs.existsSync(canonicalPath)).toBe(false);
+  });
+
   it("reports and preserves conflicting retained migration claims", async () => {
     const agentDir = createAgentDir();
     const pluginDir = path.join(agentDir, "plugins", "zai");
@@ -125,6 +194,17 @@ describe("doctor generated plugin model catalog migration", () => {
     fs.writeFileSync(firstPath, generatedCatalog("zai", "first-provider-test-key"), "utf8");
     fs.writeFileSync(secondPath, generatedCatalog("zai", "second-provider-test-key"), "utf8");
     const params = migrationParams([agentDir]);
+
+    const detection = await detectLegacyPluginModelCatalogs({
+      cfg: {} as OpenClawConfig,
+      agentDirs: [agentDir],
+    });
+    expect(detection.detected).toHaveLength(2);
+    expect(detection.migrations).toEqual([]);
+    expect(detection.warnings).toEqual([
+      expect.stringContaining("Conflicting retained legacy provider catalogs"),
+    ]);
+    expect(fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
 
     await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toEqual({
       detected: 0,

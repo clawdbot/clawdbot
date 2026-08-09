@@ -33,6 +33,7 @@ describe("gateway minimal boot smoke", () => {
     });
     const token = "gateway-minimal-boot-smoke-token";
     await state.writeConfig({
+      agents: { entries: { main: { default: true } } },
       gateway: {
         auth: { mode: "token", token },
         controlUi: { enabled: false },

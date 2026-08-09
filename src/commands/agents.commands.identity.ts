@@ -2,15 +2,10 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { loadAgentIdentityFromFile } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { replaceConfigFile } from "../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { AgentConfig, IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -44,11 +39,7 @@ function resolveAgentIdByWorkspace(
   cfg: Parameters<typeof resolveAgentWorkspaceDir>[0],
   workspaceDir: string,
 ): string[] {
-  const list = listAgentEntries(cfg);
-  const ids =
-    list.length > 0
-      ? list.map((entry) => normalizeAgentId(entry.id))
-      : [resolveDefaultAgentId(cfg)];
+  const ids = listAgentEntries(cfg).map((entry) => normalizeAgentId(entry.id));
   const normalizedTarget = normalizeWorkspacePath(workspaceDir);
   return ids.filter(
     (id) => normalizeWorkspacePath(resolveAgentWorkspaceDir(cfg, id)) === normalizedTarget,
@@ -64,9 +55,7 @@ export async function agentsSetIdentityCommand(
   if (!configSnapshot) {
     return;
   }
-  const cfg = migratePersistedImplicitMainRoster(
-    configSnapshot.sourceConfig ?? configSnapshot.config,
-  ).config as OpenClawConfig;
+  const cfg = (configSnapshot.sourceConfig ?? configSnapshot.config) as OpenClawConfig;
   const baseHash = configSnapshot.hash;
 
   const agentRaw = normalizeOptionalString(opts.agent);

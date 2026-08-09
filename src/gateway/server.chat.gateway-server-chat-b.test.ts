@@ -24,6 +24,7 @@ import {
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -193,7 +194,8 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
   await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+  const persistedConfig = withCanonicalTestAgentRoster(config as OpenClawConfig);
+  await fs.writeFile(configPath, JSON.stringify(persistedConfig, null, 2), "utf-8");
   clearConfigCache();
 }
 
@@ -1025,7 +1027,7 @@ describe("gateway server chat", () => {
     const config = {
       agents: {
         defaults: {},
-        list: [{ id: "main", default: true }, { id: "work" }],
+        entries: { main: { default: true }, work: {} },
       },
     } as OpenClawConfig;
     const context = createDirectChatContext({

@@ -13,6 +13,8 @@ export type LegacyConfigMigrationContext = {
   authoredRaw: unknown;
   /** Configuration after include and environment resolution. */
   resolvedRaw: unknown;
+  /** Doctor must not flatten a roster contributed by an authored include. */
+  includeOwnedAgentRoster?: boolean;
 };
 
 type LegacyConfigMigration = {

@@ -15,6 +15,7 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntry,
 } from "../../../../src/config/sessions/session-accessor.js";
+import { withCanonicalTestAgentRoster } from "../../../../src/config/test-fixtures.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import {
@@ -611,7 +612,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const configPath = path.join(tmpDir, "openclaw.json");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
     fsSync.writeFileSync(sessionFile, "");
-    fsSync.writeFileSync(configPath, JSON.stringify({ session: { store: storePath } }));
+    fsSync.writeFileSync(
+      configPath,
+      JSON.stringify(withCanonicalTestAgentRoster({ session: { store: storePath } })),
+    );
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -642,7 +646,11 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     fsSync.writeFileSync(path.join(sessionsDir, "sessions.json"), "{}");
     fsSync.writeFileSync(
       configPath,
-      JSON.stringify({ session: { store: path.join(sessionsDir, "sessions.json") } }),
+      JSON.stringify(
+        withCanonicalTestAgentRoster({
+          session: { store: path.join(sessionsDir, "sessions.json") },
+        }),
+      ),
     );
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
     clearRuntimeConfigSnapshot();
@@ -675,7 +683,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     fsSync.mkdirSync(sessionsDir, { recursive: true });
     fsSync.writeFileSync(sessionFile, "");
     fsSync.writeFileSync(archivePath, "");
-    fsSync.writeFileSync(configPath, JSON.stringify({ session: { store: storePath } }));
+    fsSync.writeFileSync(
+      configPath,
+      JSON.stringify(withCanonicalTestAgentRoster({ session: { store: storePath } })),
+    );
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
     clearRuntimeConfigSnapshot();
     clearConfigCache();

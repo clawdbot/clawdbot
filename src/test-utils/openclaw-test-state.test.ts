@@ -53,7 +53,9 @@ describe("openclaw test state", () => {
       expect(state.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
       expect(process.env.HOME).toBe(state.home);
       expect(process.env.OPENCLAW_HOME).toBe(state.home);
-      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toStrictEqual({});
+      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toStrictEqual({
+        agents: { entries: { main: { default: true } } },
+      });
       for (const key of GATEWAY_STARTUP_MUTATED_ENV_KEYS) {
         setTestEnvValue(key, `mutated-${key}`);
       }
@@ -138,6 +140,7 @@ describe("openclaw test state", () => {
       },
       async (state) => {
         expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual({
+          agents: { entries: { main: { default: true } } },
           update: {
             channel: "stable",
           },

@@ -87,6 +87,7 @@ import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
+import { requireCanonicalModelCatalogState } from "./legacy-catalog-preflight.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
 import type { AuthProbeSummary } from "./list.probe.js";
@@ -369,6 +370,7 @@ export async function modelsStatusCommand(
   const agentDir = agentId
     ? resolveAgentDir(cfg, agentId)
     : (resolveEnvAgentDirOverride() ?? resolveAgentDir(cfg, workspaceAgentId));
+  await requireCanonicalModelCatalogState({ config: cfg, agentDir, env: process.env });
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
   const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;

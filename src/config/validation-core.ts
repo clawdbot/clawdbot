@@ -22,7 +22,6 @@ import {
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { attachAgentListProjection } from "./agent-list-projection.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import {
   isModelPolicyCompatSelector,
@@ -372,7 +371,7 @@ export function validateConfigObject(
     sourceRaw?: unknown;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const result = validateConfigObjectRaw(migratePersistedImplicitMainRoster(raw).config, opts);
+  const result = validateConfigObjectRaw(raw, opts);
   if (!result.ok) {
     return result;
   }

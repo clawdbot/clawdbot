@@ -437,7 +437,7 @@ test("sessions.create keeps incognito rows process-local through list, spawn, re
 
 test("incognito sessions survive non-default-agent webchat reply initialization", async () => {
   const { storePath } = await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  testState.agentsConfig = { entries: { main: { default: true }, work: {} } };
   const { ws } = await openClient({
     browserOrigin: "http://127.0.0.1",
     client: {
@@ -1984,7 +1984,7 @@ test("sessions.create rejects a caller-supplied key for a catalog target", async
 test("sessions.create authorizes a catalog target for the requested agent", async () => {
   await createSessionStoreDir();
   testState.agentsConfig = {
-    list: [{ id: "main", default: true }, { id: "research" }],
+    entries: { main: { default: true }, research: {} },
   };
   const resolveCreateSession = vi.fn(({ agentId }: { agentId?: string }) =>
     agentId === "research"
@@ -2636,7 +2636,7 @@ test("sessions.create scopes the main alias to the requested agent", async () =>
 
 test("sessions.create replaces a dead main entry with a fresh session id", async () => {
   const { storePath } = await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  testState.agentsConfig = { entries: { ops: { default: true } } };
   try {
     await writeSessionStore({
       agentId: "ops",
@@ -3376,7 +3376,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
   const workDir = path.dirname(workStorePath);
   testState.sessionStorePath = storeTemplate;
   testState.sessionConfig = { scope: "per-sender" };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  testState.agentsConfig = { entries: { main: { default: true }, work: {} } };
   try {
     await fs.mkdir(workDir, { recursive: true });
     const parent = await createCheckpointFixture(workDir);
@@ -3452,7 +3452,7 @@ test("sessions.create completes simultaneous opposite-direction cross-agent fork
   const workStorePath = storeTemplate.replace("{agentId}", "work");
   testState.sessionStorePath = storeTemplate;
   testState.sessionConfig = { scope: "per-sender" };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  testState.agentsConfig = { entries: { main: { default: true }, work: {} } };
 
   try {
     const mainDir = path.dirname(mainStorePath);
@@ -3581,7 +3581,7 @@ test("sessions.create can start the first agent turn from an initial task", asyn
   await createSessionStoreDir();
   // Register "ops" so the deleted-agent guard added in #65986 does not
   // reject the auto-started chat.send triggered by `task:`.
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  testState.agentsConfig = { entries: { ops: { default: true } } };
   const { ws } = await openClient();
 
   const created = await rpcReq<{
@@ -3614,7 +3614,7 @@ test("sessions.create can start the first agent turn from an initial task", asyn
 
 test("sessions.create forwards an attachment-only first turn", async () => {
   await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: { default: true } } };
   const { chatHandlers } = await import("./server-methods/chat.js");
   const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
     respond(true, { runId: "attachment-run", status: "started" });
@@ -3646,7 +3646,7 @@ test("sessions.create forwards an attachment-only first turn", async () => {
 
 test("sessions.create rejects unusable attachment-only input before creating a session", async () => {
   await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: { default: true } } };
 
   const created = await directSessionReq("sessions.create", {
     agentId: "main",
@@ -3661,7 +3661,7 @@ test("sessions.create rejects unusable attachment-only input before creating a s
 
 test("sessions.create rejects replacing its parent key", async () => {
   await createSessionStoreDir();
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  testState.agentsConfig = { entries: { main: { default: true } } };
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent-task") } });
 
   const created = await directSessionReq("sessions.create", {

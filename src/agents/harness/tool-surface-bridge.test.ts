@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
+import { withCanonicalTestAgentRoster } from "../../config/test-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
@@ -17,7 +17,7 @@ function createAgentHarnessToolSurfaceRuntime(
 ): ReturnType<typeof createAgentHarnessToolSurfaceRuntimeBase> {
   return createAgentHarnessToolSurfaceRuntimeBase({
     ...params,
-    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
+    config: withCanonicalTestAgentRoster(params.config ?? {}),
   });
 }
 

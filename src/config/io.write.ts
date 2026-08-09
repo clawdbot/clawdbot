@@ -1,5 +1,6 @@
 import type fs from "node:fs";
 import path from "node:path";
+import { hasAgentRosterProperty } from "../agents/agent-scope-config.js";
 import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -107,7 +108,6 @@ export async function writeConfigFileFromContext(
   options.assertConfigPathForWrite?.();
   assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
   const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
-  let persistCandidate: unknown = cfg;
   const snapshotRead = options.baseSnapshot
     ? {
         snapshot: options.baseSnapshot,
@@ -115,13 +115,24 @@ export async function writeConfigFileFromContext(
       }
     : await readSnapshot();
   const snapshot = snapshotRead.snapshot;
+  const nextConfig =
+    !snapshot.exists && !hasAgentRosterProperty(cfg)
+      ? {
+          ...cfg,
+          agents: { ...cfg.agents, entries: { main: { default: true } } },
+        }
+      : cfg;
+  let persistCandidate: unknown = nextConfig;
   if (options.baseSnapshot) {
     assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
   }
+  const explicitSetPaths = snapshot.exists
+    ? options.explicitSetPaths
+    : [...(options.explicitSetPaths ?? []), ["agents", "entries"]];
   let envRefMap: Map<string, string> | null = null;
   const changedPaths = new Set<string>();
-  collectChangedPaths(snapshot.config, cfg, "", changedPaths);
-  for (const changedPath of [...(options.explicitSetPaths ?? []), ...(options.unsetPaths ?? [])]) {
+  collectChangedPaths(snapshot.config, nextConfig, "", changedPaths);
+  for (const changedPath of [...(explicitSetPaths ?? []), ...(options.unsetPaths ?? [])]) {
     const normalizedPath = changedPath.filter((segment) => segment.length > 0).join(".");
     if (normalizedPath) {
       changedPaths.add(normalizedPath);
@@ -131,18 +142,17 @@ export async function writeConfigFileFromContext(
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
   const hasResolvedAuthoredIncludes =
     hasAuthoredIncludes && !containsConfigIncludeDirective(snapshot.sourceConfig);
-  // Missing snapshots still need runtime-to-authored projection. Callers authoring an
-  // exact bootstrap roster mark that intent through explicitSetPaths.
+  // A missing file is the fresh-config owner, so its canonical roster is authored on first write.
   if (snapshot.valid) {
     persistCandidate = resolvePersistCandidateForWrite({
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
-      nextConfig: cfg,
+      nextConfig,
       rootAuthoredConfig: snapshot.parsed,
       agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
       unsetPaths,
-      explicitSetPaths: options.explicitSetPaths,
+      explicitSetPaths,
       explicitSetValueSource: options.explicitSetValueSource,
       allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
       allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
@@ -151,7 +161,7 @@ export async function writeConfigFileFromContext(
     persistCandidate = preserveIncludeOwnedConfigForWrite({
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
-      nextConfig: cfg,
+      nextConfig,
       rootAuthoredConfig: snapshot.parsed,
     });
   }

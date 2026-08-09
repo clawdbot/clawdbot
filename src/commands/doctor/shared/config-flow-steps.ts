@@ -1,3 +1,4 @@
+import { configIncludeOwnsAgentRoster } from "../../../config/agent-roster-provenance.js";
 // Doctor config-flow steps for legacy compatibility and unknown-key cleanup.
 import { formatConfigIssueLines } from "../../../config/issue-format.js";
 import { protectActiveAuthProfileConfig } from "../../doctor-auth-profile-config.js";
@@ -68,6 +69,7 @@ export function applyLegacyCompatibilityStep(params: {
   } = migrateLegacyConfig(migrationInput, {
     authoredRaw: params.snapshot.parsed,
     resolvedRaw: params.snapshot.sourceConfig,
+    includeOwnedAgentRoster: configIncludeOwnsAgentRoster(params.snapshot),
   });
   if (!migrated) {
     return {

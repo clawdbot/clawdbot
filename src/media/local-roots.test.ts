@@ -2,7 +2,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnv } from "../test-utils/env.js";
 import {
@@ -13,7 +13,7 @@ import {
 } from "./local-roots.js";
 
 function loadedConfig(config: OpenClawConfig): OpenClawConfig {
-  return migratePersistedImplicitMainRoster(config).config as OpenClawConfig;
+  return withCanonicalTestAgentRoster(config);
 }
 
 function getAgentScopedMediaLocalRoots(config: OpenClawConfig, agentId: string) {

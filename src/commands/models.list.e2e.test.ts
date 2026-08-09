@@ -113,6 +113,10 @@ vi.mock("./models/load-config.js", () => ({
   }),
 }));
 
+vi.mock("./models/legacy-catalog-preflight.js", () => ({
+  requireCanonicalModelCatalogState: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../agents/auth-profiles/profile-list.js", () => ({
   listProfilesForProvider,
 }));

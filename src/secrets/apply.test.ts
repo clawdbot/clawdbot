@@ -21,6 +21,8 @@ import {
 } from "../agents/auth-profiles/store.js";
 import { testing as storeTesting } from "../agents/auth-profiles/store.test-support.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -88,7 +90,11 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
     });
     return;
   }
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const contents =
+    path.basename(filePath) === "openclaw.json"
+      ? withCanonicalTestAgentRoster(value as OpenClawConfig)
+      : value;
+  await fs.writeFile(filePath, `${JSON.stringify(contents, null, 2)}\n`, "utf8");
 }
 
 async function readAuthStore(fixture: ApplyFixture): Promise<AuthProfileStore> {
@@ -639,7 +645,7 @@ describe("secrets apply", () => {
     const coderStorePath = resolveAuthProfileDatabasePath(coderAgentDir);
     await writeJsonFile(fixture.configPath, {
       agents: {
-        entries: { coder: { agentDir: coderAgentDir } },
+        entries: { coder: { default: true, agentDir: coderAgentDir } },
       },
     });
     const plan: SecretsApplyPlan = {
@@ -682,7 +688,7 @@ describe("secrets apply", () => {
     await writeJsonFile(fixture.configPath, {
       agents: {
         entries: {
-          first: { agentDir: firstAgentDir },
+          first: { default: true, agentDir: firstAgentDir },
           second: { agentDir: secondAgentDir },
         },
       },
@@ -756,7 +762,7 @@ describe("secrets apply", () => {
       await writeJsonFile(fixture.configPath, {
         agents: {
           entries: {
-            first: { agentDir: firstAgentDir },
+            first: { default: true, agentDir: firstAgentDir },
             second: { agentDir: secondAgentDir },
           },
         },
@@ -1204,6 +1210,7 @@ describe("secrets apply", () => {
           agents: {
             entries: {
               main: {
+                default: true,
                 memory: {
                   search: {
                     remote: {

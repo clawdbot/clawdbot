@@ -22,7 +22,7 @@ import {
 } from "./plugin-model-catalog.js";
 
 function listPersistedPluginModelCatalogs(agentDir: string) {
-  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
+  return loadPersistedPluginModelCatalogs(agentDir);
 }
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({

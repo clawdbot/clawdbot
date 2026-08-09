@@ -34,6 +34,7 @@ describe("onboarding authored config persistence", () => {
         configPath,
         `{
           $include: "./channels.json",
+          agents: { entries: { main: { default: true } } },
           gateway: { auth: { mode: "token", token: "\${OPENCLAW_TOKEN}" } }
         }`,
       );

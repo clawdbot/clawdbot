@@ -147,7 +147,10 @@ describe("gateway startup-migration refusal", () => {
       fs.mkdirSync(stateDir, { recursive: true });
       fs.writeFileSync(
         configPath,
-        JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),
+        JSON.stringify({
+          agents: { entries: { main: { default: true } } },
+          gateway: { mode: "local", auth: { mode: "none" } },
+        }),
       );
       seedPluginStateConflict(stateDir);
 
@@ -255,6 +258,7 @@ describe("gateway startup-migration refusal", () => {
     const stateDir = path.join(root, "state");
     const configPath = path.join(root, "openclaw.json");
     const config = {
+      agents: { entries: { main: { default: true } } },
       gateway: { mode: "local", auth: { mode: "none" } },
     } satisfies OpenClawConfig;
     const env: NodeJS.ProcessEnv = {

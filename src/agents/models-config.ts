@@ -72,16 +72,6 @@ type PlannedOpenClawModelsJsonSource = Readonly<{
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
 }>;
 
-function listPreparedPluginModelCatalogs(agentDir: string) {
-  const { catalogs, warnings } = loadPersistedPluginModelCatalogs(agentDir);
-  if (warnings.length > 0) {
-    throw new Error(
-      `Cannot safely prepare provider models until legacy catalog migration succeeds: ${warnings.join("; ")}. Run openclaw doctor --fix.`,
-    );
-  }
-  return catalogs;
-}
-
 async function readFileMtimeMs(pathname: string): Promise<number | null> {
   try {
     const stat = await fs.stat(pathname);
@@ -108,7 +98,7 @@ async function buildModelsJsonFingerprint(params: {
   const authProfilesWalMtimeMs = await readFileMtimeMs(`${authProfilesSqlitePath}-wal`);
   const modelsFileMtimeMs = await readFileMtimeMs(path.join(params.agentDir, "models.json"));
   const pluginCatalogFingerprint = createHash("sha256")
-    .update(stableStringify(listPreparedPluginModelCatalogs(params.agentDir)))
+    .update(stableStringify(loadPersistedPluginModelCatalogs(params.agentDir)))
     .digest("base64url");
   const envShape = createConfigRuntimeEnv(params.config, params.env ?? {});
   const pluginMetadataSnapshotIndexFingerprint = params.pluginMetadataSnapshot
@@ -196,7 +186,7 @@ async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
   const root = isRecord(params.existingParsed) ? params.existingParsed : {};
   const providers = isRecord(root.providers) ? { ...root.providers } : {};
   let changed = false;
-  const pluginCatalogs = params.pluginCatalogs ?? listPreparedPluginModelCatalogs(params.agentDir);
+  const pluginCatalogs = params.pluginCatalogs ?? loadPersistedPluginModelCatalogs(params.agentDir);
   for (const { pluginId: catalogPluginId, contents } of pluginCatalogs) {
     let catalog: unknown;
     try {

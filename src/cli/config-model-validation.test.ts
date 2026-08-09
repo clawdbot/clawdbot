@@ -1,16 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { checkTouchedTextModelRefs as checkTouchedTextModelRefsRaw } from "./config-model-validation.js";
 
 const checkTouchedTextModelRefs: typeof checkTouchedTextModelRefsRaw = (params) =>
   checkTouchedTextModelRefsRaw({
     ...params,
-    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
+    config: withCanonicalTestAgentRoster(params.config),
     ...(params.previousConfig
       ? {
-          previousConfig: migratePersistedImplicitMainRoster(params.previousConfig)
-            .config as OpenClawConfig,
+          previousConfig: withCanonicalTestAgentRoster(params.previousConfig),
         }
       : {}),
   });

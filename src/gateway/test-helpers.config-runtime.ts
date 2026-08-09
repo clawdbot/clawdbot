@@ -9,8 +9,8 @@ import type {
   ReadConfigFileSnapshotForWriteResult,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { withCanonicalTestAgentRoster } from "../config/test-fixtures.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
@@ -150,7 +150,7 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
       hooks,
       cron,
     } as OpenClawConfig;
-    return migratePersistedImplicitMainRoster(composed).config as OpenClawConfig;
+    return withCanonicalTestAgentRoster(composed);
   };
 
   const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => {
@@ -215,12 +215,13 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
   const writeConfigFile = vi.fn(async (cfg: Record<string, unknown>) => {
     const configPath = resolveConfigPath();
     await fs.mkdir(path.dirname(configPath), { recursive: true });
-    const raw = JSON.stringify(cfg, null, 2).trimEnd().concat("\n");
+    const persistedConfig = withCanonicalTestAgentRoster(cfg as OpenClawConfig);
+    const raw = JSON.stringify(persistedConfig, null, 2).trimEnd().concat("\n");
     await fs.writeFile(configPath, raw, "utf-8");
     actual.resetConfigRuntimeState();
     return {
       persistedHash: "test-config-hash",
-      persistedConfig: composeTestConfig(cfg),
+      persistedConfig: composeTestConfig(persistedConfig),
     };
   });
 

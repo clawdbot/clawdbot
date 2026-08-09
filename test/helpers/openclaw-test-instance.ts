@@ -414,6 +414,11 @@ function mergeConfig(
   return result;
 }
 
+function hasExplicitAgentRoster(config: Record<string, unknown> | undefined): boolean {
+  const agents = config?.agents;
+  return isRecord(agents) && (Object.hasOwn(agents, "entries") || Object.hasOwn(agents, "list"));
+}
+
 function formatLogs(stdout: string[], stderr: string[]): string {
   return `--- stdout ---\n${readLogBuffer(stdout)}\n--- stderr ---\n${readLogBuffer(stderr)}`;
 }
@@ -459,9 +464,13 @@ export async function createOpenClawTestInstance(
     applyEnv: false,
     env: options.env,
   });
+  const defaultAgentRoster = hasExplicitAgentRoster(options.config)
+    ? {}
+    : { agents: { entries: { main: { default: true } } } };
   await state.writeConfig(
     mergeConfig(
       {
+        ...defaultAgentRoster,
         gateway: {
           port,
           auth: { mode: "token", token: gatewayToken },

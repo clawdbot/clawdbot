@@ -1,5 +1,7 @@
 import { includeContributionOwnsAgentRoster } from "./agent-roster-provenance.js";
+import { collectMissingPersistedAgentRosterIssue } from "./agent-roster-validation.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
+import { createFreshOpenClawConfig } from "./fresh-config.js";
 import { ConfigIncludeError } from "./includes.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { maybeRecoverSuspiciousConfigRead } from "./io.observe-recovery.js";
@@ -28,7 +30,6 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
@@ -56,8 +57,7 @@ export async function readConfigFileSnapshotInternal(
   maybeLoadDotEnvForConfig(deps.env);
   const envBeforeRead = snapshotEnv(deps.env);
   if (!deps.fs.existsSync(configPath)) {
-    const migrated = migratePersistedImplicitMainRoster({});
-    const config = coerceConfig(migrated.config);
+    const config = createFreshOpenClawConfig();
     const legacyIssues: LegacyConfigIssue[] = [];
     return await finalizeReadConfigSnapshotInternalResult(deps, {
       snapshot: createConfigFileSnapshot({
@@ -169,11 +169,7 @@ export async function readConfigFileSnapshotInternal(
       path: warning.configPath,
       message: `Missing env var "${warning.varName}" - feature using this value will be unavailable`,
     }));
-    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
-    envVarWarnings.push(
-      ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
-    );
-    const effectiveConfigRaw = rosterMigration.config;
+    const effectiveConfigRaw = readResolution.resolvedConfigRaw;
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;
     const snapshotParsed = effectiveParsed;
@@ -184,15 +180,18 @@ export async function readConfigFileSnapshotInternal(
       env: deps.env,
       allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     });
-    const validated = await deps.measure("config.snapshot.read.validate", () =>
-      validateConfigObjectWithPlugins(validationConfigRaw, {
-        env: deps.env,
-        pluginValidation: context.options.pluginValidation,
-        loadPluginMetadataSnapshot: pluginMetadata.load,
-        sourceRaw: effectiveParsed,
-        preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
-      }),
-    );
+    const validated = await deps.measure("config.snapshot.read.validate", () => {
+      const rosterIssues = collectMissingPersistedAgentRosterIssue(validationConfigRaw);
+      return rosterIssues.length > 0
+        ? { ok: false as const, issues: rosterIssues, warnings: [] }
+        : validateConfigObjectWithPlugins(validationConfigRaw, {
+            env: deps.env,
+            pluginValidation: context.options.pluginValidation,
+            loadPluginMetadataSnapshot: pluginMetadata.load,
+            sourceRaw: effectiveParsed,
+            preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
+          });
+    });
     if (!validated.ok) {
       const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
         collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed),
