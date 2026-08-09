@@ -6,6 +6,7 @@ import {
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -166,7 +167,7 @@ describe("embedded run durable writer admission", () => {
           usage: buildUsageWithNoCost({}),
         }),
       ),
-    ).toThrow("Session transcript header was not persisted");
+    ).toThrow(SessionTranscriptWriterClaimReboundError);
 
     const staleAppend = await appendExactAssistantMessageToSessionTranscript({
       agentId: "main",
