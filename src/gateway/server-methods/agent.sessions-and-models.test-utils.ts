@@ -18,6 +18,7 @@ import {
 } from "../../tasks/task-registry.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { createAgentTurnIo } from "../agent-turn/io.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import {
@@ -736,7 +737,7 @@ describe("gateway agent handler", () => {
       dedupeKeys: ["agent:agent-run-tool-use-deadline"],
       abortController,
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
@@ -795,7 +796,7 @@ describe("gateway agent handler", () => {
       dedupeKeys: ["agent:agent-run-provider-timeout-result"],
       abortController: new AbortController(),
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
@@ -849,7 +850,7 @@ describe("gateway agent handler", () => {
       dedupeKeys: ["agent:agent-run-resolved-error"],
       abortController: new AbortController(),
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
@@ -952,7 +953,7 @@ describe("gateway agent handler", () => {
       dedupeKeys: [`agent:deadline-control-${stopReason}-${durationMs}`],
       abortController,
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
     });
@@ -1312,7 +1313,7 @@ describe("gateway agent handler", () => {
       dedupeKeys: [`agent:${runId}`],
       abortController: new AbortController(),
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
@@ -1349,7 +1350,7 @@ describe("gateway agent handler", () => {
       dedupeKeys: ["agent:agent-run-provider-error-settlement"],
       abortController: new AbortController(),
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,

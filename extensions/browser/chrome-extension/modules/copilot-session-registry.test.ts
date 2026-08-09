@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CopilotPanelBindingRegistry, CopilotSessionRegistry } from "./copilot-session-registry.js";
 
 const GATEWAY_SCOPE = "ws://127.0.0.1:18789/";
@@ -209,6 +209,52 @@ describe("CopilotSessionRegistry", () => {
     await expect(registry.finishRun(GATEWAY_SCOPE, "session-10", "run-10")).resolves.toBe(true);
     expect(registry.pendingAborts(GATEWAY_SCOPE)).toEqual([]);
   });
+
+  it("continues queued lifecycle writes after preserving a storage failure", async () => {
+    const mock = storage();
+    const registry = new CopilotSessionRegistry(mock as never);
+    await registry.initialize(new Set([10]));
+    await registry.put(10, { gatewayScope: GATEWAY_SCOPE, sessionKey: "session-10" });
+    await registry.startRun(10, GATEWAY_SCOPE, "run-10");
+    const baselineWrites = mock.local.setCalls.length;
+    const persist = mock.local.set.bind(mock.local);
+    const failure = new Error("transient session storage failure");
+    let rejectWrite!: () => void;
+    const failedWrite = new Promise<void>((_resolve, reject) => {
+      rejectWrite = () => reject(failure);
+    });
+    let failNextWrite = true;
+    mock.local.set = async (update) => {
+      if (failNextWrite) {
+        failNextWrite = false;
+        await failedWrite;
+        return;
+      }
+      await persist(update);
+    };
+
+    const failedCancellation = registry.queueAbort(10, GATEWAY_SCOPE);
+    const finishedRun = registry.finishRun(GATEWAY_SCOPE, "session-10", "run-10");
+    const closedTab = registry.closeTab(10);
+    await vi.waitFor(() => expect(registry.pendingAborts(GATEWAY_SCOPE)).toHaveLength(1));
+    expect(registry.get(10, GATEWAY_SCOPE)).toHaveProperty("activeRunId", "run-10");
+    expect(registry.pendingArchives(GATEWAY_SCOPE)).toEqual([]);
+
+    const outcomes = Promise.allSettled([failedCancellation, finishedRun, closedTab]);
+    rejectWrite();
+    const [cancellationOutcome, finishedOutcome, closedOutcome] = await outcomes;
+    expect(cancellationOutcome).toEqual({ status: "rejected", reason: failure });
+    expect(finishedOutcome).toEqual({ status: "fulfilled", value: true });
+    expect(closedOutcome).toMatchObject({
+      status: "fulfilled",
+      value: { sessionKey: "session-10" },
+    });
+
+    expect(mock.local.setCalls).toHaveLength(baselineWrites + 2);
+    expect(registry.pendingArchives(GATEWAY_SCOPE)).toEqual([
+      expect.objectContaining({ sessionKey: "session-10", tabId: 10 }),
+    ]);
+  });
 });
 
 describe("CopilotPanelBindingRegistry", () => {
@@ -225,5 +271,46 @@ describe("CopilotPanelBindingRegistry", () => {
     await expect(bindings.resolve(first)).resolves.toBe(7);
     await bindings.remove(7);
     await expect(bindings.resolve(first)).resolves.toBeNull();
+  });
+
+  it("rolls back an undurable capability and persists the queued retry", async () => {
+    const area = storageArea();
+    const persist = area.set.bind(area);
+    const failure = new Error("transient panel storage failure");
+    let failNextWrite = true;
+    area.set = async (update) => {
+      if (failNextWrite) {
+        failNextWrite = false;
+        throw failure;
+      }
+      await persist(update);
+    };
+    const failedToken = "00000000-0000-4000-8000-000000000001";
+    const durableToken = "00000000-0000-4000-8000-000000000002";
+    const randomUUID = vi
+      .spyOn(crypto, "randomUUID")
+      .mockReturnValueOnce(failedToken)
+      .mockReturnValueOnce(durableToken);
+    try {
+      const bindings = new CopilotPanelBindingRegistry(area as never);
+      const failedBinding = bindings.bind(17);
+      const recoveredBinding = bindings.bind(17);
+
+      const [failedOutcome, recoveredOutcome] = await Promise.allSettled([
+        failedBinding,
+        recoveredBinding,
+      ]);
+      expect(failedOutcome).toEqual({ status: "rejected", reason: failure });
+      expect(recoveredOutcome).toEqual({ status: "fulfilled", value: durableToken });
+      await expect(bindings.resolve(failedToken)).resolves.toBeNull();
+      await expect(bindings.resolve(durableToken)).resolves.toBe(17);
+      expect(area.setCalls).toHaveLength(1);
+
+      await bindings.remove(17);
+      expect(area.setCalls).toHaveLength(2);
+      await expect(bindings.resolve(durableToken)).resolves.toBeNull();
+    } finally {
+      randomUUID.mockRestore();
+    }
   });
 });

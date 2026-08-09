@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { waitForChildClose, waitForFile } from "../../../test/helpers/process-wait.js";
+import { waitForChildClose, waitForPidFile } from "../../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
@@ -290,7 +290,7 @@ describe("worker tunnel manager", () => {
       const fakeRsync = path.join(bin, "rsync");
       await fs.writeFile(
         fakeRsync,
-        '#!/bin/sh\nset -eu\n: > "$OPENCLAW_TEST_RECEIVER_MARKER"\nread -r _ < "$OPENCLAW_TEST_RECEIVER_GATE"\nprintf \'late stale write\\n\' > "$OPENCLAW_TEST_RECEIVER_WORKSPACE/stale-late.txt"\n',
+        '#!/bin/sh\nset -eu\nprintf \'%s\\n\' "$$" > "$OPENCLAW_TEST_RECEIVER_MARKER"\nread -r _ < "$OPENCLAW_TEST_RECEIVER_GATE"\nprintf \'late stale write\\n\' > "$OPENCLAW_TEST_RECEIVER_WORKSPACE/stale-late.txt"\n',
         { mode: 0o755 },
       );
 
@@ -301,8 +301,24 @@ describe("worker tunnel manager", () => {
         | undefined;
       let receiverWorkspace: string | undefined;
       let receiverRelative: string | undefined;
+      let receiverGroupPid: number | undefined;
       let receiverStderr = "";
-      const lifecycle: string[] = [];
+      let resetAcknowledgement: { nonce: string; groupAlive: boolean } | undefined;
+      const processGroupIsAlive = (pid: number): boolean => {
+        try {
+          process.kill(-pid, 0);
+          return true;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "EPERM") {
+            return true;
+          }
+          if (code === "ESRCH") {
+            return false;
+          }
+          throw error;
+        }
+      };
       const fake = localWorkspaceRunner(
         remoteHome,
         async (argv, localArgv, options, receiverTarget) => {
@@ -347,12 +363,9 @@ describe("worker tunnel manager", () => {
           receiverChild.stderr?.on("data", (chunk: string) => {
             receiverStderr += chunk;
           });
-          receiverChild.once("close", () => {
-            lifecycle.push("receiver-exit");
-          });
           receiverExited = waitForChildClose(receiverChild, 10_000);
-          await Promise.race([
-            waitForFile(receiverMarker, 10_000),
+          receiverGroupPid = await Promise.race([
+            waitForPidFile(receiverMarker, 10_000),
             receiverExited.then(() => {
               throw new Error(receiverStderr || "test receiver exited before its marker");
             }),
@@ -362,7 +375,13 @@ describe("worker tunnel manager", () => {
         (argv, result) => {
           const acknowledged = /^reset ([a-f0-9]{32})\n$/u.exec(result.stdout)?.[1];
           if (acknowledged) {
-            lifecycle.push(`reset-complete:${acknowledged}`);
+            if (receiverGroupPid === undefined) {
+              throw new Error("test receiver process group was not captured");
+            }
+            resetAcknowledgement = {
+              nonce: acknowledged,
+              groupAlive: processGroupIsAlive(receiverGroupPid),
+            };
           }
         },
       );
@@ -438,7 +457,9 @@ describe("worker tunnel manager", () => {
         });
         expect(resetCommands).toHaveLength(1);
         expect(sshArgvPort(resetCommands[0]!.argv)).toBe(22);
-        expect(lifecycle).not.toContain(`reset-complete:${resetCommands[0]!.nonce}`);
+        expect(receiverGroupPid).toBeDefined();
+        expect(processGroupIsAlive(receiverGroupPid!)).toBe(true);
+        expect(resetAcknowledgement).toBeUndefined();
         await expect(fs.readFile(path.join(receiverWorkspace!, "stale.txt"), "utf8")).resolves.toBe(
           "remove before fallback\n",
         );
@@ -464,7 +485,10 @@ describe("worker tunnel manager", () => {
         expect(receiverExit.signal).toBeNull();
         expect(receiverExit.code).not.toBe(0);
         const result = await syncing;
-        expect(lifecycle).toEqual(["receiver-exit", `reset-complete:${resetCommands[0]!.nonce}`]);
+        expect(resetAcknowledgement).toEqual({
+          nonce: resetCommands[0]!.nonce,
+          groupAlive: false,
+        });
         expect(result.mode).toBe("git");
         await expect(
           fs.readFile(path.join(result.remoteWorkspaceDir, "current.txt"), "utf8"),

@@ -143,6 +143,7 @@
   "runtime-fetch",
   "sandbox",
   "secret-file-runtime",
+  "secret-provider-alias",
   "secure-random-runtime",
   "session-binding-runtime",
   "session-catalog-runtime",

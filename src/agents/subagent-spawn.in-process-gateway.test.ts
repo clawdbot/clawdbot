@@ -7,6 +7,7 @@ import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
 } from "../config/config.js";
+import { createAgentTurnIo } from "../gateway/agent-turn/io.js";
 import { prepareAgentRequestPreflight } from "../gateway/server-methods/agent-request-preflight.js";
 import type {
   GatewayRequestContext,
@@ -333,8 +334,8 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
         const externalRespond = vi.fn();
         const externalPreflight = prepareAgentRequestPreflight({
-          params,
-          respond: externalRespond,
+          request: params,
+          io: createAgentTurnIo(externalRespond),
           context: gatewayContext,
           client: externalCliClient(),
         } as never);
@@ -344,8 +345,8 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
           ? createSyntheticPluginRuntimeClient({ scopes: options.syntheticScopes })
           : externalCliClient();
         const hostPreflight = prepareAgentRequestPreflight({
-          params,
-          respond: hostRespond,
+          request: params,
+          io: createAgentTurnIo(hostRespond),
           context: gatewayContext,
           client,
         } as never);

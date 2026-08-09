@@ -17,17 +17,11 @@ import {
 } from "./outbound-media.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
-import {
-  buildTelegramThreadReplyParams,
-  resolveTelegramSendThreadSpec,
-} from "./reply-parameters.js";
+import { buildTelegramThreadReplyParams } from "./reply-parameters.js";
 import { isTelegramEmptyContentError } from "./rich-plain-fallback.js";
 import {
-  createRequestWithChatNotFound,
-  createTelegramNonIdempotentRequestWithDiag,
   logTelegramOutboundSendOk,
   resolveAcceptedReplyToMessageId,
-  resolveAndPersistChatId,
   resolveTelegramApiContext,
   resolveTelegramMessageIdOrThrow,
   sendLogger,
@@ -42,7 +36,7 @@ import {
 } from "./send-error-predicates.js";
 import { createTelegramTextSender } from "./send-message-text.js";
 import type { TelegramSendOpts, TelegramSendResult } from "./send-message-types.js";
-import { reportTelegramProviderDelivery } from "./send-outbound.js";
+import { prepareTelegramOutbound, reportTelegramProviderDelivery } from "./send-outbound.js";
 import {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
@@ -51,7 +45,6 @@ import {
   resolveMarkdownTableMode,
 } from "./send.runtime.js";
 import { recordSentMessage } from "./sent-message-cache.js";
-import { parseTelegramTarget } from "./targets.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 const MAX_TELEGRAM_PHOTO_DIMENSION_SUM = 10_000;
@@ -77,20 +70,16 @@ async function sendMessageTelegramWithContext(
 ): Promise<TelegramSendResult> {
   const { cfg, account, api } = apiContext;
   const botUserId = resolveTelegramBotUserIdFromToken(opts.token || account.token);
-  const target = parseTelegramTarget(to);
-  const chatId = await resolveAndPersistChatId({
-    cfg,
-    api,
-    lookupTarget: target.chatId,
-    persistTarget: to,
-    verbose: opts.verbose,
-    gatewayClientScopes: opts.gatewayClientScopes,
-  });
-  const threadSpec = resolveTelegramSendThreadSpec({
-    targetMessageThreadId: target.messageThreadId,
-    targetDirectMessagesTopicId: target.directMessagesTopicId,
-    messageThreadId: opts.messageThreadId,
-    chatType: target.chatType,
+  const {
+    chatId,
+    threadSpec,
+    request: requestWithChatNotFound,
+  } = await prepareTelegramOutbound({
+    to,
+    context: apiContext,
+    opts,
+    thread: { messageThreadId: opts.messageThreadId },
+    request: { kind: "nonIdempotent" },
   });
   const reportDelivery = async (
     messageId: string | number,
@@ -157,18 +146,6 @@ async function sendMessageTelegramWithContext(
           }
         : {}),
     });
-  const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
-    cfg,
-    account,
-    retry: opts.retry,
-    verbose: opts.verbose,
-  });
-  const requestWithChatNotFound = createRequestWithChatNotFound({
-    requestWithDiag,
-    chatId,
-    input: to,
-  });
-
   const textMode = opts.textMode ?? "markdown";
   // Caller-authored HTML keeps legacy parse_mode HTML semantics (literal
   // newlines, 4096 chunking) even on rich accounts; blocks are markdown-only.

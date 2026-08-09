@@ -133,6 +133,7 @@ export async function startGatewayCoreRuntime(input: {
     workerEnvironmentService,
     workerPlacementDispatchAvailable,
     workerPlacementControlAvailable,
+    workerDesktopObserveAvailable,
     listStartupChannelGatewayMethods,
     coreGatewayMethodNames,
     pluginHostServices,
@@ -314,7 +315,8 @@ export async function startGatewayCoreRuntime(input: {
           (descriptor.name !== "environments.create" &&
             descriptor.name !== "environments.destroy")) &&
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim"),
+        (workerPlacementControlAvailable || descriptor.name !== "sessions.reclaim") &&
+        (workerDesktopObserveAvailable || descriptor.name !== "worker.desktop.observe"),
     );
     return createGatewayMethodRegistry(
       [

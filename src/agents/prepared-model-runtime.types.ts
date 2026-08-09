@@ -49,6 +49,16 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   createStores: () => PreparedModelRuntimeStores;
 }>;
 
+/** Closed Gateway turn facts published atomically for one configured agent. */
+export type PreparedReplyDispatchRuntime = Readonly<{
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+  config: OpenClawConfig;
+  modelCatalog: ModelCatalogSnapshot;
+  inboundPluginRegistry: PluginRegistry;
+}>;
+
 export type PreparedModelRuntimeStores = {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;

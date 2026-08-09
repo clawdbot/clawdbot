@@ -2,7 +2,12 @@
 import { html, nothing } from "lit";
 import type { TaskSuggestion } from "../../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { repoName } from "../../../lib/session-display.ts";
+import type { TaskSuggestionAcceptMode } from "../../../lib/task-suggestion-acceptance.ts";
+
+type TaskSuggestionCloudProfile = { id: string };
 
 // Mirrors the TUI sanitizer to prevent directionality spoofing. This stays local
 // because the Control UI cannot import core src/ modules.
@@ -15,8 +20,14 @@ export function renderChatTaskSuggestions(props: {
   busyIds: ReadonlySet<string>;
   canAccept: boolean;
   canDismiss: boolean;
-  onAccept: (suggestion: TaskSuggestion) => void;
+  cloudProfiles: TaskSuggestionCloudProfile[];
+  onAccept: (
+    suggestion: TaskSuggestion,
+    mode: TaskSuggestionAcceptMode,
+    cloudProfileId?: string,
+  ) => void;
   onDismiss: (suggestion: TaskSuggestion) => void;
+  canAcceptModes: boolean;
 }) {
   if (props.suggestions.length === 0 || (!props.canAccept && !props.canDismiss)) {
     return nothing;
@@ -29,50 +40,130 @@ export function renderChatTaskSuggestions(props: {
         const tldr = sanitizeTaskSuggestionText(suggestion.tldr);
         const cwd = sanitizeTaskSuggestionText(suggestion.cwd);
         const prompt = sanitizeTaskSuggestionText(suggestion.prompt);
+        const repo = sanitizeTaskSuggestionText(repoName(cwd));
+        const cloudProfiles = props.cloudProfiles.map((profile) => ({
+          id: profile.id,
+          label: sanitizeTaskSuggestionText(profile.id),
+        }));
+        const accept = (mode: TaskSuggestionAcceptMode, cloudProfileId?: string) => {
+          if (!busy && props.canAccept) {
+            props.onAccept(suggestion, mode, cloudProfileId);
+          }
+        };
         return html`
           <article class="task-suggestion" data-task-id=${suggestion.id}>
             <div class="task-suggestion__icon" aria-hidden="true">${icons.spark}</div>
             <div class="task-suggestion__body">
-              <div class="task-suggestion__eyebrow">${t("chat.taskSuggestions.eyebrow")}</div>
+              <div class="task-suggestion__eyebrow" title=${cwd}>
+                ${t("chat.taskSuggestions.eyebrow", { repo })}
+              </div>
               <div class="task-suggestion__title">${title}</div>
               <div class="task-suggestion__summary">${tldr}</div>
-              <div class="task-suggestion__details">
-                <div class="task-suggestion__detail">
-                  <span>${t("chat.taskSuggestions.project")}</span>
+              <details class="chat-json-collapse task-suggestion__instructions">
+                <summary class="chat-json-summary">
+                  ${t("chat.taskSuggestions.showInstructions")}
+                </summary>
+                <div class="task-suggestion__instruction-body">
                   <code>${cwd}</code>
-                </div>
-                <div class="task-suggestion__detail task-suggestion__detail--instructions">
-                  <span>${t("chat.taskSuggestions.instructions")}</span>
                   <pre>${prompt}</pre>
                 </div>
-              </div>
+              </details>
             </div>
+            ${props.canDismiss
+              ? html`
+                  <button
+                    class="btn btn--ghost btn--icon task-suggestion__dismiss"
+                    type="button"
+                    ?disabled=${busy}
+                    aria-label=${t("chat.taskSuggestions.dismiss", { title })}
+                    @click=${() => props.onDismiss(suggestion)}
+                  >
+                    ${icons.x}
+                  </button>
+                `
+              : nothing}
             <div class="task-suggestion__actions">
-              <button
-                class="btn btn--primary task-suggestion__start"
-                type="button"
-                ?disabled=${busy || !props.canAccept}
-                title=${props.canAccept ? "" : t("chat.taskSuggestions.adminRequired")}
-                @click=${() => props.onAccept(suggestion)}
-              >
-                ${icons.play}
-                ${busy ? t("chat.taskSuggestions.starting") : t("chat.taskSuggestions.start")}
-              </button>
-              ${props.canDismiss
-                ? html`
-                    <button
-                      class="btn btn--ghost btn--icon task-suggestion__dismiss"
-                      type="button"
-                      ?disabled=${busy}
-                      aria-label=${t("chat.taskSuggestions.dismiss", {
-                        title,
-                      })}
-                      @click=${() => props.onDismiss(suggestion)}
-                    >
-                      ${icons.x}
-                    </button>
-                  `
-                : nothing}
+              <div class="task-suggestion__split">
+                <button
+                  class="btn primary btn--primary task-suggestion__start"
+                  type="button"
+                  ?disabled=${busy || !props.canAccept}
+                  title=${props.canAccept ? "" : t("chat.taskSuggestions.adminRequired")}
+                  @click=${() => accept("worktree")}
+                >
+                  ${icons.play}
+                  ${busy
+                    ? t("chat.taskSuggestions.starting")
+                    : t("chat.taskSuggestions.startWorktree")}
+                </button>
+                ${props.canAcceptModes
+                  ? html`
+                      <wa-dropdown
+                        class="task-suggestion__menu"
+                        placement="bottom-end"
+                        @wa-select=${(
+                          event: CustomEvent<{ item: HTMLElement & { value?: string } }>,
+                        ) => {
+                          const item = event.detail.item;
+                          if (item.value === "local") {
+                            accept("local");
+                          } else if (item.value === "session") {
+                            accept("session");
+                          } else if (item.value === "cloud") {
+                            const profileId = item.dataset.cloudProfile;
+                            if (profileId) {
+                              accept("cloud", profileId);
+                            }
+                          }
+                        }}
+                      >
+                        <button
+                          slot="trigger"
+                          class="btn primary task-suggestion__menu-trigger"
+                          type="button"
+                          ?disabled=${busy || !props.canAccept}
+                          title=${props.canAccept ? "" : t("chat.taskSuggestions.adminRequired")}
+                          aria-label=${t("chat.taskSuggestions.moreActions")}
+                          aria-haspopup="menu"
+                          aria-expanded="false"
+                        >
+                          ${icons.chevronDown}
+                        </button>
+                        <wa-dropdown-item value="local" ?disabled=${busy || !props.canAccept}>
+                          ${t("chat.taskSuggestions.startLocal")}
+                        </wa-dropdown-item>
+                        ${cloudProfiles.length === 0
+                          ? html`
+                              <wa-dropdown-item
+                                value="cloud"
+                                disabled
+                                title=${t("chat.taskSuggestions.noCloudConfigured")}
+                              >
+                                ${t("chat.taskSuggestions.startCloudGeneric")}
+                              </wa-dropdown-item>
+                            `
+                          : cloudProfiles.map(
+                              (profile) => html`
+                                <wa-dropdown-item
+                                  value="cloud"
+                                  data-cloud-profile=${profile.id}
+                                  ?disabled=${busy || !props.canAccept}
+                                >
+                                  ${cloudProfiles.length > 1
+                                    ? t("chat.taskSuggestions.startCloud", {
+                                        profile: profile.label,
+                                      })
+                                    : t("chat.taskSuggestions.startCloudGeneric")}
+                                </wa-dropdown-item>
+                              `,
+                            )}
+                        <wa-dropdown-item value="session" ?disabled=${busy || !props.canAccept}>
+                          ${t("chat.taskSuggestions.fixInSession")}
+                        </wa-dropdown-item>
+                      </wa-dropdown>
+                    `
+                  : nothing}
+              </div>
             </div>
           </article>
         `;

@@ -193,6 +193,21 @@ export const LAB_FEATURES = [
     // the recorder, so this outlives the reload plan's `logging: none` rule.
     restartHint: () => t("labsPage.restartRequired"),
   },
+  {
+    id: "workerDesktop",
+    title: () => t("labsPage.workerDesktop.title"),
+    description: () => t("labsPage.workerDesktop.description"),
+    docsUrl: "https://docs.openclaw.ai/gateway/cloud-workers#desktop-interactive",
+    configPath: ["cloudWorkers", "desktop"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    readEnabled: null,
+    enableAlso: null,
+    resetScope: "gate",
+    // Method advertisement is resolved at Gateway startup, so the panel appears after restart.
+    restartHint: () => t("labsPage.restartRequired"),
+  },
 ] as const satisfies readonly LabFeature[];
 
 function recordAtPath(config: Record<string, unknown>, path: readonly string[]): unknown {

@@ -583,13 +583,16 @@ async function updateCommandInternal(
   if (!execution) {
     return;
   }
-  const { result, preManagedServiceStop } = execution;
+  const { result, preManagedServiceStop, ownedManagedUpdateContext } = execution;
+  const finalizationConfigSnapshot = ownedManagedUpdateContext?.configSnapshot ?? configSnapshot;
+  const finalizationPluginInstallRecords =
+    ownedManagedUpdateContext?.pluginInstallRecords ?? preUpdatePluginInstallRecords;
   stop();
   await finishUpdate({
     result,
     root,
     installKindChanged: switchToGit || switchToPackage,
-    configSnapshot,
+    configSnapshot: finalizationConfigSnapshot,
     requestedChannel,
     storedChannel,
     channel,
@@ -598,8 +601,9 @@ async function updateCommandInternal(
     opts,
     showProgress,
     preManagedServiceStop,
+    ownedManagedUpdateEnv: ownedManagedUpdateContext?.env,
     controlPlaneUpdateSentinelMeta,
-    preUpdatePluginInstallRecords,
+    preUpdatePluginInstallRecords: finalizationPluginInstallRecords,
     startedAt,
     packageUpdateNodeRunner,
     updateStepTimeoutMs,

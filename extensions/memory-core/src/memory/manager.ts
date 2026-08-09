@@ -1655,7 +1655,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private async searchKeyword(
     query: string,
     limit: number,
-    options?: { boostFallbackRanking?: boolean; exactPathQuery?: string },
+    options?: {
+      boostFallbackRanking?: boolean;
+      exactPathQuery?: string;
+      rankingQuery?: string;
+    },
     sourceFilterList?: MemorySource[],
   ): Promise<KeywordSearchHit[]> {
     if (!this.fts.enabled || !this.fts.available) {
@@ -1672,6 +1676,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       buildFtsQuery: (raw) => this.buildFtsQuery(raw),
       bm25RankToScore,
       boostFallbackRanking: options?.boostFallbackRanking,
+      rankingQuery: options?.rankingQuery,
     }).catch((err: unknown) => {
       log.warn(`memory search: body keyword query failed: ${formatErrorMessage(err)}`);
       return [];
@@ -1721,16 +1726,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       options,
       sourceFilterList,
     ).catch(() => []);
-    if (fullQueryResults.length > 0) {
+    const nonExactResults = fullQueryResults.filter((result) => result.exactPathSpecificity === 0);
+    if (nonExactResults.length >= limit) {
       return fullQueryResults;
     }
 
-    // Broaden recall for conversational queries when the exact AND query is too
-    // strict, but cap the number of extra FTS probes so long prompts cannot fan
-    // out into unbounded sqlite work.
+    // Supplement thin candidate pools for conversational queries, but cap the
+    // extra FTS probes so long prompts cannot fan out into unbounded sqlite work.
     const fallbackTerms = this.resolveKeywordFallbackTerms(query);
     if (fallbackTerms.length === 0) {
-      return [];
+      return fullQueryResults;
+    }
+    const strictFtsQuery = this.buildFtsQuery(query)?.toLowerCase();
+    const keywordFtsQuery = this.buildFtsQuery(fallbackTerms.join(" "))?.toLowerCase();
+    if (fullQueryResults.length > 0 && strictFtsQuery === keywordFtsQuery) {
+      // Expansion did not normalize this already-matching keyword query; OR
+      // probes can only weaken its strict relevance before importance ranking.
+      return fullQueryResults;
     }
 
     const resultSets = await Promise.all(
@@ -1738,18 +1750,22 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         this.searchKeyword(
           term,
           limit,
-          { ...options, exactPathQuery: query },
+          { ...options, exactPathQuery: query, rankingQuery: query },
           sourceFilterList,
         ).catch(() => []),
       ),
     );
-    return this.limitKeywordSearchHits(this.mergeKeywordSearchHits(resultSets, query), limit);
+    return this.limitKeywordSearchHits(
+      this.mergeKeywordSearchHits([fullQueryResults, ...resultSets], query),
+      limit,
+    );
   }
 
   private resolveKeywordFallbackTerms(query: string): string[] {
+    const normalizedQuery = query.trim().toLowerCase();
     const keywords = extractKeywords(query, {
       ftsTokenizer: this.settings.store.fts.tokenizer,
-    }).filter((term) => term !== query);
+    }).filter((term) => term !== normalizedQuery);
     return keywords.slice(0, KEYWORD_FALLBACK_SEARCH_TERM_LIMIT);
   }
 

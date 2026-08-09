@@ -180,6 +180,9 @@ async function invokeSessionMutation({
     respond,
     context: {
       broadcastToConnIds,
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+      dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => subscribedConnIds,
       loadGatewayModelCatalog: async () => ({ providers: [] }),
       getRuntimeConfig,

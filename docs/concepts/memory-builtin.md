@@ -121,8 +121,8 @@ The builtin engine is the right choice for most users:
 - Hybrid search combines the best of both retrieval approaches.
 
 The builtin engine can index directories outside the workspace with
-`memory.search.extraPaths`, but it does not provide query expansion or a
-separate reranking stage.
+`memory.search.extraPaths`. It uses bounded lexical query expansion to improve
+conversational recall, but it does not provide a separate reranking stage.
 
 Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
 with automatic user modeling.

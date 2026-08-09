@@ -31,7 +31,6 @@ import {
 } from "./openclaw-state-lease-owner.js";
 
 export { OpenClawStateLeaseError };
-export type { OpenClawStateLeaseErrorCode };
 
 type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 type AgentLeaseDatabase = Pick<OpenClawAgentKyselyDatabase, "state_leases">;

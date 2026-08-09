@@ -267,6 +267,7 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
   requester: ChatAbortRequester;
   keyPrefix: string;
   preserveSideRuns?: boolean;
+  includeProtectedRuns?: boolean;
   excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
@@ -318,8 +319,9 @@ export function resolveAuthorizedPreRegisteredRunsForSessionKeys(params: {
     }
     const requesterCanAbort = canRequesterAbortPreRegisteredRun(run.payload, params.requester);
     const isProtected =
-      run.payload.controlUiVisible === false ||
-      (params.preserveSideRuns && normalizeUnknownText(run.payload.turnKind) === "btw");
+      params.includeProtectedRuns !== true &&
+      (run.payload.controlUiVisible === false ||
+        (params.preserveSideRuns && normalizeUnknownText(run.payload.turnKind) === "btw"));
     if (isProtected) {
       // Broad lifecycle cleanup still needs ownership, while ordinary chat.abort
       // must keep treating hidden or preserved work as a non-match.
@@ -351,6 +353,7 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
   defaultAgentId: string;
   requester: ChatAbortRequester;
   preserveSideRuns?: boolean;
+  includeProtectedRuns?: boolean;
   excludeRunIds?: ReadonlySet<string>;
 }) {
   const sessionKeys = new Set(
@@ -364,7 +367,11 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     ),
   );
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
-  const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
+  const authorizedRuns: Array<{
+    runId: string;
+    sessionKey: string;
+    entry: ChatAbortControllerEntry;
+  }> = [];
   const matchedRunIds: string[] = [];
   let hasUnauthorizedRuns = false;
   let hasUnauthorizedProtectedRuns = false;
@@ -388,7 +395,8 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
     matchedRunIds.push(runId);
     const requesterCanAbort = canRequesterAbortChatRun(active, params.requester);
     const isProtected =
-      active.controlUiVisible === false || (params.preserveSideRuns && active.turnKind === "btw");
+      params.includeProtectedRuns !== true &&
+      (active.controlUiVisible === false || (params.preserveSideRuns && active.turnKind === "btw"));
     if (isProtected) {
       // Broad lifecycle cleanup still needs ownership, while ordinary chat.abort
       // must keep treating hidden or preserved work as a non-match.
@@ -399,7 +407,7 @@ export function resolveAuthorizedRunsForSessionKeys(params: {
       continue;
     }
     if (requesterCanAbort) {
-      authorizedRuns.push({ runId, sessionKey: active.sessionKey });
+      authorizedRuns.push({ runId, sessionKey: active.sessionKey, entry: active });
     } else {
       hasUnauthorizedRuns = true;
     }

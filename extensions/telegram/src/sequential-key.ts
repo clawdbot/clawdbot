@@ -15,6 +15,7 @@ import {
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumThreadId,
   resolveTelegramMessageForumFlagHint,
+  resolveTelegramMessageThreadSpec,
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
@@ -246,21 +247,16 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     }
     return "telegram:approval";
   }
-  const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
-  const messageThreadId = msg?.message_thread_id;
-  const isForum = resolveTelegramMessageForumFlagHint({
-    chatType: msg?.chat?.type,
-    isForum: msg?.chat?.is_forum,
-    isTopicMessage: msg?.is_topic_message,
-  });
-  const threadId = isGroup
-    ? resolveTelegramForumThreadId({ isForum, messageThreadId })
-    : shouldUseTelegramDmThreadSession({
-          dmThreadId: messageThreadId,
+  const threadSpec = msg ? resolveTelegramMessageThreadSpec(msg) : undefined;
+  const threadId =
+    threadSpec?.scope === "dm"
+      ? shouldUseTelegramDmThreadSession({
+          dmThreadId: threadSpec.id,
           botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
         })
-      ? messageThreadId
-      : undefined;
+        ? threadSpec.id
+        : undefined
+      : threadSpec?.id;
   if (typeof chatId === "number") {
     return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
   }

@@ -5,7 +5,10 @@ import type { DedupeEntry } from "../server-shared.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { agentHandlers } from "./agent.js";
 
-function waitThroughGateway(params: { runId: string; timeoutMs: number }) {
+function waitThroughGateway(
+  params: { runId: string; timeoutMs: number },
+  activeKind?: "agent" | "chat",
+) {
   const respond = vi.fn();
   const handler = expectDefined(
     agentHandlers["agent.wait"],
@@ -15,7 +18,11 @@ function waitThroughGateway(params: { runId: string; timeoutMs: number }) {
     handler({
       params,
       respond,
-      context: { chatAbortControllers: new Map() },
+      context: {
+        chatAbortControllers: activeKind
+          ? new Map([[params.runId, { kind: activeKind }]])
+          : new Map(),
+      },
     } as unknown as Parameters<typeof handler>[0]),
   );
   return { promise, respond };
@@ -51,6 +58,32 @@ afterEach(() => {
 });
 
 describe("agent.wait gateway dedupe observations", () => {
+  it.each([
+    ["agent", "timeout"],
+    ["chat", "ok"],
+  ] as const)("uses the %s abort entry to select the run observation", async (kind, status) => {
+    const runId = `run-kind-${kind}`;
+    const dedupe = new Map<string, DedupeEntry>();
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: 100,
+        ok: false,
+        payload: { runId, status: "timeout", endedAt: 100, timeoutPhase: "provider" },
+      },
+    });
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `chat:${runId}`,
+      entry: { ts: 200, ok: true, payload: { runId, status: "ok", endedAt: 200 } },
+    });
+
+    const waiter = waitThroughGateway({ runId, timeoutMs: 0 }, kind);
+    await waiter.promise;
+    expect(waiter.respond).toHaveBeenCalledWith(true, expect.objectContaining({ runId, status }));
+  });
+
   it("resolves concurrent waiters when the terminal dedupe entry lands", async () => {
     const runId = "run-public-concurrent-waiters";
     const dedupe = new Map<string, DedupeEntry>();

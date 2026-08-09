@@ -75,6 +75,20 @@ function expectAgentScopedMediaAccessCall(): Record<string, unknown> {
   return requireRecord(call[0], "agent scoped media access request");
 }
 
+function createTestReplyMediaNormalizer(
+  overrides: Omit<
+    Parameters<typeof createReplyMediaPathNormalizer>[0],
+    "cfg" | "sessionKey" | "workspaceDir"
+  > = {},
+) {
+  return createReplyMediaPathNormalizer({
+    cfg: {},
+    sessionKey: "session-key",
+    workspaceDir: "/tmp/agent-workspace",
+    ...overrides,
+  });
+}
+
 describe("createReplyMediaPathNormalizer", () => {
   beforeEach(() => {
     ensureSandboxWorkspaceForSession.mockReset().mockResolvedValue(null);
@@ -95,11 +109,7 @@ describe("createReplyMediaPathNormalizer", () => {
   });
 
   it("stages workspace-relative media through shared outbound attachment loading", async () => {
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       mediaUrls: ["./out/photo.png"],
@@ -116,11 +126,7 @@ describe("createReplyMediaPathNormalizer", () => {
   });
 
   it("preserves reply metadata when media normalization clones the payload", async () => {
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
     const payload = setReplyPayloadMetadata(
       {
         text: "Here is the image",
@@ -153,11 +159,7 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
     });
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       mediaUrls: ["./out/photo.png", "file:///workspace/screens/final.png"],
@@ -185,11 +187,7 @@ describe("createReplyMediaPathNormalizer", () => {
       containerWorkdir: "/workspace",
     });
     resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("media too large"));
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       mediaUrls: ["./out/photo.png"],
@@ -206,11 +204,7 @@ describe("createReplyMediaPathNormalizer", () => {
   });
 
   it("drops host file URLs when no sandbox mapping applies", async () => {
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       mediaUrls: ["file:///Users/peter/Documents/report.pdf"],
@@ -225,11 +219,7 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
     });
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       mediaUrls: ["file:///Users/peter/Documents/report.pdf"],
@@ -326,11 +316,7 @@ describe("createReplyMediaPathNormalizer", () => {
   });
 
   it("drops workspace-relative media paths that escape the agent workspace", async () => {
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       mediaUrls: ["../../etc/passwd"],
@@ -345,11 +331,7 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
     });
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       mediaUrls: ["../../etc/passwd"],
@@ -361,11 +343,7 @@ describe("createReplyMediaPathNormalizer", () => {
 
   it("keeps managed generated media under the shared media root", async () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       mediaUrls: ["/Users/peter/.openclaw/media/tool-image-generation/generated.png"],
@@ -383,11 +361,7 @@ describe("createReplyMediaPathNormalizer", () => {
       containerWorkdir: "/workspace",
     });
     setTestEnvValue("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       mediaUrls: ["/Users/peter/.openclaw/media/outbound/generated.png"],
@@ -412,11 +386,7 @@ describe("createReplyMediaPathNormalizer", () => {
       await fs.writeFile(outsideFile, "secret", "utf8");
       await fs.symlink(outsideFile, symlinkPath);
       setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-      const normalize = createReplyMediaPathNormalizer({
-        cfg: {},
-        sessionKey: "session-key",
-        workspaceDir: "/tmp/agent-workspace",
-      });
+      const normalize = createTestReplyMediaNormalizer();
 
       const result = await normalize({
         mediaUrls: [symlinkPath],
@@ -435,11 +405,7 @@ describe("createReplyMediaPathNormalizer", () => {
     resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(
       new Error("Local media path is not under an allowed directory"),
     );
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       mediaUrls: ["/Users/peter/secrets/photo.png"],
@@ -450,11 +416,7 @@ describe("createReplyMediaPathNormalizer", () => {
 
   it("keeps reply text and appends a warning when all reply media is dropped", async () => {
     resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       text: "WA_MEDIA_DM_07",
@@ -467,11 +429,7 @@ describe("createReplyMediaPathNormalizer", () => {
 
   it("keeps surviving media and appends a warning when some reply media is dropped", async () => {
     resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       text: "Here is the surviving attachment",
@@ -484,11 +442,7 @@ describe("createReplyMediaPathNormalizer", () => {
 
   it("returns a warning-only text reply when media-only output is dropped upstream", async () => {
     resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
-    const normalize = createReplyMediaPathNormalizer({
-      cfg: {},
-      sessionKey: "session-key",
-      workspaceDir: "/tmp/agent-workspace",
-    });
+    const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       mediaUrls: ["./out/missing.png"],
