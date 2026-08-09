@@ -111,7 +111,6 @@ on:
       - "src/gateway/resolve-configured-secret-input-string*.ts"
       - "src/gateway/security-path*.ts"
       - "src/gateway/server-methods/secrets*.ts"
-      - "src/gateway/server-startup-memory.ts"
       - "src/gateway/method-scopes.ts"
       - "packages/gateway-protocol/src/**"
       - "src/gateway/server-methods/**"
@@ -257,7 +256,7 @@ jobs:
                 packages/gateway-protocol/src/*|packages/gateway-protocol/src/**/*|src/gateway/method-scopes.ts|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
                   gateway=true
                   ;;
-                packages/memory-host-sdk/*|src/commands/doctor/cron/dreaming-payload-migration.ts|src/commands/doctor-memory-search.ts|src/gateway/server-startup-memory.ts|src/memory/*|src/memory-host-sdk/*)
+                packages/memory-host-sdk/*|src/commands/doctor/cron/dreaming-payload-migration.ts|src/commands/doctor-memory-search.ts|src/memory/*|src/memory-host-sdk/*)
                   memory=true
                   ;;
                 src/infra/outbound/base-session-key.ts|src/infra/outbound/delivery-queue*.ts|src/infra/outbound/outbound-session.ts|src/infra/outbound/session-binding*.ts|src/infra/outbound/session-context.ts|src/infra/outbound/targets-session.ts)

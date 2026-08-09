@@ -664,8 +664,8 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       probeVectorStoreAvailability: vi.fn(async () => true),
       probeVectorAvailability: vi.fn(async () => true),
       status: vi.fn(() => ({
-        backend: "qmd" as const,
-        provider: "qmd",
+        backend: "builtin" as const,
+        provider: "custom-memory",
         files: 5,
         chunks: 5,
         vector: { enabled: true, available: true, semanticAvailable: true },
@@ -675,9 +675,9 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     const getMemorySearchManager = vi.fn(async () => ({ manager }));
 
     const result = await resolveSharedMemoryStatusSnapshot({
-      cfg: { plugins: { slots: { memory: "qmd" } } },
+      cfg: { plugins: { slots: { memory: "custom-memory" } } },
       agentStatus: { defaultId: "main" },
-      memoryPlugin: { enabled: true, slot: "qmd" },
+      memoryPlugin: { enabled: true, slot: "custom-memory" },
       resolveMemoryConfig: vi.fn(() => null),
       getMemorySearchManager,
       requireDefaultDatabasePath: vi.fn(),
@@ -687,8 +687,8 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(manager.probeVectorAvailability).toHaveBeenCalled();
     expect(result).toEqual({
       agentId: "main",
-      backend: "qmd",
-      provider: "qmd",
+      backend: "builtin",
+      provider: "custom-memory",
       files: 5,
       chunks: 5,
       vector: { enabled: true, available: true, semanticAvailable: true },

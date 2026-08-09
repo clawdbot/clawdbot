@@ -1,4 +1,4 @@
-// Real workspace contract for QMD/session/query helpers used by the memory engine.
+// Session transcript and query helpers shared by memory engines.
 
 export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js";
 export {
@@ -29,18 +29,3 @@ export {
   parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
 } from "./host/openclaw-runtime-session.js";
-export { parseQmdQueryJson, type QmdQueryResult } from "./host/qmd-query-parser.js";
-export {
-  deriveQmdScopeChannel,
-  deriveQmdScopeChatType,
-  isQmdScopeAllowed,
-} from "./host/qmd-scope.js";
-export {
-  checkQmdBinaryAvailability,
-  resolveCliSpawnInvocation,
-  resolveQmdBinaryUnavailableReason,
-  runCliCommand,
-  type QmdBinaryAvailability,
-  type QmdBinaryUnavailable,
-  type QmdBinaryUnavailableReason,
-} from "./host/qmd-process.js";

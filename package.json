@@ -110,7 +110,7 @@
     "!dist/plugin-sdk/memory-core-host-engine-curated.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-fs.d.ts",
-    "!dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-sessions.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-schema.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
     "!dist/plugin-sdk/memory-core-host-runtime-cli.d.ts",
@@ -1229,8 +1229,8 @@
     "./plugin-sdk/memory-core-host-engine-fs": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-fs.js"
     },
-    "./plugin-sdk/memory-core-host-engine-qmd": {
-      "default": "./dist/plugin-sdk/memory-core-host-engine-qmd.js"
+    "./plugin-sdk/memory-core-host-engine-sessions": {
+      "default": "./dist/plugin-sdk/memory-core-host-engine-sessions.js"
     },
     "./plugin-sdk/memory-core-host-engine-schema": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-schema.js"

@@ -1971,7 +1971,7 @@ export const en: TranslationMap = {
     lobsterdex: "Every lobster palette that has visited this browser.",
     automation: "Commands, hooks, automations, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
-    memory: "Memory engine, backend, search, and dreaming.",
+    memory: "Memory engine, search, and dreaming.",
     talk: "Realtime voice: provider, model, and speaker voice.",
     infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
     labs: "Experimental agent and tool capabilities.",
@@ -2470,18 +2470,6 @@ export const en: TranslationMap = {
       disabledHint:
         "The memory slot points at this plugin, but the plugin itself is disabled, so memory is not running.",
       enable: "Enable",
-    },
-    backend: {
-      title: "Backend",
-      description: "How memory is stored and retrieved for the selected engine.",
-      rowTitle: "Retrieval backend",
-      builtin: "Built-in",
-      qmd: "QMD",
-      invalid: "Invalid configured value",
-      builtinHint: "Memory files are indexed and searched by OpenClaw itself.",
-      qmdHint: "Retrieval is delegated to QMD. Its settings appear below.",
-      invalidHint:
-        "The configured memory.backend value is invalid. Choose a backend or reset it to use the default.",
     },
     addons: {
       title: "Add-ons",

@@ -154,9 +154,6 @@ extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/memory/manager-search.test.ts
 extensions/memory-core/src/memory/manager-search.ts
 extensions/memory-core/src/memory/manager.ts
-extensions/memory-core/src/memory/qmd-manager.test.ts
-extensions/memory-core/src/memory/search-manager.test.ts
-extensions/memory-core/src/memory/search-manager.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
 extensions/memory-core/src/tools.test.ts

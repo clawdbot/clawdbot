@@ -3,8 +3,8 @@ import { resolveRememberAcrossConversations, splitShellArgs } from "./config-uti
 
 describe("splitShellArgs", () => {
   it("preserves quoted command arguments through the focused re-export", () => {
-    expect(splitShellArgs('qmd query --collection "Project Notes"')).toEqual([
-      "qmd",
+    expect(splitShellArgs('search query --collection "Project Notes"')).toEqual([
+      "search",
       "query",
       "--collection",
       "Project Notes",

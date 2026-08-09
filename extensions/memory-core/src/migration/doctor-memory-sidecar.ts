@@ -594,6 +594,53 @@ async function collectRetiredQmdFileLocks(stateDir: string): Promise<string[]> {
   return lockPaths;
 }
 
+async function collectRetiredQmdWorkspaceHomes(stateDir: string): Promise<string[]> {
+  const agentsDir = path.join(stateDir, "agents");
+  const homes: string[] = [];
+  for (const entry of await readDirectoryEntries(agentsDir)) {
+    if (!entry.isDirectory() || entry.name !== normalizeAgentId(entry.name)) {
+      continue;
+    }
+    const agentDir = path.join(agentsDir, entry.name);
+    const agentEntries = await readDirectoryEntries(agentDir);
+    if (agentEntries.some((candidate) => candidate.name === "qmd" && candidate.isDirectory())) {
+      homes.push(path.join(agentDir, "qmd"));
+    }
+  }
+  return homes;
+}
+
+export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
+  id: "memory-core-qmd-workspace-retired",
+  label: "Memory Core retired QMD workspaces",
+  doctorOnly: true,
+  async detectLegacyState(params) {
+    const homes = await collectRetiredQmdWorkspaceHomes(params.stateDir);
+    if (homes.length === 0) {
+      return null;
+    }
+    return {
+      preview: homes.map(
+        (home) =>
+          `- Retired Memory Core QMD workspace: ${home} -> remove derived index, config, cache, and session-export artifacts`,
+      ),
+    };
+  },
+  async migrateLegacyState(params) {
+    const changes: string[] = [];
+    const warnings: string[] = [];
+    for (const home of await collectRetiredQmdWorkspaceHomes(params.stateDir)) {
+      try {
+        await fs.rm(home, { recursive: true, force: true });
+        changes.push(`Removed retired Memory Core QMD workspace: ${home}`);
+      } catch (err) {
+        warnings.push(`Failed removing retired Memory Core QMD workspace ${home}: ${String(err)}`);
+      }
+    }
+    return { changes, warnings };
+  },
+};
+
 export const qmdLocksStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-qmd-file-locks-to-sqlite-leases",
   label: "Memory Core retired QMD file locks",

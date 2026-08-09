@@ -86,14 +86,7 @@ export function readTranscriptContentRevisionSync(params: {
     stats.lastObservedMutationAtMs ?? "",
   ].join(":");
 }
-export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
-export type {
-  MemoryBackend,
-  MemoryCitationsMode,
-  MemoryQmdConfig,
-  MemoryQmdIndexPath,
-  MemoryQmdSearchMode,
-} from "../../../../src/config/types.memory.js";
+export type { MemoryCitationsMode } from "../../../../src/config/types.memory.js";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,

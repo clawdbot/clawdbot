@@ -11,14 +11,6 @@ export function resetMemoryEngine(config: ConfigRemover, disabled = false): bool
   return true;
 }
 
-export function resetMemoryBackend(config: ConfigRemover, disabled = false): boolean {
-  if (disabled) {
-    return false;
-  }
-  config.removeFormValue(["memory", "backend"]);
-  return true;
-}
-
 export function dreamingConfigPath(pluginId: string, path: readonly string[]) {
   return ["plugins", "entries", pluginId, "config", "dreaming", ...path];
 }

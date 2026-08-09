@@ -67,7 +67,7 @@
   "memory-core-host-engine-curated",
   "memory-core-host-engine-embeddings",
   "memory-core-host-engine-fs",
-  "memory-core-host-engine-qmd",
+  "memory-core-host-engine-sessions",
   "memory-core-host-engine-schema",
   "memory-core-host-engine-storage",
   "memory-core-host-runtime-cli",
