@@ -275,7 +275,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         this.sessionSuggestionAddOperation !== undefined,
       cloudStartup,
       onRetryCloudStartup: cloudStartup?.retryable
-        ? () => void this.context.cloudStartup.retry(state.sessionKey)
+        ? () => this.context.cloudStartup.retry(state.sessionKey)
         : undefined,
       canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
       runStatus: state.chatRunStatus,
