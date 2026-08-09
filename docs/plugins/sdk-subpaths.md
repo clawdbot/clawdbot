@@ -302,10 +302,10 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/expect-runtime` | Private-local after July 2026; Required-value assertion helper for provable runtime invariants |
     | `plugin-sdk/number-runtime` | Private-local after July 2026; Numeric coercion helper |
     | `plugin-sdk/secure-random-runtime` | Private-local after July 2026; Secure token/UUID helpers |
-    | `plugin-sdk/system-event-runtime` | Private-local after July 2026; System event queue helpers |
+    | `plugin-sdk/system-event-runtime` | Private-local after July 2026; Narrow system event enqueue/peek helpers |
     | `plugin-sdk/transport-ready-runtime` | Private-local after July 2026; Transport readiness wait helper |
     | `plugin-sdk/exec-approvals-runtime` | Private-local after July 2026; Exec approval policy file helpers without the broad infra-runtime barrel |
-    | `plugin-sdk/infra-runtime` | Deprecated compatibility shim; use the focused runtime subpaths above |
+    | `plugin-sdk/infra-runtime` | Deprecated compatibility shim; use injected runtime APIs or documented typed-public subpaths |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, trace-context, and low-cardinality dimension normalization helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |

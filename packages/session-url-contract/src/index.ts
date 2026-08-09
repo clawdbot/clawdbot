@@ -11,6 +11,15 @@ type BuildControlUiSessionPathParams = {
   shortIdLength?: number;
 };
 
+type BuildControlUiCatalogSessionUrlParams = {
+  namespace: ControlUiSessionNamespace;
+  agentId: string;
+  basePath?: string;
+  catalog: string;
+  host: string;
+  thread: string;
+};
+
 export const SESSION_UUID_SUFFIX_RE =
   /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/iu;
 export const SHORT_SESSION_ID_RE = /^[0-9a-f]{8,32}$/iu;
@@ -150,4 +159,22 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
     }
   }
   return `${namespace}/${encodedAgentId}/${segments.map(encodePathSegment).join("/")}`;
+}
+
+export function buildControlUiCatalogSessionUrl(
+  params: BuildControlUiCatalogSessionUrlParams,
+): string | null {
+  const catalog = optionalString(params.catalog);
+  const host = optionalString(params.host);
+  const thread = optionalString(params.thread);
+  const path = buildControlUiSessionPath({
+    namespace: params.namespace,
+    sessionKey: DEFAULT_MAIN_KEY,
+    fallbackAgentId: params.agentId,
+    basePath: params.basePath,
+  });
+  if (!path || !catalog || !host || !thread) {
+    return null;
+  }
+  return `${path}?${new URLSearchParams({ catalog, host, thread }).toString()}`;
 }
