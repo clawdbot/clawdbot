@@ -2334,7 +2334,11 @@ importers:
         specifier: workspace:*
         version: link:../normalization-core
 
-  packages/session-url-contract: {}
+  packages/session-url-contract:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/terminal-core:
     dependencies:
