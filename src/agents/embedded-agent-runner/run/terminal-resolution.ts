@@ -580,7 +580,6 @@ function completeEmbeddedRun(
         terminalReply: buildAgentRunTerminalReplySnapshot({
           visibleText: input.finalAssistantVisibleText,
           rawText: input.finalAssistantRawText,
-          recordExactToken: true,
           ...(input.emptyAssistantReplyIsSilent
             ? { terminalReplyKind: "silent-empty" as const }
             : {}),

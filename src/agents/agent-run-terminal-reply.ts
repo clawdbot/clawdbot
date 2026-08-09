@@ -6,7 +6,8 @@ const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
 
 export type AgentRunTerminalReplySnapshot =
   | { disposition: "visible"; text: string }
-  | { disposition: "silent"; exactToken?: true }
+  // Only the exact trimmed control token is an intentional silent disposition.
+  | { disposition: "silent" }
   | { disposition: "empty" };
 
 /** Sanitizes and caps producer-owned text before it enters lifecycle or durable state. */
@@ -18,23 +19,20 @@ export function sanitizeAgentRunTerminalReplyText(text: string): string {
   return `${truncateUtf16Safe(sanitized, AGENT_RUN_TERMINAL_REPLY_MAX_CHARS - 1).trimEnd()}…`;
 }
 
-/** Builds the authoritative terminal reply fact while raw assistant text is still available. */
+/** Builds the authoritative terminal reply fact while exact raw assistant text is available. */
 export function buildAgentRunTerminalReplySnapshot(params: {
   visibleText?: string;
   rawText?: string;
   terminalReplyKind?: "silent-empty";
-  recordExactToken?: boolean;
 }): AgentRunTerminalReplySnapshot {
+  if (params.rawText?.trim() === SILENT_REPLY_TOKEN) {
+    return { disposition: "silent" };
+  }
   if (
     params.terminalReplyKind === "silent-empty" ||
     isSilentReplyText(params.rawText, SILENT_REPLY_TOKEN)
   ) {
-    return {
-      disposition: "silent",
-      ...(params.recordExactToken && params.rawText?.trim() === SILENT_REPLY_TOKEN
-        ? { exactToken: true as const }
-        : {}),
-    };
+    return { disposition: "empty" };
   }
   const text = sanitizeAgentRunTerminalReplyText(params.visibleText ?? "");
   return text ? { disposition: "visible", text } : { disposition: "empty" };
@@ -49,12 +47,7 @@ export function normalizeAgentRunTerminalReplySnapshot(
   }
   const disposition = (value as { disposition?: unknown }).disposition;
   if (disposition === "silent") {
-    return {
-      disposition,
-      ...((value as { exactToken?: unknown }).exactToken === true
-        ? { exactToken: true as const }
-        : {}),
-    };
+    return { disposition };
   }
   if (disposition === "empty") {
     return { disposition };

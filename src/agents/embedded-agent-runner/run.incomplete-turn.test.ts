@@ -4395,7 +4395,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectNoWarnMessageWith("incomplete turn detected");
     expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
     expect(result.meta.terminalReplyKind).toBe("silent-empty");
-    expect(result.meta.terminalReply).toEqual({ disposition: "silent", exactToken: true });
+    expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
     expect(result.meta.livenessState).toBe("working");
   });
 

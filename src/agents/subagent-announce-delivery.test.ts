@@ -3634,7 +3634,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
             finalAssistantRawText: "NO_REPLY",
             livenessState: "working",
             terminalReplyKind: "silent-empty",
-            terminalReply: { disposition: "silent", exactToken: true },
+            terminalReply: { disposition: "silent" },
           },
         },
       },
@@ -3645,7 +3645,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       name: "accepts the terminal agent-wait quiet snapshot without replaying raw text",
       response: {
         status: "ok",
-        terminalReply: { disposition: "silent", exactToken: true },
+        terminalReply: { disposition: "silent" },
       },
       requireRequesterSettlement: true,
       expected: intentionalRequesterQuiet,
@@ -3659,7 +3659,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       const terminalReply = buildAgentRunTerminalReplySnapshot({
         rawText,
         terminalReplyKind: "silent-empty",
-        recordExactToken: true,
       });
       return [
         {
@@ -3700,7 +3699,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
             finalAssistantVisibleText: "NO_REPLY",
             livenessState: "working",
             terminalReplyKind: "silent-empty",
-            terminalReply: { disposition: "silent", exactToken: true },
+            terminalReply: { disposition: "silent" },
           },
         },
       },
@@ -3747,7 +3746,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           meta: {
             finalAssistantRawText: "NO_REPLY",
             livenessState: "paused",
-            terminalReply: { disposition: "silent", exactToken: true },
+            terminalReply: { disposition: "silent" },
           },
         },
       },
@@ -3789,7 +3788,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           meta: {
             finalAssistantRawText: "NO_REPLY",
             agentHarnessResultClassification: "empty",
-            terminalReply: { disposition: "silent", exactToken: true },
+            terminalReply: { disposition: "silent" },
           },
         },
       },

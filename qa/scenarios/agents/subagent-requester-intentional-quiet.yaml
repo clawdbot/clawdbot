@@ -40,6 +40,9 @@ flow:
             - ref: env
             - 120000
         - call: reset
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - set: requestCursorBefore
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
@@ -115,4 +118,25 @@ flow:
         - assert:
             expr: "quietTask.requesterSessionKey === sessionKey && quietTask.deliveryStatus === 'delivered'"
             message: native child Task did not settle as delivered at the exact requester
-      detailsExpr: "`task=${quietTask.id ?? quietTask.taskId ?? 'unknown'} requester=${sessionKey} privateDecision=${String(parentTranscript.finalText ?? '').trim()} publicAssistantText=${visibleAssistantText || '<none>'} spawnCalls=${quietRequests.spawned.length} yieldCalls=${quietRequests.yielded.length}`"
+        - waitForNoOutbound:
+            quietMs: 1500
+            sinceIndex:
+              ref: outboundStartIndex
+        - set: outboundMessages
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex)"
+        - assert:
+            expr: "outboundMessages.length === 0"
+            message:
+              expr: "`intentional quiet produced ${outboundMessages.length} outbound messages`"
+        - set: finalQuietRequests
+          value:
+            expr: "(async () => { const requests = [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`))].filter((request) => String(request.allInputText ?? '').includes(sessionKey)); return { spawned: requests.filter((request) => request.plannedToolName === 'sessions_spawn'), yielded: requests.filter((request) => request.plannedToolName === 'sessions_yield'), settled: requests.filter((request) => /QUIET-CHILD-OK/i.test(String(request.allInputText ?? '')) && !/reply exactly QUIET-CHILD-OK/i.test(String(request.prompt ?? '')) && !request.plannedToolName) }; })()"
+        - assert:
+            expr: "finalQuietRequests.spawned.length === 1 && finalQuietRequests.yielded.length === 1 && finalQuietRequests.settled.length === 1"
+            message:
+              expr: "`expected one spawn, yield, and settlement request after the replay window; observed ${finalQuietRequests.spawned.length}/${finalQuietRequests.yielded.length}/${finalQuietRequests.settled.length}`"
+        - assert:
+            expr: "finalQuietRequests.spawned[0].cursor < finalQuietRequests.yielded[0].cursor && finalQuietRequests.yielded[0].cursor < finalQuietRequests.settled[0].cursor"
+            message: requester quiet request order was not spawn then yield then settlement
+      detailsExpr: "JSON.stringify({ traceVersion: 1, requestTrace: { orderVerified: finalQuietRequests.spawned[0].cursor < finalQuietRequests.yielded[0].cursor && finalQuietRequests.yielded[0].cursor < finalQuietRequests.settled[0].cursor, spawnCalls: finalQuietRequests.spawned.length, yieldCalls: finalQuietRequests.yielded.length, settlementCalls: finalQuietRequests.settled.length, settlementReplayCalls: Math.max(0, finalQuietRequests.settled.length - 1), requesterSettleInputObserved: finalQuietRequests.settled.some((request) => /QUIET-CHILD-OK/i.test(String(request.allInputText ?? ''))) }, taskTrace: { runtime: 'subagent', taskId: quietTask.taskId, sameTask: quietTask.taskId === pendingQuietTask.taskId, requesterMatched: quietTask.requesterSessionKey === sessionKey, beforeRequesterReply: { status: pendingQuietTask.status, deliveryStatus: pendingQuietTask.deliveryStatus }, afterRequesterReply: { status: quietTask.status, deliveryStatus: quietTask.deliveryStatus } }, requester: { privateTerminalReply: String(parentTranscript.finalText ?? '').trim(), exactTerminalReply: String(parentTranscript.finalText ?? '').trim() === 'NO_REPLY' }, publicSurface: { visibleAssistantTextChars: visibleAssistantText.length, qaChannelOutboundMessages: outboundMessages.length, rawChildLeaks: outboundMessages.filter((message) => String(message.text ?? '').includes('QUIET-CHILD-OK')).length, silenceTokenLeaks: outboundMessages.filter((message) => String(message.text ?? '').includes('NO_REPLY')).length } }, null, 2)"

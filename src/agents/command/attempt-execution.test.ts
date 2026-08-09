@@ -1195,17 +1195,17 @@ describe("createAcpVisibleTextAccumulator", () => {
     {
       name: "punctuation-wrapped silence",
       chunks: ["NO_REPLY:"],
-      expected: { disposition: "silent" },
+      expected: { disposition: "empty" },
     },
     {
       name: "ellipsis-wrapped silence",
       chunks: ["NO_REPLY..."],
-      expected: { disposition: "silent" },
+      expected: { disposition: "empty" },
     },
     {
       name: "chunked punctuation-wrapped silence",
       chunks: ["NO_REPLY", ":"],
-      expected: { disposition: "silent" },
+      expected: { disposition: "empty" },
     },
     {
       name: "glued visible continuation",

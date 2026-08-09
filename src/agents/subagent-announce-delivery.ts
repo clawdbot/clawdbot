@@ -701,8 +701,7 @@ function hasExplicitRequesterQuietDecision(result: {
     result.payloadsTruncated === true ||
     meta?.aborted === true ||
     meta?.error != null ||
-    terminalReply?.disposition !== "silent" ||
-    terminalReply.exactToken !== true
+    terminalReply?.disposition !== "silent"
   ) {
     return false;
   }
