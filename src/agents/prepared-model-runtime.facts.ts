@@ -3,10 +3,6 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
-  buildModelCatalogMergeKey,
-  parseModelCatalogRef,
-} from "@openclaw/model-catalog-core/model-catalog-refs";
-import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
@@ -50,6 +46,11 @@ import {
   resolvePluginModelCatalogOwnerPluginId,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
+import {
+  modelCatalogEntryKey,
+  prepareConfiguredRuntimeFacts,
+} from "./prepared-model-runtime.configured-catalog.js";
+import { completeConfiguredRuntimeModels } from "./prepared-model-runtime.configured-completion.js";
 import {
   collectPreparedModelRuntimeConfiguredRefs,
   collectConfiguredProviderIdsNeedingStaticCatalog,
@@ -473,76 +474,6 @@ export function isPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): bool
   return fullModelCatalogSnapshots.has(snapshot);
 }
 
-function modelCatalogEntryKey(entry: Pick<ModelCatalogEntry, "id" | "provider">): string {
-  return `${normalizeProviderId(entry.provider)}\0${entry.id.trim().toLowerCase()}`;
-}
-
-function createConfiguredModelCatalogSnapshot(params: {
-  agentFacts: PreparedModelRuntimeAgentFacts;
-  workspaceFacts: PreparedModelRuntimeWorkspaceFacts;
-  templateModelRegistry: ModelRegistry;
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-}): ModelCatalogSnapshot {
-  const entries = new Map<string, ModelCatalogEntry>();
-  const addEntry = (entry: ModelCatalogEntry) => {
-    const key = modelCatalogEntryKey(entry);
-    if (!entries.has(key)) {
-      entries.set(key, entry);
-    }
-  };
-  for (const entry of params.workspaceFacts.configuredCatalogEntries) {
-    addEntry(entry);
-  }
-  for (const configured of params.configuredRuntimeModels) {
-    addEntry(toStaticCatalogEntry(configured.model));
-  }
-  for (const { value } of params.agentFacts.configuredModelRefs) {
-    const separator = value.indexOf("/");
-    if (separator <= 0 || separator >= value.length - 1) {
-      continue;
-    }
-    const provider = normalizeProviderId(value.slice(0, separator));
-    const modelId = value.slice(separator + 1).trim();
-    if (!provider || !modelId) {
-      continue;
-    }
-    const model = params.templateModelRegistry.find(provider, modelId);
-    if (model) {
-      addEntry(toStaticCatalogEntry(model));
-    }
-  }
-  const configuredEntries = [...entries.values()];
-  const staticEntries = params.configuredRuntimeModels.map(({ model }) =>
-    toStaticCatalogEntry(model),
-  );
-  return {
-    entries: configuredEntries,
-    routeVariants: configuredEntries,
-    ...(staticEntries.length > 0 ? { staticEntries } : {}),
-  };
-}
-
-function prepareConfiguredRuntimeFacts(
-  agentFacts: PreparedModelRuntimeAgentFacts,
-  workspaceFacts: PreparedModelRuntimeWorkspaceFacts,
-  sharedTemplateModelRegistry: ModelRegistry,
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[],
-): PreparedModelRuntimeCatalogFacts {
-  const { inlineProviderModels } = workspaceFacts;
-  const templateModelRegistry = sharedTemplateModelRegistry;
-  return {
-    templateModelRegistry,
-    modelCatalog: createConfiguredModelCatalogSnapshot({
-      agentFacts,
-      workspaceFacts,
-      templateModelRegistry,
-      configuredRuntimeModels,
-    }),
-    configuredRuntimeModels,
-    inlineProviderModels,
-  };
-}
-
 function captureModelsJsonContents(agentDir: string): string | null {
   try {
     return fs.readFileSync(path.join(agentDir, "models.json"), "utf8");
@@ -619,41 +550,6 @@ function groupConfiguredRegistrySources(
   return [...groups.values()].flat();
 }
 
-function completeConfiguredRuntimeModels(params: {
-  configuredModelRefs: readonly ConfiguredModelRef[];
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-  resolveDynamicModel: (lookup: {
-    provider: string;
-    modelId: string;
-  }) => ProviderRuntimeModel | undefined;
-}): PreparedConfiguredRuntimeModel[] {
-  const existing = new Map(
-    params.configuredRuntimeModels.map((configured) => [
-      buildModelCatalogMergeKey(configured.provider, configured.modelId),
-      configured,
-    ]),
-  );
-  const completed: PreparedConfiguredRuntimeModel[] = [];
-  const seen = new Set<string>();
-  for (const { value } of params.configuredModelRefs) {
-    const parsed = parseModelCatalogRef(value);
-    if (!parsed) {
-      continue;
-    }
-    const key = buildModelCatalogMergeKey(parsed.provider, parsed.modelId);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    const prepared = existing.get(key);
-    const model = prepared?.model ?? params.resolveDynamicModel(parsed);
-    if (model) {
-      completed.push({ provider: parsed.provider, modelId: parsed.modelId, model });
-    }
-  }
-  return completed;
-}
-
 export function prepareConfiguredRuntimeFactsBatch(params: {
   agentFacts: readonly PreparedModelRuntimeAgentFacts[];
   workspaceFacts: PreparedModelRuntimeWorkspaceFacts;
@@ -697,32 +593,34 @@ export function prepareConfiguredRuntimeFactsBatch(params: {
                 const providerConfig =
                   input.config.models?.providers?.[provider] ??
                   findNormalizedProviderValue(input.config.models?.providers, provider);
-                return resolveLoadedProviderRuntimePlugin({
-                  provider,
-                  modelId,
-                  config: input.config,
-                  workspaceDir: input.workspaceDir,
-                  env: facts.env,
-                })?.resolveDynamicModel?.({
-                  config: input.config,
-                  agentDir: input.agentDir,
-                  workspaceDir: input.workspaceDir,
-                  provider,
-                  modelId,
-                  modelRegistry: templateModelRegistry,
-                  providerConfig,
-                });
+                return (
+                  resolveLoadedProviderRuntimePlugin({
+                    provider,
+                    modelId,
+                    config: input.config,
+                    workspaceDir: input.workspaceDir,
+                    env: facts.env,
+                  })?.resolveDynamicModel?.({
+                    config: input.config,
+                    agentDir: input.agentDir,
+                    workspaceDir: input.workspaceDir,
+                    provider,
+                    modelId,
+                    modelRegistry: templateModelRegistry,
+                    providerConfig,
+                  }) ?? undefined
+                );
               },
             })
           : facts.configuredRuntimeModels;
         catalogs.set(
           input,
-          prepareConfiguredRuntimeFacts(
-            facts,
-            params.workspaceFacts,
+          prepareConfiguredRuntimeFacts({
+            agentFacts: facts,
+            workspaceFacts: params.workspaceFacts,
             templateModelRegistry,
             configuredRuntimeModels,
-          ),
+          }),
         );
       }
     });
