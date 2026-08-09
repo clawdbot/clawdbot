@@ -45,9 +45,11 @@ configured Gateway is unavailable, start or repair it and rerun the command.
 `resume` resolves configured Gateway auth SecretRefs for token/password auth
 when possible (`env`/`file`/`exec` providers).
 
-With no explicit URL or port, `resume` follows the active local Gateway port
-recorded by the running Gateway. Explicit `--url`, `OPENCLAW_GATEWAY_URL`,
-`OPENCLAW_GATEWAY_PORT`, and remote Gateway config keep precedence.
+Gateway target precedence is explicit `--url`, then `OPENCLAW_GATEWAY_URL`,
+then `gateway.remote.url` when `gateway.mode` is `remote`, then the local
+loopback Gateway. For that local Gateway, `OPENCLAW_GATEWAY_PORT` takes
+precedence over the active port recorded by a running Gateway, which takes
+precedence over the configured or default `gateway.port`.
 
 ## Examples
 

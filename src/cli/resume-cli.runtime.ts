@@ -23,7 +23,10 @@ function requireInteractiveResumeTerminal() {
   }
 }
 
-async function fetchResumeSessions(opts: ResumeCliOptions) {
+async function fetchResumeSessions(
+  opts: ResumeCliOptions,
+  options: { agentId?: string; includeGlobal?: boolean } = {},
+) {
   const { GatewayChatClient } = await import("../tui/gateway-chat.js");
   const client = await GatewayChatClient.connect(opts);
   try {
@@ -42,7 +45,7 @@ async function fetchResumeSessions(opts: ResumeCliOptions) {
         finish(() => reject(new Error(reason || "Gateway connection closed")));
       client.start();
     });
-    return await loadRecentSessions(client);
+    return await loadRecentSessions(client, options);
   } catch (error) {
     const [{ formatTuiErrorMessage }, { resolveGatewayDisconnectState }] = await Promise.all([
       import("../tui/tui-formatters.js"),
@@ -115,20 +118,29 @@ function formatResumeCandidate(candidate: SessionPickerChoice): string {
   return label === key ? key : `${label} [${key}]`;
 }
 
-function resolveExplicitGlobalSessionKey(query: string | undefined): string | undefined {
+function resolveExplicitGlobalSessionKey(
+  query: string | undefined,
+): { agentId: string; key: string } | undefined {
   const parsed = parseAgentSessionKey(query);
-  return parsed?.rest === "global" ? `agent:${parsed.agentId}:global` : undefined;
+  return parsed?.rest === "global"
+    ? { agentId: parsed.agentId, key: `agent:${parsed.agentId}:global` }
+    : undefined;
 }
 
 /** Resolve or select one session and run the existing Gateway-backed TUI. */
 export async function runResumeCommand(query: string | undefined, opts: ResumeCliOptions) {
   requireInteractiveResumeTerminal();
   const trimmedQuery = query?.trim();
-  const explicitGlobalSessionKey = resolveExplicitGlobalSessionKey(trimmedQuery);
-  const sessions = explicitGlobalSessionKey ? [] : await fetchResumeSessions(opts);
+  const explicitGlobalSession = resolveExplicitGlobalSessionKey(trimmedQuery);
+  const sessions = await fetchResumeSessions(
+    opts,
+    explicitGlobalSession
+      ? { agentId: explicitGlobalSession.agentId, includeGlobal: true }
+      : undefined,
+  );
   let sessionKey: string | null;
-  if (explicitGlobalSessionKey) {
-    sessionKey = explicitGlobalSessionKey;
+  if (explicitGlobalSession) {
+    sessionKey = explicitGlobalSession.key;
   } else if (trimmedQuery) {
     const resolution = resolveResumeSession(sessions, trimmedQuery);
     if (resolution.kind !== "match") {

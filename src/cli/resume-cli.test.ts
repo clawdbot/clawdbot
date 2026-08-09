@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { TuiSessionList } from "../tui/tui-backend.js";
 import { resolveResumeSession } from "../tui/tui-session-picker.js";
 import { runResumeCommand } from "./resume-cli.runtime.js";
@@ -181,16 +182,23 @@ describe("runResumeCommand", () => {
   it("preserves an explicitly agent-qualified global session", async () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+    const client = createGatewayClient([{ key: "global", displayName: "global" }]);
 
-    await runResumeCommand("AGENT:Work:GLOBAL", {});
+    await runResumeCommand("agent:work:global", {});
 
-    expect(gatewayMocks.connect).not.toHaveBeenCalled();
+    expect(client.listSessions).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "work", includeGlobal: true }),
+    );
     expect(gatewayMocks.runTui).toHaveBeenCalledWith(
       expect.objectContaining({
         session: "agent:work:global",
         forceProcessExitOnReturn: true,
       }),
     );
+    expect(parseAgentSessionKey(gatewayMocks.runTui.mock.lastCall?.[0]?.session)).toEqual({
+      agentId: "work",
+      rest: "global",
+    });
   });
 
   it("rejects a non-interactive queried resume before connecting or launching the TUI", async () => {
