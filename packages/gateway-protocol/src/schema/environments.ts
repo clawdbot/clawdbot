@@ -46,6 +46,7 @@ export const WorkerEnvironmentMetadataSchema = closedObject({
   idleMs: Type.Optional(Type.Integer({ minimum: 0 })),
   attachedSessionIds: Type.Array(NonEmptyString),
   tunnelStatus: WorkerTunnelStatusSchema,
+  error: Type.Optional(NonEmptyString),
 });
 
 function createEnvironmentSummarySchema() {

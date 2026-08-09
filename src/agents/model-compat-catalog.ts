@@ -1,13 +1,10 @@
+import { normalizeLowercaseStringOrEmpty as normalizeApi } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCompatConfig } from "../config/types.models.js";
 
 type ModelTransportRoute = {
   api?: unknown;
   baseUrl?: unknown;
 };
-
-function normalizeApi(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
 
 function normalizeBaseUrl(value: unknown): string {
   if (typeof value !== "string") {

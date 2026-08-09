@@ -120,8 +120,9 @@ The builtin engine is the right choice for most users:
 - Supports all embedding providers.
 - Hybrid search combines the best of both retrieval approaches.
 
-Consider switching to [QMD](/concepts/memory-qmd) if you need reranking, query
-expansion, or want to index directories outside the workspace.
+The builtin engine can index directories outside the workspace with
+`memory.search.extraPaths`, but it does not provide query expansion or a
+separate reranking stage.
 
 Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
 with automatic user modeling.

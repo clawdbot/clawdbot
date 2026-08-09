@@ -171,7 +171,9 @@ function findErrorWithCode(err: unknown, code: string): NodeJS.ErrnoException | 
   return findErrorWithCode(err.cause, code);
 }
 
-function isMissingPathError(err: unknown): boolean {
+function hasRecoverableMissingMediaDirCause(err: unknown): boolean {
+  // Recursive mkdir repairs only the ENOENT race where cleanup pruned the directory.
+  // Structural ENOTDIR and generic fs-safe absence remain terminal diagnostics.
   return findErrorWithCode(err, "ENOENT") !== undefined;
 }
 
@@ -188,7 +190,7 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
       attempts: 2,
       minDelayMs: 0,
       maxDelayMs: 0,
-      shouldRetry: isMissingPathError,
+      shouldRetry: hasRecoverableMissingMediaDirCause,
       onRetry: async () => {
         // Cleanup can prune the directory between mkdir and file open. Recreate
         // it once; further failures remain terminal instead of looping.

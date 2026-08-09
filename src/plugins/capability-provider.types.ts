@@ -52,6 +52,13 @@ export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 export type WorkerSshEndpoint = {
   host: string;
   port: number;
+  /**
+   * Up to 10 ordered unique integer ports (1..65535) after `port`; excludes the primary.
+   * Core rotates only for idempotent probes, content-addressed transfers, receipt/lock-guarded
+   * artifact installation, convergent managed-worktree mirroring, and tunnel reconnects.
+   * Ambiguous unguarded stateful commands fail closed and are not replayed.
+   */
+  fallbackPorts?: readonly number[];
   user: string;
   /** OpenSSH public host-key line obtained from trusted provisioning output. */
   hostKey: string;
@@ -75,11 +82,17 @@ export type WorkerSshIdentityRequest = {
 export type WorkerLease = {
   leaseId: string;
   ssh: WorkerSshEndpoint;
+  /** The SSH account also owns processes unrelated to this worker lease. */
+  sharedHost?: boolean;
 };
 
 /** Authoritative inspection result for an already-known worker lease. */
 export type WorkerLeaseStatus =
-  | { status: "active" }
+  | {
+      status: "active";
+      /** Explicit provider fact used to reconcile leases persisted before this metadata existed. */
+      sharedHost?: boolean;
+    }
   | { status: "destroyed" }
   | { status: "unknown" };
 

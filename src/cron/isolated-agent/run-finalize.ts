@@ -3,8 +3,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { deriveContextPromptTokens } from "../../agents/usage.js";
-import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
-import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -20,11 +20,7 @@ import {
 } from "../run-diagnostics.js";
 import type { CronDeliveryTrace, CronRunTelemetry } from "../types.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
-import {
-  isHeartbeatOnlyResponse,
-  resolveCronPayloadOutcome,
-  resolveHeartbeatAckMaxChars,
-} from "./helpers.js";
+import { resolveCronPayloadOutcome } from "./helpers.js";
 import { buildCronDeliveryTrace, loadCronDeliveryRuntime } from "./run-delivery-trace.js";
 import type { PreparedCronRunContext } from "./run-prepare.js";
 import { adoptCronRunSessionMetadata } from "./run-session-state.js";
@@ -166,9 +162,11 @@ export async function finalizeCronRun(params: {
     if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
+      prepared.cronSession.sessionEntry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
     } else {
       prepared.cronSession.sessionEntry.totalTokens = undefined;
       prepared.cronSession.sessionEntry.totalTokensFresh = false;
+      prepared.cronSession.sessionEntry.totalTokensVersion = undefined;
     }
     prepared.cronSession.sessionEntry.cacheRead = cacheRead;
     prepared.cronSession.sessionEntry.cacheWrite = cacheWrite;
@@ -296,6 +294,7 @@ export async function finalizeCronRun(params: {
     });
   }
   const {
+    deliveryDisposition,
     deliveryPayloadHasStructuredContent,
     hasFatalStructuredErrorPayload,
     pendingPresentationWarningError,
@@ -352,16 +351,11 @@ export async function finalizeCronRun(params: {
 
   const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
   const heartbeatOnlyResponse =
-    prepared.deliveryRequested &&
-    !hasFatalErrorPayload &&
-    isHeartbeatOnlyResponse(deliveryPayloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
+    prepared.deliveryRequested && !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const heartbeatControlOnlyResponse =
     heartbeatOnlyResponse &&
-    deliveryPayloads.every(
-      (payload) =>
-        stripHeartbeatToken(payload.text, { mode: "heartbeat", maxAckChars: 0 }).shouldSkip ||
-        isSilentReplyPayloadText(payload.text, HEARTBEAT_TOKEN),
-    );
+    (deliveryDisposition.kind === "empty" ||
+      (deliveryDisposition.kind === "heartbeat" && deliveryDisposition.controlOnly));
   const spawnOnlyHandoff =
     acceptedSessionSpawn &&
     (heartbeatControlOnlyResponse ||

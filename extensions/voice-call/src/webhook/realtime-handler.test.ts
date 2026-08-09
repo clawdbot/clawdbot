@@ -1,6 +1,7 @@
 // Voice Call tests cover realtime handler plugin behavior.
 import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
@@ -200,17 +201,6 @@ function requireFirstMockCall(calls: readonly unknown[][], label: string): unkno
     throw new Error(`expected ${label} call`);
   }
   return call;
-}
-
-function createDeferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-} {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];

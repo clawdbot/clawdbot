@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
@@ -6,7 +7,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { importSessionCatalogHistory } from "../plugins/session-catalog-history-import.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
-import { createDeferred } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,

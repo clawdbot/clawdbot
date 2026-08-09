@@ -11,7 +11,7 @@ import {
 import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
-} from "../../../infra/node-pairing.js";
+} from "../../../infra/device-pairing-node.js";
 import { listProfiles } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
@@ -19,6 +19,7 @@ import {
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
+import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
@@ -72,21 +73,23 @@ export async function sendGatewayHello(
     bootstrapDeviceTokens,
     controlUiDeviceAuthMigrationPending,
   } = state;
+  const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
+    includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
   });
   const cachedHealth = getHealthCache();
   if (cachedHealth) {
     snapshot.health = cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
-  const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
   const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
   const controlUiWidgetKinds = listControlUiPluginWidgetKinds(helloOkAuthScopes);
   const helloOk = {
     type: "hello-ok",
+    // Admission already verified range overlap; this field reports the server's current protocol.
     protocol: PROTOCOL_VERSION,
     server: {
       version: resolveRuntimeServiceVersion(process.env),

@@ -20,6 +20,7 @@ import {
   createTelegramSpooledReplayDeferredParticipant,
   createTelegramSpooledReplayParticipant,
   getTelegramSpooledReplayDeferredParticipant,
+  getTelegramSpooledReplayLifecycle,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
   type TelegramMessageProcessingResult,
@@ -54,13 +55,19 @@ export function createTelegramHandlerMessageRuntime({
     token,
     transport: telegramTransport,
   });
-  const mediaAbortSignal =
-    opts.mediaAbortSignal && opts.fetchAbortSignal
-      ? AbortSignal.any([opts.mediaAbortSignal, opts.fetchAbortSignal])
-      : (opts.mediaAbortSignal ?? opts.fetchAbortSignal);
-  const mediaRuntimeWithAbort = {
-    ...mediaRuntimeOptions,
-    abortSignal: mediaAbortSignal,
+  // Resolve the ALS owner at operation time; buffered callers retain ownership
+  // after that frame ends by passing their participant signals explicitly.
+  const resolveMediaRuntime = (...explicitSignals: AbortSignal[]) => {
+    const abortSignals = [
+      opts.mediaAbortSignal,
+      opts.fetchAbortSignal,
+      getTelegramSpooledReplayLifecycle()?.abortSignal,
+      ...explicitSignals,
+    ].filter((signal): signal is AbortSignal => signal !== undefined);
+    return {
+      ...mediaRuntimeOptions,
+      abortSignal: abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0],
+    };
   };
   const sessionRuntime = createTelegramMessageSessionRuntime({
     accountId,
@@ -105,7 +112,9 @@ export function createTelegramHandlerMessageRuntime({
     chain: TelegramCachedMessageNode[],
     shouldHydrateMedia: (node: TelegramCachedMessageNode, index: number) => Promise<boolean>,
     durableMediaReplay: boolean,
+    ...participantSignals: AbortSignal[]
   ): Promise<{ replyMedia: TelegramMediaRef[]; replyChain: TelegramReplyChainEntry[] }> => {
+    const mediaRuntime = resolveMediaRuntime(...participantSignals);
     const replyMedia: TelegramMediaRef[] = [];
     const replyChain: TelegramReplyChainEntry[] = [];
     for (const [index, node] of chain.entries()) {
@@ -124,7 +133,7 @@ export function createTelegramHandlerMessageRuntime({
               getFile: async (signal) => await bot.api.getFile(replyFileId, signal),
             },
             maxBytes: mediaMaxBytes,
-            ...mediaRuntimeWithAbort,
+            ...mediaRuntime,
           });
           mediaRef = media
             ? {
@@ -137,7 +146,7 @@ export function createTelegramHandlerMessageRuntime({
         } catch (err) {
           // Only durable ingress can replay a reply-media abort. Live polling must
           // preserve the current text instead of acknowledging it without dispatch.
-          if (mediaRuntimeWithAbort.abortSignal?.aborted && durableMediaReplay) {
+          if (mediaRuntime.abortSignal?.aborted && durableMediaReplay) {
             recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
             throw err;
           }
@@ -319,6 +328,8 @@ export function createTelegramHandlerMessageRuntime({
         replyChainNodes,
         shouldHydrateReplyMedia,
         durableMediaReplay,
+        ...spooledReplayParticipants.map((participant) => participant.abortSignal),
+        ...(params.spooledReplayAbortSignal ? [params.spooledReplayAbortSignal] : []),
       );
       const promptContextMediaByMessageId = new Map<string, TelegramMediaRef>();
       const currentMessageId =
@@ -407,7 +418,7 @@ export function createTelegramHandlerMessageRuntime({
   };
 
   return {
-    mediaRuntimeWithAbort,
+    resolveMediaRuntime,
     normalizePromptContextMinTimestampMs,
     promptContextBoundaryOptions,
     latestPromptContextMinTimestampMs,

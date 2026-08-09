@@ -1,5 +1,5 @@
 // @vitest-environment node
-import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
+import { notFound, type RouteLocation, type RouterHistory } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import {
   agentRouteFromPath,
@@ -7,6 +7,7 @@ import {
   memoryTabFromPath,
   pathForMemoryTab,
   pathForAgentPanel,
+  pathForRoute,
   pathForPluginsHubTab,
   pathForWorkboardBoard,
   pluginsHubTabFromPath,
@@ -91,6 +92,11 @@ const DYNAMIC_STARTUP_CASES = [
 }[];
 
 describe("Dynamic route startup bridge", () => {
+  it("registers the Updates settings path", () => {
+    expect(pathForRoute("updates")).toBe("/settings/updates");
+    expect(routeIdFromPath("/settings/updates")).toBe("updates");
+  });
+
   it.each(DYNAMIC_STARTUP_CASES)(
     "loads the $label once while publishing its real location",
     async ({ routeId, location: initialLocation }) => {
@@ -182,6 +188,120 @@ describe("Dynamic route startup bridge", () => {
         expect(loader).toHaveBeenCalledTimes(2);
         expect(router.getState().location).toEqual(location);
       });
+    } finally {
+      router.stop();
+      route.loader = originalLoader;
+      route.component = originalComponent;
+    }
+  });
+
+  it("keeps a loader not-found state without rejecting startup", async () => {
+    let location: RouteLocation = { pathname: "/", search: "", hash: "" };
+    const history: RouterHistory = {
+      location: () => location,
+      push: vi.fn(),
+      replace: vi.fn((next: RouteLocation) => {
+        location = next;
+      }),
+      listen: () => () => undefined,
+    };
+    const router = createApplicationRouter();
+    const route = router.getRoute("chat");
+    if (!route) {
+      throw new Error("Chat route missing");
+    }
+    const originalLoader = route.loader;
+    const originalComponent = route.component;
+    try {
+      route.loader = () => notFound({ routeId: "chat" });
+      route.component = async () => ({ render: () => null });
+
+      await expect(
+        startApplicationRouter(router, history, "", {
+          basePath: "",
+        } as unknown as ApplicationContext),
+      ).resolves.toBeUndefined();
+
+      expect(location.pathname).toBe("/chat");
+      expect(router.getState().status).toBe("notFound");
+      expect(router.getState().matches[0]).toMatchObject({
+        routeId: "chat",
+        status: "notFound",
+        error: { type: "notFound", data: { routeId: "chat" } },
+      });
+    } finally {
+      router.stop();
+      route.loader = originalLoader;
+      route.component = originalComponent;
+    }
+  });
+
+  it("tolerates not-found from both dynamic startup navigations", async () => {
+    const location: RouteLocation = {
+      pathname: "/chat/main/01JSESSIONA",
+      search: "",
+      hash: "",
+    };
+    const history: RouterHistory = {
+      location: () => location,
+      push: vi.fn(),
+      replace: vi.fn(),
+      listen: () => () => undefined,
+    };
+    const router = createApplicationRouter();
+    const route = router.getRoute("chat");
+    if (!route) {
+      throw new Error("Chat route missing");
+    }
+    const loader = vi.fn(() => notFound({ routeId: "chat" }));
+    const originalLoader = route.loader;
+    const originalComponent = route.component;
+    try {
+      route.loader = loader;
+      route.component = async () => ({ render: () => null });
+
+      await expect(
+        startApplicationRouter(router, history, "", {
+          basePath: "",
+        } as unknown as ApplicationContext),
+      ).resolves.toBeUndefined();
+
+      expect(loader).toHaveBeenCalledTimes(2);
+      expect(router.getState().status).toBe("notFound");
+      expect(router.getState().location).toEqual(location);
+    } finally {
+      router.stop();
+      route.loader = originalLoader;
+      route.component = originalComponent;
+    }
+  });
+
+  it("still rejects non-not-found startup failures", async () => {
+    const failure = new Error("chat loader failed");
+    const history: RouterHistory = {
+      location: () => ({ pathname: "/chat", search: "", hash: "" }),
+      push: vi.fn(),
+      replace: vi.fn(),
+      listen: () => () => undefined,
+    };
+    const router = createApplicationRouter();
+    const route = router.getRoute("chat");
+    if (!route) {
+      throw new Error("Chat route missing");
+    }
+    const originalLoader = route.loader;
+    const originalComponent = route.component;
+    try {
+      route.loader = () => {
+        throw failure;
+      };
+      route.component = async () => ({ render: () => null });
+
+      await expect(
+        startApplicationRouter(router, history, "", {
+          basePath: "",
+        } as unknown as ApplicationContext),
+      ).rejects.toBe(failure);
     } finally {
       router.stop();
       route.loader = originalLoader;

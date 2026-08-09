@@ -15,7 +15,6 @@ const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(),
   resolveInstallableChannelPlugin: vi.fn(),
   resolveMessageChannelSelection: vi.fn(),
-  getChannelPlugin: vi.fn(),
   resolveChannelDefaultAccountId: vi.fn(),
 }));
 
@@ -36,10 +35,6 @@ vi.mock("../commands/channel-setup/channel-plugin-resolution.js", () => ({
 
 vi.mock("../infra/outbound/channel-selection.js", () => ({
   resolveMessageChannelSelection: mocks.resolveMessageChannelSelection,
-}));
-
-vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: mocks.getChannelPlugin,
 }));
 
 vi.mock("../channels/plugins/helpers.js", () => ({
@@ -87,6 +82,7 @@ describe("registerDirectoryCli", () => {
     mocks.resolveChannelDefaultAccountId.mockReturnValue("default");
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "demo-channel",
+      plugin: { id: "demo-channel" },
       configured: ["demo-channel"],
       source: "explicit",
     });
@@ -150,12 +146,12 @@ describe("registerDirectoryCli", () => {
     });
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "whatsapp",
+      plugin: {
+        id: "whatsapp",
+        directory: { self },
+      },
       configured: ["whatsapp"],
       source: "single-configured",
-    });
-    mocks.getChannelPlugin.mockReturnValue({
-      id: "whatsapp",
-      directory: { self },
     });
 
     const program = new Command().name("openclaw");

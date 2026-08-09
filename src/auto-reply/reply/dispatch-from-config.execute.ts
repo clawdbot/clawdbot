@@ -1,7 +1,6 @@
 import {
   hasOutboundReplyContent,
   isFastModeAutoProgressPayload,
-  resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
@@ -22,6 +21,12 @@ import {
   type InternalReplyResolverOptions,
   createReplyDispatchEvent,
 } from "./dispatch-from-config.events.js";
+import {
+  hasAskUserPayload,
+  readAskUserQuestionId,
+  requiresDurableToolResultDelivery,
+  shouldDeliverDespiteSourceReplySuppression,
+} from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
@@ -40,7 +45,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     flushPendingCommentaryProgress,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
-    hasAskUserPayload,
     hookRunner,
     isDispatchOperationAborted,
     markInboundDedupeReplayUnsafe,
@@ -67,6 +71,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     sourceReplyDeliveryMode,
     trackDispatchLifecycleWork,
     typing,
+    wasReplyDeliveredAsBlock,
     waitForPendingDirectBlockReplyDelivery,
     wrapProgressCallback,
   } = state;
@@ -214,20 +219,33 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       state.shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
                     const isForcedToolProgress =
                       state.shouldDeliverForcedToolProgressDespiteSourceSuppression();
-                    const progressCallbackForwarded = state.shouldForwardToolResultProgressCallback(
-                      payload,
-                      isFastModeAutoProgress,
-                    );
-                    if (progressCallbackForwarded) {
-                      await onToolResultFromReplyOptions?.(payload);
+                    const forceToolResultProgress =
+                      params.replyOptions?.forceToolResultProgress === true;
+                    const requiresDurableToolResult =
+                      forceToolResultProgress && requiresDurableToolResultDelivery(payload);
+                    const shouldForwardToolResultProgress = isFastModeAutoProgress
+                      ? shouldForwardProgressCallback({
+                          forwardWhenSourceDeliverySuppressed: true,
+                        })
+                      : forceToolResultProgress
+                        ? !requiresDurableToolResult &&
+                          !state.shouldEmitVerboseProgress() &&
+                          shouldForwardProgressCallback({
+                            forwardWhenSourceDeliverySuppressed: true,
+                          })
+                        : state.shouldSendToolSummaries() && shouldForwardProgressCallback();
+                    const toolResultProgressCallback = shouldForwardToolResultProgress
+                      ? onToolResultFromReplyOptions
+                      : undefined;
+                    if (toolResultProgressCallback) {
+                      await toolResultProgressCallback(payload);
                     }
                     if (isDispatchOperationAborted()) {
                       return;
                     }
                     if (
-                      isFastModeAutoProgress &&
-                      progressCallbackForwarded &&
-                      onToolResultFromReplyOptions
+                      toolResultProgressCallback &&
+                      (isFastModeAutoProgress || forceToolResultProgress)
                     ) {
                       return;
                     }
@@ -282,19 +300,14 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       !isFastModeAutoProgressPayload(deliveryPayload) &&
                       !isForcedToolProgress
                     ) {
-                      const hasMedia = resolveSendableOutboundReplyParts(deliveryPayload).hasMedia;
-                      if (
-                        !hasMedia &&
-                        !state.hasExecApprovalPayload(deliveryPayload) &&
-                        !hasAskUserPayload(deliveryPayload)
-                      ) {
+                      if (!requiresDurableToolResultDelivery(deliveryPayload)) {
                         return;
                       }
                     }
                     if (deliveryPayload.isError === true) {
                       markVisibleToolErrorProgress();
                     }
-                    const askUserQuestionId = state.readAskUserQuestionId(deliveryPayload);
+                    const askUserQuestionId = readAskUserQuestionId(deliveryPayload);
                     if (
                       askUserQuestionId !== undefined &&
                       !(await isAskUserPromptPending(askUserQuestionId))
@@ -417,7 +430,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     // Buffered commentary preceded this block; deliver it first.
                     await flushPendingCommentaryProgress();
-                    if (state.suppressDelivery) {
+                    if (
+                      state.suppressDelivery &&
+                      !shouldDeliverDespiteSourceReplySuppression(payload, state)
+                    ) {
                       return;
                     }
                     // Durable reasoning is a channel-owned lane; generic channels
@@ -505,12 +521,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                             assistantMessageIndex: payloadMetadata.assistantMessageIndex,
                           }
                         : context;
-                    if (!state.suppressAutomaticSourceDelivery) {
-                      await params.replyOptions?.onBlockReplyQueued?.(
-                        visiblePayload,
-                        queuedContext,
-                      );
-                    }
                     if (isDispatchOperationAborted()) {
                       return;
                     }
@@ -538,11 +548,37 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                         "block",
                       );
                       state.recordRoutedBlockReplyDelivery(normalizedPayload, result);
+                      if (result?.delivered === true && !state.suppressAutomaticSourceDelivery) {
+                        await params.replyOptions?.onBlockReplyQueued?.(
+                          visiblePayload,
+                          queuedContext,
+                        );
+                      }
                     } else {
                       markInboundDedupeReplayUnsafe();
-                      const delivered = state.sendTrackedBlockReply(normalizedPayload);
-                      if (delivered) {
+                      const admitted = state.sendTrackedBlockReply(normalizedPayload);
+                      if (admitted) {
                         state.progressState.hasPendingDirectBlockReplyDelivery = true;
+                      }
+                      if (
+                        admitted &&
+                        !state.suppressAutomaticSourceDelivery &&
+                        params.replyOptions?.onBlockReplyQueued
+                      ) {
+                        // Block callbacks are delivery facts, not queue-admission facts.
+                        // Resolve them after beforeDeliver hooks without stalling streaming.
+                        trackDispatchLifecycleWork(
+                          wasReplyDeliveredAsBlock(normalizedPayload, context?.abortSignal).then(
+                            async (delivered) => {
+                              if (delivered) {
+                                await params.replyOptions?.onBlockReplyQueued?.(
+                                  visiblePayload,
+                                  queuedContext,
+                                );
+                              }
+                            },
+                          ),
+                        );
                       }
                     }
                   };

@@ -1,10 +1,9 @@
 // Control UI controller manages skill workshop gateway state.
-import { formatErrorMessage } from "@openclaw/normalization-core";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
-import { redactToolDetail } from "../../lib/browser-redact.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
   normalizeAgentId,
@@ -406,7 +405,7 @@ export async function loadSkillWorkshopProposals(
       await loadSkillWorkshopProposalDetail(state, context, state.skillWorkshopSelectedKey);
     }
   } catch (err) {
-    state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.skillWorkshopError = formatUiError(err);
   } finally {
     state.skillWorkshopLoading = false;
     if (skillWorkshopAgentParams(context).agentId !== requestAgentId) {
@@ -456,7 +455,7 @@ async function loadSkillWorkshopProposalDetail(
     return true;
   } catch (err) {
     if (state.skillWorkshopAgentId === requestAgentId) {
-      state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+      state.skillWorkshopError = formatUiError(err);
     }
     return false;
   } finally {
@@ -524,7 +523,7 @@ export async function runSkillWorkshopLifecycleAction(
       t(action === "apply" ? "skillWorkshop.notices.applied" : "skillWorkshop.notices.rejected"),
     );
   } catch (err) {
-    state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.skillWorkshopError = formatUiError(err);
   } finally {
     if (
       state.skillWorkshopActionBusy?.key === proposalId &&
@@ -599,7 +598,7 @@ export async function runSkillWorkshopEvaluation(
     return true;
   } catch (err) {
     if (state.skillWorkshopAgentId === requestAgentId) {
-      state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+      state.skillWorkshopError = formatUiError(err);
     }
     return false;
   } finally {
@@ -668,7 +667,7 @@ export async function requestSkillWorkshopRevision(
     showActionNotice(state, proposal, t("skillWorkshop.notices.revisionRequested"));
     return true;
   } catch (err) {
-    state.skillWorkshopError = formatErrorMessage(err, { redact: redactToolDetail });
+    state.skillWorkshopError = formatUiError(err);
     return false;
   } finally {
     if (

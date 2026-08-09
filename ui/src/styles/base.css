@@ -841,17 +841,6 @@ textarea,
   width: 85%;
 }
 
-.skeleton-stat {
-  height: 28px;
-  width: 60px;
-  border-radius: var(--radius-sm);
-}
-
-.skeleton-block {
-  height: 48px;
-  border-radius: var(--radius-md);
-}
-
 @keyframes pulse-subtle {
   0%,
   100% {
@@ -860,43 +849,6 @@ textarea,
   50% {
     opacity: 0.7;
   }
-}
-
-@keyframes glow-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 transparent;
-  }
-  50% {
-    box-shadow: 0 0 20px var(--accent-glow);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .glow-pulse,
-  [class*="glow-pulse"] {
-    animation: none !important;
-  }
-}
-
-/* Stagger animation delays for grouped elements */
-.stagger-1 {
-  animation-delay: 0ms;
-}
-.stagger-2 {
-  animation-delay: 50ms;
-}
-.stagger-3 {
-  animation-delay: 100ms;
-}
-.stagger-4 {
-  animation-delay: 150ms;
-}
-.stagger-5 {
-  animation-delay: 200ms;
-}
-.stagger-6 {
-  animation-delay: 250ms;
 }
 
 @media (prefers-reduced-motion: reduce) {

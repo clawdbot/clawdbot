@@ -8,7 +8,7 @@ import {
   asObjectRecord,
   hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 function hasLegacyZalouserGroupAllowAlias(value: unknown): boolean {
   const group = asObjectRecord(value);

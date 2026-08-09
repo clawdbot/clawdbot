@@ -166,10 +166,11 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       requesterYieldBatch: true,
       afterRequesterYield: true,
     });
-    expect(schedule).not.toHaveBeenCalled();
+    expect(entry.delivery?.disposition).toBe("intentional_non_delivery");
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(entry.runId, entry);
   });
 
-  it("persists a mixed delivered and in-progress yielded batch without scheduling", () => {
+  it("persists a mixed delivered and in-progress yielded batch before scheduling", () => {
     const alpha = makeRun("run-alpha");
     const beta = makeRun("run-beta");
     beta.delivery = { status: "in_progress" };
@@ -204,8 +205,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(beta.requesterSettleWake).toEqual(frozenState);
     expect(alpha.requesterTurnRunId).toBeUndefined();
     expect(beta.requesterTurnRunId).toBeUndefined();
-    expect(calls).toEqual(["persist"]);
-    expect(schedule).not.toHaveBeenCalled();
+    expect(beta.delivery?.disposition).toBe("intentional_non_delivery");
+    expect(calls).toEqual(["persist", "schedule"]);
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(alpha.runId, alpha);
   });
 
   it.each([true, false])(

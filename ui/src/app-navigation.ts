@@ -181,7 +181,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
   {
     labelKey: "nav.settingsGroupConnections",
-    routes: ["connection", "channels", "communications", "talk", "nodes"],
+    routes: ["connection", "channels", "communications", "talk", "devices"],
   },
   {
     labelKey: "nav.settingsGroupAgents",
@@ -193,7 +193,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "advanced", "debug", "logs", "about"],
+    routes: ["infrastructure", "advanced", "debug", "logs", "updates", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -234,7 +234,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   skills: "zap",
   plugins: "puzzle",
   "skill-workshop": "wrench",
-  nodes: "monitorSmartphone",
+  devices: "monitorSmartphone",
   chat: "messageSquare",
   dashboard: "layoutDashboard",
   dashboards: "layoutDashboard",
@@ -250,6 +250,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   talk: "mic",
   infrastructure: "globe",
   labs: "flaskConical",
+  updates: "download",
   about: "fileText",
   "ai-agents": "brain",
   "model-setup": "spark",
@@ -343,7 +344,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
     titleKey: "tabs.skillWorkshop",
     subtitleKey: "subtitles.skillWorkshop",
   },
-  nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
+  devices: { titleKey: "tabs.devices", subtitleKey: "subtitles.devices" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   dashboard: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   dashboards: { titleKey: "tabs.dashboards", subtitleKey: "subtitles.dashboards" },
@@ -362,6 +363,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   talk: { titleKey: "tabs.talk", subtitleKey: "subtitles.talk" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
   labs: { titleKey: "tabs.labs", subtitleKey: "subtitles.labs" },
+  updates: { titleKey: "tabs.updates", subtitleKey: "subtitles.updates" },
   about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
   "model-setup": { titleKey: "tabs.modelSetup", subtitleKey: "subtitles.modelSetup" },

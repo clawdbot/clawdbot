@@ -1,4 +1,6 @@
 // Control UI module implements app tool stream behavior.
+import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
@@ -74,14 +76,6 @@ type ToolStreamHost = {
   requestUpdate?: () => void;
   sessions: Pick<SessionCapability, "setModelOverride">;
 };
-
-function toTrimmedString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-}
 
 function resolveModelLabel(provider: unknown, model: unknown): string | null {
   const modelValue = toTrimmedString(model);
@@ -210,10 +204,6 @@ function formatToolOutput(value: unknown): string | null {
     return truncated.text;
   }
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
 function resolveSessionStatusModelOverride(result: unknown): string | null | undefined {

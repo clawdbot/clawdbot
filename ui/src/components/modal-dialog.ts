@@ -49,6 +49,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
 
     :host(.fullscreen) wa-dialog::part(dialog) {
+      max-width: calc(100vw - 20px);
       max-height: calc(100dvh - 20px);
     }
 
@@ -57,8 +58,13 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       margin-block-end: auto;
     }
 
+    :host(.drawer) wa-dialog {
+      --width: min(var(--openclaw-modal-width, 100vw), 100vw);
+    }
+
     :host(.drawer) wa-dialog::part(dialog) {
       height: 100dvh;
+      max-width: 100vw;
       max-height: 100dvh;
       margin: 0 0 0 auto;
       border-radius: 0;
@@ -90,10 +96,11 @@ export class OpenClawModalDialog extends OpenClawLitElement {
 
     @media (max-width: 640px) {
       wa-dialog {
-        --width: calc(100vw - 24px);
+        --width: min(var(--openclaw-modal-width, 540px), calc(100vw - 24px));
       }
 
       wa-dialog::part(dialog) {
+        max-width: var(--openclaw-modal-max-width, calc(100vw - 24px));
         max-height: 90dvh;
       }
     }

@@ -2175,12 +2175,11 @@ async function runSerializedClaudeLiveSessionTurn(
   void outputPromise.catch(() => undefined);
   const abort = () =>
     abortTurn(liveSession, createAbortError(params.context.params.abortSignal?.reason));
-  let replyBackendCompleted = false;
   const replyBackendHandle: ReplyBackendHandle | undefined = params.context.params.replyOperation
     ? {
         kind: "cli",
+        runId: params.context.params.runId,
         cancel: abort,
-        isStreaming: () => !replyBackendCompleted,
       }
     : undefined;
   params.context.params.abortSignal?.addEventListener("abort", abort, { once: true });
@@ -2201,7 +2200,6 @@ async function runSerializedClaudeLiveSessionTurn(
     }
     return { output: await outputPromise };
   } finally {
-    replyBackendCompleted = true;
     params.context.params.abortSignal?.removeEventListener("abort", abort);
     try {
       if (replyBackendHandle) {

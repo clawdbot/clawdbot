@@ -46,6 +46,19 @@ describe("OpenClawTerminalPanel accessibility", () => {
     await i18n.setLocale("en");
   });
 
+  it("labels the terminal placement switcher and all three modes", async () => {
+    const panel = createPanel(createPickerClient());
+    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-actions")).not.toBeNull());
+
+    const switcher = panel.renderRoot.querySelector('[role="group"]');
+    expect(switcher?.getAttribute("aria-label")).toBe("Terminal panel position");
+    expect(
+      ["Dock to bottom", "Dock to right", "Fill main content area"].every((label) =>
+        switcher?.querySelector(`[aria-label="${label}"]`),
+      ),
+    ).toBe(true);
+  });
+
   afterEach(async () => {
     document.body.replaceChildren();
     localStorage.clear();

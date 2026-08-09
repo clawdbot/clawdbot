@@ -274,6 +274,14 @@ const sessionUpdatesRuntimeLoader = createLazyImportLoader(
   () => import("./session-updates.runtime.js"),
 );
 
+export async function prewarmReplyRunRuntimes(): Promise<void> {
+  await Promise.all([
+    sessionUpdatesRuntimeLoader.load(),
+    embeddedAgentRuntimeLoader.load(),
+    agentRunnerRuntimeLoader.load(),
+  ]);
+}
+
 export function loadEmbeddedAgentRuntime() {
   return embeddedAgentRuntimeLoader.load();
 }

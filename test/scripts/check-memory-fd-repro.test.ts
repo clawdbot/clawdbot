@@ -21,7 +21,7 @@ import {
   updateGatewayReadyOutputState,
   waitForGatewayReady,
   writeConfig,
-} from "../../scripts/check-memory-fd-repro.mjs";
+} from "../../scripts/check-memory-fd-repro.mts";
 import { validateConfigObject } from "../../src/config/validation.js";
 import { withEnv } from "../../src/test-utils/env.js";
 

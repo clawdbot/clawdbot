@@ -8,6 +8,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
+  resolveTestProjectsRunnerEnv,
+  resolveTestProjectsRunnerSpawnParams,
+  runTestProjectsDelegation,
+} from "../../scripts/lib/test-projects-delegation.mts";
+import {
   DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   TOOLING_EXCLUDED_TESTS,
@@ -22,8 +27,6 @@ import {
   resolveMissingExplicitTestFiles,
   resolveRunVitestSpawnEnv,
   resolveTestProjectsDelegationArgs,
-  resolveTestProjectsRunnerEnv,
-  resolveTestProjectsRunnerSpawnParams,
   resolveVitestCliEntry,
   resolveVitestNoOutputHeartbeatMs,
   resolveVitestNodeArgs,
@@ -31,8 +34,8 @@ import {
   resolveVitestSpawnParams,
   spawnWatchedVitestProcess,
   shouldSuppressVitestStderrLine,
-} from "../../scripts/run-vitest.mjs";
-import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mjs";
+} from "../../scripts/run-vitest.mts";
+import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 // These bounds only guard broken fixtures; readiness and exit are asserted via process signals.
@@ -45,7 +48,7 @@ describe("scripts/run-vitest", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr.trim().split("\n").at(-1)).toBe("[vitest] FAILED (exit 1)");
+    expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 1)");
   });
 
   it.each([...VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS.keys(), ...TOOLING_EXCLUDED_TESTS])(
@@ -770,6 +773,7 @@ describe("scripts/run-vitest", () => {
   });
 
   posixIt("cleans delegated test-project children when the wrapper is signaled", async () => {
+    expect(runTestProjectsDelegation).toBeTypeOf("function");
     const fixturePath = nodePath.join(
       os.tmpdir(),
       `openclaw-run-vitest-delegated-signal-${process.pid}-${Date.now()}.mjs`,
@@ -799,10 +803,12 @@ describe("scripts/run-vitest", () => {
     const runner = spawn(
       process.execPath,
       [
+        "--import",
+        "tsx",
         "--input-type=module",
         "--eval",
         `import { runTestProjectsDelegation } from ${JSON.stringify(
-          pathToFileURL(nodePath.resolve("scripts/run-vitest.mjs")).href,
+          pathToFileURL(nodePath.resolve("scripts/lib/test-projects-delegation.mts")).href,
         )}; runTestProjectsDelegation([], process.env, { runnerPath: ${JSON.stringify(fixturePath)} });`,
       ],
       {

@@ -1,6 +1,7 @@
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
+import { readSessionIdentityMutationVersion } from "../../sessions/session-lifecycle-events.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { readSessionTitleProjectionUnavailableVersion } from "../session-transcript-title-reader.js";
 import type { SessionsListResult } from "../session-utils.types.js";
@@ -10,6 +11,7 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 type SessionListFence = {
   agentRunIndexVersion: number;
+  sessionIdentityMutationVersion: number;
   sessionsMutationVersion: number;
   titleProjectionUnavailableVersion: number;
 };
@@ -27,6 +29,7 @@ const sessionListsByContext = new WeakMap<GatewayRequestContext, SessionListStat
 function readSessionListFence(context: GatewayRequestContext): SessionListFence {
   return {
     agentRunIndexVersion: readAgentRunIndexVersion(),
+    sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
   };
@@ -35,6 +38,7 @@ function readSessionListFence(context: GatewayRequestContext): SessionListFence 
 function matchesSessionListFence(value: SessionListFence, fence: SessionListFence): boolean {
   return (
     value.agentRunIndexVersion === fence.agentRunIndexVersion &&
+    value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
     value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion
   );
@@ -86,9 +90,9 @@ function rememberCompletedSessionList(
 function resolveSessionListExpiration(result: SessionsListResult): number | null | undefined {
   let expiresAt: number | undefined;
   for (const session of result.sessions) {
-    // Running durations tick continuously, and a retained child can sit outside
-    // this page, leaving no authoritative child expiration to cache safely.
-    if (session.hasActiveSubagentRun || session.childSessions?.length) {
+    // Live work can settle without a session/index mutation, running durations tick,
+    // and a retained child can sit outside this page. None has a safe cache deadline.
+    if (session.hasActiveRun || session.hasActiveSubagentRun || session.childSessions?.length) {
       return null;
     }
     const statusExpiration = session.agentStatus?.expiresAt;
@@ -112,8 +116,8 @@ export async function respondWithCachedSessionList(params: {
 }): Promise<void> {
   const workKey = sessionListWorkKey(params.request, params.client);
   const state = sessionListState(params.context, params.config);
-  // Every input that can change a projected row must fence reuse. Store mutations and
-  // live-run transitions have separate owners, so their monotonic counters stay separate.
+  // Every input that can change a projected row must fence reuse. Session identity,
+  // Gateway projection, and live-run mutations have separate monotonic owners.
   const fence = readSessionListFence(params.context);
   // Activity windows and child retention expire without mutations; hidden paginated rows
   // prevent deriving a safe deadline, so only concurrent temporal requests share work.

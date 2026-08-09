@@ -253,7 +253,9 @@ export async function appendStatusAllDiagnosis(params: {
       params.portUsage.listeners,
       params.port,
     );
-    const portOk = params.portUsage.listeners.length === 0 || expectedGatewayListeners;
+    const portOk =
+      params.portUsage.status === "free" ||
+      (params.portUsage.status === "busy" && expectedGatewayListeners);
     emitCheck(`Port ${params.port}`, portOk ? "ok" : "warn");
     if (!portOk) {
       const gatewayPidCount = countGatewayListenerPids(params.portUsage);

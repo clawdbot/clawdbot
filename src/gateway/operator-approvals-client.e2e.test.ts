@@ -24,11 +24,14 @@ import {
   disconnectGatewayClient,
   getFreeGatewayPort,
 } from "./test-helpers.e2e.js";
-import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
+import {
+  configureManualGatewayBackgroundEnv,
+  MANUAL_GATEWAY_ENV_KEYS,
+} from "./test-helpers.manual-gateway-env.js";
 
 const TEST_ENV_KEYS = [
   "HOME",
-  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
+  ...MANUAL_GATEWAY_ENV_KEYS,
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_GATEWAY_URL",
@@ -88,6 +91,7 @@ describe("operator approval gateway client e2e", () => {
     await fs.mkdir(stateDir, { recursive: true });
     setTestEnvValue("HOME", tempHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    configureManualGatewayBackgroundEnv(tempHome);
 
     const port = await getFreeGatewayPort();
     const token = "approval-client-e2e-token";
@@ -192,6 +196,7 @@ describe("operator approval gateway client e2e", () => {
     await fs.mkdir(stateDir, { recursive: true });
     setTestEnvValue("HOME", tempHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    configureManualGatewayBackgroundEnv(tempHome);
 
     const requesterIdentity = loadOrCreateDeviceIdentity({
       path: path.join(stateDir, "test-device-identities", "approval-requester.sqlite"),

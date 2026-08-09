@@ -294,10 +294,30 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
     stateOnly,
     suppressScheduledJobId: opts?.suppressScheduledJobId,
   });
-  for (const notify of opts?.postPersistNotifications ?? []) {
-    notify();
-  }
+  runPostPersistCronNotifications(state, opts?.postPersistNotifications);
   return true;
+}
+
+/**
+ * Notifications run after the durable commit; one throwing notify (e.g. an
+ * auto-disable notice for a removed agent) must not drop its siblings or
+ * masquerade as a store-write failure — at startup that keeps the whole
+ * scheduler down.
+ */
+export function runPostPersistCronNotifications(
+  state: CronServiceState,
+  notifications: DeferredCronNotifications | undefined,
+) {
+  for (const notify of notifications ?? []) {
+    try {
+      notify();
+    } catch (err) {
+      state.deps.log.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "cron: post-persist notification failed",
+      );
+    }
+  }
 }
 
 /** Captures the live cron state that must stay aligned with the durable store. */
@@ -315,23 +335,14 @@ export async function persistOrRestore(
   snapshot: CronRollbackSnapshot,
   opts: Omit<PersistOptions, "stateOnly"> = {},
 ) {
-  let writeCompleted = false;
-  const postPersistNotifications = opts.postPersistNotifications?.map((notify) => () => {
-    // Notification failures happen after commit and must not restore the
-    // speculative snapshot over rows that are already durable.
-    writeCompleted = true;
-    notify();
-  });
   try {
-    const persisted = await persist(state, { ...opts, postPersistNotifications });
+    // Notification failures are contained inside persist(), so a throw here
+    // always means the durable write itself failed and the snapshot must win.
+    const persisted = await persist(state, opts);
     if (!persisted) {
       throw new Error("cron: durable store write did not complete");
     }
-    writeCompleted = true;
   } catch (err) {
-    if (writeCompleted) {
-      throw err;
-    }
     state.store = snapshot.store;
     state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
     throw err;

@@ -28,9 +28,9 @@ type DispatchInboundMessageMockParams = {
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
     allowToolLifecycleWhenProgressHidden?: boolean;
     onReplyStart?: () => void | Promise<void>;
-    onToolStart?: (payload: { name?: string }) => void | Promise<void>;
-    onCompactionStart?: () => void | Promise<void>;
-    onCompactionEnd?: () => void | Promise<void>;
+    onToolStart?: (payload: { name?: string }) => boolean | void | Promise<boolean | void>;
+    onCompactionStart?: () => boolean | void | Promise<boolean | void>;
+    onCompactionEnd?: () => boolean | void | Promise<boolean | void>;
   };
 };
 

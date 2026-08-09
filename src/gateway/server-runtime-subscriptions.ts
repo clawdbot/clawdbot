@@ -10,9 +10,15 @@ import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import {
+  isAcpSessionKey,
+  isCronRunSessionKey,
+  isSubagentSessionKey,
+} from "../sessions/session-key-utils.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
+import { isTerminalTaskStatus } from "../tasks/task-executor-policy.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
 import {
   type ChatAbortControllerEntry,
@@ -29,6 +35,7 @@ import { resolveVisibleActiveSessionRunState } from "./server-methods/session-ac
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
 import { createSessionCompanion } from "./session-companion.js";
 import { createSessionObserver } from "./session-observer.js";
+import type { TerminalSessionManager } from "./terminal/session-manager.js";
 
 function dispatchEventHandler<TEvent>(params: {
   loadHandler: () => Promise<(event: TEvent) => unknown>;
@@ -43,6 +50,26 @@ function dispatchEventHandler<TEvent>(params: {
     .catch((error: unknown) => {
       params.log.warn(params.failureMessage, { ...params.context, error });
     });
+}
+
+function terminalTaskSessionKey(event: TaskRegistryObserverEvent): string | undefined {
+  if (event.kind !== "upserted" || !isTerminalTaskStatus(event.task.status)) {
+    return undefined;
+  }
+  if (event.previous && isTerminalTaskStatus(event.previous.status)) {
+    return undefined;
+  }
+  const sessionKey = event.task.childSessionKey?.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  // Persistent conversation targets intentionally retain their terminals.
+  // Only task-run identities end when their authoritative task row terminalizes.
+  const taskRunScoped =
+    isCronRunSessionKey(sessionKey) ||
+    isSubagentSessionKey(sessionKey) ||
+    isAcpSessionKey(sessionKey);
+  return taskRunScoped ? sessionKey : undefined;
 }
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
@@ -63,6 +90,7 @@ export function startGatewayEventSubscriptions(params: {
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
+  terminalSessions: Pick<TerminalSessionManager, "closeAgentSessions">;
 }) {
   // The worker always runs retention maintenance. audit.enabled only controls
   // producer subscriptions, so disabling collection cannot strand expired rows.
@@ -374,6 +402,10 @@ export function startGatewayEventSubscriptions(params: {
           break;
       }
       params.broadcast("task", payload, { dropIfSlow: true });
+      const sessionKey = terminalTaskSessionKey(event);
+      if (sessionKey) {
+        params.terminalSessions.closeAgentSessions(sessionKey);
+      }
     },
   };
   const taskObserverRuntimePromise = import("../tasks/task-registry.store.js").then((module) => {

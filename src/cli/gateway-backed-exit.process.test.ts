@@ -78,6 +78,43 @@ async function startCronListGateway(token: string): Promise<{ url: string }> {
   return { url: `ws://127.0.0.1:${address.port}` };
 }
 
+async function startRateLimitedGateway(): Promise<{ url: string }> {
+  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  activeServers.add(wss);
+  wss.on("connection", (ws) => {
+    sendMinimalGatewayConnectChallenge(ws);
+    ws.on("message", (data) => {
+      const frame = parseMinimalGatewayRequestFrame(data);
+      if (frame.type !== "req" || !frame.id || frame.method !== "connect") {
+        return;
+      }
+      const message = "unauthorized: too many failed authentication attempts (retry later)";
+      ws.send(
+        JSON.stringify({
+          type: "res",
+          id: frame.id,
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            message,
+            retryable: true,
+            retryAfterMs: 60_000,
+            details: {
+              code: "AUTH_RATE_LIMITED",
+              authReason: "rate_limited",
+              recommendedNextStep: "wait_then_retry",
+            },
+          },
+        }),
+        () => ws.close(1008, message),
+      );
+    });
+  });
+  await once(wss, "listening");
+  const address = wss.address() as AddressInfo;
+  return { url: `ws://127.0.0.1:${address.port}` };
+}
+
 async function runIsolatedGatewayCli(params: {
   args: string[];
   root: string;
@@ -297,5 +334,45 @@ describe("gateway-backed CLI process exit", () => {
       error: { type: "gateway_transport_error" },
       gateway: { url: `ws://127.0.0.1:${port}` },
     });
+  }, 30_000);
+
+  it("preserves pre-hello rate-limit details through the real health entry point", async () => {
+    const root = tempDirs.make("openclaw-gateway-rate-limit-json-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const gateway = await startRateLimitedGateway();
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        gateway: {
+          mode: "remote",
+          remote: { url: gateway.url, token: "test-token" },
+        },
+      }),
+    );
+
+    const result = await runIsolatedGatewayCli({
+      args: ["health", "--json", "--timeout", "2000"],
+      root,
+      stateDir,
+      configPath,
+    });
+
+    expect(result, result.stderr).toMatchObject({ code: 1, signal: null, stderr: "" });
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_request_error",
+        code: "AUTH_RATE_LIMITED",
+        message:
+          "Gateway authentication is temporarily rate-limited. Wait for the temporary lockout to expire, then retry.",
+        retryable: true,
+        retryAfterMs: 60_000,
+      },
+      gateway: { reachable: true },
+    });
+    expect(result.stdout).not.toContain("gateway.remote.token");
+    expect(result.stdout).not.toContain("devices rotate");
   }, 30_000);
 });

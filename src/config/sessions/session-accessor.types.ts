@@ -20,6 +20,7 @@ import type {
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
+import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 /**
@@ -166,6 +167,10 @@ export interface SessionTranscriptReadTarget {
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
   /** Optional for appenders that resolve it from the session entry. */
   sessionId?: string;
+  /** Optional run-owned fence checked inside the transcript write transaction. */
+  expectedWriterRunId?: string;
+  /** Optional lifecycle fence paired with sessionId for run-owned writes. */
+  expectedLifecycleRevision?: string;
 };
 
 export type SessionEntrySummary = {
@@ -317,6 +322,8 @@ export type TranscriptMessageAppendResult<TMessage> = {
   messageId: string;
   /** Parent id actually used by the durable transcript append. */
   effectiveParentId?: string | null;
+  /** Authoritative immutable identity issued by the append transaction. */
+  anchor?: TranscriptEntryAnchor;
 };
 
 /** Transcript update fields supplied by callers; the target is resolved here. */
@@ -341,6 +348,7 @@ export type SessionTranscriptWriteLockAccessorContext = {
   }>;
   /** Reads bounded indexed facts for supplied transcript mirror identities. */
   readMessageFacts: (params: { idempotencyKeys: readonly string[] }) => Promise<{
+    anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;
     existingIdempotencyKeys: Set<string>;
     messagesByIdempotencyKey: Map<string, unknown>;
   }>;
@@ -387,6 +395,8 @@ export type SessionTranscriptTurnPersistOptions = {
   expectedSessionId?: string;
   /** Rejects the turn when lifecycle ownership changed without rotating the session id. */
   expectedLifecycleRevision?: string;
+  /** Rejects the turn when another admitted run owns transcript writes. */
+  expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
   /** Rejects the turn unless the persisted row still has this exact lifecycle owner state. */
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   /** Lifecycle metadata committed when the guarded turn inserts or idempotently matches a message. */
@@ -820,9 +830,7 @@ export type SessionEntryCreateWithTranscriptOptions = {
   requireWriteSuccess?: boolean;
 };
 
-export type SessionPatchProjectionSnapshot = {
-  entries: ReadonlyArray<{ sessionKey: string; entry: SessionEntry }>;
-};
+export type SessionPatchProjectionSnapshot = { store: Readonly<Record<string, SessionEntry>> };
 
 export type SessionPatchProjectionTarget = {
   candidateKeys?: readonly string[];
@@ -832,6 +840,7 @@ export type SessionPatchProjectionTarget = {
 export type SessionPatchProjectionContext = SessionPatchProjectionSnapshot &
   SessionPatchProjectionTarget & {
     existingEntry?: SessionEntry;
+    isLabelInUse: (label: string) => boolean;
   };
 
 export type SessionPatchProjectionFailure = { ok: false };
@@ -839,6 +848,17 @@ export type SessionPatchProjectionFailure = { ok: false };
 export type SessionPatchProjectionResult<TFailure extends SessionPatchProjectionFailure> =
   | { ok: true; entry: SessionEntry }
   | TFailure;
+
+export type SessionPatchProjectionOperation<TFailure extends SessionPatchProjectionFailure> = {
+  /** Revalidates request-scoped authorization after projection and before persistence. */
+  authorize?: () => TFailure | undefined;
+  /** Converts a target-local projection exception without aborting sibling targets. */
+  onError?: (error: unknown) => TFailure;
+  resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
+  project: (
+    context: SessionPatchProjectionContext,
+  ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
+};
 
 export type {
   DeleteSessionEntryLifecycleParams,

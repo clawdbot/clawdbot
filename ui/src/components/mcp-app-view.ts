@@ -135,7 +135,7 @@ export class McpAppView extends LitElement {
       display: block;
       width: 100%;
       border: 0;
-      background: transparent;
+      background: var(--board-surface, var(--card));
     }
     .error {
       padding: 14px;

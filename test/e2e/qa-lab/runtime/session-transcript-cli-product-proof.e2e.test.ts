@@ -66,13 +66,17 @@ afterEach(async () => {
   instance = undefined;
 });
 
-function parseCommandJson<T>(label: string, result: CommandResult): T {
+function parseCommandJson<T>(
+  label: string,
+  result: CommandResult,
+  parse: (value: unknown) => T = (value) => value as T,
+): T {
   if (result.code !== 0) {
     throw new Error(
       `${label} failed with exit ${String(result.code)}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
     );
   }
-  return JSON.parse(result.stdout) as T;
+  return parse(JSON.parse(result.stdout) as unknown);
 }
 
 async function seedTranscript(stateDir: string, env: NodeJS.ProcessEnv) {

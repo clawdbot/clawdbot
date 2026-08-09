@@ -97,6 +97,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Sticky operation identity used to suppress ordinary retry and hook policy. */
   operation?: EmbeddedRunAttemptOperation;
+  /** Core-prepared fact that explicit requester/config policy restricts plugin-native tools. */
+  pluginHarnessToolPolicyRestricted?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
@@ -175,6 +177,8 @@ export type EmbeddedRunAttemptResult = {
   assistantTranscriptOwned?: boolean;
   /** Exact idempotency key for the runtime-owned final-assistant transcript row. */
   assistantTranscriptIdempotencyKey?: string;
+  /** Host-private terminal identity used to close the accepted transcript turn. */
+  contextEngineTerminalAnchor?: import("../../../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
   preflightRecovery?:
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
@@ -269,6 +273,10 @@ export type EmbeddedRunAttemptResult = {
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
+  /**
+   * Omission preserves the legacy `lastAssistant` fallback; explicit `undefined`
+   * means this attempt produced no assistant response.
+   */
   currentAttemptAssistant?: AssistantMessage | undefined;
   /** Completed message_end snapshot owned by this model attempt. */
   currentAttemptCompletedAssistant?: AssistantMessage | undefined;

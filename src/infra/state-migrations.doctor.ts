@@ -1,16 +1,19 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   discardLegacyRegistryWorktrees,
   hasLegacyRegistryWorktrees,
+  listRegistryWorktreesForMigration,
+  rewriteRegistryWorktreePathsForMigration,
 } from "../agents/worktrees/registry.js";
-import { listBundledChannelLegacyStateMigrationDetectors } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
-import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -103,7 +106,6 @@ import {
 import {
   migrateLegacyInstalledPluginIndex,
   migrateLegacyPluginStateSidecar,
-  runLegacyMigrationPlans,
 } from "./state-migrations.plugin-state.js";
 import {
   detectLegacyRescuePending,
@@ -141,7 +143,6 @@ import {
 import {
   PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES,
   TASK_STATE_SQLITE_SIDECAR_SUFFIXES,
-  buildLegacyMigrationPreview,
   hasPendingSqliteSidecarArchive,
   listLegacyDeliveryQueueDeliveredMarkers,
   listLegacyDeliveryQueueFiles,
@@ -201,36 +202,6 @@ export function resetAutoMigrateLegacyStateForTest(): void {
   autoMigrateChecked.clear();
   resetAutoMigrateLegacyTaskStateSidecarsForTest();
   resetLegacySessionSurfacesForTest();
-}
-
-async function collectChannelLegacyStateMigrationPlans(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-  oauthDir: string;
-}): Promise<ChannelLegacyStateMigrationPlan[]> {
-  const plans: ChannelLegacyStateMigrationPlan[] = [];
-  // Legacy state detection belongs on a narrow setup-entry surface so doctor
-  // does not cold-load unrelated runtime channel code.
-  const detectors = listBundledChannelLegacyStateMigrationDetectors({ config: params.cfg });
-  for (const detectLegacyStateMigrationsLocal of detectors) {
-    const detected = await detectLegacyStateMigrationsLocal({
-      cfg: params.cfg,
-      env: params.env,
-      stateDir: params.stateDir,
-      oauthDir: params.oauthDir,
-    });
-    if (detected?.length) {
-      for (const detectedPlan of detected) {
-        const plan =
-          detectedPlan.kind === "plugin-state-import" && !detectedPlan.stateDir
-            ? { ...detectedPlan, stateDir: params.stateDir }
-            : detectedPlan;
-        plans.push(plan);
-      }
-    }
-  }
-  return plans;
 }
 
 async function collectPluginDoctorStateMigrationPlans(params: {
@@ -313,6 +284,57 @@ function resolveConcreteBindingAccountId(value: unknown): string | undefined {
   }
   const accountId = value.trim();
   return accountId && accountId !== "*" ? accountId : undefined;
+}
+
+async function detectManagedWorktreeStateMigration(params: {
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  stateSchemaMigrations: readonly OpenClawStateDatabaseSchemaMigration[];
+  doctorOnlyStateMigrations?: boolean;
+}): Promise<LegacyStateDetection["worktrees"]> {
+  const rawRoot = path.join(params.stateDir, "worktrees");
+  const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const databaseExists = fileExists(resolveOpenClawStateSqlitePath(stateEnv));
+  const hasCurrentSchema = params.stateSchemaMigrations.length === 0;
+  const hasLegacy =
+    params.doctorOnlyStateMigrations === true &&
+    hasCurrentSchema &&
+    databaseExists &&
+    hasLegacyRegistryWorktrees(stateEnv);
+  // Detection is read-only for the doctor --lint contract. ManagedWorktreeService.worktreesRoot()
+  // owns directory creation; absent roots are canonicalized through their existing state parent.
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = await fs.realpath(rawRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    try {
+      canonicalRoot = path.join(await fs.realpath(params.stateDir), "worktrees");
+    } catch (stateDirError) {
+      if ((stateDirError as NodeJS.ErrnoException).code === "ENOENT") {
+        return { hasLegacy, pathRewrites: [] };
+      }
+      throw stateDirError;
+    }
+  }
+  if (rawRoot === canonicalRoot || !hasCurrentSchema || !databaseExists) {
+    return { hasLegacy, pathRewrites: [] };
+  }
+  const pathRewrites = listRegistryWorktreesForMigration(stateEnv).flatMap((row) => {
+    const fromPath = path.join(rawRoot, row.repoFingerprint, row.name);
+    return row.path === fromPath
+      ? [
+          {
+            id: row.id,
+            fromPath,
+            toPath: path.join(canonicalRoot, row.repoFingerprint, row.name),
+          },
+        ]
+      : [];
+  });
+  return { hasLegacy, pathRewrites };
 }
 
 export async function detectLegacyStateMigrations(params: {
@@ -414,12 +436,12 @@ export async function detectLegacyStateMigrations(params: {
   const stateSchemaMigrations = detectOpenClawStateDatabaseSchemaMigrations({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });
-  const stateEnv = { ...env, OPENCLAW_STATE_DIR: stateDir };
-  const hasLegacyWorktrees =
-    params.doctorOnlyStateMigrations === true &&
-    stateSchemaMigrations.length === 0 &&
-    fileExists(resolveOpenClawStateSqlitePath(stateEnv)) &&
-    hasLegacyRegistryWorktrees(stateEnv);
+  const worktrees = await detectManagedWorktreeStateMigration({
+    env,
+    stateDir,
+    stateSchemaMigrations,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const taskRunsSidecarPath = resolveLegacyTaskRunsSidecarPath(stateDir);
   const flowRunsSidecarPath = resolveLegacyFlowRunsSidecarPath(stateDir);
   const hasPendingTaskRunsSidecarArchive = hasPendingSqliteSidecarArchive(
@@ -565,12 +587,6 @@ export async function detectLegacyStateMigrations(params: {
     ),
     configuredAccountIds,
   });
-  const channelPlans = await collectChannelLegacyStateMigrationPlans({
-    cfg: params.cfg,
-    env,
-    stateDir,
-    oauthDir,
-  });
   const pluginPlanWarnings: string[] = [];
   const pluginPlans =
     stateSchemaMigrations.length > 0
@@ -619,8 +635,13 @@ export async function detectLegacyStateMigrations(params: {
       "- Rerun doctor after shared SQLite schema repair to detect plugin state migrations",
     );
   }
-  if (hasLegacyWorktrees) {
+  if (worktrees.hasLegacy) {
     preview.push("- Managed worktrees: discard rows without provisioned-file ledgers");
+  }
+  if (worktrees.pathRewrites.length > 0) {
+    preview.push(
+      `- Managed worktrees: canonicalize ${worktrees.pathRewrites.length} persisted ${worktrees.pathRewrites.length === 1 ? "path" : "paths"} for symlinked state directories`,
+    );
   }
   if (fileExists(taskRunsSidecarPath)) {
     preview.push(`- Task registry sidecar: ${taskRunsSidecarPath} → shared SQLite state`);
@@ -694,9 +715,6 @@ export async function detectLegacyStateMigrations(params: {
       preview.push(message);
     }
   }
-  if (channelPlans.length > 0) {
-    preview.push(...channelPlans.map(buildLegacyMigrationPreview));
-  }
   if (pluginPlans.length > 0) {
     preview.push(...pluginPlans.flatMap((plan) => plan.preview));
   }
@@ -724,10 +742,6 @@ export async function detectLegacyStateMigrations(params: {
       targetDir: targetAgentDir,
       hasLegacy: hasLegacyAgentDir,
     },
-    channelPlans: {
-      hasLegacy: channelPlans.length > 0,
-      plans: channelPlans,
-    },
     pluginPlans: {
       hasLegacy: pluginPlans.length > 0,
       plans: pluginPlans,
@@ -745,7 +759,7 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: stateSchemaMigrations.length > 0,
       preview: stateSchemaMigrations.map((migration) => migration.path),
     },
-    worktrees: { hasLegacy: hasLegacyWorktrees },
+    worktrees,
     taskStateSidecars: {
       taskRunsPath: taskRunsSidecarPath,
       flowRunsPath: flowRunsSidecarPath,
@@ -1020,24 +1034,32 @@ function buildLegacyStateMigrationSteps(
     run: () => migrate({ detected: detection, env, stateDir }),
   });
 
-  const doctorPrelude: LegacyStateMigrationStep[] = isDoctor
-    ? [
-        finalStep(() => {
-          const discardedWorktrees = detected.worktrees.hasLegacy
-            ? discardLegacyRegistryWorktrees({ ...env, OPENCLAW_STATE_DIR: stateDir })
-            : 0;
-          return {
-            changes:
-              discardedWorktrees > 0
-                ? [
-                    `Discarded ${discardedWorktrees} legacy managed worktree ${discardedWorktrees === 1 ? "row" : "rows"}; affected worktrees will provision fresh on next use`,
-                  ]
-                : [],
-            warnings: [],
-          };
-        }),
-      ]
-    : [];
+  const managedWorktreePrelude: LegacyStateMigrationStep[] = [
+    finalStep(() => {
+      const stateEnv = { ...env, OPENCLAW_STATE_DIR: stateDir };
+      const discardedWorktrees =
+        isDoctor && detected.worktrees.hasLegacy ? discardLegacyRegistryWorktrees(stateEnv) : 0;
+      const canonicalizedWorktrees = rewriteRegistryWorktreePathsForMigration(
+        stateEnv,
+        detected.worktrees.pathRewrites,
+      );
+      return {
+        changes: [
+          ...(discardedWorktrees > 0
+            ? [
+                `Discarded ${discardedWorktrees} legacy managed worktree ${discardedWorktrees === 1 ? "row" : "rows"}; affected worktrees will provision fresh on next use`,
+              ]
+            : []),
+          ...(canonicalizedWorktrees > 0
+            ? [
+                `Canonicalized ${canonicalizedWorktrees} managed worktree ${canonicalizedWorktrees === 1 ? "path" : "paths"} for symlinked state directories`,
+              ]
+            : []),
+        ],
+        warnings: [],
+      };
+    }),
+  ];
 
   const sharedSteps: LegacyStateMigrationStep[] = [
     sharedStep(() => migrateLegacyPluginStateSidecar({ stateDir })),
@@ -1114,11 +1136,6 @@ function buildLegacyStateMigrationSteps(
         env: { ...env, OPENCLAW_STATE_DIR: stateDir },
       }),
     ),
-    finalStep(() =>
-      runLegacyMigrationPlans(
-        detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
-      ),
-    ),
     finalStep(
       () =>
         isDoctor && detected.stateSchema.hasLegacy
@@ -1149,15 +1166,10 @@ function buildLegacyStateMigrationSteps(
         kind: "acp-session-metadata",
       },
       finalStep(() => migrateLegacyAgentDir(detected, now)),
-      finalStep(() =>
-        runLegacyMigrationPlans(
-          detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
-        ),
-      ),
     );
   }
 
-  return [...doctorPrelude, ...sharedSteps, ...doctorStateSteps, ...finalSteps];
+  return [...managedWorktreePrelude, ...sharedSteps, ...doctorStateSteps, ...finalSteps];
 }
 
 async function runLegacyStateMigrationSteps(steps: readonly LegacyStateMigrationStep[]): Promise<{
@@ -1288,7 +1300,21 @@ export async function autoMigrateLegacyState(params: {
   }
   const mediaPersistence =
     params.doctorOnlyStateMigrations === true
-      ? migrateLegacyMediaPersistence({ env: { ...env, OPENCLAW_STATE_DIR: stateDir } })
+      ? migrateLegacyMediaPersistence({
+          configuredAgentDatabaseTargets: resolveSessionStoreTargets(
+            params.cfg,
+            { allAgents: true },
+            { env },
+          ).map((target) => ({
+            agentId: target.agentId,
+            path: resolveSqliteTargetFromSessionStorePath(target.storePath, {
+              agentId: target.agentId,
+              defaultAgentId: resolveDefaultAgentId(params.cfg),
+              env,
+            }).path,
+          })),
+          env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+        })
       : { changes: [], warnings: [] };
   if (mediaPersistence.warnings.length > 0) {
     return {
@@ -1403,12 +1429,13 @@ export async function autoMigrateLegacyState(params: {
     !hasCustomAgentDir &&
     !detected.sessions.hasLegacy &&
     !detected.agentDir.hasLegacy &&
-    !detected.channelPlans.hasLegacy &&
     !detected.pluginPlans?.hasLegacy &&
     !detected.pluginStateSidecar.hasLegacy &&
     !detected.pluginInstallIndex.hasLegacy &&
     !detected.debugProxyCaptureSidecar.hasLegacy &&
     !detected.stateSchema.hasLegacy &&
+    !detected.worktrees.hasLegacy &&
+    detected.worktrees.pathRewrites.length === 0 &&
     !detected.taskStateSidecars.hasLegacy &&
     !detected.deliveryQueues.hasLegacy &&
     !detected.voiceWake.hasLegacy &&

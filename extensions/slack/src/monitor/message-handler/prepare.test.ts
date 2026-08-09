@@ -445,14 +445,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.From).toBe("slack:U123");
   });
 
-  it("uses the validated event workspace as the standardized conversation space", async () => {
+  it("carries the validated event workspace through reusable DM routing", async () => {
     const ctx = createDefaultSlackCtx();
     ctx.teamId = "";
     const eventScope = {
-      apiAppId: "A1",
-      enterpriseId: "E1",
-      isEnterpriseInstall: true,
-      teamId: "T_ENTERPRISE",
+      teamId: "T123ENTERPRISE",
       client: {} as SlackEventScope["client"],
     } satisfies SlackEventScope;
 
@@ -464,7 +461,53 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
 
     assertPrepared(prepared, "org-wide Slack DM");
-    expect(prepared.ctxPayload.GroupSpace).toBe("T_ENTERPRISE");
+    expect(prepared.ctxPayload.GroupSpace).toBe("T123ENTERPRISE");
+    expect(prepared.ctxPayload.To).toBe("team:T123ENTERPRISE:user:U123");
+    expect(prepared.ctxPayload.OriginatingTo).toBe("team:T123ENTERPRISE:user:U123");
+    expect(prepared.ctxPayload.NativeChannelId).toBe("D999");
+    expect(prepared.replyTarget).toBe("channel:D999");
+    expect(prepared.turn.record).toMatchObject({
+      updateLastRoute: {
+        channel: "slack",
+        to: "team:T123ENTERPRISE:user:U123",
+      },
+    });
+  });
+
+  it("carries the validated event workspace through reusable channel routing", async () => {
+    const ctx = createReplyToAllSlackCtx({
+      groupPolicy: "open",
+      defaultRequireMention: false,
+      asChannel: true,
+    });
+    const eventScope = {
+      teamId: "T123ENTERPRISE",
+      client: {} as SlackEventScope["client"],
+    } satisfies SlackEventScope;
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: createSlackAccount({ groupPolicy: "open" }),
+      message: createSlackMessage({
+        channel: "C123CHANNEL",
+        channel_type: "channel",
+        user: "U123",
+        text: "hello",
+      }),
+      opts: { source: "message", eventScope },
+    });
+
+    assertPrepared(prepared, "org-wide Slack channel message");
+    expect(prepared.ctxPayload.To).toBe("team:T123ENTERPRISE:channel:C123CHANNEL");
+    expect(prepared.ctxPayload.OriginatingTo).toBe("team:T123ENTERPRISE:channel:C123CHANNEL");
+    expect(prepared.ctxPayload.NativeChannelId).toBe("C123CHANNEL");
+    expect(prepared.replyTarget).toBe("channel:C123CHANNEL");
+    expect(prepared.turn.record).toMatchObject({
+      updateLastRoute: {
+        channel: "slack",
+        to: "team:T123ENTERPRISE:channel:C123CHANNEL",
+      },
+    });
   });
 
   it("routes a self-threaded Agent View root before capability detection completes", async () => {
@@ -1026,6 +1069,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     source: "app_mention" | "message";
     mentionType: "explicit" | "implicit" | "regex";
     bindingOwner: "none" | "plugin" | "runtime";
+    enterpriseTeamId?: string;
     expectRootMentioned?: boolean;
     expectFollowUpMentioned?: boolean;
   };
@@ -1046,7 +1090,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const expectedSessionKey =
       scenario.bindingOwner === "runtime"
         ? "agent:review:slack:channel:c0ahzfcas1k"
-        : `agent:main:slack:channel:${channelId.toLowerCase()}:thread:${rootTs}`;
+        : `agent:main:slack:channel:${scenario.enterpriseTeamId ? `team:${scenario.enterpriseTeamId.toLowerCase()}:channel:` : ""}${channelId.toLowerCase()}:thread:${rootTs}`;
     const { storePath } = storeFixture.makeTmpStorePath();
     const channelsConfig = implicit
       ? { [channelId]: { enabled: true, requireMention: false } }
@@ -1086,6 +1130,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
       replyToMode,
       ...(channelsConfig ? { channelsConfig } : {}),
     });
+    if (scenario.enterpriseTeamId) {
+      Object.assign(slackCtx, { botUserId: "" });
+    }
     slackCtx.resolveChannelName = async () => ({
       name: implicit ? "genai" : "proj-openclaw",
       type: "channel",
@@ -1148,9 +1195,19 @@ describe("slack prepareSlackMessage inbound contract", () => {
         opts: {
           source: scenario.source,
           ...(scenario.source === "app_mention" ? { wasMentioned: true } : {}),
+          ...(scenario.enterpriseTeamId
+            ? {
+                eventScope: {
+                  teamId: scenario.enterpriseTeamId,
+                  client: slackCtx.app.client,
+                },
+              }
+            : {}),
         },
       });
-      recordSlackThreadParticipation("default", channelId, rootTs);
+      recordSlackThreadParticipation("default", channelId, rootTs, {
+        teamId: scenario.enterpriseTeamId,
+      });
       const followUp = await prepareSlackMessage({
         ctx: slackCtx,
         account,
@@ -1163,7 +1220,17 @@ describe("slack prepareSlackMessage inbound contract", () => {
           ts: "1777244714.000100",
           thread_ts: rootTs,
         } as SlackMessageEvent,
-        opts: { source: "message" },
+        opts: {
+          source: "message",
+          ...(scenario.enterpriseTeamId
+            ? {
+                eventScope: {
+                  teamId: scenario.enterpriseTeamId,
+                  client: slackCtx.app.client,
+                },
+              }
+            : {}),
+        },
       });
       const expectedAgentId =
         scenario.bindingOwner === "runtime"
@@ -1631,38 +1698,24 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.RawBody).toContain("[Forwarded message from Bob]\nForwarded hello");
   });
 
-  it("recovers full Slack DM text from top-level rich text blocks when text is only a preview", async () => {
-    const preview = "Yo Molty what is uppppp ".repeat(7).slice(0, 160);
-    const fullText = `${preview}and this tail should still reach the agent`;
-
-    const prepared = await prepareWithDefaultCtx(
-      createSlackMessage({
-        text: preview,
-        blocks: [
-          {
-            type: "rich_text",
-            block_id: "b1",
-            elements: [
-              {
-                type: "rich_text_section",
-                elements: [{ type: "text", text: fullText }],
-              },
-            ],
-          },
-        ],
-      }),
-    );
-
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.RawBody).toBe(fullText);
-    expect(prepared.ctxPayload.BodyForAgent).toContain(fullText);
-  });
-
-  it("recovers full Slack DM text when rich text differs from a truncated preview", async () => {
-    const fullText = `First paragraph ${"keeps going ".repeat(14)}
+  it.each([
+    {
+      name: "recovers full Slack DM text from top-level rich text blocks when text is only a preview",
+      createText: () => {
+        const preview = "Yo Molty what is uppppp ".repeat(7).slice(0, 160);
+        return { preview, fullText: `${preview}and this tail should still reach the agent` };
+      },
+    },
+    {
+      name: "recovers full Slack DM text when rich text differs from a truncated preview",
+      createText: () => {
+        const fullText = `First paragraph ${"keeps going ".repeat(14)}
 Second paragraph should still reach the agent after Slack's preview cutoff.`;
-    const preview = `${fullText.slice(0, 200).replace(/\n/g, " ")}...`;
-
+        return { preview: `${fullText.slice(0, 200).replace(/\n/g, " ")}...`, fullText };
+      },
+    },
+  ])("$name", async ({ createText }) => {
+    const { preview, fullText } = createText();
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
         text: preview,
@@ -1765,16 +1818,20 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       createSlackMessage({
         text: "",
         files: [
-          { id: "FVOICE", name: "voice.ogg" },
-          { id: "FPHOTO", name: "photo.jpg" },
+          { id: "FVOICE", name: "voice.ogg", mimetype: "audio/ogg", size: 3_210 },
+          { id: "FPHOTO", name: "photo.jpg", mimetype: "image/jpeg", size: 6_543 },
         ],
       }),
     );
 
     assertPrepared(prepared);
     expect(prepared.ctxPayload.RawBody).toContain("[Slack file:");
-    expect(prepared.ctxPayload.RawBody).toContain("voice.ogg (fileId: FVOICE)");
-    expect(prepared.ctxPayload.RawBody).toContain("photo.jpg (fileId: FPHOTO)");
+    expect(prepared.ctxPayload.RawBody).toContain(
+      "voice.ogg (audio/ogg, 3210 bytes, fileId: FVOICE)",
+    );
+    expect(prepared.ctxPayload.RawBody).toContain(
+      "photo.jpg (image/jpeg, 6543 bytes, fileId: FPHOTO)",
+    );
   });
 
   it("delivers forwarded file-only messages with metadata when media download fails", async () => {
@@ -2007,7 +2064,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(prepared).toBeNull();
       const entries = Array.from(slackCtx.channelHistories.values()).flat();
       expect(entries).toHaveLength(1);
-      expect(entries[0]?.body).toBe("[Slack file: diagram.png (fileId: F1)]");
+      expect(entries[0]?.body).toBe("[Slack file: diagram.png (image/png, fileId: F1)]");
       expect(entries[0]?.media).toHaveLength(1);
       expect(entries[0]?.media?.[0]).toMatchObject({
         contentType: "image/png",
@@ -2131,7 +2188,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       });
       const entries = Array.from(slackCtx.channelHistories.values()).flat();
       expect(entries).toHaveLength(1);
-      expect(entries[0]?.body).toBe("[Slack file: parent.png (fileId: F-parent)]");
+      expect(entries[0]?.body).toBe("[Slack file: parent.png (image/png, fileId: F-parent)]");
       expect(entries[0]?.media).toBeUndefined();
       expect(mockFetch).not.toHaveBeenCalled();
     } finally {
@@ -2512,7 +2569,18 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.From).toBe("slack:group:G123");
   });
 
-  it("blocks MPIM messages from senders outside the configured allowFrom", async () => {
+  it.each([
+    {
+      name: "blocks MPIM messages from senders outside the configured allowFrom",
+      user: "U_ATTACKER",
+      allowed: false,
+    },
+    {
+      name: "allows MPIM messages from senders in the configured allowFrom",
+      user: "U_OWNER",
+      allowed: true,
+    },
+  ])("$name", async ({ user, allowed }) => {
     const ctx = createReplyToAllSlackCtx();
     ctx.allowFrom = ["U_OWNER"];
     const prepared = await prepareMessageWith(
@@ -2521,26 +2589,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       createSlackMessage({
         channel: "G123",
         channel_type: "mpim",
-        user: "U_ATTACKER",
+        user,
       }),
     );
 
-    expect(prepared).toBeNull();
-  });
-
-  it("allows MPIM messages from senders in the configured allowFrom", async () => {
-    const ctx = createReplyToAllSlackCtx();
-    ctx.allowFrom = ["U_OWNER"];
-    const prepared = await prepareMessageWith(
-      ctx,
-      createSlackAccount({ replyToMode: "all" }),
-      createSlackMessage({
-        channel: "G123",
-        channel_type: "mpim",
-        user: "U_OWNER",
-      }),
-    );
-
+    if (!allowed) {
+      expect(prepared).toBeNull();
+      return;
+    }
     assertPrepared(prepared);
     expect(prepared.ctxPayload.ChatType).toBe("group");
   });
@@ -3631,6 +3687,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expectFollowUpMentioned: true,
     },
     {
+      name: "keeps a Grid root app mention and unmentioned thread follow-up on one parent session",
+      source: "app_mention",
+      mentionType: "explicit",
+      bindingOwner: "none",
+      enterpriseTeamId: "T123ENTERPRISE",
+      expectFollowUpMentioned: true,
+    },
+    {
       name: "keeps a message-first root mention and URL-only Slack thread follow-up on one parent session",
       source: "message",
       mentionType: "explicit",
@@ -4211,7 +4275,9 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(root.ctxPayload.CommandBody).toBe("");
       expect(root.ctxPayload.Transcript).toBe("Bill /new please review this");
       expect(root.ctxPayload.media?.[1]?.transcribed).toBe(true);
-      expect(root.ctxPayload.RawBody).toContain("[Slack file: voice.mp4 (fileId: FVOICE)]");
+      expect(root.ctxPayload.RawBody).toContain(
+        "[Slack file: voice.mp4 (video/mp4, fileId: FVOICE)]",
+      );
       expect(root.ctxPayload.BodyForAgent).toContain(
         '[Audio transcript (machine-generated, untrusted)]: "Bill /new please review this"',
       );
@@ -4320,7 +4386,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       await expect(fs.stat(downloadedPath as string)).rejects.toMatchObject({ code: "ENOENT" });
       const entries = Array.from(slackCtx.channelHistories.values()).flat();
       expect(entries).toHaveLength(1);
-      expect(entries[0]?.body).toBe("[Slack file: report.pdf (fileId: FPDF)]");
+      expect(entries[0]?.body).toBe("[Slack file: report.pdf (application/pdf, fileId: FPDF)]");
       expect(entries[0]?.media).toBeUndefined();
     } finally {
       globalThis.fetch = originalFetch;

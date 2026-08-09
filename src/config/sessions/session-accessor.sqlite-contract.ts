@@ -15,6 +15,7 @@ import type {
   SessionLifecycleStoreTarget,
 } from "./session-accessor.lifecycle-types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
+import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionAccessScope = {
@@ -49,6 +50,8 @@ export type SessionTranscriptReadScope = Omit<SessionTranscriptRuntimeScope, "se
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
   sessionId?: string;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
 };
 
 export type ExactSessionEntry = {
@@ -133,6 +136,7 @@ export type TranscriptMessageAppendOptions<TMessage> = {
 
 export type TranscriptMessageAppendResult<TMessage> = {
   appended: boolean;
+  anchor?: TranscriptEntryAnchor;
   effectiveParentId?: string | null;
   message: TMessage;
   messageId: string;
@@ -195,6 +199,17 @@ type SessionEntryReplacement = {
 
 export type SessionEntryReplacementUpdate<T> = {
   replacements?: Iterable<SessionEntryReplacement>;
+  result: T;
+};
+
+type SessionEntryBatchProjectionMutation = {
+  entry: SessionEntry;
+  previousSessionKeys?: readonly string[];
+  sessionKey: string;
+};
+
+export type SessionEntryBatchProjectionUpdate<T> = {
+  mutations?: Iterable<SessionEntryBatchProjectionMutation>;
   result: T;
 };
 

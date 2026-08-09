@@ -13,6 +13,7 @@ import type { ControlUiSessionPullRequest } from "../../../../src/gateway/contro
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewayEventFrame, GatewayEventListener } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createBrowserAnnotationHandoff } from "../../app/browser-annotation-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -38,6 +39,7 @@ export type TestChatPane = HTMLElement & {
   createSession: () => Promise<boolean>;
   restoreArchivedSession: (sessionKey: string) => Promise<void>;
   disconnectedCallback: () => void;
+  discardBrowserAnnotations?: () => void;
   acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
@@ -64,6 +66,7 @@ export type TestChatPane = HTMLElement & {
     resolution: "send" | "queue" | "edit" | "dismiss",
   ) => Promise<void>;
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
+  paneId: string;
   sessionKey: string;
   switchPaneSession: (nextSessionKey: string) => void;
   deferSessionHydrationUntilTranscript: (
@@ -179,6 +182,8 @@ export function createSessionContext(
       },
     },
     initialUserMessage: createInitialUserMessageHandoff(),
+    browserAnnotationHandoff: createBrowserAnnotationHandoff(),
+    nativeChatDrafts: { subscribe: () => () => undefined },
     sessions,
   } as unknown as ApplicationContext;
 }
@@ -196,6 +201,8 @@ export function createTestChatPane(params: {
   const state = {
     agentsList: null,
     assistantAgentId: null,
+    chatAttachments: [],
+    chatComposerFallbackByScope: {},
     chatError: null,
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,

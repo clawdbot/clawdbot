@@ -4,6 +4,7 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { ChannelCapability } from "../lib/channels/index.ts";
+import type { ChatAttachment } from "../lib/chat/chat-types.ts";
 import type { RuntimeConfigCapability } from "../lib/config/index.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { WorkboardCapability } from "../lib/workboard/capability.ts";
@@ -90,6 +91,19 @@ export type ApplicationInitialUserMessageHandoff = {
   clear: (sessionKey?: string) => void;
 };
 
+type BrowserAnnotationHandoffKey = {
+  owner: ApplicationGateway["snapshot"]["client"];
+  paneId: string;
+  scopeKey: string;
+};
+
+export type ApplicationBrowserAnnotationHandoff = {
+  prepare(handoff: BrowserAnnotationHandoffKey & { attachments: readonly ChatAttachment[] }): void;
+  consume(handoff: BrowserAnnotationHandoffKey): ChatAttachment[] | null;
+  clearPane(paneId: string): void;
+  dispose(): void;
+};
+
 export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
   readonly gateway: ApplicationGateway;
@@ -109,6 +123,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly webPush: WebPushCapability;
   readonly skillWorkshopRevision: ApplicationSkillWorkshopRevisionHandoff;
   readonly initialUserMessage: ApplicationInitialUserMessageHandoff;
+  readonly browserAnnotationHandoff: ApplicationBrowserAnnotationHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly revalidate: (routeId?: TRouteId) => Promise<void>;

@@ -1020,7 +1020,6 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   const runtimeResolved = resolveProviderRuntimePlugin({
     ...params,
     applyAutoEnable: false,
-    bundledProviderVitestCompat: false,
   })?.resolveSyntheticAuth?.(params.context);
   if (runtimeResolved) {
     return runtimeResolved;
@@ -1033,17 +1032,21 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
       ...params,
       provider: providerRef,
       applyAutoEnable: false,
-      bundledProviderVitestCompat: false,
     })?.resolveSyntheticAuth?.(params.context);
     if (runtimeProviderResolved) {
       return runtimeProviderResolved;
     }
   }
   if (providerRefs.length === 1) {
+    // Last-resort match for custom provider ids with no resolvable owning plugin (e.g. Ollama
+    // aliases). Entry modules only: a full plugin-runtime sweep here costs seconds per ref on
+    // source checkouts and belongs to explicit control-plane loads.
     return resolvePluginDiscoveryProvidersRuntime({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      discoveryEntriesOnly: true,
+      includeSyntheticAuthProviders: true,
     })
       .find((provider) => matchesAnyProviderPluginRef(provider, providerRefs))
       ?.resolveSyntheticAuth?.(params.context);
@@ -1061,9 +1064,9 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
   const env = params.env ?? process.env;
   const config = params.config ?? {};
   const currentMetadataSnapshot = getCurrentPluginMetadataSnapshot({
-    config,
     env,
-    ...(workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : { workspaceDir }),
+    ...(params.config ? { config } : { requireDefaultDiscoveryContext: true }),
+    ...(workspaceDir ? { workspaceDir } : { allowWorkspaceScopedSnapshot: true }),
   });
   const { manifestRegistry } =
     currentMetadataSnapshot ?? resolvePluginMetadataSnapshot({ config, workspaceDir, env });

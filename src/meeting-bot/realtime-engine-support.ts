@@ -1,3 +1,4 @@
+import { normalizeOptionalString as readLogString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   RealtimeTranscriptionProviderPlugin,
@@ -92,10 +93,6 @@ export function buildMeetingSpeakExactUserMessage(text: string): string {
     "Speak this exact OpenClaw answer to the meeting, without adding, removing, or rephrasing words.",
     `Answer: ${JSON.stringify(text)}`,
   ].join("\n");
-}
-
-function readLogString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function formatLogValue(value: string | undefined): string {

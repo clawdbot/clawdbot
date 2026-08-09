@@ -28,10 +28,11 @@ import {
 import { resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import {
   isConfiguredHeartbeatAgent,
-  isTargetedImmediateSystemEventWake,
+  isTargetedImmediateUnscheduledWake,
 } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
+  HEARTBEAT_SKIP_NO_PENDING_EVENT,
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
   type HeartbeatWakeIntent,
@@ -129,15 +130,45 @@ export function startHeartbeatRunner(opts: {
     agent.nextDueMs = seekActiveSlotForAgent(agent, rawDueMs);
   };
 
+  const applyScheduledCadence = (
+    agent: HeartbeatAgentState,
+    intervalMs: number | undefined,
+    anchorMs: number | undefined,
+  ) => {
+    if (intervalMs === undefined) {
+      return;
+    }
+    agent.intervalMs = intervalMs;
+    agent.phaseMs =
+      anchorMs ??
+      resolveHeartbeatPhaseMs({
+        schedulerSeed: state.schedulerSeed,
+        agentId: agent.agentId,
+        intervalMs,
+      });
+    agent.heartbeat = {
+      ...agent.heartbeat,
+      every: `${intervalMs}ms`,
+    };
+  };
+
   const advanceStaleScheduleAfterDeferral = (
     agent: HeartbeatAgentState,
     now: number,
     reason?: string,
     decision?: DeferDecision,
+    options: { authoritativeScheduledTick?: boolean; execEventWake?: boolean } = {},
   ) => {
-    if (!decision?.defer || decision.reason === "not-due" || agent.nextDueMs > now) {
+    if (
+      !decision?.defer ||
+      decision.reason === "not-due" ||
+      agent.nextDueMs > now ||
+      (options.execEventWake && !options.authoritativeScheduledTick)
+    ) {
       return;
     }
+    // A stale exec wake can be retained by the wake layer after a guard
+    // deferral, but it never owns cadence unless a scheduled tick joined it.
     // Deferrals that do not have wake-layer retry ownership still move the due
     // slot forward so repeated event wakes cannot retry a stale interval.
     advanceAgentSchedule(agent, now, reason);
@@ -271,6 +302,7 @@ export function startHeartbeatRunner(opts: {
 
     const reason = params.reason;
     const intent = params.intent;
+    const execEventWake = params.source === "exec-event";
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
     const requestedHeartbeat = params.heartbeat;
@@ -280,6 +312,7 @@ export function startHeartbeatRunner(opts: {
       params.scheduledEveryMs > 0
         ? params.scheduledEveryMs
         : undefined;
+    const authoritativeScheduledTick = scheduledEveryMs !== undefined;
     const scheduledAnchorMs =
       typeof params.scheduledAnchorMs === "number" &&
       Number.isSafeInteger(params.scheduledAnchorMs) &&
@@ -295,10 +328,11 @@ export function startHeartbeatRunner(opts: {
     const allowsUnscheduledTarget =
       requestedTargetAgentId !== undefined &&
       isConfiguredHeartbeatAgent(wakeConfig, requestedTargetAgentId) &&
-      isTargetedImmediateSystemEventWake({
+      isTargetedImmediateUnscheduledWake({
         source: params.source,
         intent,
         reason,
+        agentId: requestedAgentId,
         sessionKey: requestedSessionKey,
       });
     if (state.agents.size === 0 && !allowsUnscheduledTarget) {
@@ -328,14 +362,17 @@ export function startHeartbeatRunner(opts: {
     };
     const runOneAgent = async (
       agent: HeartbeatAgentState,
-      authoritativeScheduledTick = false,
+      scheduledTickIsAuthoritative = false,
     ): Promise<AgentWakeOutcome> => {
       const deferral = evaluateWakeDeferral(agent, now, reason, intent, {
-        authoritativeScheduledTick,
+        authoritativeScheduledTick: scheduledTickIsAuthoritative,
         retainedWork,
       });
       if (deferral.defer) {
-        advanceStaleScheduleAfterDeferral(agent, now, reason, deferral);
+        advanceStaleScheduleAfterDeferral(agent, now, reason, deferral, {
+          authoritativeScheduledTick: scheduledTickIsAuthoritative,
+          execEventWake,
+        });
         return {
           ran: false,
           result: {
@@ -355,6 +392,7 @@ export function startHeartbeatRunner(opts: {
           source: params.source,
           intent,
           reason,
+          ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
           runScope: "global",
           tasks: requestedTasks,
           deps: { runtime: state.runtime },
@@ -376,6 +414,15 @@ export function startHeartbeatRunner(opts: {
         // Do not advance the schedule or record run bookkeeping for this
         // agent — its target runtime is busy and the wake layer retries.
         return { ran: false, retryableBusySkip: res };
+      }
+      if (
+        params.source === "exec-event" &&
+        res.status === "skipped" &&
+        res.reason === HEARTBEAT_SKIP_NO_PENDING_EVENT
+      ) {
+        // Poll already acknowledged the exec completion. This wake owns no
+        // cadence or commitment work, so it must remain a true no-op.
+        return { ran: false, result: res };
       }
       // Non-retryable outcome — record bookkeeping for cooldown gates.
       recordRunBookkeeping(agent, now);
@@ -430,21 +477,8 @@ export function startHeartbeatRunner(opts: {
       const targetAgent = state.agents.get(targetAgentId);
       // Task intent wins scheduled-task coalescing, so the cadence payload—not
       // the final intent—proves that the persisted monitor tick joined this turn.
-      const authoritativeScheduledTick =
-        params.source === "interval" && scheduledEveryMs !== undefined;
-      if (targetAgent && scheduledEveryMs !== undefined && authoritativeScheduledTick) {
-        targetAgent.intervalMs = scheduledEveryMs;
-        targetAgent.phaseMs =
-          scheduledAnchorMs ??
-          resolveHeartbeatPhaseMs({
-            schedulerSeed: state.schedulerSeed,
-            agentId: targetAgent.agentId,
-            intervalMs: scheduledEveryMs,
-          });
-        targetAgent.heartbeat = {
-          ...targetAgent.heartbeat,
-          every: `${scheduledEveryMs}ms`,
-        };
+      if (targetAgent && authoritativeScheduledTick) {
+        applyScheduledCadence(targetAgent, scheduledEveryMs, scheduledAnchorMs);
       }
       // A user-present targeted event may wake an unscheduled agent once. It
       // must not enroll that agent in the recurring heartbeat scheduler.
@@ -480,7 +514,10 @@ export function startHeartbeatRunner(opts: {
           retainedWork,
         });
         if (deferral.defer) {
-          advanceStaleScheduleAfterDeferral(targetAgent, now, reason, deferral);
+          advanceStaleScheduleAfterDeferral(targetAgent, now, reason, deferral, {
+            authoritativeScheduledTick,
+            execEventWake,
+          });
           return {
             status: "skipped",
             reason: deferral.reason,
@@ -503,6 +540,7 @@ export function startHeartbeatRunner(opts: {
           source: params.source,
           intent,
           reason,
+          ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
           runScope: "global",
           sessionKey: requestedSessionKey,
           tasks: requestedTasks,
@@ -513,6 +551,13 @@ export function startHeartbeatRunner(opts: {
           // retries the same reason shortly; if we recorded `lastRunStartedAtMs`
           // here, the retry would falsely defer with `not-due`/`min-spacing`
           // because the cooldown would treat this skipped attempt as a real run.
+          return res;
+        }
+        if (
+          params.source === "exec-event" &&
+          res.status === "skipped" &&
+          res.reason === HEARTBEAT_SKIP_NO_PENDING_EVENT
+        ) {
           return res;
         }
         // Non-retryable outcome (ran, disabled, failed-but-not-busy). Record
@@ -539,8 +584,15 @@ export function startHeartbeatRunner(opts: {
       }
     }
 
+    if (authoritativeScheduledTick) {
+      for (const agent of state.agents.values()) {
+        applyScheduledCadence(agent, scheduledEveryMs, scheduledAnchorMs);
+      }
+    }
     const agentOutcomes = await Promise.all(
-      Array.from(state.agents.values()).map((agent) => runOneAgent(agent)),
+      Array.from(state.agents.values()).map((agent) =>
+        runOneAgent(agent, authoritativeScheduledTick),
+      ),
     );
     let firstRetryableBusy: HeartbeatRunResult | undefined;
     for (const outcome of agentOutcomes) {

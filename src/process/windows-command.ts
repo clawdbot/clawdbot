@@ -10,6 +10,7 @@ import {
   resolveExecutableFromPathEnv,
   resolveExecutablePathCandidate,
 } from "../infra/executable-path.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
@@ -44,11 +45,6 @@ function createWindowsCommandNotFoundError(command: string): NodeJS.ErrnoExcepti
   return error;
 }
 
-function resolveWindowsEnvironmentValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const normalizedName = name.toLowerCase();
-  return Object.entries(env).find(([key]) => key.toLowerCase() === normalizedName)?.[1];
-}
-
 function resolveWindowsCommandFromCwdOrPath(params: {
   command: string;
   cwd?: string;
@@ -77,8 +73,8 @@ function resolveWindowsCommandFromCwdOrPath(params: {
   }
   const cwd = params.cwd?.trim() || process.cwd();
   const pathValue =
-    resolveWindowsEnvironmentValue(params.env, "PATH") ??
-    resolveWindowsEnvironmentValue(process.env, "PATH") ??
+    resolveEnvironmentValue(params.env, "PATH") ??
+    resolveEnvironmentValue(process.env, "PATH") ??
     "";
   const pathEntries = pathValue
     .split(";")

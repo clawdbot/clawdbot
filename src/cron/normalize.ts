@@ -395,6 +395,22 @@ export function normalizeCronJobInput(
     }
   }
 
+  if ("toolsAllowProvenance" in base) {
+    const provenance = base.toolsAllowProvenance;
+    if (
+      isRecord(provenance) &&
+      provenance.version === 1 &&
+      provenance.source === "final-executable-surface"
+    ) {
+      next.toolsAllowProvenance = {
+        version: 1,
+        source: "final-executable-surface",
+      };
+    } else {
+      delete next.toolsAllowProvenance;
+    }
+  }
+
   if ("agentId" in base) {
     const agentId = base.agentId;
     if (agentId === null) {

@@ -45,11 +45,33 @@ function sessionMenuActionDisabledReasons(
     method: "sessions.patch",
     params: { key: session.key, label: null },
   });
+  const batchPatchReason = (patch: Record<string, unknown>) => {
+    if (!batchRows) {
+      return patchReason;
+    }
+    const access = readSessionMethodAccess(snapshot, {
+      method: "sessions.patchMany",
+      params: {
+        targets: batchRows.map((row) => ({ key: row.key })),
+        patch,
+      },
+    });
+    if (access.allowed) {
+      return undefined;
+    }
+    return access.cause === "method-unavailable" ? patchReason : access.reason;
+  };
+  const unreadReason = batchPatchReason({ unread: true });
+  const categoryReason = batchPatchReason({ category: null });
+  const archiveReason = batchPatchReason({ archived: true });
   const groupReason = reason({
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
   const deleteRows = batchRows ?? [session];
+  const cloudWorkerStopReason = session.cloudWorkerStopAction
+    ? reason(session.cloudWorkerStopAction)
+    : undefined;
   const deleteReason = deleteRows
     .map((row) =>
       reason({
@@ -63,13 +85,13 @@ function sessionMenuActionDisabledReasons(
       ? {
           "toggle-pin": patchReason,
           "set-icon": patchReason,
-          "toggle-unread": patchReason,
           rename: patchReason,
-          "move-to-group": patchReason,
-          "toggle-archived": patchReason,
         }
       : {}),
-    ...(groupReason || patchReason ? { "new-group": groupReason ?? patchReason } : {}),
+    ...(unreadReason ? { "toggle-unread": unreadReason } : {}),
+    ...(categoryReason ? { "move-to-group": categoryReason } : {}),
+    ...(archiveReason ? { "toggle-archived": archiveReason } : {}),
+    ...(groupReason || categoryReason ? { "new-group": groupReason ?? categoryReason } : {}),
     ...(deleteReason ? { delete: deleteReason } : {}),
     ...(batchRows
       ? {}
@@ -85,14 +107,7 @@ function sessionMenuActionDisabledReasons(
                 }),
               }
             : {}),
-          ...(reason({ method: "sessions.reclaim", requiredScope: "operator.admin" })
-            ? {
-                "stop-cloud-worker": reason({
-                  method: "sessions.reclaim",
-                  requiredScope: "operator.admin",
-                }),
-              }
-            : {}),
+          ...(cloudWorkerStopReason ? { "stop-cloud-worker": cloudWorkerStopReason } : {}),
         }),
   };
 }
@@ -229,6 +244,14 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
   const sharedCategory = rows.every((row) => (row.category ?? null) === (rows[0]?.category ?? null))
     ? (rows[0]?.category ?? null)
     : null;
+  const cloudWorkerStopAction = session.cloudWorkerStopAction;
+  const cloudWorkerStopAllowed = Boolean(
+    !batchRows &&
+    cloudWorkerStopAction &&
+    (cloudWorkerStopAction.method !== "sessions.reclaim" || !session.hasActiveRun) &&
+    context &&
+    isGatewayMethodAdvertised(context.gateway.snapshot, cloudWorkerStopAction.method) === true,
+  );
   return keyed(
     menu,
     html`
@@ -253,13 +276,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         )}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
         .archiveAllowed=${archiveAllowed}
-        .cloudWorkerStopAllowed=${Boolean(
-          !batchRows &&
-          session.cloudWorkerActive &&
-          !session.hasActiveRun &&
-          context &&
-          isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.reclaim") === true,
-        )}
+        .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${host.knownSessionGroups()}
         .canOpenChat=${true}
         .work=${batchRows ? null : controller.sessionMenuWork}

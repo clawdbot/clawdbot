@@ -418,12 +418,12 @@ allowlist such as `["all"]`.
 
 #### Data Handling
 
-| Policy field                                        | Observed state                                                                                     | Use when                                                               |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `dataHandling.sensitiveLogging.requireRedaction`    | Runtime invariant `oc://openclaw.invariant/logging/redaction`                                      | Set to `true` to record the requirement; OpenClaw always satisfies it. |
-| `dataHandling.telemetry.denyContentCapture`         | `diagnostics.otel.captureContent`                                                                  | Set to `true` to reject telemetry content capture.                     |
-| `dataHandling.retention.requireSessionMaintenance`  | `session.maintenance.mode`                                                                         | Set to `true` to require effective session maintenance mode `enforce`. |
-| `dataHandling.memory.denySessionTranscriptIndexing` | `memory.qmd.sessions.enabled`, `memory.search.experimental.sessionMemory`, and per-agent overrides | Set to `true` to reject session transcript indexing into memory.       |
+| Policy field                                        | Observed state                                                                                                   | Use when                                                               |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `dataHandling.sensitiveLogging.requireRedaction`    | Runtime invariant `oc://openclaw.invariant/logging/redaction`                                                    | Set to `true` to record the requirement; OpenClaw always satisfies it. |
+| `dataHandling.telemetry.denyContentCapture`         | `diagnostics.otel.captureContent`                                                                                | Set to `true` to reject telemetry content capture.                     |
+| `dataHandling.retention.requireSessionMaintenance`  | `session.maintenance.mode`                                                                                       | Set to `true` to require effective session maintenance mode `enforce`. |
+| `dataHandling.memory.denySessionTranscriptIndexing` | `memory.search.experimental.sessionMemory`, `memory.search.rememberAcrossConversations`, and per-agent overrides | Set to `true` to reject session transcript indexing into memory.       |
 
 #### Secrets
 

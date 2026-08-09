@@ -118,7 +118,7 @@ The assistant avatar override follows the same browser-local pattern: uploaded o
 
 ## Runtime config endpoint
 
-The Control UI fetches its runtime settings from `/control-ui-config.json`, resolved relative to the gateway's Control UI base path (for example `/__openclaw__/control-ui-config.json` under base path `/__openclaw__/`). That endpoint is gated by the same gateway auth as the rest of the HTTP surface: unauthenticated browsers cannot fetch it, and a successful fetch requires a valid gateway token/password, Tailscale Serve identity, or a trusted-proxy identity.
+The Control UI fetches its runtime settings from `/control-ui-config.json`, resolved relative to the gateway's Control UI base path (for example `/__openclaw__/control-ui-config.json` under base path `/__openclaw__/`). That endpoint is gated by gateway HTTP auth: unauthenticated browsers cannot fetch it, and a successful fetch requires a valid gateway token/password or trusted-proxy identity. Tailscale header auth applies to the Control UI WebSocket, not this HTTP endpoint.
 
 ## Gateway host status
 
@@ -397,7 +397,7 @@ The dockable operator terminal is enabled by default; set `gateway.terminal.enab
 The terminal is an unconfined host shell and inherits the Gateway process environment. Disable it with `gateway.terminal.enabled: false` on deployments where admin operators should not get a host shell. OpenClaw refuses terminal sessions for agents with `sandbox.mode: "all"`; changing an active agent to that mode closes its existing and in-flight terminal sessions.
 </Warning>
 
-Use **Ctrl + backtick** to toggle the dock. The layout supports bottom and right docking, resizes with the browser viewport, and keeps multiple shell tabs. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.
+Use **Ctrl + backtick** to toggle the terminal. The layout supports bottom and right docking or a main-content mode, resizes with the browser viewport, and keeps multiple shell tabs. Opening a Codex or Claude Code session from the catalog selects main-content mode. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.
 
 Owner-authorized, unsandboxed agents can use the `terminal` tool for long or interactive work that the operator should watch. Each tool call can open, read, write, resize, close, or list the agent's own gateway PTYs. New sessions open a co-attached Control UI tab by default, so the agent and operator share output and either can type or resize. Agent access is exact-session scoped: an agent cannot read or control operator-created terminals or terminals opened by another agent session.
 
@@ -421,8 +421,12 @@ The Control UI ships a dockable browser panel that renders the Gateway-controlle
 
 Two capture modes package page context for the agent:
 
-- **Annotate (pencil)**: draw freehand markup over the page. **Send to chat** composites the strokes into the screenshot, attaches the image to the active chat composer, and prefills a prompt describing the page URL, title, and each marked region so the agent knows exactly what you circled.
-- **Inspect (pointer)**: hover to see the element under the cursor (selector, accessible name, role, size); click to send that element's details plus a highlighted screenshot through the same composer flow. Inspect, wheel scrolling, and back/forward need `browser.evaluateEnabled` (on by default).
+- **Annotate (pencil)**: draw freehand markup over the page. **Send to chat** composites the strokes into the screenshot and adds one structured annotation card to the active chat composer. The card keeps its generated page and region context with the image instead of inserting it into your editable draft.
+- **Inspect (pointer)**: hover to see the element under the cursor (selector, accessible name, role, size); click to add those details and a highlighted screenshot through the same card flow. Removing an annotation card removes only that image and its generated context, preserves your draft and other attachments, and offers a short-lived **Undo**. Inspect, wheel scrolling, and back/forward need `browser.evaluateEnabled` (on by default).
+
+One composer accepts up to four browser annotation cards and 8,000 total characters of generated annotation context. When it reaches either limit, the browser panel keeps the current capture so you can remove a card and retry; Undo also preserves the limit instead of evicting another card.
+
+Within the same Control UI tab, staged annotation cards stay with their pane and session across ordinary route changes and narrow split-pane remounts. Switching sessions keeps them scoped to the original session and restores them only when that session is revisited. A hard reload, pane close, Gateway-owner change, or application shutdown discards them; ordinary attachments keep their existing lifecycle.
 
 The macOS app keeps its native link-browser sidebar for links clicked in the dashboard; the browser panel works there too, and is the way to annotate pages on every other platform.
 
@@ -459,12 +463,12 @@ Capability toggles stay disabled until the Gateway, session, and runtime config 
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
     - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. When New Session creates a worktree without an explicit worktree name, OpenClaw also uses the session label or generated title for its branch name, falling back to a readable crustacean-themed name. Set `agents.defaults.utilityModel` (or `agents.entries.*.utilityModel`) to route this separate model call to a lower-cost model; if that distinct model fails, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
     - Thread search lives in the command palette (⌘K, or the search button in the top-left control cluster): typing a query follows a bounded number of matching pages across agents, filters internal child/cron rows, and lists visible matches next to navigation commands. The Threads page keeps the exhaustive searchable list with filters.
-    - Each sidebar row keeps direct pin access plus a full context menu for unread state, rename, fork, grouping, archive, and delete. Multi-selected rows (Cmd/Ctrl-click, Shift-click for ranges) get a batch menu covering unread state, grouping, archive, and delete; batch archive/delete stays disabled unless every selected session is archivable. An active run and an agent's main session cannot be archived. Archiving or deleting the currently selected session switches Chat back to that agent's main session.
+    - Each sidebar row keeps direct pin access plus a full context menu for unread state, rename, fork, grouping, archive, and delete. Multi-selected rows (Cmd/Ctrl-click, Shift-click for ranges) get a batch menu covering unread state, grouping, archive, and delete; batch Archive reports per-session failures while archiving eligible rows, whereas batch Delete stays disabled unless every selected session is archivable. An active run and an agent's main session cannot be archived. Archiving or deleting the currently selected session switches Chat back to that agent's main session.
     - In the macOS app, the OpenClaw mark uses the otherwise-empty native titlebar strip next to the window controls instead of consuming a sidebar row.
     - On desktop widths, chat controls stay on one compact row and collapse while scrolling down the transcript; scrolling up, returning to the top, or reaching the bottom restores the controls.
     - The session header shows a small facepile beside the workspace chip when other people are viewing the same session; it lists up to four viewer avatars with an overflow count and disappears when you are alone.
     - Consecutive duplicate text-only messages render as one bubble with a count badge. Messages that carry images, attachments, tool output, or canvas previews are left uncollapsed.
-    - User-message bubbles carry transcript actions: a hover rewind button (confirm popover with a "Don't ask again" option) plus right-click **Rewind to here** and **Fork from here**. Rewind repoints the session to the state just before that message and returns its text to the composer for edit and resend (`sessions.rewind`, `operator.admin`); fork creates a new session from the active-path prefix before the message, opens it, and seeds its composer with the same text (`sessions.fork`, `operator.write`). Both actions disable with an explanatory tooltip while the agent is working, apply only to persisted user messages, and are rejected for sessions whose conversation is owned by an external agent harness. Rewind moves chat context only — files and other tool side effects are not reverted — and the pre-rewind transcript remains preserved in the append-only session store. When that store contains multiple transcript branches, the chat title bar shows a branch menu with each branch's latest message, message count, and recency; selecting an inactive branch switches the current session back to that preserved path (`sessions.branches.list`, `operator.read`; `sessions.branches.switch`, `operator.admin`). Branch switching is also unavailable while the agent is working, and selecting the already-active branch is a typed no-op error at the RPC boundary. The separate hide action on user bubbles hides a message in the current browser only; the message stays in the transcript and the agent still sees it.
+    - User-message bubbles carry transcript actions: a hover rewind button (confirm popover with a "Don't ask again" option) plus right-click **Rewind to here** and **Fork from here**. Rewind repoints the session to the state just before that message and returns its text to the composer for edit and resend (`sessions.rewind`, `operator.admin`); fork creates a new session from the active-path prefix before the message, opens it, and seeds its composer with the same text (`sessions.fork`, `operator.write`). Both actions disable with an explanatory tooltip while the agent is working, apply only to persisted user messages, and are rejected for sessions whose conversation is owned by an external agent harness. Rewind moves chat context only — files and other tool side effects are not reverted — and the pre-rewind transcript remains preserved in the append-only session store. When that store contains multiple transcript branches, the chat title bar shows a branch menu with each branch's latest message, message count, and recency; selecting an inactive branch switches the current session back to that preserved path (`sessions.branches.list`, `operator.read`; `sessions.branches.switch`, `operator.admin`). Branch switching is also unavailable while the agent is working, and selecting the already-active branch is a typed no-op error at the RPC boundary.
     - When a session's checkout sits on a non-default branch of a GitHub repository, the chat view pins pull request chips above the composer: PR number, repo, branch, diff counts, a CI pill, and draft/merged/closed state, each linking to the PR. The row shows at most two chips — live (open/draft) PRs first — and a "Show more" button reveals collapsed merged/closed history. The CI pill opens a small CI monitoring popover with passed/failed/running/skipped check counts and a link to the PR's checks page. The Gateway polls only sessions visible in a connected Control UI and pushes changed snapshots through `controlUi.sessionPullRequests.changed`; it reuses `GH_TOKEN`/`GITHUB_TOKEN` when set. When the GitHub API rate limit is hit, chips keep the last known status and show a warning that the status may be out of date; dismissing a chip hides it for that session in the current browser profile. Before any PR exists, the row shows the branch itself — repo, branch name, and the +/− size of the diff against the default-branch merge base (committed and uncommitted work). Once the pushed branch has commits to compare, the row adds a Create PR button that opens GitHub's new-pull-request page; before that, a session with changed files (committed, uncommitted, or untracked) still gets the row without the button. The row hides itself while an open or draft PR exists; once the branch's PR is merged and the pushed tip still matches the merged head, the row disappears too (returning without the Create PR button only when new local work appears, and with it once new commits are pushed past the merged head). The branch row comes from local git only, so it stays available while GitHub is rate limited and carries the same stale-status warning, since "no PR found" cannot be trusted until the limit resets.
     - The session diff panel shows what a session's checkout actually changed: the branch button in the workspace rail or chat title bar opens the detail panel with a per-file diff of branch, uncommitted, and untracked work against the checkout's default-branch merge base — status dot, rename arrow, per-file +/− counts, collapsible files, and "N unmodified lines" markers between hunks. Diffs are computed server-side through the `sessions.diff` Gateway method (`operator.read` scope); binary and oversized files degrade to stats-only entries, and the button only appears when the connected Gateway advertises `sessions.diff`.
     - Every Chat pane has a title bar. Click the session title to rename it; the workspace chip copies the checkout path or branch and can reveal local Gateway workspaces in the host file manager. Remote and exec-node sessions keep copy actions but hide reveal.
@@ -524,11 +528,11 @@ automatically when the Gateway returns. Live controls and slash commands remain 
 offline, except that **Stop** can queue an exact local run ID for replay. A session-only stop
 is not replayed because newer work may start in that session before the connection returns.
 
-When this browser already holds credentials (a configured token/password or an approved device
-token), first opens and reloads show a small animated OpenClaw mark while the connection is
-established instead of flashing the login gate. The login gate only appears when no credentials
-are stored yet or when the Gateway actively rejects them (bad token/password, revoked pairing) —
-states that need your input rather than waiting.
+First opens and reloads show a small animated OpenClaw mark while the Gateway resolves the initial
+connection, including when authentication comes from a trusted proxy or Tailscale instead of a
+browser-stored credential. The login gate appears only after the initial connection fails or the
+Gateway actively rejects authentication (bad token/password, missing trusted identity, revoked
+pairing) — states that need your input rather than waiting.
 
 ## PWA install and web push
 
@@ -614,40 +618,25 @@ constrained `min(...)`, `max(...)`, `clamp(...)`, `calc(...)`, and
 
 ## Tailnet access (recommended)
 
-<Tabs>
-  <Tab title="Integrated Tailscale Serve (preferred)">
-    Keep the Gateway on loopback and let Tailscale Serve proxy it with HTTPS:
+Keep the Gateway on loopback and let Tailscale Serve proxy it with HTTPS:
 
-    ```bash
-    openclaw gateway --tailscale serve
-    ```
+```bash
+openclaw gateway --tailscale serve
+```
 
-    Open `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`).
+Open `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`).
 
-    By default, Control UI/WebSocket Serve requests can authenticate via Tailscale identity headers (`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw verifies the identity by resolving the `x-forwarded-for` address with `tailscale whois` and matching it to the header, and only accepts these when the request hits loopback with Tailscale's `x-forwarded-*` headers. For Control UI operator sessions with browser device identity, this verified Serve path also skips the device-pairing round trip; device-less browsers and node-role connections still follow the normal device checks. Set `gateway.auth.allowTailscale: false` if you want to require explicit shared-secret credentials even for Serve traffic, then use `gateway.auth.mode: "token"` or `"password"`.
+By default, Control UI/WebSocket Serve requests can authenticate via Tailscale identity headers (`tailscale-user-login`) when `gateway.auth.allowTailscale` is `true`. OpenClaw verifies the identity by resolving the `x-forwarded-for` address with `tailscale whois` and matching it to the header, and only accepts these when the request hits loopback with Tailscale's `x-forwarded-*` headers. For Control UI operator sessions with browser device identity, this verified Serve path also skips the device-pairing round trip; device-less browsers and node-role connections still follow the normal device checks. Set `gateway.auth.allowTailscale: false` if you want to require explicit shared-secret credentials even for Serve traffic, then use `gateway.auth.mode: "token"` or `"password"`.
 
-    For that async Serve identity path, failed auth attempts for the same client IP and auth scope are serialized before rate-limit writes. Concurrent bad retries from the same browser can therefore show `retry later` on the second request instead of two plain mismatches racing in parallel.
+For that async Serve identity path, failed auth attempts for the same client IP and auth scope are serialized before rate-limit writes. Concurrent bad retries from the same browser can therefore show `retry later` on the second request instead of two plain mismatches racing in parallel.
 
-    <Warning>
-    Tokenless Serve auth assumes the gateway host is trusted. If untrusted local code may run on that host, require token/password auth.
-    </Warning>
-
-  </Tab>
-  <Tab title="Bind to tailnet + token">
-    ```bash
-    openclaw gateway --bind tailnet --token "$(openssl rand -hex 32)"
-    ```
-
-    Open `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`).
-
-    Paste the matching shared secret into the UI settings (sent as `connect.params.auth.token` or `connect.params.auth.password`).
-
-  </Tab>
-</Tabs>
+<Warning>
+Tokenless Serve auth assumes the gateway host is trusted. If untrusted local code may run on that host, require token/password auth.
+</Warning>
 
 ## Insecure HTTP
 
-If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`), the browser runs in a **non-secure context** and blocks WebCrypto. By default, OpenClaw **blocks** Control UI connections without device identity.
+If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`), the browser runs in a **non-secure context** and blocks WebCrypto. OpenClaw rejects token/password Control UI connections without device identity; a shared secret cannot replace browser identity.
 
 The supported device-less exception is successful operator Control UI auth
 through `gateway.auth.mode: "trusted-proxy"`. There is no persistent config
@@ -659,7 +648,7 @@ switch that disables device identity.
   <Accordion title="Trusted-proxy note">
     - Successful trusted-proxy auth can admit **operator** Control UI sessions without device identity.
     - This does **not** extend to node-role Control UI sessions.
-    - Same-host loopback reverse proxies still do not satisfy trusted-proxy auth; see [Trusted proxy auth](/gateway/trusted-proxy-auth).
+    - A same-host loopback reverse proxy requires both loopback in `gateway.trustedProxies` and `gateway.auth.trustedProxy.allowLoopback: true`; see [Trusted proxy auth](/gateway/trusted-proxy-auth).
 
   </Accordion>
 </AccordionGroup>

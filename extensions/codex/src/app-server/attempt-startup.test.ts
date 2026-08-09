@@ -88,6 +88,8 @@ const bundleMcpThreadConfig = {
   diagnostics: [],
   evaluated: false,
   fingerprint: undefined,
+  staticServerNames: [],
+  userStaticServerNames: [],
 } satisfies CodexBundleMcpThreadConfig;
 
 const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
@@ -177,7 +179,7 @@ async function captureExpectedRuntimeArtifact(
     before,
     startOptions: appServer.start,
     spawnIdentity,
-    runtimeIdentity: { serverVersion: "0.146.1", userAgent: "openclaw/0.146.1 (macOS; test)" },
+    runtimeIdentity: { serverVersion: "0.147.0", userAgent: "openclaw/0.147.0 (macOS; test)" },
   });
 }
 
@@ -187,7 +189,7 @@ async function answerInitialize(harness: ClientHarness): Promise<void> {
     timeout: HARNESS_REQUEST_TIMEOUT_MS,
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.146.1 (macOS; test)" } });
+  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.147.0 (macOS; test)" } });
 }
 
 async function waitForRequest(

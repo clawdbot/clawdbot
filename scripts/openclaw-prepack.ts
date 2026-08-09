@@ -11,7 +11,7 @@ import { writePackageDistInventoryForPublish } from "./lib/package-dist-inventor
 import { restorePrepackArtifacts } from "./openclaw-postpack.mjs";
 import { preparePackageChangelog } from "./package-changelog.mjs";
 import { preparePackageDocsMap } from "./package-docs-map.mjs";
-import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
+import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
 const requiredPreparedPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
@@ -24,7 +24,7 @@ const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGE
 const PREPARED_RELEASE_ENV = "OPENCLAW_PREPACK_PREPARED";
 const OCM_INTERNAL_NPM_BIN_ENV = "OCM_INTERNAL_NPM_BIN";
 const OCM_WORKSPACE_DIRS_ENV = "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS";
-const OCM_ADAPTER_BASENAME = "ocm-npm-workspace-deps.mjs";
+const OCM_ADAPTER_BASENAME = "ocm-npm-workspace-deps.mts";
 const NPM_COMMAND_ENV = "npm_command";
 const SELF_CONTAINED_SOURCE_PACK_COMMAND =
   "node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog";
@@ -276,7 +276,7 @@ function runPnpm(args: string[], env: NodeJS.ProcessEnv): void {
 }
 
 function runBuildSmoke(): void {
-  run(process.execPath, ["scripts/test-built-bundled-channel-entry-smoke.mjs"]);
+  run(process.execPath, ["--import", "tsx", "scripts/test-built-bundled-channel-entry-smoke.mts"]);
 }
 
 async function writeDistInventory(): Promise<void> {

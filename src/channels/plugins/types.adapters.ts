@@ -532,6 +532,10 @@ export type ChannelLifecycleAdapter = {
     trigger?: string;
     logPrefix?: string;
   }) => Promise<void> | void;
+  /**
+   * @deprecated Export stateMigrations from the plugin doctor contract instead.
+   * Removal plan: remove the lifecycle adapter after the 2027.1 external-plugin migration window.
+   */
   detectLegacyStateMigrations?: (params: {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;

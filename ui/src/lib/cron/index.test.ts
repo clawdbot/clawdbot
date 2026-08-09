@@ -6,6 +6,7 @@ import {
   validateCronAddParams,
   validateCronUpdateParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob, CronRunsResult } from "../../api/types.ts";
 import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
 import {
@@ -165,16 +166,6 @@ type EmptyCronListResponse = {
 
 function emptyCronListResponse(): EmptyCronListResponse {
   return { jobs: [], total: 0, hasMore: false, nextOffset: null };
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 function createCronRunsResult(

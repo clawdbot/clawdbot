@@ -1,9 +1,13 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { acquireOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import {
   acquireSessionWriteLock,
   drainSessionWriteLockStateForTest,
@@ -57,13 +61,55 @@ describe("SQLite session write leases", () => {
     const sessionFile = target();
     const first = await acquire(sessionFile);
 
-    await expect(acquire(sessionFile, { timeoutMs: 5 })).rejects.toThrow(/session file locked/);
+    const timeout = await acquire(sessionFile, { timeoutMs: 5 }).catch((error: unknown) => error);
+    expect(timeout).toBeInstanceOf(SessionWriteLockTimeoutError);
+    expect(timeout).toMatchObject({
+      owner: `held by this process (pid ${process.pid}); an earlier run has not released it`,
+    });
+    expect(String(timeout)).toContain(`pid ${process.pid}`);
     await expect(fs.access(`${sessionFile}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
 
     await first.release();
     const second = await acquire(sessionFile, { timeoutMs: 500 });
     expect(() => second.assertOwned?.()).not.toThrow();
     await second.release();
+  });
+
+  it("reports the live foreign process that holds the session lease", async () => {
+    const databasePath = path.join(root, "foreign-openclaw-agent.sqlite");
+    const sessionFile = target({ sessionId: "foreign-session", storePath: databasePath });
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    await once(child, "spawn");
+    const childPid = child.pid;
+    if (!childPid) {
+      throw new Error("foreign lease fixture did not start");
+    }
+    const foreignLease = await acquireOpenClawStateLease({
+      scope: "session-write",
+      key: sessionFile,
+      database: { scope: "agent", agentId: "main", path: databasePath },
+      leaseMs: 1_000,
+      waitMs: 0,
+      processOwner: {
+        pid: childPid,
+        startTime: null,
+        isAlive: () => true,
+        readStartTime: () => null,
+      },
+    });
+    try {
+      const timeout = await acquire(sessionFile, { timeoutMs: 5 }).catch((error: unknown) => error);
+      expect(timeout).toBeInstanceOf(SessionWriteLockTimeoutError);
+      expect(timeout).toMatchObject({ owner: `held by OpenClaw process pid ${childPid}` });
+    } finally {
+      await foreignLease.release();
+      child.kill();
+      if (child.exitCode === null && child.signalCode === null) {
+        await once(child, "exit");
+      }
+    }
   });
 
   it("reference-counts intentional process-local reentrancy", async () => {

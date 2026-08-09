@@ -7,7 +7,7 @@ import {
   collectDatabaseFirstNativeLegacyStoreViolations,
   collectDatabaseFirstLegacyStoreSourceFiles,
   collectDatabaseFirstLegacyStoreViolations,
-} from "../../scripts/check-database-first-legacy-stores.mjs";
+} from "../../scripts/check-database-first-legacy-stores.mts";
 
 type LegacyStoreViolations = ReturnType<typeof collectDatabaseFirstLegacyStoreViolations>;
 type UnnamedViolationCase = {

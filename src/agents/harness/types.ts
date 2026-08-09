@@ -63,14 +63,16 @@ type AgentHarnessDeprecatedAttemptTerminalFields = {
     | import("../agent-run-terminal-outcome.js").AgentRunAttemptFailureSource
     | null;
 };
-type AgentHarnessCanonicalAttemptResult =
-  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult &
-    AgentHarnessDeprecatedAttemptTerminalFields;
+type AgentHarnessCanonicalAttemptResult = Omit<
+  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult,
+  "contextEngineTerminalAnchor"
+> &
+  AgentHarnessDeprecatedAttemptTerminalFields;
 
 /** @deprecated Return `terminal` instead. Remove no earlier than the 2026.9 stable release. */
 type AgentHarnessLegacyAttemptResult = Omit<
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult,
-  "terminal"
+  "contextEngineTerminalAnchor" | "terminal"
 > &
   AgentHarnessDeprecatedAttemptTerminalFields & {
     aborted: boolean;
@@ -88,7 +90,7 @@ type AgentHarnessLegacyAttemptResult = Omit<
 
 export type AgentHarnessAttemptParams = Omit<
   InternalEmbeddedRunAttemptParams,
-  "trajectoryRecorder"
+  "contextEngineLogicalTurnLease" | "onContextEngineTurnCandidate" | "trajectoryRecorder"
 >;
 export type AgentHarnessAttemptResult =
   | AgentHarnessCanonicalAttemptResult
@@ -286,6 +288,8 @@ type AgentHarnessRunCapability = {
    */
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
+  /** Certifies exact runAttempt enforcement; direct-policy-restricted channel side questions fail in core. */
+  conversationToolPolicySupport?: "exact";
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
