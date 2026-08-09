@@ -28,7 +28,7 @@ extension CanvasWindowController {
 
     static func loadRestoredFrame(sessionKey: String) -> NSRect? {
         let key = self.storedFrameDefaultsKey(sessionKey: sessionKey)
-        guard let arr = UserDefaults.standard.array(forKey: key) as? [Double], arr.count == 4 else { return nil }
+        guard let arr = AppDefaults.standard.array(forKey: key) as? [Double], arr.count == 4 else { return nil }
         let rect = NSRect(x: arr[0], y: arr[1], width: arr[2], height: arr[3])
         if rect.width < CanvasLayout.minPanelSize.width || rect.height < CanvasLayout.minPanelSize.height { return nil }
         return rect
@@ -36,7 +36,7 @@ extension CanvasWindowController {
 
     static func storeRestoredFrame(_ frame: NSRect, sessionKey: String) {
         let key = self.storedFrameDefaultsKey(sessionKey: sessionKey)
-        UserDefaults.standard.set(
+        AppDefaults.standard.set(
             [Double(frame.origin.x), Double(frame.origin.y), Double(frame.size.width), Double(frame.size.height)],
             forKey: key)
     }

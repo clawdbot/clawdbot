@@ -7,7 +7,7 @@ enum GatewayLaunchAgentManager {
     }
 
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
-    private static let disableLaunchAgentMarker = ".openclaw/disable-launchagent"
+    private static let disableLaunchAgentMarker = "disable-launchagent"
     /// A first-run daemon command may wait behind state integrity checks and the shared startup-
     /// migration lease. Keep the app from killing healthy migration work before it can finish.
     static let startupMigrationTolerance: TimeInterval = 120
@@ -18,13 +18,21 @@ enum GatewayLaunchAgentManager {
             return testingDisableLaunchAgentMarkerURL
         }
         #endif
-        return FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent(self.disableLaunchAgentMarker)
+        let root = AppProfile.current.isActive
+            ? OpenClawPaths.stateDirURL
+            : FileManager().homeDirectoryForCurrentUser.appendingPathComponent(".openclaw", isDirectory: true)
+        return root.appendingPathComponent(self.disableLaunchAgentMarker)
     }
 
     private static var plistURL: URL {
-        FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
+        self.plistURL(
+            homeDirectory: FileManager().homeDirectoryForCurrentUser,
+            profile: .current)
+    }
+
+    static func plistURL(homeDirectory: URL, profile: AppProfile) -> URL {
+        homeDirectory.appendingPathComponent(
+            "Library/LaunchAgents/\(profile.gatewayLaunchAgentLabel).plist")
     }
 
     private static var generatedEnvironmentDirectoryURL: URL {
@@ -138,11 +146,20 @@ enum GatewayLaunchAgentManager {
 
     static func launchdConfigSnapshot() -> LaunchAgentPlistSnapshot? {
         let directory = self.generatedEnvironmentDirectoryURL
+        let artifacts = self.generatedEnvironmentArtifacts(directory: directory, profile: .current)
         return LaunchAgentPlist.snapshot(
             url: self.plistURL,
-            generatedEnvironmentFileURL: directory.appendingPathComponent("\(gatewayLaunchdLabel).env"),
-            generatedEnvironmentWrapperURL: directory.appendingPathComponent(
-                "\(gatewayLaunchdLabel)-env-wrapper.sh"))
+            generatedEnvironmentFileURL: artifacts.environment,
+            generatedEnvironmentWrapperURL: artifacts.wrapper)
+    }
+
+    static func generatedEnvironmentArtifacts(
+        directory: URL,
+        profile: AppProfile) -> (environment: URL, wrapper: URL)
+    {
+        (
+            directory.appendingPathComponent("\(profile.gatewayLaunchAgentLabel).env"),
+            directory.appendingPathComponent("\(profile.gatewayLaunchAgentLabel)-env-wrapper.sh"))
     }
 
     /// Empty means no Gateway LaunchAgent. Nil preserves an unreadable

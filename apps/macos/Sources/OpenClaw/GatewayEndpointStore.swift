@@ -367,12 +367,12 @@ actor GatewayEndpointStore {
 
     init(deps: Deps = .live) {
         self.deps = deps
-        let modeRaw = UserDefaults.standard.string(forKey: connectionModeKey)
+        let modeRaw = AppDefaults.standard.string(forKey: connectionModeKey)
         let initialMode: AppState.ConnectionMode
         if let modeRaw {
             initialMode = AppState.ConnectionMode(rawValue: modeRaw) ?? .local
         } else {
-            let seen = UserDefaults.standard.bool(forKey: "openclaw.onboardingSeen")
+            let seen = AppDefaults.standard.bool(forKey: "openclaw.onboardingSeen")
             initialMode = seen ? .local : .unconfigured
         }
 
@@ -914,6 +914,7 @@ extension GatewayEndpointStore {
             generationIsCurrent: { generation in
                 AppStateStore.shared.gatewayRoutingGeneration == generation
             },
+            profile: .current,
             beforeConfigRead: {})
     }
 
@@ -933,6 +934,7 @@ extension GatewayEndpointStore {
     private static func liveSourceSnapshot(
         appSnapshot: @escaping @MainActor @Sendable () -> LiveAppSnapshot,
         generationIsCurrent: @escaping @MainActor @Sendable (UInt64) -> Bool,
+        profile: AppProfile,
         beforeConfigRead: @escaping @Sendable () async -> Void) async -> SourceSnapshot
     {
         // Capture MainActor-owned selection facts before reading config. The
@@ -994,7 +996,7 @@ extension GatewayEndpointStore {
                     env: env,
                     launchdSnapshot: launchdSnapshot),
             deviceAuthGatewayID: deviceAuthGatewayID,
-            localPort: self.resolveGatewayPort(root: root, env: env),
+            localPort: self.resolveGatewayPort(root: root, env: env, profile: profile),
             localHost: self.resolveLocalGatewayHost(
                 bindMode: bindMode,
                 customBindHost: customBindHost,
@@ -1039,16 +1041,11 @@ extension GatewayEndpointStore {
     private static func resolveGatewayPort(
         root: [String: Any],
         env: [String: String],
-        defaults: UserDefaults = .standard) -> Int
+        defaults: UserDefaults = AppDefaults.standard,
+        profile: AppProfile) -> Int
     {
-        if let raw = env["OPENCLAW_GATEWAY_PORT"],
-           let port = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
-           port > 0
-        {
-            return port
-        }
-        if let gateway = root["gateway"] as? [String: Any] {
-            let port: Int? = switch gateway["port"] {
+        let configPort: Int? = if let gateway = root["gateway"] as? [String: Any] {
+            switch gateway["port"] {
             case let value as Int:
                 value
             case let value as NSNumber:
@@ -1058,12 +1055,14 @@ extension GatewayEndpointStore {
             default:
                 nil
             }
-            if let port, port > 0 {
-                return port
-            }
+        } else {
+            nil
         }
-        let stored = defaults.integer(forKey: "gatewayPort")
-        return stored > 0 ? stored : 18789
+        return GatewayEnvironment.resolvedGatewayPort(
+            environment: env,
+            configPort: configPort,
+            storedPort: defaults.integer(forKey: "gatewayPort"),
+            profile: profile)
     }
 
     private static func resolveGatewayBindMode(
@@ -1249,6 +1248,7 @@ extension GatewayEndpointStore {
     @MainActor
     static func _testLiveSourceSnapshot(
         state: AppState,
+        profile: AppProfile = .current,
         beforeConfigRead: @escaping @Sendable () async -> Void) async -> SourceSnapshot
     {
         await self.liveSourceSnapshot(
@@ -1262,6 +1262,7 @@ extension GatewayEndpointStore {
             generationIsCurrent: { generation in
                 state.gatewayRoutingGeneration == generation
             },
+            profile: profile,
             beforeConfigRead: beforeConfigRead)
     }
 

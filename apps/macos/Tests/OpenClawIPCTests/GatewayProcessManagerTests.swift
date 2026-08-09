@@ -7,6 +7,29 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
+    @Test func `colliding profile ports cannot attach another profile gateway`() {
+        let first = AppProfile(environment: ["OPENCLAW_PROFILE": "p1402"])
+        let second = AppProfile(environment: ["OPENCLAW_PROFILE": "p2380"])
+        #expect(first.defaultGatewayPort == 55636)
+        #expect(second.defaultGatewayPort == 55636)
+        #expect(GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+            profile: first,
+            listenerPID: 1402,
+            managedServicePID: 1402))
+        #expect(!GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+            profile: second,
+            listenerPID: 1402,
+            managedServicePID: 2380))
+        #expect(!GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+            profile: second,
+            listenerPID: 1402,
+            managedServicePID: nil))
+        #expect(GatewayProcessManager.profileAllowsExistingGatewayAttachment(
+            profile: AppProfile(environment: [:]),
+            listenerPID: 1402,
+            managedServicePID: nil))
+    }
+
     private func availableGatewayPort() throws -> Int {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {

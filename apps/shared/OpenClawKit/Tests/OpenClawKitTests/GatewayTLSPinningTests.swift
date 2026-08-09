@@ -105,6 +105,22 @@ private func gatewayTLSTestTrust(systemTrusted: Bool) throws -> SecTrust {
 }
 
 struct GatewayTLSPinningTests {
+    @Test func `keychain namespace configures once and fails closed after use`() {
+        var state = GatewayTLSKeychainNamespaceState()
+        #expect(state.configure(suffix: ".profile.work"))
+        #expect(state.configure(suffix: ".profile.work"))
+        #expect(!state.configure(suffix: ".profile.other"))
+        #expect(state.service(base: "ai.openclaw.tls-pinning") ==
+            "ai.openclaw.tls-pinning.profile.work")
+        #expect(state.configure(suffix: ".profile.work"))
+        #expect(!state.configure(suffix: ""))
+
+        var usedDefault = GatewayTLSKeychainNamespaceState()
+        #expect(usedDefault.service(base: "ai.openclaw.tls-pinning") == "ai.openclaw.tls-pinning")
+        #expect(usedDefault.configure(suffix: ""))
+        #expect(!usedDefault.configure(suffix: ".profile.work"))
+    }
+
     private func withFakeKeychain<T>(_ operation: (GatewayTLSFakeKeychain) throws -> T) rethrows -> T {
         let keychain = GatewayTLSFakeKeychain()
         return try GatewayTLSStore.$keychainOperations.withValue(keychain.operations) {

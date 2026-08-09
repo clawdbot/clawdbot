@@ -522,6 +522,18 @@ final class GatewayProcessManager {
         guard self.isCurrentGatewayStart(startGeneration) else { return true }
         let instanceText = instance.map { self.describe(instance: $0) }
         let hasListener = instance != nil
+        let managedProfilePID = AppProfile.current.isActive
+            ? await GatewayLaunchAgentManager.runningGatewayPID()
+            : nil
+        if hasListener,
+           !Self.profileAllowsExistingGatewayAttachment(
+               profile: .current,
+               listenerPID: instance?.pid,
+               managedServicePID: managedProfilePID)
+        {
+            self.failProfilePortOwnership(port: port)
+            return true
+        }
 
         let attemptAttach = {
             try await self.probeGatewayHealth(timeoutMs: 2000)
@@ -534,6 +546,14 @@ final class GatewayProcessManager {
                 guard self.isCurrentGatewayStart(startGeneration) else { return true }
                 let attachedInstance = await PortGuardian.shared.describe(port: port)
                 guard self.isCurrentGatewayStart(startGeneration) else { return true }
+                if !Self.profileAllowsExistingGatewayAttachment(
+                    profile: .current,
+                    listenerPID: attachedInstance?.pid,
+                    managedServicePID: managedProfilePID)
+                {
+                    self.failProfilePortOwnership(port: port)
+                    return true
+                }
                 let snap = decodeHealthSnapshot(from: data)
                 let attachedInstanceText = attachedInstance.map { self.describe(instance: $0) }
                 let details = self.describe(details: attachedInstanceText, port: port, snap: snap)
@@ -579,6 +599,25 @@ final class GatewayProcessManager {
 
         self.existingGatewayDetails = nil
         return false
+    }
+
+    static func profileAllowsExistingGatewayAttachment(
+        profile: AppProfile,
+        listenerPID: Int32?,
+        managedServicePID: Int32?) -> Bool
+    {
+        guard profile.isActive else { return true }
+        guard let listenerPID, let managedServicePID else { return false }
+        return listenerPID == managedServicePID
+    }
+
+    private func failProfilePortOwnership(port: Int) {
+        let message = "Gateway port \(port) is already owned by another process or OpenClaw profile. " +
+            "Set gateway.port to a free port for profile \(AppProfile.current.name ?? "named")."
+        self.status = .failed(message)
+        self.lastFailureReason = message
+        self.appendLog("[gateway] \(message)\n")
+        self.logger.error("\(message, privacy: .public)")
     }
 
     private func describe(details instance: String?, port: Int, snap: HealthSnapshot?) -> String {

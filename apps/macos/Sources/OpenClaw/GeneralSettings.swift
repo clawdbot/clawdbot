@@ -791,6 +791,11 @@ struct GeneralSettings: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+            if AppProfile.current.isActive {
+                Text("Launch at login is unavailable while an app profile is active.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(12)
         .background(Color.gray.opacity(0.08))

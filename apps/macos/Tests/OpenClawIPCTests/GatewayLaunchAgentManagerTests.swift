@@ -4,6 +4,44 @@ import Testing
 
 @Suite(.serialized)
 struct GatewayLaunchAgentManagerTests {
+    @Test func `gateway launchd artifacts follow default and named profile labels`() {
+        let home = URL(fileURLWithPath: "/Users/test", isDirectory: true)
+        let directory = URL(fileURLWithPath: "/state/service-env", isDirectory: true)
+        let base = AppProfile(environment: [:])
+        let work = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+
+        #expect(GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: base).path ==
+            "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist")
+        #expect(GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: work).path ==
+            "/Users/test/Library/LaunchAgents/ai.openclaw.work.plist")
+        let baseArtifacts = GatewayLaunchAgentManager.generatedEnvironmentArtifacts(
+            directory: directory,
+            profile: base)
+        let workArtifacts = GatewayLaunchAgentManager.generatedEnvironmentArtifacts(
+            directory: directory,
+            profile: work)
+        #expect(baseArtifacts.environment.path == "/state/service-env/ai.openclaw.gateway.env")
+        #expect(baseArtifacts.wrapper.path == "/state/service-env/ai.openclaw.gateway-env-wrapper.sh")
+        #expect(workArtifacts.environment.path == "/state/service-env/ai.openclaw.work.env")
+        #expect(workArtifacts.wrapper.path == "/state/service-env/ai.openclaw.work-env-wrapper.sh")
+    }
+
+    @Test func `gateway daemon command selects named profile at the root`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("node_modules/.bin/openclaw")
+        try makeExecutableForTests(at: executable)
+        let command = await CommandResolver.openclawCommand(
+            subcommand: "gateway",
+            extraArgs: ["status", "--json"],
+            projectRoot: root,
+            profile: AppProfile(environment: ["OPENCLAW_PROFILE": "work"]))
+
+        #expect(command == [
+            executable.path, "--profile", "work", "gateway", "status", "--json",
+        ])
+    }
+
     @Test func `daemon commands tolerate first run state migrations`() {
         #expect(GatewayLaunchAgentManager.startupMigrationTolerance >= 120)
     }
