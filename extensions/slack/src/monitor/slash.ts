@@ -86,7 +86,7 @@ type SlackCommandHandlerArgs = SlackCommandMiddlewareArgs &
   Pick<AllMiddlewareArgs, "context" | "client">;
 type SlackArgActionHandlerArgs = SlackActionMiddlewareArgs &
   Pick<AllMiddlewareArgs, "context" | "client">;
-type SlackArgOptionsHandlerArgs = SlackOptionsMiddlewareArgs &
+type SlackArgOptionsHandlerArgs = SlackOptionsMiddlewareArgs<"block_suggestion"> &
   Pick<AllMiddlewareArgs, "context" | "client">;
 
 const loadSlashCommandsRuntime = createLazyRuntimeModule(
