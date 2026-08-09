@@ -278,10 +278,10 @@ describe("meta provider", () => {
       expectedMaxOutputTokens: 4096,
     },
     {
-      label: "an explicit zero override",
+      label: "an explicit zero treated as unset by the Responses transport",
       callerMaxTokens: 0,
       prepopulatedMaxOutputTokens: undefined,
-      expectedMaxOutputTokens: undefined,
+      expectedMaxOutputTokens: 131072,
     },
     {
       label: "a pre-populated payload cap",

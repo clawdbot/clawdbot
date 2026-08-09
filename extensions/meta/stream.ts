@@ -24,7 +24,7 @@ function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamF
     }
     // The catalog limit is the no-override request default. Preserve an explicit
     // caller or provider payload cap while filling the direct stream path gap.
-    if (options?.maxTokens === undefined && payload.max_output_tokens === undefined) {
+    if (!options?.maxTokens && payload.max_output_tokens === undefined) {
       payload.max_output_tokens = model.maxTokens;
     }
     if (!model.reasoning) {
