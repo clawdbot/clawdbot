@@ -451,7 +451,7 @@ export const en = {
       notMultitenant:
         "Do not rely on one tool-enabled agent to keep people with different access levels separate.",
       personalAgent: "OpenClaw is designed strictly for personal use by one operator.",
-      promptRisk: "A malicious or misleading prompt can cause unsafe actions.",
+      promptRisk: "A bad prompt can trick it into doing unsafe things.",
       recommendedBaseline: "Safer setup",
       runRegularly: "Run regularly",
       sharedAuthority:

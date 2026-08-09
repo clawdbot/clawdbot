@@ -439,7 +439,7 @@ export const zh_TW = {
       learnMore: "了解更多",
       notMultitenant: "不要依靠同一個啟用了工具的 agent 將存取層級不同的人彼此隔離。",
       personalAgent: "OpenClaw 主要面向一位操作者的個人使用。",
-      promptRisk: "惡意或誤導性的提示可能導致不安全操作。",
+      promptRisk: "惡意 prompt 可能誘導它執行不安全操作。",
       recommendedBaseline: "更安全的設定",
       runRegularly: "定期執行",
       sharedAuthority:
