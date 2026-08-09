@@ -2,14 +2,12 @@ package ai.openclaw.app.gateway
 
 import android.content.Context
 import android.net.ConnectivityManager
-import android.net.DnsResolver
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
-import android.os.CancellationSignal
 import android.util.Log
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
@@ -20,7 +18,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import org.xbill.DNS.AAAARecord
 import org.xbill.DNS.ARecord
 import org.xbill.DNS.DClass
@@ -46,21 +43,6 @@ import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-
-private fun createDnsResolver(context: Context): DnsResolver =
-  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
-    createContextDnsResolver(context)
-  } else {
-    createLegacyDnsResolver()
-  }
-
-@RequiresApi(Build.VERSION_CODES.CINNAMON_BUN)
-private fun createContextDnsResolver(context: Context): DnsResolver = DnsResolver(context, null)
-
-@Suppress("DEPRECATION")
-private fun createLegacyDnsResolver(): DnsResolver = DnsResolver.getInstance()
 
 internal fun gatewayDiscoveryStatusText(
   localCount: Int,
@@ -91,7 +73,8 @@ class GatewayDiscovery(
 ) {
   private val nsd = context.getSystemService(NsdManager::class.java)
   private val connectivity = context.getSystemService(ConnectivityManager::class.java)
-  private val dns = createDnsResolver(context)
+  private val serviceInfoExecutor: Executor = Executors.newCachedThreadPool()
+  private val systemDns = createGatewaySystemDns(context, serviceInfoExecutor)
   private val serviceType = "_openclaw-gw._tcp."
   private val wideAreaDomain = System.getenv("OPENCLAW_WIDE_AREA_DOMAIN")
   private val logTag = "OpenClaw/GatewayDiscovery"
@@ -109,7 +92,6 @@ class GatewayDiscovery(
   val statusText: StateFlow<String> = _statusText.asStateFlow()
 
   private var unicastJob: Job? = null
-  private val dnsExecutor: Executor = Executors.newCachedThreadPool()
   private val availableNetworks = ConcurrentHashMap.newKeySet<Network>()
   private val serviceInfoCallbacks = ConcurrentHashMap<String, Any>()
 
@@ -237,7 +219,7 @@ class GatewayDiscovery(
 
     serviceInfoCallbacks[id] = callback
     try {
-      nsd.registerServiceInfoCallback(serviceInfo, dnsExecutor, callback)
+      nsd.registerServiceInfoCallback(serviceInfo, serviceInfoExecutor, callback)
     } catch (_: Throwable) {
       serviceInfoCallbacks.remove(id, callback)
     }
@@ -488,10 +470,11 @@ class GatewayDiscovery(
   }
 
   private suspend fun queryViaSystemDns(query: Message): Message? {
+    val dns = systemDns ?: return null
     val network = preferredDnsNetwork()
     val bytes =
       try {
-        rawQuery(network, query.toWire())
+        dns.rawQuery(network, query.toWire())
       } catch (_: Throwable) {
         return null
       }
@@ -608,35 +591,6 @@ class GatewayDiscovery(
       null
     }
   }
-
-  private suspend fun rawQuery(
-    network: android.net.Network?,
-    wireQuery: ByteArray,
-  ): ByteArray =
-    suspendCancellableCoroutine { cont ->
-      val signal = CancellationSignal()
-      cont.invokeOnCancellation { signal.cancel() }
-
-      dns.rawQuery(
-        network,
-        wireQuery,
-        DnsResolver.FLAG_EMPTY,
-        dnsExecutor,
-        signal,
-        object : DnsResolver.Callback<ByteArray> {
-          override fun onAnswer(
-            answer: ByteArray,
-            rcode: Int,
-          ) {
-            cont.resume(answer)
-          }
-
-          override fun onError(error: DnsResolver.DnsException) {
-            cont.resumeWithException(error)
-          }
-        },
-      )
-    }
 
   private fun txtValue(
     records: List<TXTRecord>,

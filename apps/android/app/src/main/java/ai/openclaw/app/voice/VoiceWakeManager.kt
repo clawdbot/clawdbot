@@ -7,12 +7,14 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -73,7 +75,7 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
   private val appContext = context.applicationContext
   private val mainHandler = Handler(Looper.getMainLooper())
   override val isAvailable: Boolean =
-    runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext) }.getOrDefault(false)
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && isOnDeviceRecognitionAvailable(appContext)
   private val latestOperationId = AtomicLong(0)
   private val platformOwnerOperationId = AtomicLong(0)
   private var recognizer: SpeechRecognizer? = null
@@ -96,9 +98,9 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
       }
       retireRecognizer()
       platformOwnerOperationId.set(operationId)
-      if (!isAvailable) {
+      if (!isAvailable || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
         platformOwnerOperationId.compareAndSet(operationId, 0)
-        onEvent(VoiceWakeRecognitionEvent.Error(SpeechRecognizer.ERROR_SERVER_DISCONNECTED))
+        onEvent(VoiceWakeRecognitionEvent.Error(SpeechRecognizer.ERROR_CLIENT))
         return@runOnMain
       }
       val session = VoiceWakeRecognitionSession(onEvent)
@@ -141,6 +143,7 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
     }
   }
 
+  @RequiresApi(Build.VERSION_CODES.S)
   private fun createRecognizer(session: VoiceWakeRecognitionSession): SpeechRecognizer =
     SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).also { active ->
       active.setRecognitionListener(
@@ -418,9 +421,9 @@ internal class VoiceWakeManager(
             _isListening.value = false
             if (event.code == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
               _statusText.value = nativeText("Microphone permission required")
-            } else if (event.code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED) {
+            } else if (isLanguageNotSupportedError(event.code)) {
               _statusText.value = nativeText("Device language not supported")
-            } else if (event.code == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE) {
+            } else if (isLanguageUnavailableError(event.code)) {
               _statusText.value = nativeText("On-device language model unavailable")
             } else {
               scheduleRestartLocked(delayMs = retryDelayMs(event.code))
@@ -483,15 +486,18 @@ internal class VoiceWakeManager(
   }
 
   private fun retryDelayMs(errorCode: Int): Long =
-    when (errorCode) {
-      SpeechRecognizer.ERROR_TOO_MANY_REQUESTS -> 15_000L
-      SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
-      SpeechRecognizer.ERROR_SERVER,
-      SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
-      SpeechRecognizer.ERROR_AUDIO,
-      SpeechRecognizer.ERROR_CLIENT,
-      -> 1_500L
-      else -> restartDelayMs
+    when {
+      isTooManyRequestsError(errorCode) -> 15_000L
+      isServerDisconnectedError(errorCode) -> 1_500L
+      else ->
+        when (errorCode) {
+          SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+          SpeechRecognizer.ERROR_SERVER,
+          SpeechRecognizer.ERROR_AUDIO,
+          SpeechRecognizer.ERROR_CLIENT,
+          -> 1_500L
+          else -> restartDelayMs
+        }
     }
 
   private fun stopSessionLocked(destroy: Boolean): RecognizerAction? {
@@ -528,6 +534,17 @@ internal class VoiceWakeManager(
     }
   }
 }
+
+@RequiresApi(Build.VERSION_CODES.S)
+private fun isOnDeviceRecognitionAvailable(context: Context): Boolean = runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
+
+private fun isLanguageNotSupportedError(code: Int): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED
+
+private fun isLanguageUnavailableError(code: Int): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && code == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
+
+private fun isTooManyRequestsError(code: Int): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && code == SpeechRecognizer.ERROR_TOO_MANY_REQUESTS
+
+private fun isServerDisconnectedError(code: Int): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && code == SpeechRecognizer.ERROR_SERVER_DISCONNECTED
 
 internal class PreviewVoiceWakeRecognizer : VoiceWakeRecognizer {
   override val isAvailable: Boolean = true

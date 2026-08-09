@@ -12,6 +12,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -284,8 +285,7 @@ class NodeForegroundService : Service() {
       ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
     val backgroundGranted =
-      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
-        PackageManager.PERMISSION_GRANTED
+      AndroidPermissionPolicy.hasBackgroundLocation(this)
     return (fineGranted || coarseGranted) && backgroundGranted
   }
 
@@ -369,13 +369,19 @@ internal fun foregroundServiceTypes(
   voiceMode: VoiceCaptureMode,
   backgroundLocationActive: Boolean,
 ): Int {
+  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return 0
   val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
   val voiceTypes =
     when (voiceMode) {
       VoiceCaptureMode.Off -> base
       VoiceCaptureMode.ManualMic,
       VoiceCaptureMode.TalkMode,
-      -> base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+      ->
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+          base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        } else {
+          base
+        }
     }
   return if (backgroundLocationActive) {
     voiceTypes or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION

@@ -7,6 +7,7 @@ import android.location.Location
 import android.location.LocationManager
 import android.os.CancellationSignal
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -113,7 +114,7 @@ class LocationCaptureManager(
         suspendCancellableCoroutine<Location?> { cont ->
           val signal = CancellationSignal()
           cont.invokeOnCancellation { signal.cancel() }
-          manager.getCurrentLocation(resolved, signal, context.mainExecutor) { location ->
+          LocationManagerCompat.getCurrentLocation(manager, resolved, signal, context.mainExecutor) { location ->
             cont.resume(location) { _, _, _ -> }
           }
         }

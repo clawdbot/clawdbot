@@ -18,7 +18,8 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] Security hardening (biometric lock, token handling, safer defaults)
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
-- [x] Foreground on-device Voice Wake with Gateway-synced wake words
+- [x] Foreground on-device Voice Wake with Gateway-synced wake words on
+  Android 12 and newer
 - [x] Screen tab full functionality
 - [x] Skill Workshop settings can filter proposals, inspect proposal content, and apply/reject/quarantine drafts through Gateway RPCs
 - [x] Skills settings can search installed skills, enable or disable them, and install Gateway-verified ClawHub releases
@@ -30,6 +31,13 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 - Run `pnpm install` from the repository root so native Canvas resources can be generated.
 - Open the folder `apps/android`.
+
+The phone app supports Android 9 (API 28) and newer. The Wear OS app still
+requires API 31. On Android 9 through 11, on-device Voice Wake and Chat
+dictation are unavailable because Android does not expose the guaranteed
+on-device recognizer API. Copying a widget image remains available on Android
+9; saving it directly to Downloads requires Android 10.
+Automatic Bluetooth microphone routing requires Android 12.
 
 ## Wear OS companion
 
@@ -245,7 +253,9 @@ Then in app **Connect → Manual**:
 
 This app is native Kotlin + Jetpack Compose.
 
-- For Compose UI edits: use Android Studio **Live Edit** on a debug build (works on physical devices; project `minSdk=31` already meets API requirement).
+- For Compose UI edits: use Android Studio **Live Edit** on a compatible debug
+  device. Live Edit itself requires API 30 even though the phone app supports
+  API 28.
 - For many non-structural code/resource changes: use Android Studio **Apply Changes**.
 - For structural/native/manifest/Gradle changes: do full reinstall (`pnpm android:run`).
 - Canvas web content already supports live reload when loaded from Gateway `__openclaw__/canvas/` (see `docs/platforms/android.md`).

@@ -8,6 +8,7 @@ import android.content.ClipboardManager
 import android.content.ContentUris
 import android.content.pm.ActivityInfo
 import android.graphics.BitmapFactory
+import android.os.Build
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.view.View
@@ -107,6 +108,7 @@ class CanvasHostLifecycleTest {
 
   @Test
   fun rendererTerminationForgetsFailedPageAndNextShowRecreatesIt() {
+    org.junit.Assume.assumeTrue(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
     activityRule.scenario.onActivity { activity -> activity.presentFastPage() }
     assertTrue("initial page never finished", activityRule.scenario.waitForPageFinished())
 
@@ -164,6 +166,7 @@ class CanvasHostLifecycleTest {
 
   @Test
   fun renderedWebViewExportsPngToClipboardAndDownloads() {
+    org.junit.Assume.assumeTrue(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
     activityRule.scenario.onActivity { activity -> activity.presentFastPage() }
     assertTrue("widget proof page never finished", activityRule.scenario.waitForPageFinished())
     val activity = activityRule.scenario.readActivity { it }

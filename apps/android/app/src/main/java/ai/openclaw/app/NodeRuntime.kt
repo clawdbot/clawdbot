@@ -940,11 +940,14 @@ class NodeRuntime private constructor(
       locationPreciseEnabled = { locationPreciseEnabled.value },
     )
 
+  private val callLogAvailable =
+    SensitiveFeatureConfig.callLogEnabled && hasTelephonyCapability(appContext)
+
   private val permissionSnapshot = {
     readAndroidPermissionSnapshot(
       context = appContext,
       smsEnabled = SensitiveFeatureConfig.smsEnabled,
-      callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
+      callLogEnabled = callLogAvailable,
       photosEnabled = SensitiveFeatureConfig.photosEnabled,
       backgroundLocationEnabled = SensitiveFeatureConfig.backgroundLocationEnabled,
     )
@@ -954,7 +957,7 @@ class NodeRuntime private constructor(
     DeviceHandler.withPermissionSnapshot(
       appContext = appContext,
       smsEnabled = SensitiveFeatureConfig.smsEnabled,
-      callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
+      callLogEnabled = callLogAvailable,
       photosEnabled = SensitiveFeatureConfig.photosEnabled,
       permissionSnapshot = permissionSnapshot,
     )
@@ -1018,7 +1021,7 @@ class NodeRuntime private constructor(
       sendSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canSendSms() },
       readSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canReadSms() },
       smsSearchPossible = { SensitiveFeatureConfig.smsEnabled && sms.hasTelephonyFeature() },
-      callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
+      callLogAvailable = { callLogAvailable },
       photosAvailable = { SensitiveFeatureConfig.photosEnabled },
       installedAppsSharingEnabled = { installedAppsSharingEnabled.value },
       voiceWakeAvailable = {
@@ -1074,7 +1077,7 @@ class NodeRuntime private constructor(
       readSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canReadSms() },
       smsFeatureEnabled = { SensitiveFeatureConfig.smsEnabled },
       smsTelephonyAvailable = { sms.hasTelephonyFeature() },
-      callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
+      callLogAvailable = { callLogAvailable },
       photosAvailable = { SensitiveFeatureConfig.photosEnabled },
       installedAppsSharingEnabled = { installedAppsSharingEnabled.value },
       debugBuild = { BuildConfig.DEBUG },

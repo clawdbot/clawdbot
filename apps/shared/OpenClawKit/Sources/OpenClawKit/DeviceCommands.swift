@@ -13,6 +13,7 @@ public enum OpenClawBatteryState: String, Codable, Sendable {
 }
 
 public enum OpenClawThermalState: String, Codable, Sendable {
+    case unknown
     case nominal
     case fair
     case serious

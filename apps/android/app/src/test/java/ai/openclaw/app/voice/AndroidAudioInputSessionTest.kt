@@ -5,6 +5,7 @@ import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.os.Build
 import android.os.Looper
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -37,8 +38,43 @@ class AndroidAudioInputSessionTest {
   @After
   fun tearDown() {
     shadowAudioManager.setInputDevices(emptyList())
-    shadowAudioManager.setAvailableCommunicationDevices(emptyList())
-    audioManager.clearCommunicationDevice()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      shadowAudioManager.setAvailableCommunicationDevices(emptyList())
+      audioManager.clearCommunicationDevice()
+    }
+  }
+
+  @Test
+  @Config(sdk = [28])
+  fun api28OpensAndClosesWithoutCommunicationDeviceApis() {
+    val builtIn = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_MIC)
+    val bluetooth = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    shadowAudioManager.setInputDevices(listOf(bluetooth, builtIn))
+
+    val session = AndroidAudioInputSession.open(context, sampleRateHz = 24_000, frameBytes = 4_800)
+
+    assertNull(session.requestedInputType)
+    assertEquals(
+      listOf(AudioDeviceInfo.TYPE_BUILTIN_MIC),
+      AndroidAudioInputSession.listAvailableDevices(context).map(AudioInputDeviceOption::type),
+    )
+    assertNull(resolvePreferredAudioInput(listOf(bluetooth, builtIn), audioInputDeviceKey(bluetooth)))
+    session.close()
+  }
+
+  @Test
+  @Config(sdk = [31])
+  fun api31RoutesClassicBluetoothThroughCommunicationDevice() {
+    val scoInput = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    val scoOutput = audioDevice(AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+    shadowAudioManager.setInputDevices(listOf(scoInput))
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(scoOutput))
+
+    val session = AndroidAudioInputSession.open(context, sampleRateHz = 24_000, frameBytes = 4_800)
+
+    assertEquals(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, session.requestedInputType)
+    assertEquals(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, audioManager.communicationDevice?.type)
+    session.close()
   }
 
   @Test
@@ -239,6 +275,7 @@ class AndroidAudioInputSessionTest {
         .setType(type)
         .build()
     val port = ReflectionHelpers.getField<Any>(device, "mPort")
+    ReflectionHelpers.setField(port, "mName", "Test microphone")
     val handle = ReflectionHelpers.getField<Any>(port, "mHandle")
     ReflectionHelpers.setField(handle, "mId", nextDeviceId++)
     return device

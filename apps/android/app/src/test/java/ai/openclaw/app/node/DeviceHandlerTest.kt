@@ -12,12 +12,14 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 class DeviceHandlerTest {
@@ -109,7 +111,7 @@ class DeviceHandlerTest {
     assertEquals((totalBytes - freeBytes).coerceAtLeast(0L), usedBytes)
 
     val thermalState = thermal.getValue("state").jsonPrimitive.content
-    assertTrue(thermalState in setOf("nominal", "fair", "serious", "critical"))
+    assertTrue(thermalState in setOf("unknown", "nominal", "fair", "serious", "critical"))
 
     val networkStatus = network.getValue("status").jsonPrimitive.content
     assertTrue(networkStatus in setOf("satisfied", "unsatisfied", "requiresConnection"))
@@ -328,6 +330,18 @@ class DeviceHandlerTest {
   }
 
   @Test
+  @Config(sdk = [28])
+  fun handleDevicePermissions_marksCallLogPromptableOnlyWithTelephony() {
+    val app = appContext()
+    val handler = DeviceHandler(app, callLogEnabled = true)
+
+    assertFalse(permissionPromptable(handler.handleDevicePermissions(null).payloadJson, "callLog"))
+
+    shadowOf(app.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, true)
+    assertTrue(permissionPromptable(handler.handleDevicePermissions(null).payloadJson, "callLog"))
+  }
+
+  @Test
   fun handleDevicePermissions_requiresReadAndWritePermissionPairs() {
     val app = appContext()
     val handler = DeviceHandler(app)
@@ -540,6 +554,19 @@ class DeviceHandlerTest {
       .getValue("status")
       .jsonPrimitive
       .content
+
+  private fun permissionPromptable(
+    payloadJson: String?,
+    key: String,
+  ): Boolean =
+    parsePayload(payloadJson)
+      .getValue("permissions")
+      .jsonObject
+      .getValue(key)
+      .jsonObject
+      .getValue("promptable")
+      .jsonPrimitive
+      .boolean
 }
 
 private class FakeDeviceAppSource(

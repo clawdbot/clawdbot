@@ -9,9 +9,11 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioRouting
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.annotation.RequiresApi
 import java.net.URLDecoder
 import java.net.URLEncoder
 
@@ -84,6 +86,7 @@ internal class AndroidAudioInputSession private constructor(
       val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
       return audioManager
         .getDevices(AudioManager.GET_DEVICES_INPUTS)
+        .filter { device -> isSupportedAudioInput(device.type) }
         .map { device ->
           AudioInputDeviceOption(
             key = audioInputDeviceKey(device),
@@ -201,9 +204,9 @@ internal class AndroidAudioInputSession private constructor(
   ): Boolean {
     val communicationDevice =
       if (preferredInput == null) {
-        selectBluetoothDevice(audioManager.availableCommunicationDevices, requestedCommunicationDevice)
+        selectBluetoothDevice(availableCommunicationDevices(audioManager), requestedCommunicationDevice)
       } else {
-        selectCommunicationDevice(audioManager.availableCommunicationDevices, preferredInput)
+        selectCommunicationDevice(availableCommunicationDevices(audioManager), preferredInput)
       }
     val communicationSelected = bluetoothCommunicationRoute.update(audioManager, communicationRouteOwner, communicationDevice)
     requestedCommunicationDevice = communicationDevice.takeIf { communicationSelected }
@@ -302,6 +305,16 @@ private class BluetoothCommunicationRoute {
   ): Boolean {
     if (owner < latestOwner) return false
     latestOwner = owner
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+    return updateApi31(audioManager, owner, device)
+  }
+
+  @RequiresApi(Build.VERSION_CODES.S)
+  private fun updateApi31(
+    audioManager: AudioManager,
+    owner: Long,
+    device: AudioDeviceInfo?,
+  ): Boolean {
     if (device == null) {
       if (activeOwner != null) audioManager.clearCommunicationDevice()
       activeOwner = null
@@ -322,12 +335,21 @@ private class BluetoothCommunicationRoute {
     owner: Long,
   ) {
     if (activeOwner != owner || owner < latestOwner) return
-    audioManager.clearCommunicationDevice()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      audioManager.clearCommunicationDevice()
+    }
     activeOwner = null
   }
 }
 
 private val bluetoothCommunicationRoute = BluetoothCommunicationRoute()
+
+private fun availableCommunicationDevices(audioManager: AudioManager): List<AudioDeviceInfo> =
+  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    audioManager.availableCommunicationDevices
+  } else {
+    emptyList()
+  }
 
 /** Converts AudioRecord's negative return codes into capture-session failures. */
 internal fun checkAudioRecordReadResult(result: Int): Int {
@@ -389,7 +411,12 @@ internal fun audioInputDeviceKey(device: AudioDeviceInfo): String = audioInputDe
 internal fun resolvePreferredAudioInput(
   devices: List<AudioDeviceInfo>,
   preferredDeviceKey: String?,
-): AudioDeviceInfo? = preferredDeviceKey?.let { key -> devices.firstOrNull { audioInputDeviceKey(it) == key } }
+): AudioDeviceInfo? =
+  preferredDeviceKey?.let { key ->
+    devices.firstOrNull { device ->
+      isSupportedAudioInput(device.type) && audioInputDeviceKey(device) == key
+    }
+  }
 
 internal fun audioInputDeviceKey(
   type: Int,
@@ -412,12 +439,18 @@ internal fun audioInputDeviceOptionFromKey(key: String): AudioInputDeviceOption?
   )
 }
 
-private fun bluetoothPriority(type: Int): Int? =
-  when (type) {
+private fun bluetoothPriority(type: Int): Int? {
+  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+  return when (type) {
     AudioDeviceInfo.TYPE_BLE_HEADSET -> 0
     AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> 1
     else -> null
   }
+}
+
+private fun isSupportedAudioInput(type: Int): Boolean =
+  Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ||
+    type != AudioDeviceInfo.TYPE_BLUETOOTH_SCO
 
 private fun sameDevice(
   left: AudioDeviceInfo?,

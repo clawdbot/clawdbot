@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.AndroidPermissionPolicy
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.gateway.GatewaySession
 import android.Manifest
@@ -41,9 +42,7 @@ private class DefaultLocationDataSource(
     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
       PackageManager.PERMISSION_GRANTED
 
-  override fun hasBackgroundPermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
-      PackageManager.PERMISSION_GRANTED
+  override fun hasBackgroundPermission(context: Context): Boolean = AndroidPermissionPolicy.hasBackgroundLocation(context)
 
   override suspend fun fetchLocation(
     desiredProviders: List<String>,

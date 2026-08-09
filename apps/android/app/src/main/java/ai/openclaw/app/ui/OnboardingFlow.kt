@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.AndroidPermissionPolicy
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.LocationMode
@@ -10,6 +11,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.hasPhotoReadPermission
+import ai.openclaw.app.hasTelephonyCapability
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
@@ -3164,19 +3166,18 @@ private fun rememberPermissionState(
   var notificationListenerGranted by rememberSaveable { mutableStateOf(DeviceNotificationListenerService.isAccessEnabled(context)) }
   val photosAvailable = SensitiveFeatureConfig.photosEnabled
   val motionAvailable = remember(context) { hasMotionCapabilities(context) }
-  val smsAvailable =
-    remember(context) {
-      SensitiveFeatureConfig.smsEnabled &&
-        context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
-    }
+  val telephonyAvailable = remember(context) { hasTelephonyCapability(context) }
+  val smsAvailable = SensitiveFeatureConfig.smsEnabled && telephonyAvailable
   val currentSmsGranted =
     !smsAvailable ||
       (
         hasPermission(context, Manifest.permission.SEND_SMS) &&
           hasPermission(context, Manifest.permission.READ_SMS)
       )
-  val callLogAvailable = SensitiveFeatureConfig.callLogEnabled
-  var motionGranted by rememberSaveable { mutableStateOf(!motionAvailable || hasPermission(context, Manifest.permission.ACTIVITY_RECOGNITION)) }
+  val callLogAvailable = SensitiveFeatureConfig.callLogEnabled && telephonyAvailable
+  var motionGranted by rememberSaveable {
+    mutableStateOf(!motionAvailable || AndroidPermissionPolicy.hasActivityRecognition(context))
+  }
   var smsGranted by rememberSaveable { mutableStateOf(currentSmsGranted) }
   var callLogGranted by rememberSaveable { mutableStateOf(!callLogAvailable || hasPermission(context, Manifest.permission.READ_CALL_LOG)) }
   val lifecycleOwner = LocalLifecycleOwner.current
@@ -3219,7 +3220,12 @@ private fun rememberPermissionState(
         } else {
           true
         }
-      motionGranted = permissions[Manifest.permission.ACTIVITY_RECOGNITION] ?: motionGranted
+      motionGranted =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          permissions[Manifest.permission.ACTIVITY_RECOGNITION] ?: motionGranted
+        } else {
+          true
+        }
       smsGranted =
         mergedRequiredPermissionGrantState(
           permissions = permissions,
@@ -3287,7 +3293,9 @@ private fun rememberPermissionState(
       },
       if (motionAvailable) {
         PermissionRowModel(PermissionRowId.Motion, nativeText("Motion"), nativeText("Share steps and activity"), Icons.Default.Sensors, motionGranted) {
-          request(Manifest.permission.ACTIVITY_RECOGNITION)
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            request(Manifest.permission.ACTIVITY_RECOGNITION)
+          }
         }
       } else {
         null

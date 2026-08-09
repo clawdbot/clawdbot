@@ -5,10 +5,12 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -90,7 +92,7 @@ internal class AndroidChatDictationRecognizer(
 ) : ChatDictationRecognizer {
   private val appContext = context.applicationContext
   override val isAvailable: Boolean =
-    runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext) }.getOrDefault(false)
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && isOnDeviceRecognitionAvailable(appContext)
   private var generation = 0L
   private var recognizer: SpeechRecognizer? = null
 
@@ -98,11 +100,11 @@ internal class AndroidChatDictationRecognizer(
     generation += 1
     val operation = generation
     retireRecognizer()
-    if (!isAvailable) {
-      onEvent(ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_SERVER_DISCONNECTED))
+    if (!isAvailable || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+      onEvent(ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_CLIENT))
       return
     }
-    val active = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
+    val active = createOnDeviceSpeechRecognizer(appContext)
     active.setRecognitionListener(
       object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
@@ -192,6 +194,12 @@ internal class AndroidChatDictationRecognizer(
     runCatching { active?.destroy() }
   }
 }
+
+@RequiresApi(Build.VERSION_CODES.S)
+private fun isOnDeviceRecognitionAvailable(context: Context): Boolean = runCatching { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) }.getOrDefault(false)
+
+@RequiresApi(Build.VERSION_CODES.S)
+private fun createOnDeviceSpeechRecognizer(context: Context): SpeechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
 
 internal class ChatDictationController(
   private val recognizer: ChatDictationRecognizer,
@@ -354,12 +362,19 @@ internal fun dictationFailureForError(code: Int): ChatDictationFailure =
     SpeechRecognizer.ERROR_NO_MATCH,
     SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
     -> ChatDictationFailure.NoSpeech
-    SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
-    SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
-    SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE,
-    -> ChatDictationFailure.Unavailable
-    else -> ChatDictationFailure.Generic
+    else ->
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && isOnDeviceRecognitionUnavailableError(code)) {
+        ChatDictationFailure.Unavailable
+      } else {
+        ChatDictationFailure.Generic
+      }
   }
+
+@RequiresApi(Build.VERSION_CODES.S)
+private fun isOnDeviceRecognitionUnavailableError(code: Int): Boolean =
+  code == SpeechRecognizer.ERROR_SERVER_DISCONNECTED ||
+    code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+    code == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
 
 @Composable
 internal fun rememberChatDictationController(viewModel: MainViewModel): ChatDictationController {

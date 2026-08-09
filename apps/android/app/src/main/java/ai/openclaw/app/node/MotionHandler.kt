@@ -1,14 +1,13 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.AndroidPermissionPolicy
 import ai.openclaw.app.gateway.GatewaySession
-import android.Manifest
 import android.content.Context
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.SystemClock
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -94,9 +93,7 @@ private object SystemMotionDataSource : MotionDataSource {
     return sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
   }
 
-  override fun hasPermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
-      android.content.pm.PackageManager.PERMISSION_GRANTED
+  override fun hasPermission(context: Context): Boolean = AndroidPermissionPolicy.hasActivityRecognition(context)
 
   override suspend fun activity(
     context: Context,

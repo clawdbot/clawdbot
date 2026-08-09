@@ -4,6 +4,7 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.RootScreen
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import android.widget.Toast
@@ -106,13 +107,28 @@ class MainActivity : AppCompatActivity() {
 
   override fun onTopResumedActivityChanged(isTopResumedActivity: Boolean) {
     super.onTopResumedActivityChanged(isTopResumedActivity)
-    // minSdk 31 guarantees this callback and lets multi-resume select the actually interactive task.
+    // Multi-resume selects the actually interactive task on Android 10 and newer.
     updateTopResumedPermissionHost(
       isTopResumedActivity = isTopResumedActivity,
       activate = { permissionRequester.activate(this) },
       deactivate = { permissionRequester.deactivate(this) },
       refreshPermissionSurface = { initializedViewModel?.refreshNodePermissionSurface() },
     )
+  }
+
+  override fun onResume() {
+    super.onResume()
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+      permissionRequester.activate(this)
+      initializedViewModel?.refreshNodePermissionSurface()
+    }
+  }
+
+  override fun onPause() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+      permissionRequester.deactivate(this)
+    }
+    super.onPause()
   }
 
   override fun onStop() {

@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidLicenseNotice
+import ai.openclaw.app.AndroidPermissionPolicy
 import ai.openclaw.app.AppLanguage
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
@@ -839,6 +840,8 @@ private fun AudioInputDevicePanel(
         subtitle =
           if (preferredDeviceKey != null && !preferredAvailable) {
             nativeString("Preferred microphone unavailable; using automatic routing.")
+          } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            nativeString("Uses the system-selected microphone.")
           } else {
             nativeString("Prioritizes connected Bluetooth microphones.")
           },
@@ -1289,7 +1292,11 @@ private fun PhoneCapabilitiesScreen(
   var pendingPreciseLocation by rememberSaveable { mutableStateOf(false) }
   val platformBackgroundPermissionLabel =
     remember(context) {
-      context.packageManager.backgroundPermissionOptionLabel.toString()
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        context.packageManager.backgroundPermissionOptionLabel.toString()
+      } else {
+        ""
+      }
     }
   val backgroundPermissionLabel = resolvedBackgroundPermissionLabel(platformBackgroundPermissionLabel)
   val cameraPermissionLauncher =
@@ -1318,8 +1325,12 @@ private fun PhoneCapabilitiesScreen(
           )
         LocationMode.Always -> {
           if (foregroundGranted) {
-            viewModel.setLocationMode(LocationMode.WhileUsing)
-            showBackgroundLocationExplanation = true
+            if (hasBackgroundLocationPermission(context)) {
+              viewModel.setLocationMode(LocationMode.Always)
+            } else {
+              viewModel.setLocationMode(LocationMode.WhileUsing)
+              showBackgroundLocationExplanation = true
+            }
           } else {
             viewModel.setLocationMode(LocationMode.Off)
             pendingAlwaysPreviousModeRaw = null
@@ -3163,7 +3174,7 @@ private fun hasLocationPermission(context: Context): Boolean =
   hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
     hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
 
-private fun hasBackgroundLocationPermission(context: Context): Boolean = hasPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+private fun hasBackgroundLocationPermission(context: Context): Boolean = AndroidPermissionPolicy.hasBackgroundLocation(context)
 
 private fun openNotificationListenerSettings(context: Context) {
   val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

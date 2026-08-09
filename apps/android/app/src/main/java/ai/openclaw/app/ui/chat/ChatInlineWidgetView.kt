@@ -216,11 +216,13 @@ internal fun ChatInlineWidget(
                 leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                 onClick = { export(ChatWidgetExportDestination.Clipboard) },
               )
-              DropdownMenuItem(
-                text = { Text(nativeString("Save image")) },
-                leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
-                onClick = { export(ChatWidgetExportDestination.Downloads) },
-              )
+              if (canSaveChatWidgetToDownloads()) {
+                DropdownMenuItem(
+                  text = { Text(nativeString("Save image")) },
+                  leadingIcon = { Icon(Icons.Default.Download, contentDescription = null) },
+                  onClick = { export(ChatWidgetExportDestination.Downloads) },
+                )
+              }
             }
           }
         }

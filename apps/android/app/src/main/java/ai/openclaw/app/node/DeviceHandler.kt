@@ -3,6 +3,7 @@ package ai.openclaw.app.node
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.hasTelephonyCapability
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.Context
@@ -353,7 +354,7 @@ class DeviceHandler private constructor(
 
   private fun permissionsPayloadJson(): String {
     val snapshot = permissionSnapshot()
-    val canSendSms = appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
+    val telephonyAvailable = hasTelephonyCapability(appContext)
     return buildJsonObject {
       put(
         "permissions",
@@ -387,7 +388,7 @@ class DeviceHandler private constructor(
                 JsonPrimitive(
                   if (hasAnySmsCapability(
                       smsEnabled,
-                      canSendSms,
+                      telephonyAvailable,
                       snapshot.smsSend,
                       snapshot.smsRead,
                     )
@@ -403,7 +404,7 @@ class DeviceHandler private constructor(
                 JsonPrimitive(
                   isSmsPromptable(
                     smsEnabled,
-                    canSendSms,
+                    telephonyAvailable,
                     snapshot.smsSend,
                     snapshot.smsRead,
                   ),
@@ -416,14 +417,14 @@ class DeviceHandler private constructor(
                     "send",
                     permissionStateJson(
                       granted = snapshot.smsSend,
-                      promptableWhenDenied = smsEnabled && canSendSms,
+                      promptableWhenDenied = smsEnabled && telephonyAvailable,
                     ),
                   )
                   put(
                     "read",
                     permissionStateJson(
                       granted = snapshot.smsRead,
-                      promptableWhenDenied = smsEnabled && canSendSms,
+                      promptableWhenDenied = smsEnabled && telephonyAvailable,
                     ),
                   )
                 },
@@ -469,7 +470,7 @@ class DeviceHandler private constructor(
             "callLog",
             permissionStateJson(
               granted = snapshot.callLog,
-              promptableWhenDenied = callLogEnabled,
+              promptableWhenDenied = callLogEnabled && telephonyAvailable,
             ),
           )
           put(
@@ -610,7 +611,8 @@ class DeviceHandler private constructor(
     }
 
   private fun mapThermalState(powerManager: PowerManager?): String {
-    val thermal = powerManager?.currentThermalStatus ?: return "nominal"
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return "unknown"
+    val thermal = powerManager?.currentThermalStatus ?: return "unknown"
     return when (thermal) {
       PowerManager.THERMAL_STATUS_NONE, PowerManager.THERMAL_STATUS_LIGHT -> "nominal"
       PowerManager.THERMAL_STATUS_MODERATE -> "fair"

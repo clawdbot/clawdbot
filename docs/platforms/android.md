@@ -337,11 +337,13 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 
 - Android's shell navigation is **Home**, **Chat**, and **Settings**. Voice input
   belongs to the Chat composer; there is no separate Voice tab.
-- Tap the composer microphone for on-device speech recognition that inserts a
-  transcript into the draft. Long-press the microphone to record a voice-note
-  attachment. The UI reports unavailable recognition, missing permission,
-  busy/network failures, and no-speech outcomes instead of silently dropping
-  the attempt.
+- On Android 12 and newer, tap the composer microphone for on-device speech
+  recognition that inserts a transcript into the draft. On Android 9 through
+  11, Chat dictation and Voice Wake remain unavailable because the platform
+  cannot guarantee on-device recognition. Long-press the microphone to record
+  a voice-note attachment. The UI reports unavailable recognition, missing
+  permission, busy/network failures, and no-speech outcomes instead of
+  silently dropping the attempt.
 - Start continuous **Talk** from the Chat waveform. Dictation, voice-note
   recording, and Talk are mutually exclusive microphone paths.
 - Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.

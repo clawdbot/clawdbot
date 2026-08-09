@@ -10,12 +10,14 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Rect
+import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.view.PixelCopy
 import android.webkit.WebView
+import androidx.annotation.RequiresApi
 import androidx.core.content.FileProvider
 import androidx.core.graphics.createBitmap
 import kotlinx.coroutines.Dispatchers
@@ -65,7 +67,13 @@ internal suspend fun exportChatWidgetImage(
     val fileName = widgetExportFileName(title)
     when (destination) {
       ChatWidgetExportDestination.Clipboard -> copyChatWidgetImage(context, bitmap, fileName)
-      ChatWidgetExportDestination.Downloads -> saveChatWidgetImage(context, bitmap, fileName)
+      ChatWidgetExportDestination.Downloads -> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          saveChatWidgetImage(context, bitmap, fileName)
+        } else {
+          error("saving widget images requires Android 10")
+        }
+      }
     }
   } finally {
     bitmap.recycle()
@@ -208,6 +216,9 @@ private fun pruneExpiredWidgetExportDirectories(
     }.forEach(File::deleteRecursively)
 }
 
+internal fun canSaveChatWidgetToDownloads(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+
+@RequiresApi(Build.VERSION_CODES.Q)
 private suspend fun saveChatWidgetImage(
   context: Context,
   bitmap: Bitmap,

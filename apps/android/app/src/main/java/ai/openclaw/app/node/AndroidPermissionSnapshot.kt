@@ -1,6 +1,8 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.AndroidPermissionPolicy
 import ai.openclaw.app.hasPhotoReadPermission
+import ai.openclaw.app.hasTelephonyCapability
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -63,7 +65,7 @@ internal fun readAndroidPermissionSnapshot(
 
   val locationFine = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
   val locationCoarse = hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
-  val telephonyAvailable = context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
+  val telephonyAvailable = hasTelephonyCapability(context)
 
   return AndroidPermissionSnapshot(
     camera = hasPermission(Manifest.permission.CAMERA),
@@ -73,7 +75,7 @@ internal fun readAndroidPermissionSnapshot(
     locationBackground =
       backgroundLocationEnabled &&
         (locationFine || locationCoarse) &&
-        hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+        AndroidPermissionPolicy.hasBackgroundLocation(context),
     smsSend = smsEnabled && telephonyAvailable && hasPermission(Manifest.permission.SEND_SMS),
     smsRead = smsEnabled && telephonyAvailable && hasPermission(Manifest.permission.READ_SMS),
     notificationListener = DeviceNotificationListenerService.isAccessEnabled(context),
@@ -85,7 +87,7 @@ internal fun readAndroidPermissionSnapshot(
     contactsWrite = hasPermission(Manifest.permission.WRITE_CONTACTS),
     calendarRead = hasPermission(Manifest.permission.READ_CALENDAR),
     calendarWrite = hasPermission(Manifest.permission.WRITE_CALENDAR),
-    callLog = callLogEnabled && hasPermission(Manifest.permission.READ_CALL_LOG),
-    motion = hasPermission(Manifest.permission.ACTIVITY_RECOGNITION),
+    callLog = callLogEnabled && telephonyAvailable && hasPermission(Manifest.permission.READ_CALL_LOG),
+    motion = AndroidPermissionPolicy.hasActivityRecognition(context),
   )
 }

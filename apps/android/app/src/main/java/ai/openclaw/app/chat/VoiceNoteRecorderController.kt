@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.voice.TalkAudioLevel
 import android.content.Context
 import android.media.MediaRecorder
+import android.os.Build
 import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -274,7 +275,7 @@ internal class AndroidVoiceNoteRecordingEngine(
 
   override fun start(outputFile: File) {
     check(recorder == null)
-    val next = MediaRecorder(context)
+    val next = createMediaRecorder(context)
     try {
       next.setAudioSource(MediaRecorder.AudioSource.MIC)
       next.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
@@ -315,3 +316,11 @@ internal class AndroidVoiceNoteRecordingEngine(
   // killing the recording.
   override fun pollAmplitude(): Int = recorder?.let { active -> runCatching { active.maxAmplitude }.getOrDefault(0) } ?: 0
 }
+
+@Suppress("DEPRECATION")
+private fun createMediaRecorder(context: Context): MediaRecorder =
+  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    MediaRecorder(context)
+  } else {
+    MediaRecorder()
+  }

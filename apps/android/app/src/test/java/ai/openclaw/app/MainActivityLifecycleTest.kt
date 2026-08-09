@@ -8,6 +8,7 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Looper
 import androidx.lifecycle.SavedStateHandle
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -20,6 +21,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowContentResolver
+import org.robolectric.util.ReflectionHelpers
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -27,6 +29,27 @@ import java.util.concurrent.TimeUnit
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MainActivityLifecycleTest {
+  @Test
+  @Config(sdk = [28])
+  fun api28ResumeOwnsPermissionRequestsUntilPause() {
+    val controller =
+      Robolectric
+        .buildActivity(MainActivity::class.java)
+        .create()
+        .start()
+        .resume()
+    val requester = (RuntimeEnvironment.getApplication() as NodeApp).permissionRequester
+    val activeHost = ReflectionHelpers.getField<MutableStateFlow<*>>(requester, "activeActivityHost")
+
+    try {
+      assertTrue(activeHost.value != null)
+      controller.pause()
+      assertNull(activeHost.value)
+    } finally {
+      controller.stop().destroy()
+    }
+  }
+
   @Test
   fun pendingIntentRouterUsesLatestIntentBeforeActivation() {
     val router = MainActivityPendingIntentRouter()
