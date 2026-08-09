@@ -49,7 +49,7 @@ export function createRfbClientMessageFilter() {
         return 10;
       case 248:
         // ClientFence's payload length byte follows its 8-byte fixed header.
-        return pending.length < 9 ? 9 : 9 + pending[8];
+        return pending.length < 9 ? 9 : 9 + pending.readUInt8(8);
       default:
         return `unsupported RFB client message type ${pending[0]}`;
     }

@@ -112,10 +112,10 @@ describe("RFB view-only client message filter", () => {
 
     for (const byte of capturedSequence) {
       const result = filter.filter(Buffer.of(byte));
-      expect(result).not.toHaveProperty("error");
-      if ("forward" in result) {
-        forwarded.push(result.forward);
+      if ("error" in result) {
+        throw new Error(result.error);
       }
+      forwarded.push(result.forward);
     }
 
     expect(Buffer.concat(forwarded)).toEqual(
