@@ -300,6 +300,7 @@ describe("provider-catalog-shared implicit catalog merge", () => {
   it("inherits omitted input capability while preserving explicit overrides", () => {
     const result = mergeImplicitProviderCatalog({
       implicit: {
+        baseUrl: "https://discovery.example.test/v1",
         models: [
           {
             id: "vision-model",

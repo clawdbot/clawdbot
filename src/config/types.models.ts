@@ -242,9 +242,13 @@ export type ModelProviderConfig = {
 /** Fully materialized provider declaration emitted by provider catalog plugins. */
 export type ModelProviderDeclarationConfig = ModelProviderConfig;
 
+/** Model row shape accepted before provider defaults are materialized. */
+export type ModelDefinitionConfigInput = Partial<ModelDefinitionConfig> &
+  Pick<ModelDefinitionConfig, "id" | "name">;
+
 /** User config input shape before provider defaults/models are materialized. */
 export type ModelProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
-  models?: ModelDefinitionConfig[];
+  models?: ModelDefinitionConfigInput[];
 };
 
 export type BedrockDiscoveryConfig = {

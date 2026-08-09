@@ -16,7 +16,7 @@ import {
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfigInput } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -41,7 +41,15 @@ export {
 export function mergeImplicitProviderCatalog(params: {
   existing: ModelProviderConfig | undefined;
   implicit: ModelProviderConfig;
-}): ModelProviderConfig {
+}): ModelProviderConfig;
+export function mergeImplicitProviderCatalog(params: {
+  existing: ModelProviderConfigInput | undefined;
+  implicit: ModelProviderConfigInput;
+}): ModelProviderConfigInput;
+export function mergeImplicitProviderCatalog(params: {
+  existing: ModelProviderConfigInput | undefined;
+  implicit: ModelProviderConfigInput;
+}): ModelProviderConfigInput {
   const { existing, implicit } = params;
   if (!existing) {
     return implicit;
