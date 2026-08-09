@@ -60,6 +60,7 @@ import {
   retirePersistedSteeredChips,
   retireSteeredChipsForTerminalRun,
 } from "./steer-lifecycle.ts";
+import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import { isAckedSteeredChip } from "./steered-chip.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
@@ -180,6 +181,7 @@ function finishSessionMessageRunReconcile(
     return false;
   }
   retireSteeredChipsForTerminalRun(state, runId ?? undefined);
+  deferPendingChatHistoryAnchorTerminalRefresh(state);
   void loadChatHistory(state)
     .finally(() => {
       if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
@@ -262,6 +264,7 @@ function replayPendingSessionMessageReload(
     return;
   }
   state.pendingSessionMessageReloadSessionKey = null;
+  deferPendingChatHistoryAnchorTerminalRefresh(state);
   void loadChatHistory(state).finally(() => state.requestUpdate?.());
 }
 
@@ -282,11 +285,24 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     state.retireSessionCompanion?.(event.key, event.agentId);
   }
   const resetsSelectedSession = matchesChat && resetsSession;
+  const defersSelectedSessionReset =
+    resetsSelectedSession && deferPendingChatHistoryAnchorTerminalRefresh(state);
   if (resetsSelectedSession) {
+    const anchoredMessages = defersSelectedSessionReset ? state.chatMessages : null;
+    const agentId = resolveChatAgentId(state);
+    if (state.chatMessagesBySession) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+        agentId,
+      });
+    }
     const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
     // Reset keeps the public session ID; the explicit reducer event is the
     // only proof that its old live and pending transcript no longer exists.
     reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
+    if (anchoredMessages) {
+      state.chatMessages = anchoredMessages;
+    }
   }
   if (
     matchesChat &&
