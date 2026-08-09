@@ -2592,11 +2592,7 @@ describe("before_tool_call adapter and client tool integration", () => {
       undefined,
       {} as ExtensionContext,
     );
-    recordLoopWarningForToolCall(
-      "call-voice-client-2",
-      "Choose a different action.",
-      runId,
-    );
+    recordLoopWarningForToolCall("call-voice-client-2", "Choose a different action.", runId);
     const second = await definition.execute(
       "call-voice-client-2",
       toolParams,

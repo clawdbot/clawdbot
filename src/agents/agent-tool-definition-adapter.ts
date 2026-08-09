@@ -727,16 +727,14 @@ export function toClientToolDefinitions(
           throw appendLoopWarningToError(err, toolCallId, hookContext?.runId);
         }
         // Return a terminal pending result; the client will execute the tool.
-        return withLoopWarning(
-          {
-            ...jsonResult({
-              status: "pending",
-              tool: func.name,
-              message: "Tool execution delegated to client",
-            }),
-            terminate: true,
-          },
-        );
+        return withLoopWarning({
+          ...jsonResult({
+            status: "pending",
+            tool: func.name,
+            message: "Tool execution delegated to client",
+          }),
+          terminate: true,
+        });
       },
     } satisfies ToolDefinition;
     return attachAdapterExecutionPreparer(definition);
