@@ -5,6 +5,7 @@ import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 /** Shared options, usage shape, cache identity, ordering, and stream scheduling for OpenAI APIs. */
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
+import { headersToRecord } from "../utils/headers.js";
 import { transportAbortError } from "./transport-stream-shared.js";
 
 export { sortPromptCacheToolsByName as sortTransportToolsByName } from "../utils/prompt-cache-stability.js";
@@ -101,6 +102,17 @@ export function parseOpenAICompletionsUsage(
   return usage;
 }
 
+export function createOpenAIResponseHook(
+  onResponse: BaseOpenAIStreamOptions["onResponse"],
+  response: Response,
+  model: Model,
+): (() => void | Promise<void>) | undefined {
+  return onResponse
+    ? () =>
+        onResponse({ status: response.status, headers: headersToRecord(response.headers) }, model)
+    : undefined;
+}
+
 type ModelStreamCooperativeScheduler = {
   afterEvent: () => Promise<void>;
 };
@@ -109,6 +121,24 @@ export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw transportAbortError(signal);
   }
+}
+
+/** Measure one UTF-8 append without double-counting a surrogate pair split across chunks. */
+export function measureUtf8AppendBytes(bufferEndsWithHighSurrogate: boolean, chunk: string) {
+  let bytes = Buffer.byteLength(chunk, "utf8");
+  if (!chunk) {
+    return { bytes, endsWithHighSurrogate: bufferEndsWithHighSurrogate };
+  }
+  const nextCodeUnit = chunk.charCodeAt(0);
+  if (bufferEndsWithHighSurrogate && nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff) {
+    // Each isolated surrogate counts as three UTF-8 bytes; the joined scalar is four.
+    bytes -= 2;
+  }
+  const finalCodeUnit = chunk.charCodeAt(chunk.length - 1);
+  return {
+    bytes,
+    endsWithHighSurrogate: finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff,
+  };
 }
 
 export function createModelStreamCooperativeScheduler(

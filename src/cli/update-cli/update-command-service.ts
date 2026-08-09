@@ -55,11 +55,7 @@ import {
 import { runRestartScript } from "./restart-helper.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
-import {
-  disableUpdatedPackageCompileCacheEnv,
-  resolveUpdatedInstallCommandEnv,
-  resolveUpdatedServicePathEnv,
-} from "./update-command-service-env.js";
+import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
   hasLoadedLaunchdKeepAliveSupervisor,
@@ -74,12 +70,6 @@ const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS = 10;
 const POST_REFRESH_ALREADY_HEALTHY_DELAY_MS = 500;
-const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
-  "OPENCLAW_HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_PROFILE",
-] as const;
 const JSON_MODE_SERVICE_STDOUT = new Writable({
   write(_chunk, _encoding, callback) {
     callback();
@@ -119,6 +109,7 @@ export type PreManagedServiceStop = {
   serviceMatchesMutationRoot?: boolean;
   blockMessage?: string;
   serviceEnv?: NodeJS.ProcessEnv;
+  serviceDefinitionEnv?: NodeJS.ProcessEnv;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
 
@@ -566,6 +557,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     running: true,
     ...serviceOwnership,
     serviceEnv: serviceState.env,
+    serviceDefinitionEnv: serviceState.command?.environment,
     ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
   };
 }
@@ -754,28 +746,6 @@ export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.Pro
   delete resolvedEnv.OPENCLAW_SERVICE_MARKER;
   delete resolvedEnv.OPENCLAW_SERVICE_KIND;
   delete resolvedEnv[GATEWAY_SERVICE_RUNTIME_PID_ENV];
-  return resolvedEnv;
-}
-
-export function resolvePostInstallDoctorEnv(params?: {
-  baseEnv?: NodeJS.ProcessEnv;
-  serviceEnv?: NodeJS.ProcessEnv;
-  invocationCwd?: string;
-}): NodeJS.ProcessEnv {
-  const resolvedEnv: NodeJS.ProcessEnv = {
-    ...disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env),
-  };
-  if (!params?.serviceEnv) {
-    return resolvedEnv;
-  }
-
-  const serviceEnv = resolveUpdatedServicePathEnv(params.serviceEnv, params.invocationCwd);
-  for (const key of POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS) {
-    const value = serviceEnv[key]?.trim();
-    if (value) {
-      resolvedEnv[key] = serviceEnv[key];
-    }
-  }
   return resolvedEnv;
 }
 

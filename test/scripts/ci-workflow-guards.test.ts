@@ -49,6 +49,12 @@ const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
 const MATURITY_SCORECARD_WORKFLOW_REF =
   "openclaw/openclaw/.github/workflows/maturity-scorecard.yml@refs/heads/main";
 const OIDC_BOUND_MAIN_REUSABLE_WORKFLOWS = new Set<string>();
+const AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC =
+  "::error title=ambiguous main push::github.event.before is zero; refusing to infer a diff base for a created or recreated main branch.";
+const AMBIGUOUS_MAIN_PUSH_GUARD = `if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$base_sha" =~ ^0+$ ]]; then
+  echo "${AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC}" >&2
+  exit 1
+fi`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const MATURITY_GENERATED_PR_PATHS = [
   "qa/maturity-scores.yaml",
@@ -704,6 +710,67 @@ function findUnpinnedExternalActions(): string[] {
 
 function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function runPushDiffBaseFixture(options: {
+  commitCount: 1 | 2 | 3;
+  eventBaseSha: string | "parent";
+}) {
+  const root = tempDirs.make("openclaw-ci-diff-base-");
+  runGit(root, ["init", "-q", "-b", "main"]);
+  runGit(root, ["config", "commit.gpgsign", "false"]);
+  runGit(root, ["config", "user.email", "ci-fixture@example.com"]);
+  runGit(root, ["config", "user.name", "CI Fixture"]);
+  for (let index = 1; index <= options.commitCount; index += 1) {
+    writeFileSync(path.join(root, "fixture.txt"), `commit ${index}\n`, "utf8");
+    runGit(root, ["add", "fixture.txt"]);
+    runGit(root, ["commit", "-q", "-m", `fixture ${index}`]);
+  }
+
+  const headSha = runGit(root, ["rev-parse", "HEAD"]);
+  const parentSha =
+    options.commitCount > 1 ? runGit(root, ["rev-parse", "--verify", "HEAD^1"]) : null;
+  const eventBaseSha = options.eventBaseSha === "parent" ? parentSha! : options.eventBaseSha;
+  const outputPath = path.join(root, "github-output");
+  writeFileSync(outputPath, "", "utf8");
+  const diffBaseStep = readCiWorkflow().jobs.preflight.steps.find(
+    (step: WorkflowStep) => step.name === "Resolve exact diff base",
+  );
+  const run = runWorkflowShellScript(diffBaseStep.run, {
+    cwd: root,
+    env: {
+      ...process.env,
+      DEFAULT_BRANCH: "main",
+      EVENT_BASE_SHA: eventBaseSha,
+      GITHUB_EVENT_NAME: "push",
+      GITHUB_OUTPUT: outputPath,
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      PULL_REQUEST_NUMBER: "",
+      RELEASE_GATE: "false",
+    },
+  });
+  const rawOutputs = readFileSync(outputPath, "utf8").trim();
+  const outputs: Record<string, string> =
+    rawOutputs === ""
+      ? {}
+      : Object.fromEntries(
+          rawOutputs.split("\n").map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+        );
+  const emittedBaseIsCommit =
+    typeof outputs.sha === "string" &&
+    spawnSync("git", ["cat-file", "-e", `${outputs.sha}^{commit}`], { cwd: root }).status === 0;
+  return {
+    emittedBaseIsCommit,
+    eventBaseSha,
+    headSha,
+    output: `${run.stdout}${run.stderr}`,
+    outputs,
+    parentSha,
+    status: run.status,
+  };
 }
 
 function writeExecutable(filePath: string, lines: string[]): void {
@@ -4443,11 +4510,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${head_sha}"',
     );
     expect(diffBaseStep.run).toContain("Could not resolve an exact diff base");
+    expect(diffBaseStep.run).toContain(AMBIGUOUS_MAIN_PUSH_GUARD);
     const securityDiffBase = parsedWorkflow.jobs["security-fast"].steps.find(
       (step: WorkflowStep) => step.name === "Resolve security diff base",
     ).run;
     expect(securityDiffBase).toContain("git rev-list --parents -n 1 HEAD");
     expect(securityDiffBase).not.toContain("node scripts/lib/merge-head-diff-base.mjs");
+    expect(securityDiffBase).toContain(AMBIGUOUS_MAIN_PUSH_GUARD);
     const checkShardStep = parsedWorkflow.jobs["check-shard"].steps.find(
       (step: WorkflowStep) => step.name === "Run check shard",
     );
@@ -4457,6 +4526,29 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checkShardStep.run).toContain(
       'timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"',
     );
+  });
+
+  it("rejects ambiguous zero-before main pushes and preserves concrete bases", () => {
+    const zeroSha = "0".repeat(40);
+    const threeCommit = runPushDiffBaseFixture({ commitCount: 3, eventBaseSha: zeroSha });
+    expect(threeCommit.status, threeCommit.output).toBe(1);
+    expect(threeCommit.output).toContain(AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC);
+    expect(threeCommit.outputs).not.toHaveProperty("sha");
+    expect(threeCommit.emittedBaseIsCommit).toBe(false);
+
+    const rootCommit = runPushDiffBaseFixture({ commitCount: 1, eventBaseSha: zeroSha });
+    expect(rootCommit.status, rootCommit.output).toBe(1);
+    expect(rootCommit.output).toContain(AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC);
+    expect(rootCommit.outputs).not.toHaveProperty("sha");
+    expect(rootCommit.emittedBaseIsCommit).toBe(false);
+
+    const concreteBase = runPushDiffBaseFixture({
+      commitCount: 3,
+      eventBaseSha: "parent",
+    });
+    expect(concreteBase.status, concreteBase.output).toBe(0);
+    expect(concreteBase.outputs.sha).toBe(concreteBase.eventBaseSha);
+    expect(concreteBase.emittedBaseIsCommit).toBe(true);
   });
 
   it("uses stable deadcode checks for current and frozen checkouts", () => {
@@ -4649,6 +4741,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then',
     );
     expect(checksFastRun.run).toContain(
+      "node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --split-core --threads=1",
+    );
+    expect(checksFastRun.run).not.toContain(
       "node scripts/run-oxlint.mjs src ui/src packages extensions",
     );
 

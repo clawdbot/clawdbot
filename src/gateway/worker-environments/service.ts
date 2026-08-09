@@ -60,6 +60,7 @@ import {
   type WorkerInferenceSink,
 } from "./inference.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
+import type { WorkerDesktopObserveResult } from "./service-contract.js";
 import {
   boundedWorkerError as boundedError,
   requireWorkerLeaseStatus,
@@ -331,6 +332,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     ...((record.state === "failed" || record.state === "orphaned") && record.lastError
       ? { error: boundedError(record.lastError) }
       : {}),
+    desktopAvailable: inState(record, "ready", "idle", "attached") && record.desktop !== null,
     tunnelStatus: tunnels?.status(record.environmentId) ?? ("stopped" as const),
   });
 
@@ -643,6 +645,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       leaseId: lease.leaseId,
       sshEndpoint: lease.ssh,
       sharedHost: lease.sharedHost === true,
+      desktop: lease.desktop ?? null,
     };
     const bootstrapping = move(record, "bootstrapping", patch);
     if (record.destroyRequestedAtMs !== null) {
@@ -1165,6 +1168,79 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
   };
 
+  const observeDesktop = async (request: {
+    environmentId: string;
+    control: boolean;
+  }): Promise<WorkerDesktopObserveResult> => {
+    if (options.getConfig().cloudWorkers?.desktop !== true) {
+      throw serviceError(
+        "invalid_state",
+        "worker desktop observe is disabled; enable the Desktop lab in Control UI Settings -> Labs (config: cloudWorkers.desktop)",
+      );
+    }
+    if (stopping) {
+      throw serviceError("invalid_state", "Worker environment service is stopping");
+    }
+    if (!tunnels) {
+      throw serviceError("invalid_state", "Worker tunnel runtime is unavailable");
+    }
+    let startup: Promise<{ localSocketPath: string; vncPassword?: string }> | undefined;
+    let ownerEpoch: number | undefined;
+    await withLock(request.environmentId, async () => {
+      if (stopping) {
+        throw serviceError("invalid_state", "Worker environment service is stopping");
+      }
+      const record = store.get(request.environmentId);
+      if (!record) {
+        throw serviceError(
+          "environment_not_found",
+          `Unknown worker environment: ${request.environmentId}`,
+        );
+      }
+      if (
+        !inState(record, "ready", "idle", "attached") ||
+        record.destroyRequestedAtMs !== null ||
+        !record.leaseId ||
+        !record.sshEndpoint ||
+        !record.desktop
+      ) {
+        throw serviceError(
+          "invalid_state",
+          "environment has no desktop; desktop is a warm-time capability of the profile",
+        );
+      }
+      const provider = providerFor(record.providerId);
+      ownerEpoch = record.ownerEpoch;
+      startup = tunnels.desktop.acquire({
+        environmentId: record.environmentId,
+        ownerEpoch: record.ownerEpoch,
+        ssh: record.sshEndpoint,
+        desktop: record.desktop,
+        resolveIdentity: identityResolverFor(record, provider, record.leaseId),
+      });
+    });
+    if (!startup || ownerEpoch === undefined) {
+      throw serviceError("invalid_state", "Worker desktop tunnel failed to start");
+    }
+    const acquired = await startup;
+    const { WORKER_DESKTOP_OBSERVE_PATH, mintWorkerDesktopObserverToken } =
+      await import("./desktop-observe.js");
+    const minted = mintWorkerDesktopObserverToken({
+      environmentId: request.environmentId,
+      ownerEpoch,
+      control: request.control,
+      localSocketPath: acquired.localSocketPath,
+      nowMs: now(),
+    });
+    return {
+      transport: "rfb",
+      wsPath: `${WORKER_DESKTOP_OBSERVE_PATH}?token=${minted.token}`,
+      expiresAtMs: minted.expiresAtMs,
+      control: request.control,
+      ...(acquired.vncPassword ? { vncPassword: acquired.vncPassword } : {}),
+    };
+  };
+
   const stopTunnel = async (environmentId: string, ownerEpoch?: number): Promise<void> => {
     await withLock(environmentId, async () => {
       await tunnels?.stop(environmentId, ownerEpoch);
@@ -1524,6 +1600,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     destroy: async (environmentId: string) => project(await destroy(environmentId)),
     destroyUnattached: async (environmentId: string) =>
       project(await destroy(environmentId, { requireUnattached: true })),
+    observeDesktop,
     admitWorker: async (admission: WorkerConnectParams["admission"]) => {
       if (stopping) {
         return { ok: false, reason: "environment-unavailable" } as const;

@@ -79,6 +79,8 @@ export {
   EnvironmentsListResultSchema,
   EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResultSchema,
+  WorkerDesktopObserveParamsSchema,
+  WorkerDesktopObserveResultSchema,
   SystemInfoParamsSchema,
   SystemInfoResultSchema,
   StateVersionSchema,

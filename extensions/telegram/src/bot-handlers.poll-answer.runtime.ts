@@ -8,6 +8,7 @@ import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
+import { resolveTelegramThreadSpec } from "./bot/helpers.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
 import { findTelegramPollRegistryEntry, retireTelegramPollRegistryEntry } from "./poll-registry.js";
 
@@ -95,9 +96,12 @@ export function registerTelegramPollHandlers(
         cfg: authorizationCfg,
         chatId,
         isGroup,
-        isForum,
         senderId,
-        messageThreadId: entry.messageThreadId,
+        threadSpec: resolveTelegramThreadSpec({
+          isGroup,
+          isForum,
+          messageThreadId: entry.messageThreadId,
+        }),
       });
       const senderAuthorization = await authorizeTelegramEventSender({
         chatId,
