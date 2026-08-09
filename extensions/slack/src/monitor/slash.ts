@@ -1071,7 +1071,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           // straddling the 75-char Slack plain_text limit is dropped whole rather
           // than serialized as a lone `\uD83D` half that Slack rejects.
           text: {
-            type: "plain_text",
+            type: "plain_text" as const,
             text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_SELECT_OPTION_TEXT_MAX),
           },
           value: choice.value,
