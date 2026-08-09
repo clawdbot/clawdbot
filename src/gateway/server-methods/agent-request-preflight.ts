@@ -23,6 +23,7 @@ import {
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
+import type { AgentTurnContext, AgentTurnPrincipal } from "../agent-turn/types.js";
 import {
   isAcceptedAgentDedupePayload,
   readGatewayDedupeEntry,
@@ -43,7 +44,7 @@ import { assertValidParams } from "./validation.js";
 
 type AgentRequestPreflight = {
   request: AgentRunRequest;
-  cfg: ReturnType<GatewayRequestHandlerOptions["context"]["getRuntimeConfig"]>;
+  cfg: ReturnType<AgentTurnContext["getRuntimeConfig"]>;
   runId: string;
   lifecycleGeneration: string;
   allowModelOverride: boolean;
@@ -67,7 +68,10 @@ type AgentRequestPreflight = {
 };
 
 export function prepareAgentRequestPreflight(
-  params: Pick<GatewayRequestHandlerOptions, "params" | "respond" | "context" | "client">,
+  params: Pick<GatewayRequestHandlerOptions, "params" | "respond"> & {
+    context: AgentTurnContext;
+    client: AgentTurnPrincipal | null;
+  },
 ): AgentRequestPreflight | undefined {
   if (!assertValidParams(params.params, validateAgentParams, "agent", params.respond)) {
     return undefined;

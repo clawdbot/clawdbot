@@ -290,6 +290,54 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     }
   });
 
+  it("fences a terminal steer before delayed preparation can enqueue it", async () => {
+    vi.useFakeTimers();
+    let emit!: (event: unknown) => void;
+    let releasePreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    let enqueued = false;
+    const onQueueAccepted = vi.fn();
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer: async (_text, _images, _recorder, _media, _imageOrder, _identity, canInject) => {
+        await preparation;
+        if (canInject && !canInject()) {
+          throw new Error("active session is finalizing");
+        }
+        enqueued = true;
+      },
+      subscribe: (listener) => {
+        emit = listener;
+        return () => {};
+      },
+    };
+    const wait = steerActiveSessionWithOptionalDeliveryWait(
+      activeSession,
+      "delayed steer",
+      { deliveryTimeoutMs: 10_000, onQueueAccepted, waitForTranscriptCommit: true },
+      undefined,
+      () => true,
+    );
+    const rejection = expect(wait).rejects.toThrow(
+      "active session ended before queued steering message was committed to the transcript",
+    );
+
+    emit({ type: "agent_end", messages: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    releasePreparation();
+
+    try {
+      await rejection;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(enqueued).toBe(false);
+      expect(onQueueAccepted).toHaveBeenCalledOnce();
+      expect(onQueueAccepted).toHaveBeenCalledWith(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("matches identical steering text by stable queue identity", async () => {
     let emit!: (event: unknown) => void;
     const first = {

@@ -31,6 +31,11 @@ type NewSessionComposerOptions = {
   readSignal: AbortSignal;
   requiresModifier: boolean;
   submitDisabledReason?: string;
+  terminalAction?: {
+    canStart: boolean;
+    disabledReason?: string;
+    onStart: () => void;
+  };
   submitting: boolean;
   textareaController: NewSessionComposerTextareaController;
   messageLocked?: boolean;
@@ -43,6 +48,65 @@ type NewSessionComposerOptions = {
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 };
+
+function renderStartControl(options: NewSessionComposerOptions) {
+  const startLabel = options.submitting ? t("newSession.starting") : t("newSession.start");
+  if (!options.terminalAction) {
+    return html`
+      <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
+        <button
+          type="button"
+          class="chat-send-btn"
+          ?disabled=${!options.canSubmit}
+          aria-label=${startLabel}
+          @click=${options.onSubmit}
+        >
+          ${options.submitting ? icons.loader : icons.arrowUp}
+        </button>
+      </openclaw-tooltip>
+    `;
+  }
+  const terminalLabel = t("newSession.startInTerminal");
+  return html`
+    <div class="new-session-page__start-split">
+      <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
+        <button
+          type="button"
+          class="chat-send-btn new-session-page__start-primary"
+          ?disabled=${!options.canSubmit}
+          aria-label=${startLabel}
+          @click=${options.onSubmit}
+        >
+          ${options.submitting ? icons.loader : icons.arrowUp}
+        </button>
+      </openclaw-tooltip>
+      <openclaw-tooltip content=${options.terminalAction.disabledReason ?? terminalLabel}>
+        <wa-dropdown class="new-session-page__start-menu" placement="top-end">
+          <button
+            slot="trigger"
+            type="button"
+            class="chat-send-btn new-session-page__start-menu-trigger"
+            ?disabled=${!options.terminalAction.canStart}
+            aria-label=${terminalLabel}
+          >
+            ${icons.chevronUp}
+          </button>
+          <wa-dropdown-item
+            value="start-terminal"
+            ?disabled=${!options.terminalAction.canStart}
+            @click=${() => {
+              if (options.terminalAction?.canStart) {
+                options.terminalAction.onStart();
+              }
+            }}
+          >
+            ${terminalLabel}
+          </wa-dropdown-item>
+        </wa-dropdown>
+      </openclaw-tooltip>
+    </div>
+  `;
+}
 
 export class NewSessionComposerTextareaController {
   private textarea: HTMLTextAreaElement | null = null;
@@ -130,7 +194,6 @@ function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposer
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
 function renderNewSessionComposer(options: NewSessionComposerOptions) {
-  const startLabel = options.submitting ? t("newSession.starting") : t("newSession.start");
   const attachmentProps = {
     attachments: options.attachments,
     disabled: options.submitting || options.messageLocked,
@@ -180,19 +243,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               }}
             ></textarea>
           </div>
-          <div class="agent-chat__composer-actions">
-            <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
-              <button
-                type="button"
-                class="chat-send-btn"
-                ?disabled=${!options.canSubmit}
-                aria-label=${startLabel}
-                @click=${options.onSubmit}
-              >
-                ${options.submitting ? icons.loader : icons.arrowUp}
-              </button>
-            </openclaw-tooltip>
-          </div>
+          <div class="agent-chat__composer-actions">${renderStartControl(options)}</div>
         </div>
         <div class="agent-chat__composer-footer">
           <div class="agent-chat__composer-controls">
@@ -242,6 +293,11 @@ export function renderNewSessionDraftComposer(options: {
   textareaController: NewSessionComposerTextareaController;
   requiresModifier: boolean;
   submitDisabledReason?: string;
+  terminalAction?: {
+    canStart: boolean;
+    disabledReason?: string;
+    onStart: () => void;
+  };
   submitting: boolean;
   messageLocked?: boolean;
   incognitoDisabledReason?: string;
@@ -269,6 +325,7 @@ export function renderNewSessionDraftComposer(options: {
     readSignal,
     requiresModifier: options.requiresModifier,
     submitDisabledReason: options.submitDisabledReason,
+    terminalAction: options.terminalAction,
     submitting: options.submitting,
     textareaController: options.textareaController,
     messageLocked: options.messageLocked,

@@ -700,6 +700,7 @@ export const en: TranslationMap = {
     messagePlaceholder: "What should this session work on?",
     readingAttachment: "Reading attachment",
     start: "Start session",
+    startInTerminal: "Start in terminal",
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
     cloudOwnershipLost:
