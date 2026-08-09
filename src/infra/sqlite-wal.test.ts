@@ -289,12 +289,30 @@ describe("sqlite WAL maintenance", () => {
     }
   });
 
+  it("uses rollback journaling for databases on Linux 9p volumes", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-9p-"));
+    try {
+      const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x01021997)); // V9FS_MAGIC
+
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databasePath: path.join(tempDir, "openclaw.sqlite"),
+      });
+
+      expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses rollback journaling for databases on Linux virtiofs volumes", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-virtiofs-"));
     try {
       const db = createMockDb();
       vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x01021997));
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x10002000)); // VIRTIOFS_MAGIC
 
       configureSqliteWalMaintenance(db, {
         checkpointIntervalMs: 0,

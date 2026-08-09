@@ -21,9 +21,10 @@ const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
 const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
-// virtiofs shares the 9p magic; both are cross-VM/host filesystems where WAL
-// shared-memory semantics are not reliable (Docker Desktop / OrbStack bind mounts).
-const LINUX_VIRTIOFS_SUPER_MAGIC = 0x01021997;
+// V9FS (9p) and virtiofs are cross-VM/host filesystems where WAL shared-memory
+// semantics are not reliable (Docker Desktop / OrbStack bind mounts).
+const LINUX_V9FS_SUPER_MAGIC = 0x01021997; // V9FS_MAGIC
+const LINUX_VIRTIOFS_SUPER_MAGIC = 0x10002000; // VIRTIOFS_MAGIC
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
 // Filesystem classification runs during database open, so never let the fallback probe stall it.
 const MOUNT_COMMAND_TIMEOUT_MS = 1_000;
@@ -321,6 +322,7 @@ function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJournalPo
       filesystemType === LINUX_SMB_SUPER_MAGIC ||
       filesystemType === LINUX_CIFS_SUPER_MAGIC ||
       filesystemType === LINUX_SMB2_SUPER_MAGIC ||
+      filesystemType === LINUX_V9FS_SUPER_MAGIC ||
       filesystemType === LINUX_VIRTIOFS_SUPER_MAGIC
     ) {
       return "rollback";
