@@ -372,7 +372,7 @@ function hashCommandList(commands: TelegramMenuCommand[]): string {
 
 function readLocalizedDescription(
   command: TelegramMenuCommand,
-  languageCode: string,
+  languageCode: LanguageCode,
 ): string | undefined {
   for (const [rawLanguageCode, rawDescription] of Object.entries(
     command.descriptionLocalizations ?? {},
@@ -399,10 +399,10 @@ function toTelegramBotCommands(commands: TelegramMenuCommand[]): Array<{
 }
 
 function buildLocalizedCommandVariants(commands: TelegramMenuCommand[]): {
-  variants: Array<{ languageCode: string; commands: TelegramMenuCommand[] }>;
+  variants: Array<{ languageCode: LanguageCode; commands: TelegramMenuCommand[] }>;
   unsupportedLanguageCodes: string[];
 } {
-  const locales = new Set<string>();
+  const locales = new Set<LanguageCode>();
   const unsupportedLanguageCodes = new Set<string>();
   for (const command of commands) {
     for (const rawLanguageCode of Object.keys(command.descriptionLocalizations ?? {})) {
@@ -435,7 +435,7 @@ function buildLocalizedCommandVariants(commands: TelegramMenuCommand[]): {
 function formatTelegramCommandScopeOperation(
   operation: "deleteMyCommands" | "setMyCommands",
   scope: TelegramCommandMenuScope,
-  languageCode?: string,
+  languageCode?: LanguageCode,
 ): string {
   const base = scope.label === "default" ? operation : `${operation}(${scope.label})`;
   return languageCode ? `${base}(${languageCode})` : base;
@@ -443,12 +443,12 @@ function formatTelegramCommandScopeOperation(
 
 function buildTelegramCommandScopeOptions(
   scope: TelegramCommandMenuScope,
-  languageCode?: string,
+  languageCode?: LanguageCode,
 ): { scope?: { type: "all_group_chats" }; language_code?: LanguageCode } | undefined {
   return scope.options || languageCode
     ? {
         ...scope.options,
-        ...(languageCode ? { language_code: languageCode as LanguageCode } : {}),
+        ...(languageCode ? { language_code: languageCode } : {}),
       }
     : undefined;
 }
@@ -456,7 +456,7 @@ function buildTelegramCommandScopeOptions(
 async function clearTelegramMenuCommandsForScopes(params: {
   bot: Bot;
   runtime: RuntimeEnv;
-  languageCode?: string;
+  languageCode?: LanguageCode;
 }): Promise<boolean> {
   const { bot, runtime, languageCode } = params;
 
@@ -486,7 +486,7 @@ async function setTelegramMenuCommandsForScopes(params: {
   bot: Bot;
   runtime: RuntimeEnv;
   commands: TelegramMenuCommand[];
-  languageCode?: string;
+  languageCode?: LanguageCode;
   shouldLog?: (err: unknown) => boolean;
 }): Promise<void> {
   const { bot, runtime, commands, languageCode, shouldLog } = params;
@@ -530,14 +530,14 @@ export function syncTelegramMenuCommands(params: {
     const ledgerRead = owner.botId
       ? await readTelegramMenuLocaleLedger({ botId: owner.botId, runtime })
       : null;
-    const trackedLocales = new Set([
+    const trackedLocales = new Set<LanguageCode>([
       ...processLocales,
       ...(ledgerRead?.value?.languageCodes ?? []),
     ]);
 
     // Keep every exact scope/language clear ahead of publication.
     const neutralCleared = await clearTelegramMenuCommandsForScopes({ bot, runtime });
-    const unclearedLocales = new Set<string>();
+    const unclearedLocales = new Set<LanguageCode>();
     for (const languageCode of [...trackedLocales].toSorted()) {
       const cleared = await clearTelegramMenuCommandsForScopes({
         bot,
@@ -553,10 +553,10 @@ export function syncTelegramMenuCommands(params: {
       processLocales.add(languageCode);
     }
 
-    const persistLocales = async (desiredLocales: string[]): Promise<boolean> => {
-      const conservativeLocales = [...new Set([...unclearedLocales, ...desiredLocales])].toSorted();
+    const persistLocales = async (desiredLocales: LanguageCode[]): Promise<boolean> => {
+      const knownLocales = [...new Set([...unclearedLocales, ...desiredLocales])].toSorted();
       processLocales.clear();
-      for (const languageCode of conservativeLocales) {
+      for (const languageCode of knownLocales) {
         processLocales.add(languageCode);
       }
       if (!owner.botId) {
@@ -569,7 +569,7 @@ export function syncTelegramMenuCommands(params: {
         await persistTelegramMenuLocaleLedger({
           botId: owner.botId,
           read: ledgerRead,
-          languageCodes: conservativeLocales,
+          languageCodes: knownLocales,
         });
         return true;
       } catch (error) {
