@@ -59,9 +59,7 @@ async function deliverAnnounceReply(params: {
 }) {
   // Gateway chooses media roots before its later outbound directive parse, so
   // project the media and its producing agent at the announcement boundary.
-  const { text: message, mediaUrls, audioAsVoice } = splitMediaFromOutput(
-    params.message.trim(),
-  );
+  const { text: message, mediaUrls, audioAsVoice } = splitMediaFromOutput(params.message.trim());
   if (!message && !mediaUrls?.length) {
     return;
   }
