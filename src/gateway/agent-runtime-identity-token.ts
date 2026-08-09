@@ -9,6 +9,7 @@ import { ensureExecApprovalsSnapshot, loadExecApprovalsAsync } from "../infra/ex
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.js";
 import type { AgentRuntimeMessageActionContext } from "./message-action-turn-capability.js";
 
 const AGENT_RUNTIME_IDENTITY_TOKEN_CONTEXT = "openclaw:gateway-agent-runtime-identity-token:v1";
@@ -28,6 +29,8 @@ export type AgentRuntimeIdentity = {
   turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
+  cronToolsAllowCapture?: "final-executable-surface";
+  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
 
@@ -47,6 +50,8 @@ type AgentRuntimeIdentityTokenPayload = {
   turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementContext?: AgentRuntimeCronSelfManagementContext;
+  cronToolsAllowCapture?: "final-executable-surface";
+  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 };
 
@@ -75,6 +80,15 @@ function decodeSessionSpawnContext(value: unknown): AgentRuntimeSessionSpawnCont
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolPolicy: { version: 1, allow, deny },
   };
+}
+
+function decodeCronCreatorAuthorityGrant(value: unknown): CronCreatorAuthorityGrant | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const runId = normalizeOptionalString(value.runId);
+  const token = normalizeOptionalString(value.token);
+  return runId && token ? { runId, token } : undefined;
 }
 
 async function readSharedAgentRuntimeIdentitySecret(): Promise<string | null> {
@@ -214,6 +228,8 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       messageActionContext?: unknown;
       cronSelfManagementContext?: unknown;
       sessionSpawnContext?: unknown;
+      cronToolsAllowCapture?: unknown;
+      cronCreatorAuthorityGrant?: unknown;
     };
     if (
       raw.kind !== AGENT_RUNTIME_IDENTITY_TOKEN_KIND ||
@@ -265,6 +281,23 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
     if (raw.sessionSpawnContext !== undefined && !sessionSpawnContext) {
       return undefined;
     }
+    const cronToolsAllowCapture =
+      raw.cronToolsAllowCapture === "final-executable-surface"
+        ? raw.cronToolsAllowCapture
+        : undefined;
+    if (raw.cronToolsAllowCapture !== undefined && !cronToolsAllowCapture) {
+      return undefined;
+    }
+    const cronCreatorAuthorityGrant =
+      raw.cronCreatorAuthorityGrant === undefined
+        ? undefined
+        : decodeCronCreatorAuthorityGrant(raw.cronCreatorAuthorityGrant);
+    if (raw.cronCreatorAuthorityGrant !== undefined && !cronCreatorAuthorityGrant) {
+      return undefined;
+    }
+    if (cronCreatorAuthorityGrant && !cronToolsAllowCapture) {
+      return undefined;
+    }
     return {
       kind: AGENT_RUNTIME_IDENTITY_TOKEN_KIND,
       agentId,
@@ -273,6 +306,8 @@ function decodePayload(value: string, nowMs: number): AgentRuntimeIdentityTokenP
       ...(messageActionContext ? { messageActionContext } : {}),
       ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
       ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
+      ...(cronToolsAllowCapture ? { cronToolsAllowCapture } : {}),
+      ...(cronCreatorAuthorityGrant ? { cronCreatorAuthorityGrant } : {}),
     };
   } catch {
     return undefined;
@@ -286,8 +321,16 @@ export async function mintAgentRuntimeIdentityToken(params: {
   turnSourceAccountId?: string;
   messageActionContext?: AgentRuntimeMessageActionContext;
   cronSelfManagementJobId?: string;
+  cronToolsAllowCapture?: "final-executable-surface";
+  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
 }): Promise<string> {
+  if (
+    params.cronCreatorAuthorityGrant &&
+    params.cronToolsAllowCapture !== "final-executable-surface"
+  ) {
+    throw new Error("cron creator authority grants require final tool-surface provenance");
+  }
   if (
     params.messageActionContext?.sourceReplyFinal === true &&
     !normalizeOptionalString(params.messageActionContext.sourceReplyToolCallId)
@@ -320,6 +363,12 @@ export async function mintAgentRuntimeIdentityToken(params: {
     ...(turnSourceAccountId ? { turnSourceAccountId } : {}),
     ...(messageActionContext ? { messageActionContext } : {}),
     ...(cronSelfManagementContext ? { cronSelfManagementContext } : {}),
+    ...(params.cronToolsAllowCapture === "final-executable-surface"
+      ? { cronToolsAllowCapture: params.cronToolsAllowCapture }
+      : {}),
+    ...(params.cronCreatorAuthorityGrant
+      ? { cronCreatorAuthorityGrant: params.cronCreatorAuthorityGrant }
+      : {}),
     ...(params.sessionSpawnContext ? { sessionSpawnContext: params.sessionSpawnContext } : {}),
   });
   const signature = signPayload(await requireSharedAgentRuntimeIdentitySecret(), payload);
@@ -355,6 +404,12 @@ export async function verifyAgentRuntimeIdentityToken(
     ...(payload.messageActionContext ? { messageActionContext: payload.messageActionContext } : {}),
     ...(payload.cronSelfManagementContext
       ? { cronSelfManagementContext: payload.cronSelfManagementContext }
+      : {}),
+    ...(payload.cronToolsAllowCapture
+      ? { cronToolsAllowCapture: payload.cronToolsAllowCapture }
+      : {}),
+    ...(payload.cronCreatorAuthorityGrant
+      ? { cronCreatorAuthorityGrant: payload.cronCreatorAuthorityGrant }
       : {}),
     ...(payload.sessionSpawnContext ? { sessionSpawnContext: payload.sessionSpawnContext } : {}),
   };

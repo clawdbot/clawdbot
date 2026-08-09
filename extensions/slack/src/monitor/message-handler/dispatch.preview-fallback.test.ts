@@ -321,9 +321,6 @@ function createPreparedSlackMessage(params?: {
   relayIdentity?: { username?: string; iconUrl?: string; iconEmoji?: string };
   turnAdoptionLifecycle?: object;
   eventScope?: {
-    apiAppId: string;
-    enterpriseId: string;
-    isEnterpriseInstall: true;
     teamId: string;
     client: Record<string, unknown>;
   };
@@ -405,9 +402,6 @@ async function dispatchNativeProgressScenario(params: {
   };
   replyToMode?: "off" | "first" | "all" | "batched";
   eventScope?: {
-    apiAppId: string;
-    enterpriseId: string;
-    isEnterpriseInstall: true;
     teamId: string;
     client: Record<string, unknown>;
   };
@@ -1456,6 +1450,29 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         SessionKey: "agent:main:slack:direct:u1",
       },
     });
+  });
+
+  it("preserves a workspace-qualified DM route during dispatch", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        isDirectMessage: true,
+        message: {
+          channel: "D123",
+          user: "U1",
+          ts: "501.000",
+        },
+        ctxPayload: {
+          OriginatingTo: "team:T123:user:U1",
+          SessionKey: "agent:main:main:account:default:team:t123",
+        },
+      }),
+    );
+
+    expect(updateLastRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryContext: expect.objectContaining({ to: "team:T123:user:U1" }),
+      }),
+    );
   });
 
   it("uses DM transport thread metadata for last-route updates", async () => {
@@ -3144,9 +3161,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       finalPayload: { text: FINAL_REPLY_TEXT },
       events: [{ kind: "item", progressText: "checking" }],
       eventScope: {
-        apiAppId: "A_TEST",
-        enterpriseId: "E_TEST",
-        isEnterpriseInstall: true,
         teamId: "T_ENTERPRISE",
         client: eventClient,
       },
@@ -3992,9 +4006,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       chat: { postMessage: postMessageMock, update: chatUpdateMock },
     };
     const eventScope = {
-      apiAppId: "A_TEST",
-      enterpriseId: "E_TEST",
-      isEnterpriseInstall: true as const,
       teamId: "T_ENTERPRISE",
       client: eventClient,
     };
@@ -4263,9 +4274,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
         eventScope: {
-          apiAppId: "A_TEST",
-          enterpriseId: "E_TEST",
-          isEnterpriseInstall: true,
           teamId: "T_ENTERPRISE",
           client: eventClient,
         },
@@ -4286,9 +4294,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       users: { info: usersInfo },
     };
     const eventScope = {
-      apiAppId: "A_TEST",
-      enterpriseId: "E_TEST",
-      isEnterpriseInstall: true as const,
       teamId: "T_ENTERPRISE",
       client: eventClient,
     };

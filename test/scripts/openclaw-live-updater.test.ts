@@ -1832,7 +1832,9 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
         throw new Error("cleanup blocker did not expose a process group id");
       }
       const processGroupId = blocker.pid;
-      const blockerClosed = new Promise<void>((resolve) => blocker.once("close", () => resolve()));
+      const blockerClosed = new Promise<void>((resolve) => {
+        blocker.once("close", () => resolve());
+      });
       const events: string[] = [];
 
       try {

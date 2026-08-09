@@ -193,7 +193,7 @@ describe("AppSidebar session indicators", () => {
       forked?.querySelector(".session-row-aside > .session-row-state .session-row-fork-indicator"),
     ).not.toBeNull();
     expect(forked?.querySelector(".session-row-fork-indicator")?.getAttribute("aria-label")).toBe(
-      "Forked thread",
+      "Forked session",
     );
     expect(forked?.querySelector(".session-row-fork-indicator")?.hasAttribute("title")).toBe(false);
 
@@ -219,7 +219,7 @@ describe("AppSidebar session indicators", () => {
       expect(descriptionId).toBe(`sidebar-session-state-${encodeURIComponent(key)}`);
       expect(sidebar.querySelector(`[id="${descriptionId}"]`)).not.toBeNull();
     }
-    expect(forked?.querySelector("a")?.getAttribute("title")).toContain("Forked thread");
+    expect(forked?.querySelector("a")?.getAttribute("title")).toContain("Forked session");
     expect(unread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
     expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Active run");
     expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Unread");

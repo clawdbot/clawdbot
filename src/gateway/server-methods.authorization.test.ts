@@ -14,6 +14,7 @@ import {
 import { handleGatewayRequest } from "./server-methods.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
 const METHOD = "workboard.cards.dispatch";
 const ensureProfileForEmail = vi.hoisted(() => vi.fn());
@@ -339,92 +340,228 @@ describe("gateway method authorization", () => {
   });
 });
 
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
+describe("sessions.patchMany orchestration", () => {
+  const context = (overrides: Record<string, unknown> = {}) =>
+    ({
+      getRuntimeConfig: () => ({}),
+      loadGatewayModelCatalog: vi.fn(async () => []),
+      broadcastToConnIds: vi.fn(),
+      getSessionEventSubscriberConnIds: () => new Set(),
+      chatAbortControllers: new Map(),
+      ...overrides,
+    }) as never;
 
-describe("sessions.archiveMany orchestration", () => {
-  it("starts canonical patches concurrently and preserves target order", async () => {
-    const originalPatch = sessionMutationHandlers["sessions.patch"];
-    if (!originalPatch) {
-      throw new Error("sessions.patch handler is not registered");
-    }
-    const releases = Array.from({ length: 3 }, () => deferred<void>());
-    const patch = vi.fn<GatewayRequestHandler>(async ({ params, respond }) => {
-      const index = Number(String(params.key).at(-1));
-      await releases[index]?.promise;
-      if (index === 1) {
-        respond(false, undefined, { code: "INVALID_REQUEST", message: "active run" });
-      } else {
-        respond(true, { ok: true });
+  it("preserves request-order outcomes while isolating expected-identity failures", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      for (let index = 0; index < 3; index += 1) {
+        await upsertSessionEntry(
+          { agentId: "main", sessionKey: `agent:main:batch-${index}` },
+          {
+            sessionId: `session-${index}`,
+            lifecycleRevision: `revision-${index}`,
+            updatedAt: 1,
+          },
+        );
       }
-    });
-    sessionMutationHandlers["sessions.patch"] = patch;
-    const respond = vi.fn();
-    try {
-      const request = sessionMutationHandlers["sessions.archiveMany"]!({
+      const respond = vi.fn();
+      await sessionMutationHandlers["sessions.patchMany"]!({
         params: {
-          targets: [0, 1, 2].map((index) => ({ key: `agent:main:batch-${index}` })),
-          archived: true,
+          targets: [0, 1, 2].map((index) => ({
+            key: `agent:main:batch-${index}`,
+            expectedSessionId: index === 1 ? "stale-session" : `session-${index}`,
+            expectedLifecycleRevision: `revision-${index}`,
+          })),
+          patch: { unread: false },
         },
         respond,
-        context: { getRuntimeConfig: () => ({}) },
+        context: context(),
       } as never);
-      await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(3));
-      releases[2]!.resolve();
-      releases[1]!.resolve();
-      releases[0]!.resolve();
-      await request;
+
+      const outcomes = respond.mock.calls[0]?.[1]?.outcomes;
+      expect(outcomes).toEqual([
+        { ok: true, key: "agent:main:batch-0" },
+        {
+          ok: false,
+          key: "agent:main:batch-1",
+          error: {
+            code: "INVALID_REQUEST",
+            message: "Session agent:main:batch-1 changed before patch. Retry.",
+          },
+        },
+        { ok: true, key: "agent:main:batch-2" },
+      ]);
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:batch-0" }),
+      ).toHaveProperty("lastReadAt");
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:batch-1" }),
+      ).not.toHaveProperty("lastReadAt");
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:batch-2" }),
+      ).toHaveProperty("lastReadAt");
+    });
+  });
+
+  it("rejects logical aliases before mutation", async () => {
+    const respond = vi.fn();
+    await sessionMutationHandlers["sessions.patchMany"]!({
+      params: {
+        targets: [{ key: "agent:main:duplicate" }, { key: "duplicate" }],
+        patch: { archived: true },
+      },
+      respond,
+      context: context(),
+    } as never);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "Duplicate target." }),
+    );
+  });
+
+  it("projects non-archive patches in request order against prior successes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      for (let index = 0; index < 2; index += 1) {
+        await upsertSessionEntry(
+          { agentId: "main", sessionKey: `agent:main:label-${index}` },
+          { sessionId: `session-label-${index}`, updatedAt: 1 },
+        );
+      }
+      const respond = vi.fn();
+      await sessionMutationHandlers["sessions.patchMany"]!({
+        params: {
+          targets: [0, 1].map((index) => ({ key: `agent:main:label-${index}` })),
+          patch: { label: "Shared label" },
+        },
+        respond,
+        context: context(),
+      } as never);
+
+      expect(respond.mock.calls[0]?.[1]?.outcomes).toEqual([
+        { ok: true, key: "agent:main:label-0" },
+        {
+          ok: false,
+          key: "agent:main:label-1",
+          error: { code: "INVALID_REQUEST", message: "label already in use: Shared label" },
+        },
+      ]);
+      expect(loadSessionEntry({ agentId: "main", sessionKey: "agent:main:label-0" })?.label).toBe(
+        "Shared label",
+      );
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:label-1" })?.label,
+      ).toBeUndefined();
+    });
+  });
+
+  it("isolates a target authorization race from sibling patches", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      for (let index = 0; index < 3; index += 1) {
+        await upsertSessionEntry(
+          { agentId: "main", sessionKey: `agent:main:race-${index}` },
+          { sessionId: `session-race-${index}`, updatedAt: 1 },
+        );
+      }
+      const respond = vi.fn();
+      const assertCurrent = vi.fn(() => {
+        throw new Error("outer all-target guard must not be delegated");
+      });
+      const assertTargetCurrent = vi.fn(({ sessionKey }: { sessionKey: string }) => {
+        if (sessionKey.endsWith("-1")) {
+          throw new SessionMutationAuthorizationChangedError({
+            code: "INVALID_REQUEST",
+            message: "session changed before sessions.patchMany; retry the request",
+          });
+        }
+      });
+      await sessionMutationHandlers["sessions.patchMany"]!({
+        params: {
+          targets: [0, 1, 2].map((index) => ({ key: `agent:main:race-${index}` })),
+          patch: { unread: false },
+        },
+        respond,
+        context: context(),
+        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent },
+      } as never);
+
+      expect(assertCurrent).not.toHaveBeenCalled();
+      expect(assertTargetCurrent).toHaveBeenCalledTimes(3);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          outcomes: [
+            { ok: true, key: "agent:main:race-0" },
+            {
+              ok: false,
+              key: "agent:main:race-1",
+              error: {
+                code: "INVALID_REQUEST",
+                message: "session changed before sessions.patchMany; retry the request",
+              },
+            },
+            { ok: true, key: "agent:main:race-2" },
+          ],
+        },
+        undefined,
+      );
+      expect(loadSessionEntry({ agentId: "main", sessionKey: "agent:main:race-0" })).toHaveProperty(
+        "lastReadAt",
+      );
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:race-1" }),
+      ).not.toHaveProperty("lastReadAt");
+      expect(loadSessionEntry({ agentId: "main", sessionKey: "agent:main:race-2" })).toHaveProperty(
+        "lastReadAt",
+      );
+    });
+  });
+
+  it("converts an unexpected target exception into an ordered isolated failure", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      for (let index = 0; index < 3; index += 1) {
+        await upsertSessionEntry(
+          { agentId: "main", sessionKey: `agent:main:throw-${index}` },
+          { sessionId: `session-throw-${index}`, updatedAt: 1 },
+        );
+      }
+      const respond = vi.fn();
+      await sessionMutationHandlers["sessions.patchMany"]!({
+        params: {
+          targets: [0, 1, 2].map((index) => ({ key: `agent:main:throw-${index}` })),
+          patch: { category: "Batch" },
+        },
+        respond,
+        context: context({
+          workerSessionPlacementService: {
+            getMany: (sessionIds: string[]) => {
+              if (sessionIds.includes("session-throw-1")) {
+                throw new Error("private placement detail");
+              }
+              return new Map();
+            },
+          },
+        }),
+      } as never);
 
       expect(respond).toHaveBeenCalledWith(
         true,
         {
           outcomes: [
-            { ok: true, key: "agent:main:batch-0" },
+            { ok: true, key: "agent:main:throw-0" },
             {
               ok: false,
-              key: "agent:main:batch-1",
-              error: { code: "INVALID_REQUEST", message: "active run" },
+              key: "agent:main:throw-1",
+              error: {
+                code: "UNAVAILABLE",
+                message: "Session patch failed unexpectedly. Retry the request.",
+                retryable: true,
+              },
             },
-            { ok: true, key: "agent:main:batch-2" },
+            { ok: true, key: "agent:main:throw-2" },
           ],
         },
         undefined,
       );
-    } finally {
-      sessionMutationHandlers["sessions.patch"] = originalPatch;
-    }
-  });
-
-  it("rejects logical aliases before dispatch", async () => {
-    const originalPatch = sessionMutationHandlers["sessions.patch"];
-    if (!originalPatch) {
-      throw new Error("sessions.patch handler is not registered");
-    }
-    const patch = vi.fn<GatewayRequestHandler>();
-    sessionMutationHandlers["sessions.patch"] = patch;
-    const respond = vi.fn();
-    try {
-      await sessionMutationHandlers["sessions.archiveMany"]!({
-        params: {
-          targets: [{ key: "agent:main:duplicate" }, { key: "duplicate" }],
-          archived: true,
-        },
-        respond,
-        context: { getRuntimeConfig: () => ({}) },
-      } as never);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: "Duplicate target." }),
-      );
-      expect(patch).not.toHaveBeenCalled();
-    } finally {
-      sessionMutationHandlers["sessions.patch"] = originalPatch;
-    }
+    });
   });
 });

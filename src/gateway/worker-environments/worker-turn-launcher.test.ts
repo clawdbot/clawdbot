@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -37,6 +38,7 @@ import {
   parseWorkerLaunchDescriptor,
   type WorkerLaunchDescriptor,
 } from "../../worker/launch-descriptor.js";
+import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import {
   createWorkerSessionPlacementStore,
@@ -649,6 +651,7 @@ describe("worker turn launcher", () => {
           ownerEpoch: OWNER_EPOCH,
         });
         descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
+        expect(command.transportRetry).toBe("never");
         expect(command.argv).toEqual([
           "sh",
           "-c",
@@ -1108,6 +1111,86 @@ describe("worker turn launcher", () => {
       ),
     ).rejects.toThrow("tunnel unavailable");
 
+    expect(runLocal).not.toHaveBeenCalled();
+    expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();
+    expect(stopTunnel).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+  });
+
+  it("fails impossible replay before handoff and keeps the active placement reusable", async () => {
+    seedActivePlacement();
+    const manager = openSessionManager();
+    manager.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "call-replay", name: "read", arguments: {} }],
+        model: "gpt-test",
+        providerReplay: {
+          v: 1,
+          type: "openai-responses-compaction",
+          data: "gAAAAlauncherReplayCiphertext",
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-test",
+          baseUrlHash: "ozhevd1smnk8s",
+        },
+        stopReason: "toolUse",
+        timestamp: 1,
+      }),
+    );
+    manager.appendMessage({
+      role: "toolResult",
+      toolCallId: "call-replay",
+      toolName: "read",
+      content: [{ type: "text", text: "result" }],
+      details: { payload: "x".repeat(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) },
+      isError: false,
+      timestamp: 2,
+    });
+    const runWorkspaceCommand = vi.fn(async (): Promise<SpawnResult> => {
+      throw new Error("unexpected worker handoff");
+    });
+    const acknowledgeCredentialDelivery = vi.fn(() => true);
+    const startTunnel = vi.fn(
+      async (): Promise<WorkerTunnelHandle> => ({
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        remoteSocketPath: "/worker/gateway.sock",
+        quiesceWorkspace: vi.fn(),
+        runWorkspaceCommand,
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(async () => {}),
+      }),
+    );
+    const stopTunnel = vi.fn(async () => {});
+    const destroy = vi.fn(async () => attachedEnvironment());
+    const environments: WorkerTurnEnvironmentService = {
+      get: vi.fn(() => attachedEnvironment()),
+      acquireTurnCredential: vi.fn(async () => credential()),
+      acknowledgeCredentialDelivery,
+      startTunnel,
+      stopTunnel,
+      destroy,
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-replay-local-fallback",
+        },
+        turn("run-replay-local-fallback"),
+        runLocal,
+      ),
+    ).rejects.toThrow(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
+
+    expect(startTunnel).toHaveBeenCalledOnce();
+    expect(runWorkspaceCommand).not.toHaveBeenCalled();
     expect(runLocal).not.toHaveBeenCalled();
     expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();
     expect(stopTunnel).not.toHaveBeenCalled();

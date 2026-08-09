@@ -205,6 +205,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       provider: contextConfigProvider,
       modelId,
       model: runtimeModelWithContext,
+      agentId: effectiveSkillAgentId,
       requestedTokenBudget: params.contextTokenBudget,
       fallbackTokenBudget: params.tokenBudget,
     });

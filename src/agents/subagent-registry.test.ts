@@ -2017,7 +2017,7 @@ describe("subagent registry seam flow", () => {
     });
 
     await withOwnedSessionTranscriptWrites(
-      { sessionKey, withSessionWriteLock: withStaleWriteLock },
+      { sessionKey, assertOwned: () => undefined, withSessionWriteLock: withStaleWriteLock },
       async () => {
         mod.registerSubagentRun({
           runId: "run-detached-requester-owner",

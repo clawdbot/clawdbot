@@ -200,6 +200,17 @@ export type SessionEntryReplacementUpdate<T> = {
   result: T;
 };
 
+type SessionEntryBatchProjectionMutation = {
+  entry: SessionEntry;
+  previousSessionKeys?: readonly string[];
+  sessionKey: string;
+};
+
+export type SessionEntryBatchProjectionUpdate<T> = {
+  mutations?: Iterable<SessionEntryBatchProjectionMutation>;
+  result: T;
+};
+
 export type {
   DeletedAgentSessionEntryPurgeParams,
   DeleteSessionEntryLifecycleParams,

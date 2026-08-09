@@ -791,26 +791,35 @@ describe("bundled channel entry shape guards", () => {
       );
 
       expect(
-        bundled.listBundledChannelLegacyStateMigrationDetectors({
+        bundled.listBundledChannelLegacyStateMigrationDetectorEntries({
           config: { channels: { alpha: { enabled: false } } },
         }),
       ).toStrictEqual([]);
       expect(testGlobal["__bundledSetupOnlySetupLoaded"]).toBeUndefined();
 
-      const detectors = bundled.listBundledChannelLegacyStateMigrationDetectors();
+      const detectorEntries = bundled.listBundledChannelLegacyStateMigrationDetectorEntries();
       expect(
-        detectors.map((detector) =>
-          detector({ cfg: {}, env: {}, stateDir: "/state", oauthDir: "/oauth" } as never),
-        ),
+        detectorEntries.map(({ pluginId, detector }) => ({
+          pluginId,
+          plans: detector({
+            cfg: {},
+            env: {},
+            stateDir: "/state",
+            oauthDir: "/oauth",
+          } as never),
+        })),
       ).toEqual([
-        [
-          {
-            kind: "copy",
-            label: "Alpha state",
-            sourcePath: "/oauth/legacy.json",
-            targetPath: "/oauth/alpha/legacy.json",
-          },
-        ],
+        {
+          pluginId: "alpha",
+          plans: [
+            {
+              kind: "copy",
+              label: "Alpha state",
+              sourcePath: "/oauth/legacy.json",
+              targetPath: "/oauth/alpha/legacy.json",
+            },
+          ],
+        },
       ]);
       expect(testGlobal["__bundledSetupOnlySetupLoaded"]).toBe(1);
       expect(testGlobal["__bundledSetupOnlyMainLoaded"]).toBeUndefined();

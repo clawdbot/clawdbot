@@ -1,7 +1,7 @@
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 /** Reminder-context projection for cron tool job creation. */
 import { getRuntimeConfig } from "../../config/config.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
-import { truncateUtf16Safe } from "../../utils.js";
 import { REMINDER_CONTEXT_MESSAGES_MAX } from "./cron-tool-schema.js";
 import type { ChatMessage, GatewayToolCaller } from "./cron-tool.types.js";
 import type { GatewayCallOptions } from "./gateway.js";
@@ -20,11 +20,7 @@ export function stripExistingContext(text: string) {
 }
 
 function truncateText(input: string, maxLen: number) {
-  if (input.length <= maxLen) {
-    return input;
-  }
-  const truncated = truncateUtf16Safe(input, Math.max(0, maxLen - 3)).trimEnd();
-  return `${truncated}...`;
+  return truncateWithMarker(input, maxLen, { marker: "...", reserve: 3, trimEnd: true });
 }
 
 function extractMessageText(message: ChatMessage): { role: string; text: string } | null {

@@ -1829,6 +1829,13 @@ const pluginPrerelease = "plugin-prerelease-test-plan";
 const releaseCheck = "test/release-check.test.ts";
 const installDocker = "test-install-sh-docker";
 const changedScope = "src/scripts/ci-changed-scope.test.ts";
+const changedScopeTests = [
+  "src/scripts/ci-changed-scope.contract-fixtures.test.ts",
+  "src/scripts/ci-changed-scope.control-ui.test.ts",
+  "src/scripts/ci-changed-scope.native-i18n.test.ts",
+  changedScope,
+  "src/scripts/ci-changed-scope.windows.test.ts",
+];
 const dockerCache = "src/docker-build-cache.test.ts";
 const dockerDigests = "src/docker-image-digests.test.ts";
 const openaiChatToolsE2e = "test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts";
@@ -2092,7 +2099,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS = [
   [/^\.github\/actions\/ensure-base-commit\/action\.yml$/u, [workflowGuards]],
   [/^tsconfig\.scripts\.json$/u, ["changed-lanes", "test-projects"]],
   [/^scripts\/test-projects\.test-support\.mjs$/u, ["test-projects"]],
-  [/^scripts\/ci-changed-scope\.mjs$/u, [changedScope, "control-ui-i18n"]],
+  [/^scripts\/ci-changed-scope\.mjs$/u, [...changedScopeTests, "control-ui-i18n"]],
   [/^scripts\/check-changed\.mjs$/u, ["changed-lanes"]],
   [
     new RegExp(

@@ -11,6 +11,7 @@ import type {
   ChannelId,
   ChannelMessageActionContext,
   ChannelOutboundAdapter,
+  ChannelPlugin,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
@@ -26,7 +27,6 @@ import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { NormalizedOutboundPayload, OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
@@ -51,6 +51,7 @@ type OutboundGatewayContext = {
 type OutboundSendContext = {
   cfg: OpenClawConfig;
   channel: ChannelId;
+  plugin: ChannelPlugin;
   params: Record<string, unknown>;
   idempotencyKey?: string;
   /** Active agent id for per-agent outbound media root scoping. */
@@ -179,6 +180,7 @@ async function sendCoreMessage(params: {
     silent: params.ctx.silent,
     mediaAccess: params.ctx.mediaAccess,
     preparedMessageId: params.ctx.preparedMessageId,
+    preparedPlugin: params.ctx.plugin,
     gatewayOwnedDelivery: params.ctx.gatewayOwnedDelivery,
     deliveryIntentId: params.ctx.deliveryIntentId,
     deliveryCompletion: params.ctx.deliveryCompletion,
@@ -292,10 +294,7 @@ async function preparePluginSendPayload(params: {
   replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number;
 }): Promise<PluginSendPayloadPreparation> {
-  const plugin = resolveOutboundChannelPlugin({
-    channel: params.ctx.channel,
-    cfg: params.ctx.cfg,
-  });
+  const plugin = params.ctx.plugin;
   if (!plugin?.outbound) {
     return { kind: "unavailable" };
   }
@@ -365,10 +364,7 @@ export async function executeSendAction(params: {
         replyToIdSource: params.replyToIdSource,
         threadId: params.threadId,
       });
-  const channelPlugin = resolveOutboundChannelPlugin({
-    channel: params.ctx.channel,
-    cfg: params.ctx.cfg,
-  });
+  const channelPlugin = params.ctx.plugin;
   const presentation = normalizeMessagePresentation(defaultPayload.presentation);
   const corePayload = requiresCoreDelivery
     ? defaultPayload
@@ -519,6 +515,7 @@ export async function executePollAction(params: {
     dryRun: params.ctx.dryRun,
     gateway: params.ctx.gateway,
     idempotencyKey: params.ctx.idempotencyKey,
+    preparedPlugin: params.ctx.plugin,
   });
 
   return {

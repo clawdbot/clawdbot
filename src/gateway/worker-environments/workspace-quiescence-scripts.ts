@@ -92,6 +92,10 @@ function persistLease(targetPath, lease, verifyCurrent) {
   fs.renameSync(temporary, targetPath);
 }`;
 
+// Signal sites tolerate ESRCH (gone) without aborting the protocol. EPERM (exists but
+// unsignalable, e.g. macOS SIP-protected same-uid processes on shared static-ssh dev hosts)
+// must not crash cleanup/resume paths, but a freeze target that returns EPERM stays counted
+// as live so quiescence fails closed instead of reporting a still-running process as frozen.
 export const REMOTE_WORKSPACE_QUIESCE_JS = String.raw`const childProcess = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -123,13 +127,15 @@ function writeLease(expiresAtMs = Date.now() + watchdogTimeoutMs) {
     expiresAtMs,
   });
 }
+// EPERM on SIGCONT implies the target was never ours to freeze: kill permission checks are
+// identical for SIGSTOP and SIGCONT, so any process this uid successfully stopped can be resumed.
 function resumeProcesses(entries) {
   for (const entry of entries) {
     if (processIdentity(entry.pid) !== entry.start) continue;
     try {
       process.kill(entry.pid, "SIGCONT");
     } catch (error) {
-      if (!error || error.code !== "ESRCH") throw error;
+      if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error;
     }
   }
 }
@@ -143,7 +149,7 @@ for (const name of orphanNames) {
   const orphanPath = path.join(leaseDirectory, name);
   const lease = parseLease(fs.readFileSync(orphanPath, "utf8"), match[1]);
   if (lease.watchdog !== null && processIdentity(lease.watchdog.pid) === lease.watchdog.start) {
-    try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
+    try { process.kill(lease.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
   }
   resumeProcesses(lease.processes);
   fs.unlinkSync(orphanPath);
@@ -194,6 +200,11 @@ try {
         }
         process.kill(pid, "SIGSTOP");
       } catch (error) {
+        if (error && error.code === "EPERM") {
+          frozen.delete(pid);
+          writeLease();
+          continue;
+        }
         if (!error || error.code !== "ESRCH") throw error;
       }
     }
@@ -210,7 +221,7 @@ try {
   }
 } catch (error) {
   if (processIdentity(watchdog.pid) === watchdogStart) {
-    try { process.kill(watchdog.pid, "SIGTERM"); } catch (killError) { if (!killError || killError.code !== "ESRCH") throw killError; }
+    try { process.kill(watchdog.pid, "SIGTERM"); } catch (killError) { if (!killError || (killError.code !== "ESRCH" && killError.code !== "EPERM")) throw killError; }
   }
   resumeProcesses([...frozen].map(([pid, start]) => ({ pid, start })));
   try { fs.unlinkSync(leasePath); } catch (unlinkError) { if (!unlinkError || unlinkError.code !== "ENOENT") throw unlinkError; }
@@ -254,7 +265,7 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
           typeof entry.start !== "string" ||
           processIdentity(entry.pid) !== entry.start
         ) continue;
-        try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
+        try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
       }
       watchdogFs.unlinkSync(watchedLeasePath);
     } catch (error) {
@@ -345,7 +356,9 @@ if (validationMode === "final") {
         if (input.expiresAtMs - Date.now() < 2500) refreshLease(frozenEntries);
         process.kill(pid, "SIGSTOP");
       } catch (error) {
-        if (!error || error.code !== "ESRCH") throw error;
+        if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error;
+        // Fail-closed either way: the candidate scan below runs without the frozen filter,
+        // so an EPERM-live process re-registers as a candidate and blocks quiescence.
         frozen.delete(pid);
       }
     }
@@ -393,11 +406,11 @@ ${REMOTE_QUIESCENCE_PS_JS}
 ${REMOTE_QUIESCENCE_LEASE_JS}
 const input = parseLease(raw, nonce);
 if (input.watchdog !== null && processIdentity(input.watchdog.pid) === input.watchdog.start) {
-  try { process.kill(input.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
+  try { process.kill(input.watchdog.pid, "SIGTERM"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
 }
 for (const entry of input.processes) {
   if (processIdentity(entry.pid) !== entry.start) continue;
-  try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
+  try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || (error.code !== "ESRCH" && error.code !== "EPERM")) throw error; }
 }
 fs.unlinkSync(leasePath);
 `;

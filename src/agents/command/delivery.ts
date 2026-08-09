@@ -24,6 +24,7 @@ import {
 } from "../../channels/message/runtime.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -131,6 +132,8 @@ type DeliverAgentCommandResultParams = {
   sessionEntry: SessionEntry | undefined;
   result: RunResult;
   payloads: RunResult["payloads"];
+  /** Channel plugin already selected and bootstrapped by the caller. */
+  preparedPlugin?: ChannelPlugin;
   assertDeliveryCurrent?: () => void;
   onDeliveryResult?: (result: AgentCommandDeliveryResult) => void;
 } & FreshSessionDeliveryRefreshParams;
@@ -462,6 +465,7 @@ function normalizeAgentCommandReplyPayloads(params: {
   payloads: RunResult["payloads"];
   result: RunResult;
   deliveryChannel?: string;
+  plugin?: ChannelPlugin;
   accountId?: string;
   applyChannelTransforms?: boolean;
   includeRunModelContext?: boolean;
@@ -478,7 +482,7 @@ function normalizeAgentCommandReplyPayloads(params: {
     return payloads as ReplyPayload[];
   }
   const applyChannelTransforms = params.applyChannelTransforms ?? true;
-  const deliveryPlugin = applyChannelTransforms ? getChannelPlugin(channel) : undefined;
+  const deliveryPlugin = applyChannelTransforms ? params.plugin : undefined;
 
   const sessionKey = params.outboundSession?.key ?? params.opts.sessionKey;
   const agentId =
@@ -569,6 +573,7 @@ export async function deliverAgentCommandResult(
       explicitThreadId: opts.threadId,
       accountId: opts.replyAccountId ?? opts.accountId,
       wantsDelivery: deliver,
+      preparedPlugin: params.preparedPlugin,
       turnSourceChannel,
       turnSourceTo,
       turnSourceAccountId,
@@ -576,11 +581,13 @@ export async function deliverAgentCommandResult(
     });
     params.assertDeliveryCurrent?.();
     let deliveryChannel = deliveryPlan.resolvedChannel;
+    let preparedPlugin = deliveryPlan.plugin;
     if (deliver && isInternalMessageChannel(deliveryChannel) && !explicitChannelHint) {
       try {
         const selection = await resolveMessageChannelSelection({ cfg });
         params.assertDeliveryCurrent?.();
         deliveryChannel = selection.channel;
+        preparedPlugin = selection.plugin;
       } catch {
         // Keep the internal channel marker; error handling below reports the failure.
       }
@@ -591,27 +598,34 @@ export async function deliverAgentCommandResult(
         : {
             ...deliveryPlan,
             resolvedChannel: deliveryChannel,
+            plugin: preparedPlugin,
           };
-    // Channel docking: delivery channels are resolved via plugin registry.
+    // Bundled/setup channels may be dockable before they appear in the registered
+    // deliverable-id list. Resolve only when upstream planning prepared no plugin.
     const deliveryPlugin =
       deliver && !isInternalMessageChannel(deliveryChannel)
-        ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
+        ? (effectiveDeliveryPlan.plugin ??
+          getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel))
         : undefined;
+    const pluginDeliveryPlan =
+      deliveryPlugin && deliveryPlugin !== effectiveDeliveryPlan.plugin
+        ? { ...effectiveDeliveryPlan, plugin: deliveryPlugin }
+        : effectiveDeliveryPlan;
     const isDeliveryChannelKnown =
       isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
     const targetMode =
       opts.deliveryTargetMode ??
-      effectiveDeliveryPlan.deliveryTargetMode ??
+      pluginDeliveryPlan.deliveryTargetMode ??
       (opts.to ? "explicit" : "implicit");
     const defaultAccountId =
-      !effectiveDeliveryPlan.resolvedAccountId && deliveryPlugin?.config?.listAccountIds
+      !pluginDeliveryPlan.resolvedAccountId && deliveryPlugin?.config?.listAccountIds
         ? resolveChannelDefaultAccountId({ plugin: deliveryPlugin, cfg })
         : undefined;
-    const resolvedAccountId = effectiveDeliveryPlan.resolvedAccountId ?? defaultAccountId;
+    const resolvedAccountId = pluginDeliveryPlan.resolvedAccountId ?? defaultAccountId;
     const resolvedDeliveryPlan =
-      resolvedAccountId === effectiveDeliveryPlan.resolvedAccountId
-        ? effectiveDeliveryPlan
-        : { ...effectiveDeliveryPlan, resolvedAccountId };
+      resolvedAccountId === pluginDeliveryPlan.resolvedAccountId
+        ? pluginDeliveryPlan
+        : { ...pluginDeliveryPlan, resolvedAccountId };
     const resolved =
       deliver && isDeliveryChannelKnown && deliveryChannel
         ? resolveAgentOutboundTarget({
@@ -718,6 +732,7 @@ export async function deliverAgentCommandResult(
     deliveryTarget,
     resolvedReplyToId,
     resolvedThreadTarget,
+    deliveryPlugin,
   } = deliveryRouting;
 
   let deliveryLoggedError = false;
@@ -764,6 +779,7 @@ export async function deliverAgentCommandResult(
     payloads,
     result,
     deliveryChannel,
+    plugin: deliveryPlugin,
     accountId: resolvedAccountId,
     applyChannelTransforms: deliver,
   });
@@ -783,6 +799,7 @@ export async function deliverAgentCommandResult(
       payloads: sentTexts.map((text) => ({ text })),
       result,
       deliveryChannel,
+      plugin: deliveryPlugin,
       accountId: resolvedAccountId,
       applyChannelTransforms: deliver,
       includeRunModelContext: false,

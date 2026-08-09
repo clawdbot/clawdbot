@@ -1143,6 +1143,12 @@ openclaw-settings-save-indicator {
   margin: 12px 16px 0;
 }
 
+.sidebar-update-card__actions {
+  display: flex;
+  align-items: stretch;
+  gap: 5px;
+}
+
 /* Clear the collapsed three-button chrome cluster plus an 8px breathing gap. */
 .shell:not(.shell--mobile-nav) .sidebar-update-card--floating .sidebar-update-card {
   width: min(360px, calc(100% - var(--shell-floating-update-card-left) - 16px));
@@ -1172,7 +1178,8 @@ html.openclaw-native-macos
 }
 
 .sidebar-update-card__action {
-  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
   min-height: 34px;
   display: flex;
   align-items: center;
@@ -1196,14 +1203,47 @@ html.openclaw-native-macos
 }
 
 .sidebar-update-card__action:focus-visible,
+.sidebar-update-card__hold:focus-visible,
 .sidebar-update-card__dismiss:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
   outline-offset: 1px;
 }
 
-.sidebar-update-card__action:disabled {
+.sidebar-update-card__hold {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sidebar-update-card__hold:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-update-card__hold:disabled {
   cursor: wait;
   opacity: 0.66;
+}
+
+.sidebar-update-card__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.66;
+}
+
+.sidebar-update-card__action--busy:disabled {
+  cursor: wait;
+}
+
+.sidebar-update-card__action--undismissable {
+  padding-right: 8px;
 }
 
 .sidebar-update-card__icon,
@@ -1409,13 +1449,6 @@ html.openclaw-native-macos
 
 .sidebar-recent-sessions__head--draggable:active {
   cursor: grabbing;
-}
-
-.sidebar-recent-sessions__head--root {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--sidebar-bg);
 }
 
 .sidebar-session-group-toggle {
@@ -2383,13 +2416,6 @@ html.openclaw-native-macos
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
-/* Button variant of .nav-item (e.g. the "More" menu row). */
-.nav-item--action {
-  width: 100%;
-  font: inherit;
-  text-align: left;
-}
-
 .sidebar-customize-menu:not(wa-dropdown) {
   position: fixed;
   z-index: 120;
@@ -2646,8 +2672,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 .session-menu__icon svg,
-.session-menu__check svg,
-.session-menu__chevron svg {
+.session-menu__check svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -2675,11 +2700,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   white-space: nowrap;
 }
 
-.session-menu__chevron {
-  display: inline-flex;
-  color: var(--muted);
-}
-
 .session-menu__shortcut {
   flex: 0 0 auto;
   color: var(--muted);
@@ -2697,23 +2717,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .session-menu__separator {
   margin: 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-}
-
-.session-menu__submenu-host {
-  position: relative;
-}
-
-.session-menu__submenu {
-  position: absolute;
-  top: -6px;
-  left: calc(100% + 4px);
-  max-height: min(360px, calc(100vh - 24px));
-  overflow-y: auto;
-}
-
-.session-menu__submenu--left {
-  right: calc(100% + 4px);
-  left: auto;
 }
 
 .session-menu__icon-picker {
@@ -3418,7 +3421,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   font-weight: 550;
 }
 
-.sidebar-hover-card__you,
 .sidebar-hover-card__person-email {
   color: var(--muted);
   font-weight: 400;
@@ -3644,23 +3646,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   white-space: nowrap;
 }
 
-.sidebar-status__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-full);
-  flex-shrink: 0;
-}
-
-.sidebar-status__dot.sidebar-connection-status--online {
-  background: var(--ok);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 14%, transparent);
-}
-
-.sidebar-status__dot.sidebar-connection-status--offline {
-  background: var(--danger);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
-}
-
 .sidebar-mode-switch {
   display: inline-flex;
   margin-left: 2px;
@@ -3701,32 +3686,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   stroke-width: 1.75px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.nav-item__external-icon {
-  width: 12px;
-  height: 12px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  margin-left: auto;
-  opacity: 0;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.nav-item__external-icon svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.nav-item:hover .nav-item__external-icon {
-  opacity: 0.5;
 }
 
 /* ===========================================
@@ -3915,90 +3874,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   gap: 8px;
 }
 
-.dreaming-header-controls__modes {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
-}
-
-.dreaming-header-controls__mode {
-  appearance: none;
-  border: 1px solid transparent;
-  border-radius: var(--radius-full);
-  padding: 4px 10px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px; /* was 11px */
-  line-height: 1.2;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  max-width: 90px;
-  overflow: hidden;
-  transition:
-    max-width var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.dreaming-header-controls__mode:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-  color: var(--text);
-  max-width: 290px;
-}
-
-.dreaming-header-controls__mode:focus-visible:not(:disabled) {
-  max-width: 290px;
-}
-
-.dreaming-header-controls__mode:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
-.dreaming-header-controls__mode--active {
-  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
-  background: color-mix(in srgb, var(--accent-subtle) 70%, var(--bg-elevated));
-  color: var(--text-strong);
-}
-
-.dreaming-header-controls__mode-label {
-  flex-shrink: 0;
-}
-
-.dreaming-header-controls__mode-detail {
-  max-width: 0;
-  opacity: 0;
-  margin-left: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-transform: none;
-  letter-spacing: normal;
-  font-size: 12px; /* was 10px */
-  font-weight: 500;
-  color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
-  transition:
-    max-width var(--duration-fast) ease,
-    margin-left var(--duration-fast) ease,
-    opacity var(--duration-fast) ease;
-}
-
-.dreaming-header-controls__mode:hover:not(:disabled) .dreaming-header-controls__mode-detail,
-.dreaming-header-controls__mode:focus-visible:not(:disabled)
-  .dreaming-header-controls__mode-detail {
-  max-width: 220px;
-  margin-left: 6px;
-  opacity: 0.95;
-}
-
 /* Chat view header adjustments */
 .content--chat .content-header {
   display: grid;
@@ -4033,18 +3908,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   flex-shrink: 0;
   flex-wrap: nowrap;
   gap: 6px;
-}
-
-.content--chat .content-header .chat-controls__session-notice {
-  position: absolute;
-  top: calc(100% + 2px);
-  left: 0;
-  width: min(100%, 680px);
-  min-height: 0;
-  overflow: hidden;
-  pointer-events: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ===========================================

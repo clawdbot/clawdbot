@@ -5,17 +5,17 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import type { PortListener, PortUsageStatus } from "../../infra/ports.js";
+import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { defaultRuntime } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
-import { gatherDaemonStatus } from "./status.gather.js";
+import { gatherDaemonStatus, renderPortDiagnosticsForCli } from "./status.gather.js";
 import { printDaemonStatus } from "./status.print.js";
 
 type PortConnections = Awaited<
-  ReturnType<typeof import("../../infra/ports.js").inspectPortConnections>
+  ReturnType<typeof import("../../infra/ports-inspect.js").inspectPortConnections>
 >;
 
 const callGatewayStatusProbe = vi.fn<
@@ -86,6 +86,7 @@ const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnections>>
     connections: [],
   }),
 );
+const formatPortDiagnostics = vi.fn<(usage: PortUsageTestSummary) => string[]>(() => []);
 const readLastGatewayErrorLine = vi.fn<
   (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => Promise<string | null>
 >(async (_env?: NodeJS.ProcessEnv, _options?: { requirePatternMatch?: boolean }) => null);
@@ -270,7 +271,7 @@ vi.mock("../../gateway/probe-auth.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../infra/ports.js", () => ({
+vi.mock("../../infra/ports-inspect.js", () => ({
   inspectPortConnections: (port: number) => inspectPortConnections(port),
   inspectPortUsage: (port: number, options?: PortUsageInspectionOptions) =>
     inspectPortUsage(port, options),
@@ -278,7 +279,10 @@ vi.mock("../../infra/ports.js", () => ({
     ports: readonly number[],
     options?: { probeHostsByPort?: ReadonlyMap<number, readonly string[]> },
   ) => inspectPortUsages(ports, options),
-  formatPortDiagnostics: () => [],
+}));
+
+vi.mock("../../infra/ports-format.js", () => ({
+  formatPortDiagnostics: (usage: PortUsageTestSummary) => formatPortDiagnostics(usage),
 }));
 
 vi.mock("../../infra/restart-handoff.js", () => ({
@@ -387,6 +391,7 @@ describe("gatherDaemonStatus", () => {
       );
     });
     inspectPortConnections.mockClear();
+    formatPortDiagnostics.mockReset().mockReturnValue(["port diagnostics"]);
     inspectWindowsGatewayFirewall.mockClear();
     inspectWindowsGatewayFirewall.mockResolvedValue({
       applies: false,
@@ -421,6 +426,26 @@ describe("gatherDaemonStatus", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+  });
+
+  it("reports indeterminate port availability unless the RPC probe succeeded", () => {
+    const status = {
+      service: {
+        label: "Scheduled Task",
+        loaded: true,
+        loadedText: "registered",
+        notLoadedText: "not registered",
+      },
+      port: { port: 18789, status: "unknown" as const, listeners: [], hints: [] },
+      extraServices: [],
+    };
+
+    expect(renderPortDiagnosticsForCli(status, false)).toEqual(["port diagnostics"]);
+    expect(formatPortDiagnostics).toHaveBeenCalledWith(status.port);
+    expect(renderPortDiagnosticsForCli(status, true)).toEqual([]);
+    expect(
+      renderPortDiagnosticsForCli({ ...status, port: { ...status.port, status: "free" } }, false),
+    ).toEqual([]);
   });
 
   it("uses wss probe URL and forwards TLS fingerprint when daemon TLS is enabled", async () => {

@@ -28,6 +28,7 @@ import {
   createXaiVideoGenerationProviderMetadata,
   normalizeXaiRealtimeTranscriptionProviderConfig,
 } from "./capability-provider-metadata.js";
+import { serializeXaiRealtimeToolResult } from "./realtime-voice-config.js";
 import { createXaiSpeechProviderMetadata } from "./speech-provider-metadata.js";
 
 const MAX_LAZY_REALTIME_TRANSCRIPTION_AUDIO_BYTES = 2 * 1024 * 1024;
@@ -35,15 +36,6 @@ const MAX_LAZY_REALTIME_VOICE_USER_MESSAGES = 128;
 const MAX_LAZY_REALTIME_VOICE_USER_MESSAGE_BYTES = 256 * 1024;
 const MAX_LAZY_REALTIME_VOICE_TOOL_RESULTS = 128;
 const MAX_LAZY_REALTIME_VOICE_TOOL_RESULT_BYTES = 256 * 1024;
-
-function serializedJsonBytes(value: unknown): number | undefined {
-  try {
-    const serialized = JSON.stringify(value);
-    return typeof serialized === "string" ? Buffer.byteLength(serialized, "utf8") : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 const loadXaiImageGenerationProvider = createLazyRuntimeModule(async () =>
   (await import("./image-generation-provider.js")).buildXaiImageGenerationProvider(),
@@ -545,23 +537,34 @@ function createLazyXaiRealtimeVoiceBridge(
       }
     },
     submitToolResult: (callId, result, options) => {
-      if (!acceptsCurrentInput()) {
+      if (!acceptsCurrentInput() || options?.willContinue === true) {
         return;
       }
       if (acceptsInput && bridge) {
         return bridge.submitToolResult(callId, result, options);
       }
-      const pending = { callId, result, ...(options ? { options } : {}) };
-      const resultBytes = serializedJsonBytes(pending);
+      let serialized: string;
+      try {
+        serialized = serializeXaiRealtimeToolResult(result);
+      } catch (error) {
+        req.onError?.(error as Error);
+        throw error;
+      }
+      const pending = {
+        callId,
+        result: JSON.parse(serialized) as unknown,
+        ...(options ? { options } : {}),
+      };
+      const resultBytes = Buffer.byteLength(JSON.stringify(pending), "utf8");
       if (
-        resultBytes === undefined ||
         pendingToolResultCount >= MAX_LAZY_REALTIME_VOICE_TOOL_RESULTS ||
         pendingToolResultBytes + resultBytes > MAX_LAZY_REALTIME_VOICE_TOOL_RESULT_BYTES
       ) {
-        req.onError?.(
-          new Error("xAI realtime voice pending tool result overflow during lazy startup"),
+        const error = new Error(
+          "xAI realtime voice pending tool result overflow during lazy startup",
         );
-        return;
+        req.onError?.(error);
+        throw error;
       }
       pendingOperations.push({
         ...pending,

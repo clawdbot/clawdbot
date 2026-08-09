@@ -9,9 +9,11 @@ import type {
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { parseWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -79,6 +81,20 @@ type WorkerTurnLauncherOptions = {
 
 class WorkerTurnExecutionError extends Error {}
 class WorkerWorkspaceReconciliationError extends Error {}
+
+function emitProviderReplayRejected(
+  config: SessionPlacementTurnParams["config"],
+  details: { reason: string; bytes?: number; limitBytes?: number; count?: number },
+): void {
+  if (isDiagnosticsEnabled(config)) {
+    emitTrustedDiagnosticEvent({
+      type: "payload.large",
+      surface: "worker.provider-replay",
+      action: "rejected",
+      ...details,
+    });
+  }
+}
 
 async function executeLocalTurn<T>(params: {
   claim: LocalTurnPlacementClaim;
@@ -244,11 +260,20 @@ async function executeWorkerTurn(params: {
     turn.userTurnTranscriptRecorder?.hasPersisted() === true;
   const contextMessages = convertToLlm(manager.buildSessionContext().messages);
   const leaf = manager.getLeafEntry();
-  const initialMessages = windowInitialMessages(
+  const initialMessagePlan = windowInitialMessages(
     userMessageAlreadyPersisted && leaf?.type === "message" && leaf.message.role === "user"
       ? contextMessages.slice(0, -1)
       : contextMessages,
   );
+  if (initialMessagePlan.kind === "provider-replay-unavailable") {
+    const details = initialMessagePlan.details;
+    emitProviderReplayRejected(
+      turn.config,
+      "bytes" in details ? details : { count: details.messageCount, reason: details.reason },
+    );
+    throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
+  }
+  const initialMessages = initialMessagePlan.messages;
   let baseLeafId = manager.getLeafId();
   if (!userMessageAlreadyPersisted) {
     const persisted = turn.userTurnTranscriptRecorder
@@ -294,7 +319,7 @@ async function executeWorkerTurn(params: {
   });
   const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
   const toolAuthority = resolveWorkerToolAuthority({ modelRef, turn });
-  const descriptor = fitLaunchDescriptor(
+  const launchPlan = fitLaunchDescriptor(
     (windowedMessages) =>
       parseWorkerLaunchDescriptor({
         version: 2,
@@ -330,11 +355,21 @@ async function executeWorkerTurn(params: {
       }),
     initialMessages,
   );
+  if (launchPlan.kind === "local-fallback") {
+    emitProviderReplayRejected(turn.config, {
+      bytes: launchPlan.bytes,
+      limitBytes: launchPlan.limitBytes,
+      reason: launchPlan.reason,
+    });
+    throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
+  }
+  const descriptor = launchPlan.descriptor;
   turn.userTurnTranscriptRecorder?.markSentToProvider?.();
   turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend: "cloud-worker" });
   const handoffAbort = new AbortController();
   params.onHandoff();
   const processPromise = tunnel.runWorkspaceCommand({
+    transportRetry: "never",
     argv: ["sh", "-c", WORKER_LAUNCH_SCRIPT, "openclaw-worker", placement.workerBundleHash],
     input: JSON.stringify(descriptor),
     timeoutMs: turn.timeoutMs,

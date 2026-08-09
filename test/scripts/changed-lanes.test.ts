@@ -31,6 +31,7 @@ import {
   shouldRunControlUiI18nVerify,
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
+  shouldRunDoctorContractOwnerTests,
   shouldRunRuntimeSidecarBaselineCheck,
   shouldRunNpmLockGuard,
   shouldRunPluginSdkApiBaselineCheck,
@@ -1459,6 +1460,7 @@ describe("scripts/changed-lanes", () => {
       "environment variable count ratchet",
       "max-lines suppression ratchet",
       "changelog attributions",
+      "doctor deprecation registry",
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
       "duplicate scan target coverage",
@@ -1639,6 +1641,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).toEqual([
       "check:no-conflict-markers",
       "check:changelog-attributions",
+      "check:doctor-deprecation-registry",
       "lint:extensions:no-guarded-wildcard-reexports",
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
@@ -1754,6 +1757,29 @@ describe("scripts/changed-lanes", () => {
           {
             name: "runtime sidecar owner test",
             args: ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
+          },
+        ],
+      },
+    },
+    {
+      name: "runs doctor contract owner tests for extension module and manifest changes",
+      predicate: shouldRunDoctorContractOwnerTests,
+      predicatePaths: [
+        "extensions/telegram/doctor-contract-api.ts",
+        "extensions/telegram/openclaw.plugin.json",
+        "extensions/codex/src/migration/session-binding-sidecars.ts",
+      ],
+      changedPath: "extensions/telegram/doctor-contract-api.ts",
+      expected: {
+        exact: [],
+        partial: [
+          {
+            name: "doctor contract declaration + closure guard tests",
+            args: [
+              "test:serial",
+              "src/plugins/doctor-contract-declarations.test.ts",
+              "src/plugins/doctor-contract-closure-guard.test.ts",
+            ],
           },
         ],
       },
@@ -2290,6 +2316,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
       { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
       {
         name: "guarded extension wildcard re-exports",
         args: ["lint:extensions:no-guarded-wildcard-reexports"],
@@ -2312,6 +2339,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
       { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
       {
         name: "guarded extension wildcard re-exports",
         args: ["lint:extensions:no-guarded-wildcard-reexports"],

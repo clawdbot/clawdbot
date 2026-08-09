@@ -46,7 +46,6 @@ export function createNativeCommandTestParams(
     telegramCfg: params.telegramCfg ?? ({} as TelegramAccountConfig),
     nativeEnabled: params.nativeEnabled ?? true,
     nativeSkillsEnabled: params.nativeSkillsEnabled ?? false,
-    nativeDisabledExplicit: params.nativeDisabledExplicit ?? false,
     resolveGroupPolicy:
       params.resolveGroupPolicy ??
       (() =>

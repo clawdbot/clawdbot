@@ -57,7 +57,9 @@ const MEMORY_HOST_SDK_EXPORTS = [
   "./status",
 ] as const;
 const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
+  "packages/memory-host-sdk/src/host/config-utils.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
@@ -262,8 +264,8 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./provider-web-search-config-contract"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-web-search-config-contract.d.ts",
     );
-    expect(packageJson.exports?.["./runtime-doctor"]?.types).toBe(
-      "./dist/src/plugin-sdk/runtime-doctor.d.ts",
+    expect(packageJson.exports?.["./runtime-env"]?.types).toBe(
+      "./dist/src/plugin-sdk/runtime-env.d.ts",
     );
     expect(packageJson.exports?.["./security-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/security-runtime.d.ts",

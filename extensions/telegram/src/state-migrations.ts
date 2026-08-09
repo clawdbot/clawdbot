@@ -1,11 +1,11 @@
 // Telegram plugin module implements state migrations behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { fileExists } from "openclaw/plugin-sdk/security-runtime";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listTelegramAccountIds, resolveDefaultTelegramAccountId } from "./account-selection.js";
 import {
@@ -36,11 +36,10 @@ import {
 } from "./sticker-cache-store.js";
 import {
   listTelegramLegacyThreadBindingEntries,
+  resolveTelegramThreadBindingsPath,
   TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
   TELEGRAM_THREAD_BINDINGS_NAMESPACE,
-  testing as telegramThreadBindingTesting,
-} from "./thread-bindings.js";
-import { resolveTelegramToken } from "./token.js";
+} from "./thread-bindings-store.js";
 import {
   listTelegramLegacyTopicNameCacheEntries,
   resolveTopicNameCacheNamespace,
@@ -259,11 +258,14 @@ function detectTelegramBotInfoCacheLegacyStateMigration(params: {
   });
 }
 
-function detectTelegramUpdateOffsetLegacyStateMigration(params: {
+async function detectTelegramUpdateOffsetLegacyStateMigration(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir?: string;
-}): ChannelLegacyStateMigrationPlan[] {
+}): Promise<ChannelLegacyStateMigrationPlan[]> {
+  // token.js pulls provider-auth's config graph; keep it lazy so setup/doctor
+  // closure cold-load stays light.
+  const { resolveTelegramToken } = await import("./token.js");
   const stateDir = resolveMigrationStateDir(params);
   return listTelegramLegacySidecarAccountIds({
     cfg: params.cfg,
@@ -388,7 +390,7 @@ function detectTelegramThreadBindingLegacyStateMigration(params: {
     prefix: "thread-bindings-",
     suffix: ".json",
   }).flatMap((accountId) => {
-    const persistedPath = telegramThreadBindingTesting.resolveBindingsPath(accountId, params.env);
+    const persistedPath = resolveTelegramThreadBindingsPath(accountId, params.env);
     if (!fileExists(persistedPath)) {
       return [];
     }
@@ -484,7 +486,7 @@ export async function detectTelegramLegacyStateMigrations(params: {
   stateDir?: string;
 }): Promise<ChannelLegacyStateMigrationPlan[]> {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
-  plans.push(...detectTelegramUpdateOffsetLegacyStateMigration(params));
+  plans.push(...(await detectTelegramUpdateOffsetLegacyStateMigration(params)));
   plans.push(...detectTelegramBotInfoCacheLegacyStateMigration(params));
   plans.push(...detectTelegramStickerCacheLegacyStateMigration(params));
   plans.push(...detectTelegramMessageCacheLegacyStateMigration(params));

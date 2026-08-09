@@ -4,7 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
 import { EmbeddedBlockChunker } from "../../agents/embedded-agent-block-chunker.js";
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
@@ -53,7 +53,7 @@ function truncateText(input: string, maxChars: number): string {
   if (maxChars <= 1) {
     return truncateUtf16Safe(input, maxChars);
   }
-  return `${truncateUtf16Safe(input, maxChars - 1)}…`;
+  return truncateWithMarker(input, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 function hashText(text: string): string {

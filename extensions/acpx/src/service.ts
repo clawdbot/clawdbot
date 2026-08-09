@@ -133,25 +133,6 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
   };
 }
 
-function warnOnIgnoredLegacyCompatibilityConfig(params: {
-  pluginConfig: ResolvedAcpxPluginConfig;
-  logger?: PluginLogger;
-}): void {
-  const ignoredFields: string[] = [];
-  if (params.pluginConfig.legacyCompatibilityConfig.queueOwnerTtlSeconds != null) {
-    ignoredFields.push("queueOwnerTtlSeconds");
-  }
-  if (params.pluginConfig.legacyCompatibilityConfig.strictWindowsCmdWrapper === false) {
-    ignoredFields.push("strictWindowsCmdWrapper=false");
-  }
-  if (ignoredFields.length === 0) {
-    return;
-  }
-  params.logger?.warn(
-    `embedded acpx runtime ignores legacy compatibility config: ${ignoredFields.join(", ")}`,
-  );
-}
-
 function formatDoctorDetail(detail: unknown): string | null {
   if (!detail) {
     return null;
@@ -385,11 +366,6 @@ export function createAcpxRuntimeService(
           `reaped ${startupReap.terminatedPids.length} stale OpenClaw-owned ACPX process${startupReap.terminatedPids.length === 1 ? "" : "es"}`,
         );
       }
-      warnOnIgnoredLegacyCompatibilityConfig({
-        pluginConfig,
-        logger: ctx.logger,
-      });
-
       const startedRuntime = await measureAcpxStartup(ctx, "runtime.create", () =>
         params.runtimeFactory
           ? params.runtimeFactory({

@@ -28,6 +28,7 @@ const preparedVisionCatalog = vi.hoisted(() => [
 ]);
 
 vi.mock("../../../../src/agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: vi.fn(async () => preparedVisionCatalog),
 }));
 

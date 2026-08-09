@@ -1,6 +1,11 @@
 // Ambient trusted caller context for model-mediated Gateway tool calls.
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../runtime/internal-hooks.js";
 import type { AnyAgentTool } from "./common.js";
 
 type GatewayToolCallerIdentity = {
@@ -8,6 +13,9 @@ type GatewayToolCallerIdentity = {
   sessionKey: string;
   /** Host-signed capability for the scheduled run's existing self-management surface. */
   cronSelfManagementJobId?: string;
+  cronToolsAllowCapture?: "final-executable-surface";
+  /** One-shot Gateway-owned proof for a freshly resolved configured-MCP cap. */
+  cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   // Trusted run context, carried separately from model-authored tool arguments.
   turnSourceChannel?: string;
   turnSourceTo?: string;
@@ -46,6 +54,12 @@ export async function withGatewayToolCallerIdentity<T>(
       ...(identity.cronSelfManagementJobId?.trim()
         ? { cronSelfManagementJobId: identity.cronSelfManagementJobId.trim() }
         : {}),
+      ...(identity.cronToolsAllowCapture === "final-executable-surface"
+        ? { cronToolsAllowCapture: identity.cronToolsAllowCapture }
+        : {}),
+      ...(identity.cronCreatorAuthorityGrant
+        ? { cronCreatorAuthorityGrant: identity.cronCreatorAuthorityGrant }
+        : {}),
       ...(identity.turnSourceChannel?.trim()
         ? { turnSourceChannel: identity.turnSourceChannel.trim() }
         : {}),
@@ -73,7 +87,21 @@ export function wrapToolWithGatewayCallerIdentity(
     execute: async (...args) =>
       await withGatewayToolCallerIdentity(identity, async () => await tool.execute?.(...args)),
   };
-  return copyAgentToolMetadata(tool, wrapped);
+  copyAgentToolMetadata(tool, wrapped);
+  const sourcePreparer = getInternalToolExecutionPreparer(tool);
+  if (sourcePreparer) {
+    attachInternalToolExecutionPreparer(wrapped, async (params) => {
+      const prepared = await withGatewayToolCallerIdentity(identity, () => sourcePreparer(params));
+      return prepared.kind === "ready"
+        ? {
+            ...prepared,
+            execute: (start) =>
+              withGatewayToolCallerIdentity(identity, () => prepared.execute(start)),
+          }
+        : prepared;
+    });
+  }
+  return wrapped;
 }
 
 export function createGatewayToolCallerWrapper(

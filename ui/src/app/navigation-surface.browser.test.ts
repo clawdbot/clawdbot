@@ -39,7 +39,7 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
             <button
               class="shell-chrome-controls__button shell-chrome-controls__new-thread"
               type="button"
-              aria-label="New thread"
+              aria-label="New session"
             ></button>
             <button
               class="shell-chrome-controls__button shell-chrome-controls__search"

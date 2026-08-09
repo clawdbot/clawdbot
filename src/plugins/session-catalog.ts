@@ -40,6 +40,8 @@ export type SessionCatalogTerminalPlan =
       argv: string[];
       cwd?: string;
       title?: string;
+      /** Bounded command-specific environment overrides. */
+      env?: Record<string, string>;
       /** PATH that resolved argv[0], needed by env-based script interpreters. */
       pathEnv?: string;
     }

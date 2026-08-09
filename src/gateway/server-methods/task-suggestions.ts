@@ -12,6 +12,7 @@ import {
   validateTaskSuggestionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { insideGitCheckout } from "../../agents/worktrees/git.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -42,6 +43,19 @@ type TaskSuggestionAcceptanceResult =
   | { ok: false; error: NonNullable<Parameters<RespondFn>[2]> };
 
 const activeAcceptances = new Map<string, Promise<TaskSuggestionAcceptanceResult>>();
+
+function abandonSuggestedTaskAcceptance(
+  taskId: string,
+  options: GatewayRequestHandlerOptions,
+): void {
+  if (abandonTaskSuggestionAcceptance(taskId)) {
+    options.context.broadcast(
+      "task.suggestion",
+      { action: "resolved", taskId, resolution: "expired" },
+      { dropIfSlow: true },
+    );
+  }
+}
 
 async function rollbackSuggestedTaskSession(params: {
   key: string;
@@ -119,13 +133,7 @@ async function failSuggestedTaskSession(params: {
     }
     return { ok: false, error: params.error };
   }
-  if (abandonTaskSuggestionAcceptance(params.taskId)) {
-    params.options.context.broadcast(
-      "task.suggestion",
-      { action: "resolved", taskId: params.taskId, resolution: "expired" },
-      { dropIfSlow: true },
-    );
-  }
+  abandonSuggestedTaskAcceptance(params.taskId, params.options);
   return {
     ok: false,
     error: errorShape(
@@ -258,6 +266,14 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (!insideGitCheckout(params.cwd)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be inside a git checkout"),
+      );
+      return;
+    }
     const sessionAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
     if (
@@ -342,6 +358,9 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       taskId: params.taskId,
       suggestion: acceptance.suggestion,
       options,
+    }).catch((error: unknown) => {
+      abandonSuggestedTaskAcceptance(params.taskId, options);
+      throw error;
     });
     activeAcceptances.set(params.taskId, pending);
     try {

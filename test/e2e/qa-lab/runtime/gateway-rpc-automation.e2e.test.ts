@@ -211,10 +211,9 @@ describe("Gateway task and automation RPCs", () => {
             providers: {
               [provider.providerId]: {
                 ...provider.config,
-                models: provider.config.models.map((model) => ({
-                  ...model,
-                  input: Array.from(model.input),
-                })),
+                models: provider.config.models.map((model) =>
+                  Object.assign({}, model, { input: Array.from(model.input) }),
+                ),
               },
             },
           },
@@ -428,7 +427,9 @@ describe("Gateway task and automation RPCs", () => {
         }
         releaseTaskResponse?.();
         providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => providerServer.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          providerServer.close(() => resolve());
+        });
         envSnapshot.restore();
       }
     },

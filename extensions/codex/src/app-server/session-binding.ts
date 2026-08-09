@@ -251,6 +251,7 @@ const threadBindingSchema = z
     nativeSkillIsolationFingerprint: optionalStringSchema,
     userMcpServersFingerprint: optionalStringSchema,
     mcpServersFingerprint: optionalStringSchema,
+    configuredMcpOwnershipVersion: z.literal(1).optional().catch(undefined),
     ringZeroConfigFingerprint: optionalStringSchema,
     ringZeroClientInstanceId: optionalStringSchema,
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
@@ -366,6 +367,11 @@ type CodexAppServerBindingMutation =
       kind: "patch";
       threadId: string;
       patch: Partial<Omit<CodexAppServerThreadBinding, "threadId">>;
+    }
+  | {
+      kind: "replace-thread";
+      expectedThreadId: string;
+      binding: CodexAppServerThreadBinding;
     }
   | {
       kind: "patch-pending-supervision-branch";
@@ -927,6 +933,12 @@ export function createCodexAppServerBindingStore(
                 mutation.threadId,
                 mutation.expectedPendingSupervisionBranch,
               );
+            const replacesExpectedOrdinaryOwner =
+              mutation.kind === "replace-thread" &&
+              active?.binding.threadId === mutation.expectedThreadId &&
+              active.binding.connectionScope !== "supervision" &&
+              mutation.binding.connectionScope !== "supervision" &&
+              mutation.binding.threadId !== mutation.expectedThreadId;
             if (
               (mutation.kind === "set" &&
                 ((mutation.if?.kind === "absent" && storedActive) ||
@@ -935,6 +947,7 @@ export function createCodexAppServerBindingStore(
                   (active?.binding.connectionScope === "supervision" &&
                     !preservesSupervisionOwner))) ||
               (mutation.kind === "patch" && active?.binding.threadId !== mutation.threadId) ||
+              (mutation.kind === "replace-thread" && !replacesExpectedOrdinaryOwner) ||
               ((mutation.kind === "patch-pending-supervision-branch" ||
                 mutation.kind === "commit-pending-supervision-branch") &&
                 !matchesPendingSupervisionBranch(active?.binding, mutation.expected)) ||
@@ -962,7 +975,7 @@ export function createCodexAppServerBindingStore(
               };
             }
             let binding: CodexAppServerThreadBinding;
-            if (mutation.kind === "set") {
+            if (mutation.kind === "set" || mutation.kind === "replace-thread") {
               binding = validateBindingForWrite(mutation.binding);
             } else if (mutation.kind === "patch-pending-supervision-branch") {
               binding = validateBindingForWrite({

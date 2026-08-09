@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -12,10 +13,6 @@ import {
   type AgentDeliveryEvidence,
 } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeAttemptToolMediaPayloads } from "./embedded-agent-runner/run/tool-media-payloads.js";
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function normalizeOptionalThreadId(value: unknown): string | undefined {
   return (

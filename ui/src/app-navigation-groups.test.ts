@@ -56,6 +56,13 @@ describe("sidebar entries", () => {
     expect(settingsRoutes.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(true);
   });
 
+  it("places Updates in the System group immediately before About", () => {
+    const system = SETTINGS_NAVIGATION_GROUPS.find(
+      (group) => group.labelKey === "nav.settingsGroupSystem",
+    );
+    expect(system?.routes.slice(-2)).toEqual(["updates", "about"]);
+  });
+
   it("keeps model setup as a settings subpage without a sidebar entry", () => {
     expect(settingsRoutes).not.toContain("model-setup");
     expect(isSettingsNavigationRoute("model-setup")).toBe(true);
@@ -69,8 +76,8 @@ describe("sidebar entries", () => {
   });
 
   it("keeps devices in connection settings and drops stale pinned entries", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("nodes");
-    expect(settingsRoutes).toContain("nodes");
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("devices");
+    expect(settingsRoutes).toContain("devices");
     expect(normalizeSidebarEntries(["route:nodes", "route:usage"])).toEqual(["route:usage"]);
   });
 

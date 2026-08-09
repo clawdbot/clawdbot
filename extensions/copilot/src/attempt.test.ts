@@ -218,6 +218,57 @@ function requireCreateSessionConfig(sdk: FakeSdk): Record<string, unknown> {
   return expectDefined(sdk.createSession.mock.calls[0]?.[0], "Copilot createSession config");
 }
 
+function expectTranscriptCredentialSafety(instructions: string): void {
+  const credentialGuidance = instructions
+    .split("\n")
+    .filter((line) => /credentials?|secrets?|authentication|pairing codes?/iu.test(line));
+
+  expect(
+    credentialGuidance.some(
+      (line) =>
+        /(?:never|do not)/iu.test(line) &&
+        /(?:ask for|request)/iu.test(line) &&
+        /(?:chat|conversation|message|reply|transcript)/iu.test(line),
+    ),
+  ).toBe(true);
+  expect(
+    credentialGuidance.some(
+      (line) =>
+        /(?:never|do not)/iu.test(line) &&
+        /(?:echo|repeat)/iu.test(line) &&
+        /(?:chat|conversation|message|reply|transcript)/iu.test(line),
+    ),
+  ).toBe(true);
+  expect(
+    credentialGuidance.some(
+      (line) =>
+        /(?:never|do not)/iu.test(line) &&
+        /(?:place|put|include)/iu.test(line) &&
+        /(?:recommend|suggest)/iu.test(line) &&
+        /(?:command(?:-line)?|arguments?)/iu.test(line) &&
+        /urls?/iu.test(line) &&
+        /shell/iu.test(line) &&
+        /(?:variable|interpolat)/iu.test(line),
+    ),
+  ).toBe(true);
+  expect(
+    credentialGuidance.some(
+      (line) =>
+        /(?:never|do not)/iu.test(line) &&
+        /(?:ask|request)/iu.test(line) &&
+        /(?:report|share|provide)/iu.test(line) &&
+        /(?:authentication|pairing)/iu.test(line) &&
+        /codes?/iu.test(line) &&
+        /(?:chat|conversation|message|reply|transcript)/iu.test(line),
+    ),
+  ).toBe(true);
+  expect(
+    credentialGuidance.some(
+      (line) => /(?:masked|secure)/iu.test(line) && /(?:entry|input|setup|wizard)/iu.test(line),
+    ),
+  ).toBe(true);
+}
+
 function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {
   return expectDefined(sdk.resumeSession.mock.calls[0]?.[1], "Copilot resumeSession config");
 }
@@ -2368,23 +2419,19 @@ describe("runCopilotAttempt", () => {
       };
       expect(cfg.systemMessage).toBeDefined();
       expect(cfg.systemMessage?.mode).toBe("append");
-      expect(cfg.systemMessage?.content).toBe(rendered);
+      expect(cfg.systemMessage?.content).toContain(rendered);
     });
 
-    it("omits systemMessage entirely when the loader returns no instructions", async () => {
+    it("adds transcript credential safety when the loader returns no instructions", async () => {
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
 
       await runCopilotAttempt(makeParams(), { pool });
 
-      const cfg = requireCreateSessionConfig(sdk);
-      // No rendered instructions => skip the systemMessage field so
-      // the SDK default (foundation only) applies. Avoids polluting
-      // session logs with an empty `append` and removes a no-op SDK
-      // codepath. Mirrors the omit-when-empty pattern used elsewhere
-      // in createSessionConfig (hooks, infiniteSessions,
-      // enableSessionTelemetry).
-      expect("systemMessage" in cfg).toBe(false);
+      const cfg = requireCreateSessionConfig(sdk) as {
+        systemMessage?: { content?: string };
+      };
+      expectTranscriptCredentialSafety(cfg.systemMessage?.content ?? "");
     });
 
     it("forwards extraSystemPrompt into SDK SessionConfig.systemMessage", async () => {
@@ -2402,7 +2449,7 @@ describe("runCopilotAttempt", () => {
         systemMessage?: { mode?: string; content?: string };
       };
       expect(cfg.systemMessage?.mode).toBe("append");
-      expect(cfg.systemMessage?.content).toBe(
+      expect(cfg.systemMessage?.content).toContain(
         "## Conversation Context\nTool and file actions are disabled for this sender.",
       );
     });
@@ -2441,6 +2488,8 @@ describe("runCopilotAttempt", () => {
       );
 
       expect(beforePromptBuild).not.toHaveBeenCalled();
+      const cfg = requireCreateSessionConfig(sdk);
+      expect("systemMessage" in cfg).toBe(false);
       const messageOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as {
         prompt?: string;
       };
@@ -2464,6 +2513,8 @@ describe("runCopilotAttempt", () => {
       );
 
       expect(beforePromptBuild).not.toHaveBeenCalled();
+      const cfg = requireCreateSessionConfig(sdk);
+      expect("systemMessage" in cfg).toBe(false);
       const messageOptions = sdk.sessions[0]?.sendAndWait.mock.calls[0]?.[0] as {
         prompt?: string;
       };
@@ -2490,7 +2541,7 @@ describe("runCopilotAttempt", () => {
       const cfg = sdk.createSession.mock.calls[0]?.[0] as {
         systemMessage?: { mode?: string; content?: string };
       };
-      expect(cfg.systemMessage?.content).toBe(
+      expect(cfg.systemMessage?.content).toContain(
         `${rendered}\n\n## Conversation Context\nOnly answer in the current group thread.`,
       );
     });
@@ -2523,7 +2574,8 @@ describe("runCopilotAttempt", () => {
       };
       expect(cfg.systemMessage).toBeDefined();
       expect(cfg.systemMessage?.mode).toBe("append");
-      expect(cfg.systemMessage?.content).toBe(rendered);
+      expect(cfg.systemMessage?.content).toContain(rendered);
+      expectTranscriptCredentialSafety(cfg.systemMessage?.content ?? "");
     });
   });
 

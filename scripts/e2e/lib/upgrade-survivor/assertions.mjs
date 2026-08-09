@@ -96,13 +96,14 @@ function assert(condition, message) {
 
 function seedLegacySessionMetadata(stateDir) {
   const legacySessionsDir = path.join(stateDir, "sessions");
+  const baseUpdatedAt = Date.now() - 24 * 60 * 60 * 1000;
   writeJson(path.join(legacySessionsDir, "sessions.json"), {
     main: {
       sessionId: LEGACY_SESSION_MAIN_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_MAIN_ID}.jsonl`),
       provider: "openai",
       model: "gpt-5.5",
-      updatedAt: 1710000000000,
+      updatedAt: baseUpdatedAt,
       skillsSnapshot: {
         prompt: "legacy prompt survives as metadata",
         resolvedSkills: [
@@ -118,14 +119,14 @@ function seedLegacySessionMetadata(stateDir) {
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_DIRECT_ID}.jsonl`),
       provider: "openai",
       model: "gpt-5.5",
-      updatedAt: 1710000000100,
+      updatedAt: baseUpdatedAt + 100,
     },
     "slack:channel:CUPGRADE": {
       sessionId: LEGACY_SESSION_GROUP_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_GROUP_ID}.jsonl`),
       provider: "openai",
       model: "gpt-5.5",
-      updatedAt: 1710000000200,
+      updatedAt: baseUpdatedAt + 200,
       lastChannel: "slack",
       lastTo: "CUPGRADE",
     },

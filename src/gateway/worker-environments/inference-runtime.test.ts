@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   validateWorkerInferenceTerminalOutcome,
   type WorkerInferenceStartParams,
@@ -19,6 +20,10 @@ import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import {
+  isWorkerTranscriptMessageFrameSafe,
+  WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
+} from "../../worker/transcript-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerInferenceExecutor,
@@ -458,9 +463,23 @@ describe("worker inference provider runtime", () => {
   it("projects provider terminal messages onto the closed worker schema", async () => {
     const runtime = setup();
     const message = finalMessage();
+    message.providerReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      id: "cmp_worker_terminal",
+      data: "opaque-worker-terminal",
+      replayIndex: 1,
+      provider: "openai",
+      api: "openai-responses",
+      model: MODEL,
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    };
     Object.assign(message.content[0]!, { providerScratch: "text-state" });
     Object.assign(message.content[1]!, { partialArgs: "{}", streamIndex: 0 });
     Object.assign(message.usage, { providerScratch: { requestId: "private" } });
+    Object.assign(message.providerReplay, { providerScratch: "private" });
     runtime.stream.mockImplementation(() => providerStream(message));
 
     const outcome = await runtime.executor(params(request(), vi.fn()));
@@ -469,6 +488,82 @@ describe("worker inference provider runtime", () => {
     expect(JSON.stringify(outcome)).not.toContain("providerScratch");
     expect(JSON.stringify(outcome)).not.toContain("partialArgs");
     expect(JSON.stringify(outcome)).not.toContain("streamIndex");
+    expect(outcome).toMatchObject({
+      type: "done",
+      message: {
+        providerReplay: {
+          type: "openai-responses-compaction",
+          data: "opaque-worker-terminal",
+          replayIndex: 1,
+          sessionHash: "171dzdv17gum5g",
+          authProfileHash: "oe8bkr3r8947",
+        },
+      },
+    });
+  });
+
+  it("returns a typed error when authoritative replay cannot be persisted", async () => {
+    const runtime = setup();
+    const message = finalMessage();
+    message.providerReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      data: "x".repeat(WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1),
+      provider: "openai",
+      api: "openai-responses",
+      model: MODEL,
+    };
+    runtime.stream.mockImplementation(() => providerStream(message));
+    const payloadEvents: unknown[] = [];
+    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+      if (event.type === "payload.large" && event.surface === "worker.provider-replay") {
+        payloadEvents.push(event);
+      }
+    });
+
+    const outcome = await runtime.executor(params(request(), vi.fn())).finally(unsubscribe);
+
+    expect(outcome).toMatchObject({
+      type: "error",
+      reason: "provider-error",
+      message: WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
+      usage: message.usage,
+    });
+    expect(payloadEvents).toEqual([
+      expect.objectContaining({
+        type: "payload.large",
+        surface: "worker.provider-replay",
+        action: "rejected",
+        bytes: WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES + 1,
+        limitBytes: WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
+        reason: "provider-replay-data-budget",
+      }),
+    ]);
+    expect(JSON.stringify(payloadEvents)).not.toContain(message.providerReplay.data);
+  });
+
+  it("keeps a maximum fitting replay exact through the terminal projection", async () => {
+    const runtime = setup();
+    const message = finalMessage();
+    const ciphertext = `cipher-${"x".repeat(60 * 1024)}-€`;
+    message.providerReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      data: ciphertext,
+      provider: "openai",
+      api: "openai-responses",
+      model: MODEL,
+    };
+    runtime.stream.mockImplementation(() => providerStream(message));
+
+    const outcome = await runtime.executor(params(request(), vi.fn()));
+
+    expect(outcome.type).toBe("done");
+    if (outcome.type !== "done") {
+      throw new Error("expected successful worker inference");
+    }
+    expect(outcome.message.providerReplay?.data).toBe(ciphertext);
+    expect(isWorkerTranscriptMessageFrameSafe(outcome.message)).toBe(true);
   });
 
   it("rejects an incomplete final argument stream", async () => {

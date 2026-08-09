@@ -13,6 +13,7 @@ import {
   fingerprintResolvedProviderAuth,
   type AgentExecutionAuthBinding,
 } from "../agents/execution-auth-binding.js";
+import { ensureSelectedAgentHarnessPlugin } from "../agents/harness/runtime-plugin.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -29,6 +30,10 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { ensurePluginRegistryLoaded } from "../plugins/runtime/runtime-registry-loader.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import {
@@ -445,6 +450,7 @@ type SuccessfulRunParams = {
   authProfileId?: string;
   agentHarnessRuntimeOverride?: string;
   config?: OpenClawConfig;
+  reportedModel?: string;
 };
 
 function successfulAgentHarnessBinding(params?: SuccessfulRunParams): AgentExecutionAuthBinding {
@@ -491,13 +497,14 @@ function successfulRun(provider: string, model: string, params?: SuccessfulRunPa
   return {
     meta: {
       finalAssistantVisibleText: "OK",
-      executionTrace: { winnerProvider: provider, winnerModel: model },
+      executionTrace: { winnerProvider: provider, winnerModel: params?.reportedModel ?? model },
     },
   };
 }
 
-function successfulRunner(provider: string, model: string) {
-  return async (params: SuccessfulRunParams) => successfulRun(provider, model, params);
+function successfulRunner(provider: string, model: string, reportedModel?: string) {
+  return async (params: SuccessfulRunParams) =>
+    successfulRun(provider, model, { ...params, reportedModel });
 }
 
 function openAiOAuthCredential(token: string, lifetimeMs = 3_600_000) {
@@ -2026,7 +2033,7 @@ describe("activateSetupInference", () => {
     expect(configHarness.current()).toEqual(canonicalizeAgentEntriesForTest(concurrentConfig));
   });
 
-  it("preserves authored provider rows and lifts an onboarding-owned lean setting", async () => {
+  it("accepts OpenAI's gpt-5.6 alias reporting Sol while preserving authored rows", async () => {
     const sourceConfig = {
       wizard: { localModelLeanAutoModel: "lmstudio/qwen-local" },
       agents: {
@@ -2067,17 +2074,21 @@ describe("activateSetupInference", () => {
       },
     ];
     const configHarness = createConfigTransformHarness(sourceConfig, runtimeConfig);
+    const runEmbeddedAgent = vi.fn(successfulRunner("openai", "gpt-5.6", "gpt-5.6-sol"));
 
     const result = await activateSetupInference({
       kind: "openai-api-key",
       deps: {
         readConfigFileSnapshot: mockConfigSnapshot(sourceConfig, { runtimeConfig }),
-        runEmbeddedAgent: vi.fn(successfulRunner("openai", "gpt-5.6")) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
       },
     });
 
     expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6" });
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", model: "gpt-5.6" }),
+    );
     expect(configHarness.current().models?.providers?.openai?.models).toEqual(
       sourceConfig.models.providers.openai.models,
     );
@@ -2426,14 +2437,20 @@ describe("activateSetupInference", () => {
       error: "did not report which provider and model",
     },
     {
-      name: "model-routing override",
+      name: "provider-routing override",
       runResult: successfulRun("openai", "gpt-5.5"),
       error: "instead of the requested anthropic/claude-opus-5",
     },
-  ])("does not persist inference after a $name", async ({ runResult, error }) => {
+    {
+      name: "same-provider model-routing override",
+      kind: "openai-api-key" as const,
+      runResult: successfulRun("openai", "gpt-5.6-terra"),
+      error: "instead of the requested openai/gpt-5.6",
+    },
+  ])("does not persist inference after a $name", async ({ runResult, error, kind }) => {
     const transformConfig = vi.fn();
     const result = await activateSetupInference({
-      kind: "anthropic-api-key",
+      kind: kind ?? "anthropic-api-key",
       deps: {
         runEmbeddedAgent: vi.fn(async () => runResult) as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
@@ -2442,7 +2459,7 @@ describe("activateSetupInference", () => {
 
     expect(result).toMatchObject({
       ok: false,
-      status: "format",
+      status: "unknown",
       error: expect.stringContaining(error),
     });
     expect(transformConfig).not.toHaveBeenCalled();
@@ -4405,6 +4422,63 @@ describe("activateSetupInference", () => {
         },
       },
     });
+  });
+
+  it("probes a newly loaded Codex harness inside an older Gateway registry scope", async () => {
+    const oldRegistry = createEmptyPluginRegistry();
+    const stagedRegistry = createEmptyPluginRegistry();
+    stagedRegistry.agentHarnesses.push({
+      pluginId: "codex",
+      source: "test",
+      harness: {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("unused");
+        },
+      },
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(stagedRegistry);
+    let ownerArtifactRegistry: unknown;
+    const captureSystemAgentOwnerPluginArtifacts = vi.fn(() => {
+      ownerArtifactRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+      return { ownerPluginIds: [], ownerPluginArtifacts: [] } as const;
+    });
+    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
+      const pluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+      expect(pluginRegistry).toBe(stagedRegistry);
+      await ensureSelectedAgentHarnessPlugin({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        agentHarnessRuntimeOverride: "codex",
+        workspaceDir: "/tmp/work",
+        pluginRegistry,
+      });
+      return successfulRun("openai", "gpt-5.6-sol", params);
+    });
+
+    await withPluginRuntimeGatewayRequestScope(
+      { isWebchatConnect: () => false, pluginRegistry: oldRegistry },
+      async () => {
+        const result = await activateCodexSetup({
+          workspace: "/tmp/work",
+          deps: {
+            captureSystemAgentOwnerPluginArtifacts,
+            runEmbeddedAgent: runEmbeddedAgent as never,
+            transformConfigWithPendingPluginInstalls: createPreRosterConfigTransformHarness()
+              .transform as never,
+          },
+        });
+
+        expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6-sol" });
+        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(oldRegistry);
+      },
+    );
+    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+    expect(ownerArtifactRegistry).toBe(stagedRegistry);
+    expect(captureSystemAgentOwnerPluginArtifacts).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
   it("commits only the refreshed codex record when authored install metadata is stale", async () => {

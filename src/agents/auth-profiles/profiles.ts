@@ -24,7 +24,7 @@ export {
   listProfilesForProvider,
   resolveSubscriptionAuthModeForProfiles,
 } from "./profile-list.js";
-export { upsertAuthProfileWithLock } from "./upsert-with-lock.js";
+export { upsertAuthProfileWithLock, upsertAuthProfileWithLockOrThrow } from "./upsert-with-lock.js";
 
 const authProfileProfilesLog = createSubsystemLogger("agent/embedded");
 

@@ -287,6 +287,43 @@ describe("googlechat group policy", () => {
   });
 });
 
+describe("googlechat API JSON response decoding", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects invalid UTF-8 in API JSON responses instead of corrupting identifiers", async () => {
+    const raw = Buffer.concat([
+      Buffer.from('{"name":"spaces/'),
+      Buffer.from([0xff]),
+      Buffer.from('AAA"}'),
+    ]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(new Uint8Array(raw), { status: 200 })),
+    );
+
+    await expect(
+      sendGoogleChatMessage({ account, space: "spaces/AAA", text: "hello" }),
+    ).rejects.toThrow(/malformed JSON response/);
+  });
+
+  it("keeps valid UTF-8 API JSON responses unchanged (negative control)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(new Uint8Array(Buffer.from('{"name":"spaces/AAA"}')), { status: 200 }),
+        ),
+    );
+
+    await expect(
+      sendGoogleChatMessage({ account, space: "spaces/AAA", text: "hello" }),
+    ).resolves.toEqual({ messageName: "spaces/AAA", threadName: undefined });
+  });
+});
+
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
     unregisterGoogleChatManualApprovalFollowupSuppression("12345678-1234-1234-1234-123456789012");

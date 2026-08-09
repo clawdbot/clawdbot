@@ -61,7 +61,7 @@ import {
 } from "./discovery.ts";
 import { isMissingRestoredFolderError } from "./folder-validation.ts";
 import { discoverGatewayName } from "./gateway-name-discovery.ts";
-import type { NewSessionRouteData } from "./location.ts";
+import { newSessionSearch, type NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { isAbsolutePath } from "./path.ts";
 import { renderPlaceSelect } from "./place-picker.ts";
@@ -130,6 +130,10 @@ class NewSessionPage extends OpenClawLightDomElement {
   private readonly modelControl = new NewSessionModelControl(
     () => this.requestUpdate(),
     (selection) => this.persistPreference(selection),
+    (catalogId) =>
+      this.context?.navigate("new-session", {
+        search: newSessionSearch(this.agentId, { catalogId }),
+      }),
   );
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
@@ -159,6 +163,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.sessions,
       (sessions, notify) => sessions.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.config,
+      (config, notify) => config.subscribe(() => notify()),
     );
 
   private readonly gatewayNameTask = new Task(this, {
@@ -457,6 +465,11 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   override updated() {
     this.retryPendingCatalogTarget();
+    this.modelControl.loadCatalogTargets(
+      this.context,
+      this.agentId,
+      this.context?.config.current.cliAgentsEnabled === true && !catalog.isTarget(this.data),
+    );
     const agentState = this.context?.agents.state;
     const agentsReady = Boolean(
       this.gatewayConnected &&

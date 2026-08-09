@@ -1,6 +1,7 @@
 // Hook workspace helpers resolve hook roots and workspace-local hook files.
 import fs from "node:fs";
 import path from "node:path";
+import { safeParseJson } from "@openclaw/normalization-core";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -44,11 +45,7 @@ function readHookPackageManifest(dir: string): HookPackageManifest | null {
   if (raw === null) {
     return null;
   }
-  try {
-    return JSON.parse(raw) as HookPackageManifest;
-  } catch {
-    return null;
-  }
+  return (safeParseJson(raw) as HookPackageManifest | undefined) ?? null;
 }
 
 function resolvePackageHooks(manifest: HookPackageManifest): string[] {

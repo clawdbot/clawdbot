@@ -40,7 +40,6 @@ type CreateControllerInput = {
     staleMs: number;
     maxHoldMs: number;
   };
-  mergePromptReleasedSessionEntries: (entries: never[]) => unknown;
   reloadPromptReleasedSessionFile: () => void;
 };
 
@@ -48,10 +47,10 @@ function createFixture(options?: { rejectPostArmFence?: Error }) {
   const order: string[] = [];
   const sessionFileOwner = { release: vi.fn() };
   const sessionManager = {
-    mergePromptReleasedSessionEntries: vi.fn(() => "merged"),
     reloadPersistedTranscript: vi.fn(),
   };
   const sessionLockController = {
+    assertOwned: vi.fn(),
     canAdvanceSessionEntryCache: vi.fn(() => true),
     dispose: vi.fn(async () => undefined),
     publishOwnedSessionFileSnapshot: vi.fn(() => true),
@@ -161,10 +160,6 @@ describe("prepareEmbeddedAttemptSessionLock", () => {
     expect(mocks.resolveSessionWriteLockTargetKey).toHaveBeenCalledWith(
       fixture.input.attempt.sessionTarget,
     );
-    expect(controllerInput?.mergePromptReleasedSessionEntries([])).toBe("merged");
-    expect(fixture.sessionManager.mergePromptReleasedSessionEntries).toHaveBeenCalledWith([], {
-      persistLeaf: true,
-    });
     controllerInput?.reloadPromptReleasedSessionFile();
     expect(fixture.sessionManager.reloadPersistedTranscript).toHaveBeenCalledOnce();
 

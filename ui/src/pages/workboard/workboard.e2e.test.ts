@@ -444,7 +444,7 @@ suite.define(() => {
       await expect.poll(() => createDialog.isVisible()).toBe(true);
       await setWorkboardDraftField(createForm, "Title", createdCard.title);
       await setWorkboardDraftField(createForm, "Notes", createdCard.notes ?? "");
-      await chooseWorkboardSelectOption(createForm, "Thread", linkedSessionName);
+      await chooseWorkboardSelectOption(createForm, "Session", linkedSessionName);
       await setWorkboardDraftField(createForm, "Labels", "ui, proof");
       await captureScreenshot(writable.page, artifacts, "02-create-dialog");
       const createBefore = (await writableGateway.getRequests("workboard.cards.create")).length;
@@ -527,11 +527,11 @@ suite.define(() => {
         state: "visible",
       });
       await details.locator(".workboard-card__move-select").waitFor({ state: "visible" });
-      expect(await details.getByRole("button", { name: "Open thread" }).count()).toBe(1);
+      expect(await details.getByRole("button", { name: "Open session" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Edit card" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Archive card" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Delete card" }).count()).toBe(1);
-      expect(await details.getByRole("button", { name: "Stop thread" }).count()).toBe(0);
+      expect(await details.getByRole("button", { name: "Stop session" }).count()).toBe(0);
       await captureScreenshot(writable.page, artifacts, "05-detail-actions");
       await details.locator('button[aria-label="Cancel"]').click();
 

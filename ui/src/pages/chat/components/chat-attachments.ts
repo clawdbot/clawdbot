@@ -550,11 +550,11 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                         <button
                           class="chat-attachment-text-action"
                           type="button"
-                          aria-label=${t("worktrees.restore")}
+                          aria-label=${t("chat.attachments.showInTextField")}
                           ?disabled=${props.disabled}
                           @click=${() => showPastedTextInComposer(att, props)}
                         >
-                          ${t("worktrees.restore")}
+                          ${t("chat.attachments.showInTextField")}
                           <span aria-hidden="true">${icons.chevronRight}</span>
                         </button>
                       </span>

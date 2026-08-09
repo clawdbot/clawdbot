@@ -238,6 +238,7 @@ vi.mock("./run-model-selection.runtime.js", () => ({
     entries: await loadModelCatalogMock(params),
     routeVariants: [],
   }),
+  loadProviderScopedThinkingCatalog: async (params: unknown) => await loadModelCatalogMock(params),
   loadResolvedPublishedModelCatalogOwner: loadModelCatalogOwnerMock,
   publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
     owner.agentId === agentId.trim().toLowerCase(),

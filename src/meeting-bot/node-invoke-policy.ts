@@ -1,3 +1,4 @@
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   OpenClawPluginNodeInvokePolicy,
@@ -39,7 +40,7 @@ function readPositiveNumber(value: unknown): number | undefined {
 }
 
 function readOutputGeneration(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function copyCommand(command: string[] | undefined): string[] | undefined {

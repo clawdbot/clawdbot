@@ -463,6 +463,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           sessionKey,
           storePath: fixture.storePath(),
         },
+        assertOwned: () => undefined,
         withSessionWriteLock: async (run) => {
           events.push("lock");
           return await run();
@@ -492,6 +493,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       {
         sessionFile: oldSessionFile,
         sessionKey,
+        assertOwned: () => undefined,
         withSessionWriteLock: async (run) => {
           events.push("lock");
           return await run();
@@ -530,6 +532,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           sessionFile: ownerTarget.sessionKey,
           sessionKey: ownerTarget.sessionKey,
           sessionTarget: ownerTarget,
+          assertOwned: () => undefined,
           withSessionWriteLock: async (run) => {
             events.push("lock");
             return await run();
@@ -561,6 +564,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       {
         sessionFile,
         sessionKey,
+        assertOwned: () => undefined,
         withSessionWriteLock: async (run) => {
           events.push("lock");
           return await run();

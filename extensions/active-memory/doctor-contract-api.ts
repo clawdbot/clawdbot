@@ -7,7 +7,7 @@ import path from "node:path";
 import {
   defineLegacyJsonStateMigration,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 type ActiveMemoryToggleEntry = {
   sessionKey: string;

@@ -393,7 +393,8 @@ export function createMarkdownParser(): MarkdownIt {
     return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}"${lineAttribute}>${rendered}</a>`;
   };
 
-  // Override image to only allow base64 data URIs (#15437).
+  // Message rendering allows only inline data images (#15437). Document
+  // previews preserve authored image URLs and rely on DOMPurify's URI policy.
   installAssistantTranscriptRoleImageRenderer(markdownParser, {
     escapeHtml: escapeMarkdownHtml,
     isInlineDataImage: (src) => INLINE_DATA_IMAGE_RE.test(src),
@@ -405,6 +406,8 @@ export function createMarkdownParser(): MarkdownIt {
       }),
     interactiveImages: (env) =>
       (env as Partial<MarkdownRenderEnv> | undefined)?.interactiveImages === true,
+    allowRemoteImages: (env) =>
+      (env as Partial<MarkdownRenderEnv> | undefined)?.mode === "document",
   });
 
   // Override fenced code blocks with copy button + JSON collapse

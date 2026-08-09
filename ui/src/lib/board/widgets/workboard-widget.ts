@@ -1,5 +1,6 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
+import type { PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
@@ -126,6 +127,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
 
   @property({ attribute: false }) widget?: BoardViewWidget;
   @property({ attribute: false }) sessionKey = "";
+  @property({ type: Boolean }) active = true;
   @property({ type: Boolean }) canMutate = true;
   @property({ attribute: false }) hostRequestUpdate?: () => void;
 
@@ -183,7 +185,9 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
       sync();
       const unsubscribeSnapshot = gateway.subscribe(sync);
       const unsubscribeEvents = subscribeToSharedWorkboardChanges(gateway, () => {
-        void this.refresh(true);
+        if (this.active) {
+          void this.refresh(true);
+        }
       });
       return () => {
         unsubscribeSnapshot();
@@ -197,7 +201,20 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     this.syncGateway(this.context?.gateway.snapshot);
   }
 
-  override updated(): void {
+  override shouldUpdate(): boolean {
+    // @lit/task can schedule its host directly when a request settles. Keep
+    // cached state, but defer the hidden render until active changes again.
+    return this.active;
+  }
+
+  override updated(changed: PropertyValues<this>): void {
+    if (changed.get("active") === false && this.active) {
+      void this.refresh(true);
+      return;
+    }
+    if (!this.active) {
+      return;
+    }
     if (!this.loaded && this.refreshTask.status === TaskStatus.INITIAL) {
       void this.refresh();
     }
@@ -239,7 +256,13 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
 
   protected async moveCard(card: WorkboardCard, status: WorkboardStatus): Promise<void> {
     const client = this.client;
-    if (!client || !this.canMutate || !isActiveWorkboardCard(card) || card.status === status) {
+    if (
+      !this.active ||
+      !client ||
+      !this.canMutate ||
+      !isActiveWorkboardCard(card) ||
+      card.status === status
+    ) {
       return;
     }
     const host = this.workboardHost;
@@ -300,7 +323,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
   private async refresh(force = false): Promise<void> {
     const client = this.client;
     const sharedRuntime = this.sharedRuntime;
-    if (!client || !sharedRuntime || (!force && this.loaded)) {
+    if (!this.active || !client || !sharedRuntime || (!force && this.loaded)) {
       return;
     }
     const refreshAfterInflight = force && this.refreshTask.status === TaskStatus.PENDING;
@@ -322,6 +345,9 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
   }
 
   private requestRender(): void {
+    if (!this.active) {
+      return;
+    }
     this.requestUpdate();
     this.hostRequestUpdate?.();
   }

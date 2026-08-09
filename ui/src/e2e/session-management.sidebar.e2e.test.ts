@@ -1,5 +1,9 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   actionOpacity,
@@ -98,7 +102,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
       await captureUiProof(page, "child-sessions-collapsed.png");
 
-      await parent.getByRole("button", { name: "Show 4 child threads for Plan release" }).click();
+      await parent.getByRole("button", { name: "Show 4 child sessions for Plan release" }).click();
       await page.getByText("Research sources", { exact: true }).waitFor({ state: "visible" });
       await page.getByText("Verify tests", { exact: true }).waitFor({ state: "visible" });
       await page.getByText("Stale activity", { exact: true }).waitFor({ state: "visible" });
@@ -113,7 +117,7 @@ suite.define(() => {
 
       const childRows = page.locator(".sidebar-recent-session--child");
       await expect.poll(() => childRows.count()).toBe(4);
-      expect(await childRows.getByRole("button", { name: "Open thread menu" }).count()).toBe(0);
+      expect(await childRows.getByRole("button", { name: "Open session menu" }).count()).toBe(0);
       await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
       await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
 
@@ -189,7 +193,7 @@ suite.define(() => {
 
       const openSessionMenu = async () => {
         await row.hover();
-        await row.getByRole("button", { name: "Open thread menu" }).click();
+        await row.getByRole("button", { name: "Open session menu" }).click();
         await page
           .getByRole("menu", { name: "Actions for Research notes" })
           .waitFor({ state: "visible" });
@@ -331,14 +335,14 @@ suite.define(() => {
       const researchRow = page.locator('[data-session-key="agent:main:research"]');
       const followUpRow = page.locator('[data-session-key="agent:main:follow-up"]');
       const researchMenu = researchRow.getByRole("button", {
-        name: "Open thread menu: Research notes",
+        name: "Open session menu: Research notes",
         exact: true,
       });
       await researchRow
-        .getByRole("button", { name: "Pin thread: Research notes", exact: true })
+        .getByRole("button", { name: "Pin session: Research notes", exact: true })
         .waitFor();
       await followUpRow
-        .getByRole("button", { name: "Open thread menu: Follow-up work", exact: true })
+        .getByRole("button", { name: "Open session menu: Follow-up work", exact: true })
         .waitFor();
 
       await researchMenu.focus();
@@ -434,12 +438,24 @@ suite.define(() => {
       await expect.poll(() => sidebarRows.count()).toBe(3);
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
-      await gateway.deferNext("sessions.list");
-      await gateway.closeLatest(1006, "disconnect proof");
-      await sidebarRow.waitFor({ state: "visible" });
+      const socketsBefore = await gateway.getSocketCount();
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      await expect.poll(() => sidebarRow.textContent()).toContain("Disconnect proof");
+      await expect.poll(() => sidebarRows.count()).toBe(3);
+      for (const otherKey of otherSessionKeys) {
+        await page
+          .locator(`.sidebar-recent-session[data-session-key="${otherKey}"]`)
+          .waitFor({ state: "visible" });
+      }
       await captureUiProof(page, "sidebar-sessions-during-reconnect.png");
 
-      await expect.poll(() => gateway.getSocketCount(), { timeout: 15_000 }).toBeGreaterThan(1);
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
+        .toBe(socketsBefore + 1);
+      await gateway.deferNext("sessions.list");
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
         .toBeGreaterThan(initialListCount);
@@ -501,10 +517,18 @@ suite.define(() => {
       const initialObserverCount = (await gateway.getRequests("sessions.subscribe")).length;
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
+      const socketsBefore = await gateway.getSocketCount();
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
+        .toBe(socketsBefore + 1);
       await gateway.deferNext("sessions.subscribe");
       await gateway.deferNext("sessions.list");
-      await gateway.closeLatest(1006, "session route reconnect");
-      await expect.poll(() => gateway.getSocketCount(), { timeout: 15_000 }).toBeGreaterThan(1);
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.subscribe")).length, {
           timeout: 15_000,
@@ -760,7 +784,7 @@ suite.define(() => {
 
       // Names and subtitles never show raw node ids or raw agent keys.
       const names = await trimmedTextContents(page.locator(".sidebar-recent-session__name"));
-      expect(names).toContain("New thread");
+      expect(names).toContain("New session");
       expect(names).toContain("clawdbot ⎇ wt-1 · …0357");
       expect(names).toContain("node-mcp-debug-…8b2e");
       const subtitles = await trimmedTextContents(
@@ -913,14 +937,14 @@ suite.define(() => {
         .locator(".sidebar-recent-sessions__list .sidebar-recent-session")
         .filter({ hasText: "Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      const pin = row.getByRole("button", { name: "Pin thread" });
-      const menu = row.getByRole("button", { name: "Open thread menu" });
+      const pin = row.getByRole("button", { name: "Pin session" });
+      const menu = row.getByRole("button", { name: "Open session menu" });
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionPointerEvents(pin)).toBe("auto");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
       await expect.poll(() => actionPointerEvents(menu)).toBe("auto");
       await menu.click();
-      await page.getByRole("menuitem", { name: "Archive thread" }).waitFor({ state: "visible" });
+      await page.getByRole("menuitem", { name: "Archive session" }).waitFor({ state: "visible" });
     } finally {
       await context.close();
     }

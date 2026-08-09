@@ -51,6 +51,7 @@ import {
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { loadSessionEntryReadOnly } from "../session-utils.js";
 import {
@@ -70,6 +71,19 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
+
+function resolveCronCreatorAuthorityCommitGuard(
+  callerScope: CronCallerScope | undefined,
+): (() => void) | undefined {
+  const grant = callerScope?.cronCreatorAuthorityGrant;
+  if (!grant) {
+    return undefined;
+  }
+  if (!callerScope.toolsAllowProvenance) {
+    throw new TypeError("cron creator authority grant is missing tool-surface provenance");
+  }
+  return () => consumeCronCreatorAuthorityGrant(grant);
+}
 
 type CronRunsRequestParams = CronJobIdParams & {
   agentId?: string;
@@ -658,6 +672,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const callerScope = readCronCallerScope(client);
+    let cronCreatorAuthorityCommitGuard: (() => void) | undefined;
+    try {
+      cronCreatorAuthorityCommitGuard = resolveCronCreatorAuthorityCommitGuard(callerScope);
+    } catch (err) {
+      respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
+      return;
+    }
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
     const cfg = context.getRuntimeConfig();
     try {
@@ -718,7 +739,15 @@ export const cronHandlers: GatewayRequestHandlers = {
             defaultAgentId: context.cron.getDefaultAgentId(),
           }),
         ...(cronJobUsesToolRuntime(jobCreate)
-          ? { scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope) }
+          ? {
+              scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope),
+              ...(callerScope?.toolsAllowProvenance
+                ? { toolsAllowProvenance: callerScope.toolsAllowProvenance }
+                : {}),
+              ...(cronCreatorAuthorityCommitGuard
+                ? { commitGuard: cronCreatorAuthorityCommitGuard }
+                : {}),
+            }
           : {}),
       });
     } catch (err) {
@@ -799,6 +828,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       expectedConfigRevision?: string;
     };
     const callerScope = readCronCallerScope(client);
+    let cronCreatorAuthorityCommitGuard: (() => void) | undefined;
+    try {
+      cronCreatorAuthorityCommitGuard = resolveCronCreatorAuthorityCommitGuard(callerScope);
+    } catch (err) {
+      respondInvalidCronParams(respond, "cron.update", formatErrorMessage(err));
+      return;
+    }
     const jobId = resolveCronJobId(p);
     if (!jobId) {
       respond(
@@ -905,7 +941,15 @@ export const cronHandlers: GatewayRequestHandlers = {
           }
         },
         cronPatchTouchesToolRuntime(patch)
-          ? { scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope) }
+          ? {
+              scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope),
+              ...(callerScope?.toolsAllowProvenance
+                ? { toolsAllowProvenance: callerScope.toolsAllowProvenance }
+                : {}),
+              ...(cronCreatorAuthorityCommitGuard
+                ? { commitGuard: cronCreatorAuthorityCommitGuard }
+                : {}),
+            }
           : undefined,
       );
     } catch (err) {

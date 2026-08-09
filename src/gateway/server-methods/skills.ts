@@ -155,11 +155,7 @@ async function forwardSkillWorkshopRevisionToChatSend(
     targetAgentId?: string;
   },
 ): Promise<void> {
-  const { chatHandlers } = await import("./chat.js");
-  const chatSend = chatHandlers["chat.send"];
-  if (!chatSend) {
-    throw new Error("chat.send handler is unavailable");
-  }
+  const { handleChatSend } = await import("./chat-send-handler.js");
   const chatParams = {
     sessionKey: params.sessionKey,
     agentId: params.targetAgentId ?? params.agentId,
@@ -173,7 +169,7 @@ async function forwardSkillWorkshopRevisionToChatSend(
     suppressCommandInterpretation: true,
     idempotencyKey: params.idempotencyKey,
   };
-  await chatSend({
+  await handleChatSend({
     ...opts,
     req: { ...opts.req, method: "chat.send", params: chatParams },
     params: chatParams,

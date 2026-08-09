@@ -410,7 +410,7 @@ describe("release candidate checklist", () => {
       "",
       "### Complete contribution record",
       "",
-      "This audited record covers the complete base..HEAD history: 1 merged PR.",
+      "This audited record covers the complete base..HEAD history: 0 merged PRs.",
       "",
       "#### Pull requests",
       "",
@@ -418,6 +418,27 @@ describe("release candidate checklist", () => {
     ].join("\n");
 
     expect([...candidateCumulativeShippedPullRequests(changelog, "test baseline")]).toEqual([2]);
+  });
+
+  it("rejects duplicate historical contribution record rows without exact provenance", () => {
+    const changelog = [
+      "# Changelog",
+      "",
+      "## 2026.6.11",
+      "",
+      "### Complete contribution record",
+      "",
+      "This audited record covers the complete base..HEAD history: 1 merged PR.",
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #2** fix: shipped.",
+      "- **PR #2** fix: duplicate.",
+    ].join("\n");
+
+    expect(() => candidateCumulativeShippedPullRequests(changelog, "test baseline")).toThrow(
+      "test baseline section 2026.6.11 contains duplicate contribution record PR #2",
+    );
   });
 
   it("validates cumulative shipped baseline exclusion metadata", () => {

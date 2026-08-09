@@ -508,6 +508,21 @@ struct RootTabsPresentationTests {
         #expect(!RootTabs.preferredSidebarVisibility(layoutMode: mode))
     }
 
+    @Test func `keyboard contracted content uses portrait window for sidebar layout`() {
+        let size = RootTabs.sidebarLayoutContainerSize(
+            contentSize: CGSize(width: 1032, height: 973),
+            windowSize: CGSize(width: 1032, height: 1376))
+
+        #expect(size == CGSize(width: 1032, height: 1376))
+        #expect(RootTabs.sidebarLayoutMode(containerSize: size) == .drawer)
+    }
+
+    @Test func `sidebar layout container falls back to content size without a window`() {
+        let contentSize = CGSize(width: 900, height: 600)
+
+        #expect(RootTabs.sidebarLayoutContainerSize(contentSize: contentSize, windowSize: nil) == contentSize)
+    }
+
     @Test func `i pad wide landscape uses visible split sidebar`() {
         let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1366, height: 1024))
 

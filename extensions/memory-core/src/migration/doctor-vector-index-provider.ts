@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+// sqlite-runtime re-exports the agent-db/kysely graph; keep it lazy so doctor
+// enumeration does not cold-load it with this closure.
 
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
@@ -85,10 +86,11 @@ function listConfiguredAgentIds(config: OpenClawConfig): string[] {
   return ids.size > 0 ? [...ids] : ["main"];
 }
 
-function readExistingVectorModel(databasePath: string): string | null {
+async function readExistingVectorModel(databasePath: string): Promise<string | null> {
   if (!fs.existsSync(databasePath)) {
     return null;
   }
+  const { openNodeSqliteDatabase } = await import("openclaw/plugin-sdk/sqlite-runtime");
   let db: ReturnType<typeof openNodeSqliteDatabase> | undefined;
   try {
     db = openNodeSqliteDatabase(databasePath, { readOnly: true });
@@ -144,7 +146,7 @@ async function collectVectorProviderFindings(params: {
       "agent",
       "openclaw-agent.sqlite",
     );
-    const model = readExistingVectorModel(agentDatabasePath);
+    const model = await readExistingVectorModel(agentDatabasePath);
     if (!model) {
       continue;
     }

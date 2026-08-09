@@ -12,8 +12,7 @@ type SessionUrlContractCase = {
   expectedPath: string | null;
 };
 
-// Keep in sync with ui/src/app-navigation.test.ts. Core cannot import plugin internals,
-// and this independently published plugin cannot source-import the workspace contract.
+// Keep the independently published plugin wired to the host's canonical session URL contract.
 const SESSION_URL_CONTRACT_CASES = [
   {
     sessionKey: "agent:main:main",

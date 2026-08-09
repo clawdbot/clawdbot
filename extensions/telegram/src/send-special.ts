@@ -18,7 +18,8 @@ import type {
 } from "./send-message-types.js";
 import { finalizeTelegramOutbound, prepareTelegramOutbound } from "./send-outbound.js";
 import { normalizePollInput, type PollInput } from "./send.runtime.js";
-import { resolveTelegramBotUserIdFromToken } from "./token.js";
+import { parseTelegramTarget } from "./targets.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 type TelegramSendPollParams = Parameters<TelegramApiContext["api"]["sendPoll"]>[3];
 
@@ -101,6 +102,9 @@ export async function sendPollTelegram(
   poll: PollInput,
   opts: TelegramPollOpts,
 ): Promise<TelegramPollSendResult> {
+  if (parseTelegramTarget(to).directMessagesTopicId != null) {
+    throw new Error("Telegram polls are not supported in channel Direct Messages chats.");
+  }
   const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(context, sendPollTelegramWithContext(to, poll, opts, context));
 }

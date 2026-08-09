@@ -1,6 +1,7 @@
 // Chutes tests cover oauth plugin behavior.
+import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loginChutes } from "./oauth.js";
+import { loginChutes, refreshChutesOAuthCredential } from "./oauth.js";
 
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
@@ -93,8 +94,25 @@ function loginWithFetch(fetchFn: typeof fetch) {
   });
 }
 
+function createStoredCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
+  return {
+    type: "oauth",
+    provider: "chutes",
+    access: "at_old",
+    refresh: "rt_old",
+    expires: 1_000_000,
+    clientId: "cid_stored",
+    email: "fred@example.com",
+    displayName: "Fred",
+    accountId: "acct_123",
+    copyToAgents: true,
+    ...overrides,
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("chutes plugin OAuth", () => {
@@ -340,5 +358,169 @@ describe("chutes plugin OAuth", () => {
         signal: controller.signal,
       }),
     ).rejects.toBe(reason);
+  });
+
+  it("refreshes through the Chutes token endpoint and preserves credential metadata", async () => {
+    vi.stubEnv("CHUTES_CLIENT_ID", "cid_env");
+    vi.stubEnv("CHUTES_CLIENT_SECRET", "secret_env");
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(fetchInputUrl(input)).toBe(CHUTES_TOKEN_ENDPOINT);
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("content-type")).toBe(
+        "application/x-www-form-urlencoded",
+      );
+      const body = init?.body as URLSearchParams;
+      expect(Object.fromEntries(body)).toEqual({
+        grant_type: "refresh_token",
+        client_id: "cid_stored",
+        refresh_token: "rt_old",
+        client_secret: "secret_env",
+      });
+      return new Response(
+        JSON.stringify({
+          access_token: "at_new",
+          refresh_token: "rt_new",
+          expires_in: 1800,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    const credential = createStoredCredential();
+    const now = 2_000_000;
+
+    await expect(refreshChutesOAuthCredential(credential, { fetchFn, now })).resolves.toEqual({
+      ...credential,
+      access: "at_new",
+      refresh: "rt_new",
+      expires: now + 1800 * 1000 - 5 * 60 * 1000,
+    });
+    expect(timeoutSpy).toHaveBeenCalledOnce();
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
+  });
+
+  it("times out token refresh requests", async () => {
+    const timeoutSpy = useImmediateOAuthDeadline();
+    const fetchFn = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => await rejectWhenAborted(init),
+    );
+
+    await expect(
+      refreshChutesOAuthCredential(createStoredCredential(), { fetchFn }),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(fetchFn).toHaveBeenCalledOnce();
+    expect(timeoutSpy).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to CHUTES_CLIENT_ID when the credential has no client id", async () => {
+    vi.stubEnv("CHUTES_CLIENT_ID", "cid_env");
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = init?.body;
+      if (!(body instanceof URLSearchParams)) {
+        throw new Error("expected URL-encoded Chutes refresh request");
+      }
+      expect(body.get("client_id")).toBe("cid_env");
+      return new Response('{"access_token":"at_new","expires_in":1800}', {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    const refreshed = await refreshChutesOAuthCredential(
+      createStoredCredential({ clientId: undefined }),
+      { fetchFn, now: 3_000_000 },
+    );
+
+    expect(refreshed.clientId).toBe("cid_env");
+  });
+
+  it.each([
+    { label: "omitted", response: { access_token: "at_new", expires_in: 1800 } },
+    {
+      label: "empty",
+      response: { access_token: "at_new", refresh_token: "", expires_in: 1800 },
+    },
+  ])("preserves the old refresh token when the replacement is $label", async ({ response }) => {
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    const refreshed = await refreshChutesOAuthCredential(createStoredCredential(), {
+      fetchFn,
+      now: 4_000_000,
+    });
+
+    expect(refreshed.refresh).toBe("rt_old");
+  });
+
+  it("requires a refresh token", async () => {
+    await expect(
+      refreshChutesOAuthCredential(createStoredCredential({ refresh: "" })),
+    ).rejects.toThrow("Chutes OAuth credential is missing refresh token");
+  });
+
+  it("requires a client id from the credential or environment", async () => {
+    vi.stubEnv("CHUTES_CLIENT_ID", "");
+
+    await expect(
+      refreshChutesOAuthCredential(createStoredCredential({ clientId: undefined })),
+    ).rejects.toThrow(
+      "Missing CHUTES_CLIENT_ID for Chutes OAuth refresh (set env var or re-auth).",
+    );
+  });
+
+  it.each([
+    {
+      label: "missing access tokens",
+      response: { expires_in: 1800 },
+      message: "Chutes token refresh returned no access_token",
+    },
+    {
+      label: "invalid expiry values",
+      response: { access_token: "at_new", expires_in: Number.POSITIVE_INFINITY },
+      message: "Chutes token refresh returned invalid expires_in",
+    },
+  ])("rejects $label", async ({ response, message }) => {
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    await expect(
+      refreshChutesOAuthCredential(createStoredCredential(), { fetchFn, now: 5_000_000 }),
+    ).rejects.toThrow(message);
+  });
+
+  it("bounds and redacts token refresh errors", async () => {
+    const leakedRefreshToken = "oauth-refresh-secret-1234567890";
+    const errorResponse = boundedErrorResponse(
+      `${`refresh_token=${leakedRefreshToken} unavailable `.repeat(1024)}tail-marker`,
+      401,
+    );
+    const fetchFn = vi.fn(async () => errorResponse.response);
+
+    let error: unknown;
+    try {
+      await refreshChutesOAuthCredential(createStoredCredential(), { fetchFn });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toMatchObject({ name: "ProviderHttpError", status: 401 });
+    const message = (error as Error).message;
+    expect(message).toContain("Chutes token refresh failed (401): refresh_token=");
+    expect(message).not.toContain(leakedRefreshToken);
+    expect(message).not.toContain("tail-marker");
+    expect((error as { errorBody?: string }).errorBody).not.toContain(leakedRefreshToken);
+    expect(errorResponse.text).not.toHaveBeenCalled();
+    expect(errorResponse.cancel).toHaveBeenCalledOnce();
+    expect(errorResponse.releaseLock).toHaveBeenCalledOnce();
   });
 });

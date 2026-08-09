@@ -6,6 +6,7 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { releaseCodexAppServerLiveThread } from "./client-runtime.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
@@ -46,6 +47,9 @@ export async function retireCodexAppServerSessionGeneration(params: {
       return result;
     }
     try {
+      // Reset retires native-child ownership before unsubscribing its parent;
+      // late child completions must never reach a replacement session generation.
+      codexNativeSubagentMonitorRuntime.retireParent(clientLease.client, binding.threadId);
       const released = await releaseCodexAppServerLiveThread(clientLease.client, binding.threadId);
       if (!released && isIncognitoSessionKey(params.identity.sessionKey)) {
         // Ephemeral threads have no rollout to resume, so they intentionally

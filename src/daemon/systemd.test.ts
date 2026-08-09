@@ -1726,6 +1726,8 @@ describe("stageSystemdService", () => {
 
       const unit = await fs.readFile(unitPath, "utf8");
 
+      expect(unit).toContain("Description=OpenClaw Gateway");
+      expect(unit).not.toContain("OPENCLAW_SERVICE_VERSION");
       expect(unit).not.toContain("EnvironmentFile=");
       expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
       expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=dotenv-token");
@@ -2377,6 +2379,7 @@ describe("systemd service install and uninstall", () => {
         stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
         programArguments: ["/usr/bin/openclaw", "node", "run"],
         workingDirectory: "/tmp",
+        description: "OpenClaw Node Host",
         environment: {
           OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
         },
@@ -2384,7 +2387,9 @@ describe("systemd service install and uninstall", () => {
 
       const unit = await fs.readFile(unitPath, "utf8");
       expect(unitPath).toMatch(/openclaw-node\.service$/);
+      expect(unit).toContain("Description=OpenClaw Node Host");
       expect(unit).toContain("openclaw node run");
+      expect(unit).not.toContain("OPENCLAW_SERVICE_VERSION");
       expect(execFileMock).toHaveBeenCalledTimes(4);
     });
   });

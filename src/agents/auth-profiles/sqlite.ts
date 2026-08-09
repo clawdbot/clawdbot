@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core";
 import { sha256HexPrefix } from "../../infra/crypto-digest.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -85,11 +86,7 @@ function parseJsonCell(raw: string | null | undefined): unknown {
   if (!raw) {
     return null;
   }
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
+  return safeParseJson(raw) ?? null;
 }
 
 type PersistedAuthProfileStoreInspection =
