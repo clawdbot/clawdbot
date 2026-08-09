@@ -158,6 +158,19 @@ function prepareAgentFacts(
   };
 }
 
+// Provider-scoped live builds must not fan ambient synthetic-auth discovery out to every
+// registered provider; each unscoped ref can force a full plugin module load on the read path.
+function scopeSyntheticAuthProviderRefs(
+  refs: readonly string[],
+  providerDiscoveryProviderIds: readonly string[] | undefined,
+): string[] {
+  if (!providerDiscoveryProviderIds) {
+    return [...refs];
+  }
+  const scoped = new Set(providerDiscoveryProviderIds.map((id) => normalizeProviderId(id)));
+  return refs.filter((ref) => scoped.has(normalizeProviderId(ref)));
+}
+
 function listPreparedSyntheticAuthProviderRefs(providers: readonly ProviderPlugin[]): string[] {
   return [
     ...new Set(
@@ -302,13 +315,16 @@ export async function prepareWorkspaceBuildGroup(
       syntheticAuthProviderRefs:
         catalogMode === "static"
           ? listPreparedSyntheticAuthProviderRefs(preparedSyntheticAuthProviders)
-          : resolveRuntimeSyntheticAuthProviderRefs({
-              config: input.config,
-              env,
-              index: pluginMetadataSnapshot.index,
-              registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
-              ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-            }),
+          : scopeSyntheticAuthProviderRefs(
+              resolveRuntimeSyntheticAuthProviderRefs({
+                config: input.config,
+                env,
+                index: pluginMetadataSnapshot.index,
+                registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
+                ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+              }),
+              options.providerDiscoveryProviderIds,
+            ),
       ...(catalogMode === "static"
         ? {
             resolveSyntheticAuth: (provider: string) =>

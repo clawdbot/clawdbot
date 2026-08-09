@@ -1038,10 +1038,15 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
     }
   }
   if (providerRefs.length === 1) {
+    // Last-resort match for custom provider ids with no resolvable owning plugin (e.g. Ollama
+    // aliases). Entry modules only: a full plugin-runtime sweep here costs seconds per ref on
+    // source checkouts and belongs to explicit control-plane loads.
     return resolvePluginDiscoveryProvidersRuntime({
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      discoveryEntriesOnly: true,
+      includeSyntheticAuthProviders: true,
     })
       .find((provider) => matchesAnyProviderPluginRef(provider, providerRefs))
       ?.resolveSyntheticAuth?.(params.context);
