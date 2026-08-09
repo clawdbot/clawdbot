@@ -55,11 +55,9 @@ one OpenCode setup.
     **Best for:** the OpenCode-hosted Kimi, GLM, MiniMax, Qwen, and DeepSeek lineup.
 
     <Steps>
-      <Step title="Install the Go catalog plugin">
-        ```bash
-        openclaw plugins install @openclaw/opencode-go-provider
-        openclaw gateway restart
-        ```
+      <Step title="Use the bundled Go catalog">
+        OpenCode Go is included with OpenClaw for this release, so no separate
+        plugin installation or Gateway restart is required.
       </Step>
       <Step title="Run onboarding">
         ```bash
