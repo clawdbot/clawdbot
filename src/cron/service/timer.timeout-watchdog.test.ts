@@ -785,7 +785,7 @@ describe("cron service timer regressions", () => {
         expect.objectContaining({
           channel: "telegram",
           to: "12345",
-          text: expect.stringContaining("runtime-plugins"),
+          payload: expect.objectContaining({ text: expect.stringContaining("runtime-plugins") }),
         }),
       );
     } finally {

@@ -44,6 +44,7 @@ import { selectShellRouteState, type ShellRouteState } from "./app-host-route-st
 import { OpenClawApp } from "./app-root.ts";
 import {
   isBrowserPanelAvailable,
+  isDesktopPanelAvailable,
   ShellChromeOwner,
   type ShellChromeHost,
 } from "./app-shell-chrome.ts";
@@ -62,6 +63,7 @@ import {
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
   CUSTODIAN_PANEL_ELEMENT,
+  DESKTOP_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   preloadOptionalElement,
   TERMINAL_PANEL_ELEMENT,
@@ -130,6 +132,7 @@ class OpenClawShell
   readonly commandPaletteElement = COMMAND_PALETTE_ELEMENT;
   readonly terminalPanelElement = TERMINAL_PANEL_ELEMENT;
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
+  readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
   readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   @query("openclaw-command-palette") commandPalette: CommandPaletteElement | undefined;
@@ -525,6 +528,9 @@ class OpenClawShell
       }
       if (isBrowserPanelAvailable(gatewaySnapshot)) {
         preloadOptionalElement(this, this.browserPanelElement);
+      }
+      if (isDesktopPanelAvailable(gatewaySnapshot)) {
+        preloadOptionalElement(this, this.desktopPanelElement);
       }
       if (isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true) {
         preloadOptionalElement(this, this.custodianPanelElement);

@@ -16,8 +16,17 @@ export type WorkerEnvironmentServiceRecord = {
   createdAtMs: number;
   idleSinceAtMs: number | null;
   attachedSessionIds: readonly string[];
+  desktopAvailable: boolean;
   tunnelStatus: WorkerTunnelStatus;
   error?: string;
+};
+
+export type WorkerDesktopObserveResult = {
+  transport: "rfb";
+  wsPath: string;
+  expiresAtMs: number;
+  control: boolean;
+  vncPassword?: string;
 };
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
@@ -27,6 +36,10 @@ export type WorkerEnvironmentServiceContract = {
   create(profileId: string, idempotencyKey: string): Promise<WorkerEnvironmentServiceRecord>;
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   destroyUnattached(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
+  observeDesktop(request: {
+    environmentId: string;
+    control: boolean;
+  }): Promise<WorkerDesktopObserveResult>;
   startTunnel(request: WorkerTunnelRequest): Promise<WorkerTunnelHandle>;
   stopTunnel(environmentId: string, ownerEpoch?: number): Promise<void>;
 };

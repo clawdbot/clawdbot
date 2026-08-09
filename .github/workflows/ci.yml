@@ -262,6 +262,10 @@ jobs:
           set -euo pipefail
           base_sha="$EVENT_BASE_SHA"
           head_sha="$(git rev-parse HEAD)"
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$base_sha" =~ ^0+$ ]]; then
+            echo "::error title=ambiguous main push::github.event.before is zero; refusing to infer a diff base for a created or recreated main branch." >&2
+            exit 1
+          fi
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             # A long-lived PR event can retain an old base SHA. The tested merge
             # commit's first parent is the exact target tree for this run.
@@ -913,6 +917,10 @@ jobs:
         run: |
           set -euo pipefail
           base_sha="$EVENT_BASE_SHA"
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$base_sha" =~ ^0+$ ]]; then
+            echo "::error title=ambiguous main push::github.event.before is zero; refusing to infer a diff base for a created or recreated main branch." >&2
+            exit 1
+          fi
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             # Do not execute a helper from the untrusted PR tree before trusted
             # pre-commit configuration is selected.
@@ -1695,7 +1703,7 @@ jobs:
               fi
               pnpm check:max-lines-ratchet --base "$base_ref"
               if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
-                node scripts/run-oxlint.mjs src ui/src packages extensions
+                node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --split-core --threads=1
               fi
               ;;
             bun-launcher)

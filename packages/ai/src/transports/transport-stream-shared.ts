@@ -136,6 +136,47 @@ export function transportAbortError(signal?: AbortSignal): Error {
     : new Error("Request was aborted");
 }
 
+/** Run a provider-response hook before start/body consumption inside the first-event deadline. */
+export function withProviderResponseHook<T>(params: {
+  stream: AsyncIterable<T>;
+  signal: AbortSignal;
+  abort: (reason: Error) => void;
+  hook?: () => void | Promise<void>;
+  onReady: () => void;
+}): AsyncIterable<T> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      let onAbort: (() => void) | undefined;
+      try {
+        if (params.signal.aborted) {
+          throw transportAbortError(params.signal);
+        }
+        if (params.hook) {
+          await Promise.race([
+            Promise.resolve().then(params.hook),
+            new Promise<never>((_resolve, reject) => {
+              onAbort = () => reject(transportAbortError(params.signal));
+              params.signal.addEventListener("abort", onAbort, { once: true });
+            }),
+          ]);
+        }
+      } catch (error) {
+        params.abort(error instanceof Error ? error : new Error(String(error)));
+        throw error;
+      } finally {
+        if (onAbort) {
+          params.signal.removeEventListener("abort", onAbort);
+        }
+      }
+      if (params.signal.aborted) {
+        throw transportAbortError(params.signal);
+      }
+      params.onReady();
+      yield* params.stream;
+    },
+  };
+}
+
 export function finalizeTransportStream(params: {
   stream: WritableTransportStream;
   output: TransportOutputShape;
