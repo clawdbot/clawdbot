@@ -84,6 +84,28 @@ describe("cli program (smoke)", () => {
     });
   });
 
+  it("preserves a global-scope URL main session when launching tui", async () => {
+    callGateway.mockResolvedValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [],
+    });
+
+    await runProgram(["tui", "https://gateway.example/dashboard/ops"]);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agents.list",
+        params: {},
+      }),
+    );
+    expect(firstMockArg(runTui)).toMatchObject({
+      local: false,
+      session: "global",
+    });
+  });
+
   it("rejects a URL target combined with --url", async () => {
     await expect(
       runProgram([

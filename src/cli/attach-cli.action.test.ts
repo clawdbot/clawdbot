@@ -47,6 +47,9 @@ vi.mock("../gateway/call.js", () => ({
       if (p.method === "sessions.resolve") {
         return { ok: true, key: "agent:ops:thread:resolved" };
       }
+      if (p.method === "agents.list") {
+        return { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+      }
       if (p.method === "attach.grant") {
         const sessionKey = (p.params.sessionKey as string) ?? "agent:main:main";
         return {
@@ -146,7 +149,7 @@ describe("openclaw attach (action)", () => {
       token: "explicit-token",
       useStoredDeviceAuth: true,
       requiredStoredDeviceAuthScopes: ["operator.read"],
-      params: { shortId: "a1166b81", slugHint: "movies", agentId: "ops" },
+      params: { shortId: "a1166b81", slugHint: "movies" },
     });
     expect(gatewayCalls.find((call) => call.method === "attach.grant")).toMatchObject({
       url: "wss://gateway.example/base",
@@ -154,6 +157,30 @@ describe("openclaw attach (action)", () => {
       useStoredDeviceAuth: true,
       requiredStoredDeviceAuthScopes: ["operator.admin"],
       params: { sessionKey: "agent:ops:thread:resolved" },
+    });
+  });
+
+  it("preserves a global-scope URL main session when granting attach access", async () => {
+    await runAttach(
+      "https://gateway.example/base/dashboard/ops",
+      "--token",
+      "explicit-token",
+      "--print-config",
+    );
+
+    expect(gatewayCalls.find((call) => call.method === "agents.list")).toMatchObject({
+      url: "wss://gateway.example/base",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.read"],
+      params: {},
+    });
+    expect(gatewayCalls.find((call) => call.method === "attach.grant")).toMatchObject({
+      url: "wss://gateway.example/base",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.admin"],
+      params: { sessionKey: "global" },
     });
   });
 

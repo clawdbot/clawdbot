@@ -3,6 +3,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import type { AgentsListResult } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -12,6 +13,7 @@ import {
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";
+import { resolveCanonicalMainSessionKey } from "../routing/session-key.js";
 import {
   parseSessionTargetInput,
   SessionTargetParseError,
@@ -192,16 +194,20 @@ export async function resolveSessionTarget(params: {
     if (parsed.kind !== "url") {
       throw new SessionTargetParseError();
     }
-    await callSessionTargetGateway({
+    const agents = await callSessionTargetGateway<AgentsListResult>({
       gateway,
-      method: "status",
+      method: "agents.list",
       request: {},
       requiredScope: params.requiredScope ?? "operator.read",
     });
     return {
       parsed,
       gateway,
-      sessionKey: `agent:${parsed.agentId}:main`,
+      sessionKey: resolveCanonicalMainSessionKey({
+        agentId: parsed.agentId,
+        mainKey: agents.mainKey,
+        sessionScope: agents.scope,
+      }),
     };
   }
 
@@ -211,7 +217,6 @@ export async function resolveSessionTarget(params: {
       ? {
           shortId: ref.shortId,
           ...(ref.slugHint ? { slugHint: ref.slugHint } : {}),
-          ...(parsed.kind === "url" ? { agentId: parsed.agentId } : {}),
         }
       : { key: ref.sessionKey };
   const result = await callSessionTargetGateway<SessionsResolveResult>({

@@ -1,6 +1,13 @@
 // OpenClaw prepack tests validate package prepack output.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
@@ -122,6 +129,62 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
         OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: aiDir,
       }),
     ).toHaveLength(2);
+  });
+
+  it("omits build-only workspace dependencies from direct pnpm pack manifests", () => {
+    const rootDir = tempDirs.make("openclaw-direct-pack-manifest-");
+    const packDir = path.join(rootDir, "pack");
+    const extractDir = path.join(rootDir, "extract");
+    const scriptsDir = path.join(rootDir, "scripts");
+    const originalPackageJson = `${JSON.stringify(
+      {
+        name: "openclaw-direct-pack-manifest",
+        version: "2099.1.2-test.0",
+        scripts: {
+          prepack: "node scripts/package-manifest.mjs prepare",
+          postpack: "node scripts/package-manifest.mjs restore",
+        },
+        devDependencies: {
+          "@openclaw/session-url-contract": "workspace:*",
+          vitest: "4.1.10",
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    mkdirSync(packDir);
+    mkdirSync(extractDir);
+    mkdirSync(scriptsDir);
+    writeFileSync(path.join(rootDir, "package.json"), originalPackageJson);
+    copyFileSync(
+      path.join(process.cwd(), "scripts", "package-manifest.mjs"),
+      path.join(scriptsDir, "package-manifest.mjs"),
+    );
+
+    const packed = spawnSync("pnpm", ["pack", "--silent", "--pack-destination", packDir], {
+      cwd: rootDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    expect(packed.status, packed.stderr).toBe(0);
+    const tarballs = readdirSync(packDir).filter((entry) => entry.endsWith(".tgz"));
+    expect(tarballs).toHaveLength(1);
+    const tarballName = tarballs[0];
+    if (!tarballName) {
+      throw new Error("pnpm pack did not produce the expected tarball");
+    }
+    tar.x({ cwd: extractDir, file: path.join(packDir, tarballName), sync: true });
+
+    const packedPackageJson = JSON.parse(
+      readFileSync(path.join(extractDir, "package", "package.json"), "utf8"),
+    ) as { devDependencies?: Record<string, string> };
+    expect(packedPackageJson.devDependencies).toEqual({ vitest: "4.1.10" });
+    expect(readFileSync(path.join(rootDir, "package.json"), "utf8")).toBe(originalPackageJson);
+    expect(
+      existsSync(
+        path.join(rootDir, ".artifacts", "package-manifest", "package.json.prepack-backup"),
+      ),
+    ).toBe(false);
   });
 });
 

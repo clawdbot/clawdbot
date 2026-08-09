@@ -281,21 +281,21 @@ describe("session target resolution", () => {
     callGatewayMock.mockReset();
   });
 
-  it("resolves a URL short reference on its exact gateway and agent", async () => {
-    callGatewayMock.mockResolvedValue({ ok: true, key: "agent:ops:thread:full-key" });
+  it("resolves a stale-agent URL short reference without scoping UUID lookup", async () => {
+    callGatewayMock.mockResolvedValue({ ok: true, key: "agent:research:thread:full-key" });
 
     const result = await resolveSessionTarget({
       raw: "https://gateway.example/base/dashboard/ops/movies-a1166b81",
       gateway: { token: "explicit-token" },
     });
 
-    expect(result.sessionKey).toBe("agent:ops:thread:full-key");
+    expect(result.sessionKey).toBe("agent:research:thread:full-key");
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "wss://gateway.example/base",
         token: "explicit-token",
         method: "sessions.resolve",
-        params: { shortId: "a1166b81", slugHint: "movies", agentId: "ops" },
+        params: { shortId: "a1166b81", slugHint: "movies" },
         useStoredDeviceAuth: true,
         requiredStoredDeviceAuthScopes: ["operator.read"],
       }),
@@ -317,22 +317,42 @@ describe("session target resolution", () => {
     expect(callGatewayMock.mock.calls[0]?.[0]).not.toHaveProperty("useStoredDeviceAuth");
   });
 
-  it("probes URL main sessions once without requiring an existing row", async () => {
-    callGatewayMock.mockResolvedValue({ ok: true });
+  it("uses gateway-advertised routing for URL main sessions without requiring an existing row", async () => {
+    callGatewayMock.mockResolvedValue({
+      defaultId: "main",
+      mainKey: "workspace",
+      scope: "per-sender",
+      agents: [],
+    });
 
     const result = await resolveSessionTarget({
       raw: "https://gateway.example/dashboard/ops",
     });
 
-    expect(result.sessionKey).toBe("agent:ops:main");
+    expect(result.sessionKey).toBe("agent:ops:workspace");
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "wss://gateway.example",
-        method: "status",
+        method: "agents.list",
         params: {},
         requiredStoredDeviceAuthScopes: ["operator.read"],
       }),
     );
+  });
+
+  it("preserves the canonical global key for a global-scope URL main session", async () => {
+    callGatewayMock.mockResolvedValue({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "global",
+      agents: [],
+    });
+
+    const result = await resolveSessionTarget({
+      raw: "https://gateway.example/dashboard/ops",
+    });
+
+    expect(result.sessionKey).toBe("global");
   });
 
   it("rejects a second explicit URL", async () => {

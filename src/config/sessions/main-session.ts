@@ -3,6 +3,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
+  resolveCanonicalMainSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -18,10 +19,11 @@ function buildMainSessionKey(agentId: string, mainKey?: string): string {
 
 /** Resolves the configured main session key, honoring global session scope. */
 export function resolveMainSessionKey(cfg: OpenClawConfig): string {
-  if (cfg?.session?.scope === "global") {
-    return "global";
-  }
-  return buildMainSessionKey(resolveDefaultAgentId(cfg), cfg.session?.mainKey);
+  return resolveCanonicalMainSessionKey({
+    agentId: resolveDefaultAgentId(cfg),
+    mainKey: cfg.session?.mainKey,
+    sessionScope: cfg.session?.scope,
+  });
 }
 
 /** Stable fingerprint for the config values that canonicalize chat session keys. */

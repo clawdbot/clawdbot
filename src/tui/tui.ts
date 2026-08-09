@@ -28,10 +28,10 @@ import {
   resolveTrustedWindowsCmdExe,
 } from "../process/windows-command.js";
 import {
-  buildAgentMainSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
+  resolveCanonicalMainSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
@@ -167,12 +167,10 @@ export function resolveTuiSessionKey(params: {
 }) {
   const trimmed = (params.raw ?? "").trim();
   if (!trimmed) {
-    if (params.sessionScope === "global") {
-      return "global";
-    }
-    return buildAgentMainSessionKey({
+    return resolveCanonicalMainSessionKey({
       agentId: params.currentAgentId,
       mainKey: params.sessionMainKey,
+      sessionScope: params.sessionScope,
     });
   }
   const parsed = parseAgentSessionKey(trimmed);
