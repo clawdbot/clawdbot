@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectChangedScope } from "../../scripts/ci-changed-scope.mts";
+import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
 
 describe("shared Apple contract fixture CI scope", () => {
   it.each([

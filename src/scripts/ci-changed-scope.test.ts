@@ -14,7 +14,7 @@ const {
   parseArgs,
   shouldRunNativeI18n,
   writeGitHubOutput,
-} = await import("../../scripts/ci-changed-scope.mts");
+} = await import("../../scripts/ci-changed-scope.mjs");
 
 const markerPaths: string[] = [];
 const tempDirs: string[] = [];
@@ -688,7 +688,7 @@ describe("detectChangedScope", () => {
       runControlUiI18n: false,
       runUiTests: false,
     });
-    expect(detectChangedScope(["scripts/ci-changed-scope.mts"])).toEqual({
+    expect(detectChangedScope(["scripts/ci-changed-scope.mjs"])).toEqual({
       runNode: true,
       runMacos: false,
       runIosBuild: false,
@@ -896,7 +896,7 @@ describe("detectChangedScope", () => {
     expect(
       detectNodeFastScope([
         "scripts/check-changed.mjs",
-        "scripts/ci-changed-scope.mts",
+        "scripts/ci-changed-scope.mjs",
         "scripts/run-vitest.mts",
         "scripts/test-projects.test-support.mts",
         "src/commands/status.scan-result.test.ts",
@@ -1012,19 +1012,30 @@ describe("detectChangedScope", () => {
     expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8")).changed_paths_json).toBe("null");
   });
 
-  it("keeps direct CLI preflight empty diffs as no-op scope", () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-"));
+  it("loads from a zero-install tree and keeps empty diffs as no-op scope", () => {
+    const repoDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-")),
+    );
     tempDirs.push(repoDir);
     const outputPath = path.join(repoDir, "github-output.txt");
-    const scriptPath = path.resolve("scripts/ci-changed-scope.mjs");
+    const scriptPath = path.join(repoDir, "scripts/ci-changed-scope.mjs");
 
     execFileSync("git", ["init", "-b", "main"], { cwd: repoDir });
     execFileSync("git", ["config", "user.email", "ci@example.invalid"], { cwd: repoDir });
     execFileSync("git", ["config", "user.name", "CI"], { cwd: repoDir });
+    for (const sourcePath of [
+      "scripts/ci-changed-scope.mjs",
+      "scripts/lib/changed-path-facts.mjs",
+      "scripts/lib/direct-run.mjs",
+      "scripts/lib/merge-head-diff-base.mjs",
+    ]) {
+      writeRepoFile(repoDir, sourcePath, fs.readFileSync(path.resolve(sourcePath), "utf8"));
+    }
     fs.writeFileSync(path.join(repoDir, "README.md"), "test\n", "utf8");
     execFileSync("git", ["add", "README.md"], { cwd: repoDir });
     execFileSync("git", ["commit", "-m", "test"], { cwd: repoDir });
 
+    expect(fs.existsSync(path.join(repoDir, "node_modules"))).toBe(false);
     execFileSync(process.execPath, [scriptPath, "--base", "HEAD", "--head", "HEAD"], {
       cwd: repoDir,
       env: { ...process.env, GITHUB_OUTPUT: outputPath },

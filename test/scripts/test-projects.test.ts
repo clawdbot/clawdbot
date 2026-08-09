@@ -1693,6 +1693,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/lib/direct-run.mjs": [
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/direct-run-entrypoints.test.ts",
+        "src/scripts/ci-changed-scope.test.ts",
         "test/scripts/pr-operation-lock.test.ts",
         "test/scripts/pr-wrappers.test.ts",
       ],

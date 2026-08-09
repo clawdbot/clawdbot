@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getChangedPathFacts,
   normalizeChangedPath,
-} from "../../scripts/lib/changed-path-facts.mts";
+} from "../../scripts/lib/changed-path-facts.mjs";
 
 describe("changed path facts", () => {
   it("preserves the existing surface classifications", () => {

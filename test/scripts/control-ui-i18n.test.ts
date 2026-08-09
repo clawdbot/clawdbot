@@ -10,7 +10,7 @@ import {
   assertControlUiGeneratedArtifactsIsolated,
   resolveAllowedGeneratedMixBranch,
   shouldStrictControlUiI18n,
-} from "../../scripts/ci-changed-scope.mts";
+} from "../../scripts/ci-changed-scope.mjs";
 import {
   analyzeControlUiCatalogs,
   flattenControlUiCatalog,
@@ -92,7 +92,7 @@ describe("control-ui-i18n generated ownership", () => {
       .map((fileName) => fileName.slice(0, -".tm.jsonl".length));
     const owners = [
       ".gitattributes",
-      "scripts/ci-changed-scope.mts",
+      "scripts/ci-changed-scope.mjs",
       "scripts/control-ui-i18n.ts",
       "scripts/control-ui-i18n-verify.ts",
       "scripts/lib/control-ui-i18n-catalog.ts",
