@@ -392,12 +392,15 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
     runSqliteImmediateTransactionSync(
       db,
       () => {
+        // Recheck ownership after BEGIN IMMEDIATE so no current-schema repair
+        // can race a durable external ownership claim.
         assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
         assertSupportedSchemaVersion(db, pathname);
         const previousVersion = readSqliteUserVersion(db);
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
-          repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-            verifyPhysicalIntegrity: false,
+          verifyAndRepairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+            allowMissingColumns: true,
+            validateAfterRepair: () => assertCurrentStateRuntimeSchema(db, pathname),
           });
           ensureAdditiveStateColumns(db);
           assertCurrentStateRuntimeSchema(db, pathname);
@@ -549,18 +552,9 @@ function assertStateDatabaseIntegrityBeforeMutation(
       toVersion: OPENCLAW_STATE_SCHEMA_VERSION,
     });
   }
-  if (userVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
-    verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-      allowMissingColumns: true,
-      validateAfterRepair: () => assertCurrentStateRuntimeSchema(database, pathname),
-    });
-    ensureAdditiveStateColumns(database);
-  } else {
+  if (userVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);
-  }
-  if (userVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
-    assertCurrentStateRuntimeSchema(database, pathname);
   }
 }
 

@@ -118,6 +118,35 @@ describe("OpenClaw database schema preflight", () => {
     });
   });
 
+  it("accepts a copied current schema with a future bare nullable column without touching it", async () => {
+    const sourcePath = createExplicitStateDatabase();
+    const databasePath = path.join(
+      tempDirs.make("openclaw-copied-state-preflight-"),
+      "candidate.sqlite",
+    );
+    fs.copyFileSync(sourcePath, databasePath);
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec("ALTER TABLE worktrees ADD COLUMN future_note TEXT;");
+    } finally {
+      database.close();
+    }
+    const before = snapshotSourceFamily(databasePath);
+
+    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
+      schema: "openclaw.state-schema-preflight.v1",
+      databasePath,
+      targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      ownership: null,
+      status: "exact",
+      requiresWrite: false,
+      issues: [],
+    });
+    expect(snapshotSourceFamily(databasePath)).toEqual(before);
+  });
+
   it("classifies a drifted canonical named index as startup-repairable", async () => {
     const databasePath = createExplicitStateDatabase();
     const { DatabaseSync } = requireNodeSqlite();
