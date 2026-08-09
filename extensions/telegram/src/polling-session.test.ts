@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Bot } from "grammy";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
@@ -230,13 +231,21 @@ type IsolatedIngressOptions = NonNullable<
 
 const POLLING_TEST_WATCHDOG_INTERVAL_MS = 30_000;
 
-function installTelegramIngressQueueRuntime(resolveStateDir: () => string): void {
+function installTelegramIngressQueueRuntime(
+  resolveStateDir: () => string,
+  queueOpenError?: Error,
+): void {
   setTelegramRuntime({
     state: {
       resolveStateDir,
       openChannelIngressQueue: (
         options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-      ) => createChannelIngressQueue({ ...options, channelId: "telegram" }),
+      ) => {
+        if (queueOpenError) {
+          throw queueOpenError;
+        }
+        return createChannelIngressQueue({ ...options, channelId: "telegram" });
+      },
     },
   } as TelegramRuntime);
 }
@@ -1201,6 +1210,75 @@ describe("TelegramPollingSession", () => {
       await runPromise;
       await offsetPersistence.stop();
     }
+  });
+
+  it("does not start an isolated ingress worker when durable queue acquisition fails", async () => {
+    await withTempSpool(async (spoolDir) => {
+      const abort = new AbortController();
+      const queueOpenError = new Error("Telegram ingress queue could not be opened");
+      const transport = makeTelegramTransport();
+      const bot = makeIsolatedBot();
+      createTelegramBotMock.mockReturnValueOnce(bot);
+      installTelegramIngressQueueRuntime(() => spoolDir, queueOpenError);
+
+      let actualWorker: Worker | undefined;
+      let workerReady: Promise<number> | undefined;
+      const stopWorker = vi.fn(async () => {
+        await actualWorker?.terminate();
+      });
+      const createWorker = vi.fn(() => {
+        actualWorker = new Worker(
+          `
+            const http = require("node:http");
+            const { parentPort } = require("node:worker_threads");
+            const server = http.createServer((_request, response) => {
+              response.end("worker-alive");
+            });
+            server.listen(0, "127.0.0.1", () => {
+              parentPort.postMessage(server.address().port);
+            });
+          `,
+          { eval: true, execArgv: [] },
+        );
+        workerReady = new Promise<number>((resolve, reject) => {
+          actualWorker?.once("message", (port: number) => resolve(port));
+          actualWorker?.once("error", reject);
+        });
+        return {
+          onMessage: vi.fn(() => () => undefined),
+          stop: stopWorker,
+          task: vi.fn(async () => undefined),
+        };
+      });
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        telegramTransport: transport,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir,
+          createWorker,
+        },
+      });
+
+      try {
+        await expect(session.runUntilAbort()).rejects.toBe(queueOpenError);
+        expect(bot.api.deleteWebhook).toHaveBeenCalledTimes(1);
+        expect(transport.close).toHaveBeenCalledTimes(1);
+
+        if (workerReady) {
+          const port = await workerReady;
+          const response = await fetch(`http://127.0.0.1:${port}/health`);
+          expect(response.status).toBe(200);
+          expect(await response.text()).toBe("worker-alive");
+          expect(stopWorker).not.toHaveBeenCalled();
+        }
+
+        expect(createWorker).not.toHaveBeenCalled();
+      } finally {
+        abort.abort();
+        await actualWorker?.terminate();
+      }
+    });
   });
 
   it("initializes the main-thread bot before draining isolated ingress spool", async () => {
