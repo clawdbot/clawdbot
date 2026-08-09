@@ -39,6 +39,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -1138,8 +1139,8 @@ describe("dispatchReplyFromConfig", () => {
       _opts?: GetReplyOptions,
       cfgArg?: OpenClawConfig,
     ) => {
-      receivedCfg = cfgArg;
-      if (cfgArg?.plugins?.entries?.firecrawl) {
+      receivedCfg = getPreparedReplyDispatchRuntime()?.config ?? cfgArg;
+      if (receivedCfg?.plugins?.entries?.firecrawl) {
         throw new Error("stale Firecrawl SecretRef reached reply resolution");
       }
       return { text: "hi" } satisfies ReplyPayload;
