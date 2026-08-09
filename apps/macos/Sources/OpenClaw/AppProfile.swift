@@ -112,7 +112,8 @@ struct AppProfile: Equatable, Sendable {
 }
 
 enum AppDefaults {
-    static let standard: UserDefaults = {
+    /// UserDefaults synchronizes access internally; the selected suite is immutable for this process.
+    nonisolated(unsafe) static let standard: UserDefaults = {
         guard let suiteName = AppProfile.current.defaultsSuiteName else {
             return UserDefaults.standard
         }
