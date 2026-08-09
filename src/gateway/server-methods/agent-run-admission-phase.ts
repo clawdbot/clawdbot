@@ -22,7 +22,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
-import type { AgentTurnContext, AgentTurnPrincipal } from "../agent-turn/types.js";
+import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "../agent-turn/types.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
 import { consumeSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
@@ -45,7 +45,6 @@ import {
   resolveGatewayCronCreatorAuthorityAdmission,
   type GatewayCronCreatorAuthorityAdmission,
 } from "./cron-creator-authority-admission.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type PreparedAgentRunDispatch = {
   activeGatewayWorkAdmission: SessionWorkAdmissionLease;
@@ -96,7 +95,7 @@ export async function prepareAgentRunDispatch(params: {
   agentDedupeKeys: readonly string[];
   context: AgentTurnContext;
   client: AgentTurnPrincipal | null;
-  respond: GatewayRequestHandlerOptions["respond"];
+  io: AgentTurnIo;
   abortForLifecycleRotation: (target?: { sessionKey?: string; agentId?: string }) => boolean;
   acquireGatewayWorkAdmission: (scope: string) => Promise<void>;
   assertGatewayWorkAdmissionAllowed: () => void;
@@ -121,7 +120,7 @@ export async function prepareAgentRunDispatch(params: {
     })
   ) {
     params.markAgentRunAccepted(true);
-    params.respond(true, preRegistrationAbort?.payload, undefined, {
+    params.io.emitAcceptance([true, preRegistrationAbort?.payload, undefined], {
       cached: true,
       runId: params.runId,
     });
@@ -136,11 +135,11 @@ export async function prepareAgentRunDispatch(params: {
     return undefined;
   }
   if (params.restoredCronContinuationIdentity && !params.restoredCronContinuation) {
-    params.respond(
+    params.io.emitAcceptance([
       false,
       undefined,
       errorShape(ErrorCodes.UNAVAILABLE, "cron run continuation could not be restored"),
-    );
+    ]);
     return undefined;
   }
 
@@ -223,7 +222,11 @@ export async function prepareAgentRunDispatch(params: {
       );
     }
   } catch (err) {
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+    params.io.emitAcceptance([
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)),
+    ]);
     return undefined;
   }
   if (params.respondToGatewayAdmissionOutcome()) {
@@ -231,31 +234,34 @@ export async function prepareAgentRunDispatch(params: {
   }
   const activeGatewayWorkAdmission = params.getGatewayWorkAdmission();
   if (!activeGatewayWorkAdmission) {
-    params.respond(
+    params.io.emitAcceptance([
       false,
       undefined,
       errorShape(ErrorCodes.UNAVAILABLE, "agent run admission failed"),
-    );
+    ]);
     return undefined;
   }
   const activeRunAbort = params.getAdmittedRunAbort();
   if (!activeRunAbort) {
     activeGatewayWorkAdmission.release();
-    params.respond(
+    params.io.emitAcceptance([
       false,
       undefined,
       errorShape(ErrorCodes.UNAVAILABLE, "agent run admission failed"),
-    );
+    ]);
     return undefined;
   }
   const existingRunAbort = params.context.chatAbortControllers.get(params.runId);
   if (!activeRunAbort.registered && existingRunAbort) {
     activeGatewayWorkAdmission.release();
     params.markAgentRunAccepted(existingRunAbort.kind === "agent");
-    params.respond(true, { runId: params.runId, status: "in_flight" as const }, undefined, {
-      cached: true,
-      runId: params.runId,
-    });
+    params.io.emitAcceptance(
+      [true, { runId: params.runId, status: "in_flight" as const }, undefined],
+      {
+        cached: true,
+        runId: params.runId,
+      },
+    );
     return undefined;
   }
   if (!activeRunAbort.registered) {
@@ -332,14 +338,14 @@ export async function prepareAgentRunDispatch(params: {
       );
       activeRunAbort.cleanup({ force: true });
       activeGatewayWorkAdmission.release();
-      params.respond(
+      params.io.emitAcceptance([
         false,
         undefined,
         errorShape(
           ErrorCodes.UNAVAILABLE,
           `plugin subagent registry persistence failed; run was not started: ${formatForLog(err)}`,
         ),
-      );
+      ]);
       return undefined;
     }
   }
@@ -351,11 +357,11 @@ export async function prepareAgentRunDispatch(params: {
     if (!recoverySessionKey) {
       activeRunAbort.cleanup({ force: true });
       activeGatewayWorkAdmission.release();
-      params.respond(
+      params.io.emitAcceptance([
         false,
         undefined,
         errorShape(ErrorCodes.UNAVAILABLE, "restart recovery session target is unavailable"),
-      );
+      ]);
       return undefined;
     }
     try {
@@ -408,7 +414,11 @@ export async function prepareAgentRunDispatch(params: {
     } catch (err) {
       activeRunAbort.cleanup({ force: true });
       activeGatewayWorkAdmission.release();
-      params.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      params.io.emitAcceptance([
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+      ]);
       return undefined;
     }
   }
@@ -436,7 +446,7 @@ export async function prepareAgentRunDispatch(params: {
       },
     },
   });
-  params.respond(true, accepted, undefined, { runId: params.runId });
+  params.io.emitAcceptance([true, accepted, undefined], { runId: params.runId });
   const cronCreatorAuthority = resolveGatewayCronCreatorAuthorityAdmission({
     runId: params.runId,
     resolvedSessionKey: params.resolvedSessionKey,

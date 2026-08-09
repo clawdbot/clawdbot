@@ -11,7 +11,7 @@ import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
-import type { AgentTurnContext } from "../agent-turn/types.js";
+import type { AgentTurnContext, AgentTurnIo } from "../agent-turn/types.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { loadSessionEntry } from "../session-utils.js";
 import type { AgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
@@ -26,7 +26,6 @@ import {
   consumeExpectedSessionWorkAdmission,
   type ExpectedExistingSessionConstraint,
 } from "./agent-expected-session.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export function createAgentAdmissionController(params: {
   cfg: OpenClawConfig;
@@ -36,7 +35,7 @@ export function createAgentAdmissionController(params: {
   preAcceptedReservedSessionKey?: string;
   expectedSession?: ExpectedExistingSessionConstraint;
   context: AgentTurnContext;
-  respond: GatewayRequestHandlerOptions["respond"];
+  io: AgentTurnIo;
   dedupeLifecycle: AgentDedupeLifecycle;
   getRequestedSessionKey: () => string | undefined;
   getResolvedSessionKey: () => string | undefined;
@@ -232,19 +231,24 @@ export function createAgentAdmissionController(params: {
     if (postAdmissionAbort) {
       admission?.release();
       params.dedupeLifecycle.markAccepted(true);
-      params.respond(postAdmissionAbort.ok, postAdmissionAbort.payload, postAdmissionAbort.error, {
-        cached: true,
-        runId: params.runId,
-      });
+      params.io.emitAcceptance(
+        [postAdmissionAbort.ok, postAdmissionAbort.payload, postAdmissionAbort.error],
+        {
+          cached: true,
+          runId: params.runId,
+        },
+      );
       return true;
     }
     if (postAdmissionTimeout || postAdmissionSuperseded) {
       admission?.release();
       params.dedupeLifecycle.markAccepted(true);
-      params.respond(
-        true,
-        postAdmissionTimeout ?? { runId: params.runId, status: "in_flight" as const },
-        undefined,
+      params.io.emitAcceptance(
+        [
+          true,
+          postAdmissionTimeout ?? { runId: params.runId, status: "in_flight" as const },
+          undefined,
+        ],
         { cached: true, runId: params.runId },
       );
       return true;

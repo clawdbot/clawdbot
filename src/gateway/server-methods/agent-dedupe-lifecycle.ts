@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import type { AgentTurnContext } from "../agent-turn/types.js";
+import type { AgentTurnContext, AgentTurnIo } from "../agent-turn/types.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
 import {
@@ -21,7 +21,6 @@ import {
   sessionResetAckText,
 } from "./agent-session-reset.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type AgentDedupeLifecycle = ReturnType<typeof createAgentDedupeLifecycle>;
 
@@ -35,7 +34,7 @@ export function createAgentDedupeLifecycle(params: {
   ownerConnId?: string;
   ownerDeviceId?: string;
   context: AgentTurnContext;
-  respond: GatewayRequestHandlerOptions["respond"];
+  io: AgentTurnIo;
 }) {
   let reserved = false;
   let accepted = false;
@@ -126,7 +125,7 @@ export function createAgentDedupeLifecycle(params: {
         keys: params.agentDedupeKeys,
         entry: { ts: Date.now(), ok: true, payload: responsePayload },
       });
-      params.respond(true, responsePayload, undefined, { runId: params.runId });
+      params.io.emitAcceptance([true, responsePayload, undefined], { runId: params.runId });
       emitSessionsChanged(params.context, {
         sessionKey: completion.sessionKey,
         ...(completion.sessionKey === "global" && completion.agentId
@@ -145,17 +144,19 @@ export function createAgentDedupeLifecycle(params: {
       runId: params.runId,
       stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
     });
-    params.respond(
-      true,
-      {
-        runId: params.runId,
-        status: "timeout" as const,
-        summary: "aborted",
-        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-        timeoutPhase: "queue" as const,
-        providerStarted: false,
-      },
-      undefined,
+    params.io.emitAcceptance(
+      [
+        true,
+        {
+          runId: params.runId,
+          status: "timeout" as const,
+          summary: "aborted",
+          stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+          timeoutPhase: "queue" as const,
+          providerStarted: false,
+        },
+        undefined,
+      ],
       { runId: params.runId },
     );
     return true;
