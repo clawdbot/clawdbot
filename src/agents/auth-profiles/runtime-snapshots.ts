@@ -4,12 +4,27 @@ import path from "node:path";
  * Snapshots are cloned at boundaries so callers cannot mutate shared state.
  */
 import { isDeepStrictEqual } from "node:util";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { cloneAuthProfileStore } from "./clone.js";
 import { mergeAuthProfileStores } from "./persisted.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 const runtimeAuthStoreSnapshots = new Map<string, RuntimeAuthProfileStore>();
+/** Secret-free proof that one exact provider/model transport completed with usable auth. */
+export type RuntimeAuthMaterialization = Readonly<{
+  provider: string;
+  modelId: string;
+  modelApi: string;
+  modelBaseUrl: string;
+  requestTransportOverrides: "none" | "present";
+  authMode: string;
+  runtimeOwnerId: string;
+  authProfileId?: string;
+}>;
+
+const runtimeAuthMaterializations = new Map<string, RuntimeAuthMaterialization[]>();
+const MAX_RUNTIME_AUTH_MATERIALIZATIONS_PER_OWNER = 64;
 type RuntimeAuthProfileStoreMutationListener = (event: {
   agentDir?: string;
   affectsInheritedStores: boolean;
@@ -208,6 +223,109 @@ function notifyRuntimeAuthStoreMutation(agentDir?: string): void {
   }
 }
 
+function clearRuntimeAuthMaterializationsForKey(key: string): boolean {
+  return runtimeAuthMaterializations.delete(key);
+}
+
+function authProfilesChanged(
+  previous: RuntimeAuthProfileStore | undefined,
+  next: RuntimeAuthProfileStore | undefined,
+): boolean {
+  return !isDeepStrictEqual(previous?.profiles ?? {}, next?.profiles ?? {});
+}
+
+/**
+ * Records successful auth at the boundary that proved it. The fact is scoped to one exact
+ * provider/model/API route so a harness-owned credential cannot authorize sibling routes.
+ */
+export function recordRuntimeAuthMaterialization(params: {
+  agentDir?: string;
+  provider: string;
+  modelId: string;
+  modelApi: string;
+  modelBaseUrl: string;
+  requestTransportOverrides: "none" | "present";
+  authMode: string;
+  runtimeOwnerId: string;
+  authProfileId?: string;
+}): boolean {
+  const key = resolveRuntimeStoreKey(params.agentDir);
+  if (!runtimeAuthStoreSnapshots.has(key)) {
+    return false;
+  }
+  const provider = normalizeProviderId(params.provider);
+  const modelId = params.modelId.trim().toLowerCase();
+  const modelApi = params.modelApi.trim().toLowerCase();
+  const modelBaseUrl = params.modelBaseUrl.trim();
+  const authMode = params.authMode.trim().toLowerCase();
+  const runtimeOwnerId = params.runtimeOwnerId.trim().toLowerCase();
+  const authProfileId = params.authProfileId?.trim() || undefined;
+  if (!provider || !modelId || !modelApi || !modelBaseUrl || !authMode || !runtimeOwnerId) {
+    return false;
+  }
+  const fact: RuntimeAuthMaterialization = {
+    provider,
+    modelId,
+    modelApi,
+    modelBaseUrl,
+    requestTransportOverrides: params.requestTransportOverrides,
+    authMode,
+    runtimeOwnerId,
+    ...(authProfileId ? { authProfileId } : {}),
+  };
+  const existing = runtimeAuthMaterializations.get(key) ?? [];
+  if (existing.some((candidate) => isDeepStrictEqual(candidate, fact))) {
+    return false;
+  }
+  const next = [...existing, fact];
+  runtimeAuthMaterializations.set(
+    key,
+    next.slice(Math.max(0, next.length - MAX_RUNTIME_AUTH_MATERIALIZATIONS_PER_OWNER)),
+  );
+  runtimeAuthStoreSnapshotsRevision += 1;
+  runtimeAuthStoreSnapshotRevisions.set(key, runtimeAuthStoreSnapshotsRevision);
+  notifyRuntimeAuthStoreMutation(params.agentDir);
+  return true;
+}
+
+/** Revokes exact runtime-owned auth after a classified authentication failure. */
+export function revokeRuntimeAuthMaterializations(params: {
+  agentDir?: string;
+  provider: string;
+  runtimeOwnerId: string;
+}): boolean {
+  const key = resolveRuntimeStoreKey(params.agentDir);
+  const provider = normalizeProviderId(params.provider);
+  const runtimeOwnerId = params.runtimeOwnerId.trim().toLowerCase();
+  const existing = runtimeAuthMaterializations.get(key);
+  if (!provider || !runtimeOwnerId || !existing) {
+    return false;
+  }
+  const next = existing.filter(
+    (fact) => fact.provider !== provider || fact.runtimeOwnerId !== runtimeOwnerId,
+  );
+  if (next.length === existing.length) {
+    return false;
+  }
+  if (next.length > 0) {
+    runtimeAuthMaterializations.set(key, next);
+  } else {
+    runtimeAuthMaterializations.delete(key);
+  }
+  runtimeAuthStoreSnapshotsRevision += 1;
+  runtimeAuthStoreSnapshotRevisions.set(key, runtimeAuthStoreSnapshotsRevision);
+  notifyRuntimeAuthStoreMutation(params.agentDir);
+  return true;
+}
+
+/** Reads exact successful-auth facts from the requested and inherited prepared owners. */
+export function getPreparedRuntimeAuthMaterializations(
+  agentDir?: string,
+): readonly RuntimeAuthMaterialization[] {
+  const requestedKey = resolveRuntimeStoreKey(agentDir);
+  return runtimeAuthMaterializations.get(requestedKey) ?? [];
+}
+
 /** Observes credential snapshot changes at their lifecycle publication edge. */
 export function registerRuntimeAuthProfileStoreMutationListener(
   listener: RuntimeAuthProfileStoreMutationListener,
@@ -283,6 +401,14 @@ export function replaceRuntimeAuthProfileStoreSnapshots(
   if (credentialsChanged) {
     runtimeAuthStoreCredentialsRevision += 1;
   }
+  const next = new Map(
+    entries.map((entry) => [resolveRuntimeStoreKey(entry.agentDir), entry.store] as const),
+  );
+  for (const key of new Set([...runtimeAuthStoreSnapshots.keys(), ...next.keys()])) {
+    if (authProfilesChanged(runtimeAuthStoreSnapshots.get(key), next.get(key))) {
+      clearRuntimeAuthMaterializationsForKey(key);
+    }
+  }
   recordChangedSnapshotRevisions(entries);
   runtimeAuthStoreSnapshots.clear();
   for (const entry of entries) {
@@ -307,6 +433,7 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
     runtimeAuthStoreSnapshotsRevision += 1;
   }
   runtimeAuthStoreSnapshots.clear();
+  runtimeAuthMaterializations.clear();
   runtimeAuthStoreSnapshotRevisions.clear();
   if (snapshotsChanged) {
     notifyRuntimeAuthStoreMutation();
@@ -325,6 +452,7 @@ export function clearRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean
   }
   runtimeAuthStoreSnapshotsRevision += 1;
   runtimeAuthStoreSnapshots.delete(key);
+  clearRuntimeAuthMaterializationsForKey(key);
   runtimeAuthStoreSnapshotRevisions.delete(key);
   notifyRuntimeAuthStoreMutation(agentDir);
   return true;
@@ -346,6 +474,9 @@ export function setRuntimeAuthProfileStoreSnapshot(
     runtimeAuthStoreCredentialsRevision += 1;
   }
   const previousStore = runtimeAuthStoreSnapshots.get(key);
+  if (authProfilesChanged(previousStore, store)) {
+    clearRuntimeAuthMaterializationsForKey(key);
+  }
   const ownerChanged = !isDeepStrictEqual(ownerState(previousStore), ownerState(store));
   const snapshotChanged = !isDeepStrictEqual(previousStore, store);
   if (snapshotChanged) {
@@ -381,6 +512,9 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
     runtimeAuthStoreCredentialsRevision += 1;
   }
   const ownerKey = resolveRuntimeStoreKey(agentDir);
+  if (mutation.credentialsChanged || mutation.profileSetChanged) {
+    clearRuntimeAuthMaterializationsForKey(ownerKey);
+  }
   const record = getOrCreatePersistedMutationRecord(ownerKey);
   if (mutation.profileSetChanged) {
     record.profileSetRevision = persistedMutationRevision;

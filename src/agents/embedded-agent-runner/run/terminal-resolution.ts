@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
@@ -182,7 +183,9 @@ export async function resolveEmbeddedRunTerminal(input: {
   provider: string;
   modelId: string;
   modelTransportId: string;
-  modelTransportApi: string;
+  modelTransportApi: import("../../../config/types.models.js").ModelApi;
+  modelTransportBaseUrl?: string;
+  requestTransportOverrides: ProviderRouteOverridePresence;
   authProfileId?: string;
   profileFailureStore: AuthProfileStore;
   attemptAuthProfileStore: AuthProfileStore;
@@ -522,8 +525,12 @@ function completeEmbeddedRun(
     apiKeyInfo: input.apiKeyInfo,
     attempt: input.attempt,
     provider: input.provider,
+    agentDir: input.runParams.agentDir,
     modelId: input.modelTransportId,
     modelApi: input.modelTransportApi,
+    ...(input.modelTransportBaseUrl ? { modelBaseUrl: input.modelTransportBaseUrl } : {}),
+    requestTransportOverrides: input.requestTransportOverrides,
+    config: input.runParams.config,
     agentHarnessId: input.agentHarnessId,
     pluginHarnessOwnsTransport: input.pluginHarnessOwnsTransport,
     pluginHarnessOwnsAuthBootstrap: input.pluginHarnessOwnsAuthBootstrap,

@@ -1,6 +1,10 @@
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credentials.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  loadAuthProfileStoreWithoutExternalProfiles,
+} from "../../agents/auth-profiles.js";
+import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
   createModelAuthAvailabilityResolver,
@@ -41,6 +45,7 @@ export function createModelsListAuthResolver(params: {
   metadataSnapshot?: PluginMetadataSnapshot;
   preparedAuthStore?: AuthProfileStore;
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
+  preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
   workspaceDir: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
 }): ModelAuthAvailabilityResolver {
@@ -49,9 +54,17 @@ export function createModelsListAuthResolver(params: {
   // it after the Gateway execution snapshot was built.
   const authStore =
     params.preparedAuthStore ??
-    loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
-      allowKeychainPrompt: false,
-    });
+    (params.includeOpenAIExternalProfiles
+      ? ensureAuthProfileStore(agentDir, {
+          config: params.cfg,
+          externalCliProviderIds: ["openai"],
+          allowKeychainPrompt: false,
+          readOnly: true,
+          syncExternalCli: false,
+        })
+      : loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        }));
   // A prepared projection must hydrate from its own auth-store generation. Reading the global
   // snapshot can mix generations; treating this store as persisted loses resolved SecretRefs.
   const preparedRuntimeAuthStore = params.preparedAuthStore;
@@ -63,10 +76,10 @@ export function createModelsListAuthResolver(params: {
     env: process.env,
     metadataSnapshot: params.metadataSnapshot,
     preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
+    preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
     skipSetupProviderFallback: true,
     syntheticAuthProviderRefs: listEnabledSyntheticAuthProviderRefs(params),
-    externalCliProviderIds:
-      !params.preparedAuthStore && params.includeOpenAIExternalProfiles ? ["openai"] : [],
+    externalCliProviderIds: [],
     ...(preparedRuntimeAuthStore ? { preparedRuntimeAuthStore } : {}),
     routeResolverFactory: params.routeResolverFactory,
   });

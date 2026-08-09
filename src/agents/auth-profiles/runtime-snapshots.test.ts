@@ -8,12 +8,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
+  getPreparedRuntimeAuthMaterializations,
   getPreparedRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreCredentialsRevision,
   noteRuntimeAuthProfileStorePersistedMutation,
+  recordRuntimeAuthMaterialization,
   registerRuntimeAuthProfileStoreMutationListener,
   replaceRuntimeAuthProfileStoreSnapshots,
+  revokeRuntimeAuthMaterializations,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
 import { testing } from "./runtime-snapshots.test-support.js";
@@ -60,6 +63,70 @@ function expectOpenAICodexSnapshotCredential(
 }
 
 describe("runtime auth profile snapshots", () => {
+  it("publishes exact successful-auth facts and clears them with credential ownership", () => {
+    const agentDir = "/tmp/openclaw-auth-runtime-materialized";
+    const listener = vi.fn();
+    setRuntimeAuthProfileStoreSnapshot(createStore("materialized"), agentDir);
+    const unregister = registerRuntimeAuthProfileStoreMutationListener(listener);
+    try {
+      const materialization = {
+        agentDir,
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-chatgpt-responses",
+        modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+        requestTransportOverrides: "none",
+        authMode: "oauth",
+        runtimeOwnerId: "codex",
+        authProfileId: "openai:default",
+      } as const;
+      expect(recordRuntimeAuthMaterialization(materialization)).toBe(true);
+      expect(recordRuntimeAuthMaterialization(materialization)).toBe(false);
+      expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
+        {
+          provider: "openai",
+          modelId: "gpt-5.4",
+          modelApi: "openai-chatgpt-responses",
+          modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+          requestTransportOverrides: "none",
+          authMode: "oauth",
+          runtimeOwnerId: "codex",
+          authProfileId: "openai:default",
+        },
+      ]);
+      const sibling = { ...materialization, modelId: "gpt-5.5" };
+      const distinctOwner = { ...materialization, runtimeOwnerId: "other-harness" };
+      recordRuntimeAuthMaterialization(sibling);
+      recordRuntimeAuthMaterialization(distinctOwner);
+      expect(
+        revokeRuntimeAuthMaterializations({
+          agentDir,
+          provider: "openai",
+          runtimeOwnerId: "codex",
+        }),
+      ).toBe(true);
+      expect(
+        revokeRuntimeAuthMaterializations({
+          agentDir,
+          provider: "openai",
+          runtimeOwnerId: "codex",
+        }),
+      ).toBe(false);
+      expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([
+        expect.objectContaining({ runtimeOwnerId: "other-harness", modelId: "gpt-5.4" }),
+      ]);
+      expect(listener).toHaveBeenCalledTimes(4);
+
+      recordRuntimeAuthMaterialization(materialization);
+
+      setRuntimeAuthProfileStoreSnapshot(createStore("replaced"), agentDir);
+      expect(getPreparedRuntimeAuthMaterializations(agentDir)).toEqual([]);
+    } finally {
+      unregister();
+      clearRuntimeAuthProfileStoreSnapshots();
+    }
+  });
+
   it("notifies listeners only when credential ownership changes", () => {
     const agentDir = "/tmp/openclaw-auth-runtime-listener";
     const listener = vi.fn();
