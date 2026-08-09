@@ -2,12 +2,12 @@
 import type { SlackTargetKind } from "../target-parsing.js";
 import type { SlackEventScope } from "./event-scope.js";
 
-export type SlackDeferredActionTarget = {
+type SlackDeferredActionTarget = {
   peerId: string;
   target: string;
 };
 
-export type SlackDeferredActionSessionTarget = SlackDeferredActionTarget & {
+type SlackDeferredActionSessionTarget = SlackDeferredActionTarget & {
   baseConversationId: string;
   from: string;
   peerKind: "direct" | "group" | "channel";
