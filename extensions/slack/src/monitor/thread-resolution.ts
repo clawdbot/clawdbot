@@ -1,26 +1,16 @@
 // Slack plugin module implements thread resolution behavior.
-import {
-  type WebClient as SlackWebClient,
-  WebAPIHTTPError,
-  WebAPIRateLimitedError,
-  WebAPIRequestError,
-} from "@slack/web-api";
+import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import {
-  collectErrorGraphCandidates,
-  extractErrorCode,
-  readErrorName,
-} from "openclaw/plugin-sdk/error-runtime";
 import {
   asDateTimestampMs,
   parseFiniteNumber,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.js";
+import { isTransientSlackApiError } from "./transient-api-error.js";
 
 type ThreadTsCacheEntry = {
   threadTs: string | null;
@@ -39,31 +29,6 @@ const markAmbiguousThreadReply = (message: SlackMessageEvent): SlackMessageEvent
   ...message,
   _ambiguousThreadReply: true,
 });
-
-function isTransientSlackThreadLookupError(error: unknown): boolean {
-  if (error instanceof WebAPIRateLimitedError) {
-    return true;
-  }
-  if (error instanceof WebAPIHTTPError) {
-    return (
-      error.statusCode === 408 ||
-      error.statusCode === 429 ||
-      (error.statusCode >= 500 && error.statusCode < 600)
-    );
-  }
-  if (!(error instanceof WebAPIRequestError)) {
-    return false;
-  }
-  return collectErrorGraphCandidates(error.original, (current) => [
-    current.cause,
-    current.error,
-    current.original,
-  ]).some(
-    (candidate) =>
-      classifyTransientNetworkErrorCode(extractErrorCode(candidate)) ||
-      readErrorName(candidate) === "TimeoutError",
-  );
-}
 
 async function resolveThreadTsFromHistory(params: {
   client: SlackWebClient;
@@ -170,7 +135,7 @@ export function createSlackThreadTsResolver(params: {
             `slack inbound: failed to resolve thread_ts via conversations.history for channel=${message.channel} ts=${message.ts}: ${formatSlackError(err)}`,
           );
         }
-        if (isTransientSlackThreadLookupError(err)) {
+        if (isTransientSlackApiError(err)) {
           if (request.turnAdoptionLifecycle) {
             // The already-acknowledged durable ingress owner retries without dropping the turn.
             throw err;

@@ -1,9 +1,11 @@
 // Slack tests cover monitor.thread resolution plugin behavior.
 import {
+  LogLevel,
   WebAPIHTTPError,
   WebAPIPlatformError,
   WebAPIRateLimitedError,
   WebAPIRequestError,
+  WebClient,
 } from "@slack/web-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../types.js";
@@ -98,6 +100,10 @@ describe("createSlackThreadTsResolver", () => {
       error: new WebAPIRateLimitedError(1),
     },
     {
+      label: "an actual Slack platform internal error",
+      error: new WebAPIPlatformError({ ok: false, error: "internal_error" }),
+    },
+    {
       label: "an actual Slack request timeout",
       error: new WebAPIRequestError(
         Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" }),
@@ -111,6 +117,18 @@ describe("createSlackThreadTsResolver", () => {
       label: "an actual Slack connection reset",
       error: new WebAPIRequestError(
         Object.assign(new Error("socket was reset"), { code: "ECONNRESET" }),
+      ),
+    },
+    {
+      label: "an uncoded Slack request failure",
+      error: new WebAPIRequestError(new Error("temporary request failure")),
+    },
+    {
+      label: "a fetch transport type error",
+      error: new WebAPIRequestError(
+        new TypeError("fetch failed", {
+          cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+        }),
       ),
     },
   ])("hands $label to durable ingress without poisoning the cache", async ({ error }) => {
@@ -134,6 +152,191 @@ describe("createSlackThreadTsResolver", () => {
     ).resolves.toMatchObject({ thread_ts: "9" });
 
     expect(historyMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["service_unavailable", "ratelimited", "fatal_error", "request_timeout"])(
+    "returns actual Slack platform %s to durable ingress without caching ambiguity",
+    async (errorCode) => {
+      const responses = [
+        new Response(JSON.stringify({ ok: false, error: errorCode }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            ...(errorCode === "ratelimited" ? { "retry-after": "1" } : {}),
+          },
+        }),
+        new Response(JSON.stringify({ ok: true, messages: [{ ts: "1", thread_ts: "9" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ];
+      const fetch = vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        );
+        if (
+          url.origin !== "https://slack-proof.invalid" ||
+          url.pathname !== "/api/conversations.history"
+        ) {
+          throw new Error(`unexpected Slack thread proof request: ${url.origin}${url.pathname}`);
+        }
+        const response = responses.shift();
+        if (!response) {
+          throw new Error("unexpected Slack thread proof retry");
+        }
+        return response;
+      });
+      const resolver = createSlackThreadTsResolver({
+        client: new WebClient("xoxb-fixture", {
+          slackApiUrl: "https://slack-proof.invalid/api/",
+          fetch,
+          logLevel: LogLevel.ERROR,
+          retryConfig: { retries: 0 },
+        }),
+        cacheTtlMs: 60_000,
+        maxSize: 5,
+      });
+      const message = makeThreadReplyMessage("1");
+      const turnAdoptionLifecycle = createDurableTurnLifecycle();
+
+      await expect(
+        resolver.resolve({ message, source: "message", turnAdoptionLifecycle }),
+      ).rejects.toMatchObject({
+        data: {
+          error: errorCode,
+          ...(errorCode === "ratelimited" ? { response_metadata: { retryAfter: 1 } } : {}),
+        },
+      });
+      expect(fetch).toHaveBeenCalledOnce();
+
+      await expect(
+        resolver.resolve({ message, source: "app_mention", turnAdoptionLifecycle }),
+      ).resolves.toMatchObject({ thread_ts: "9" });
+      expect(fetch).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("retries exhausted actual Slack client rate limits without caching ambiguity", async () => {
+    const rateLimited = () => new Response("", { status: 429, headers: { "retry-after": "0" } });
+    const fetch = vi
+      .fn()
+      .mockImplementationOnce(async () => rateLimited())
+      .mockImplementationOnce(async () => rateLimited())
+      .mockImplementationOnce(async () => rateLimited())
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, messages: [{ ts: "1", thread_ts: "9" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    const client = new WebClient("xoxb-test", {
+      fetch,
+      logLevel: LogLevel.ERROR,
+      retryConfig: { retries: 2, minTimeout: 0, maxTimeout: 0, randomize: false },
+    });
+    const resolver = createSlackThreadTsResolver({
+      client,
+      cacheTtlMs: 60_000,
+      maxSize: 5,
+    });
+    const message = makeThreadReplyMessage("1");
+    const turnAdoptionLifecycle = createDurableTurnLifecycle();
+
+    await expect(
+      resolver.resolve({ message, source: "message", turnAdoptionLifecycle }),
+    ).rejects.toBeInstanceOf(WebAPIRequestError);
+    expect(fetch).toHaveBeenCalledTimes(3);
+
+    await expect(
+      resolver.resolve({ message, source: "app_mention", turnAdoptionLifecycle }),
+    ).resolves.toMatchObject({ thread_ts: "9" });
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    { headerLabel: "missing", retryAfter: undefined },
+    { headerLabel: "invalid", retryAfter: "not-a-timeout" },
+  ])(
+    "replays malformed Retry-After $headerLabel without poisoning thread lookup",
+    async (scenario) => {
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response("", {
+            status: 429,
+            headers:
+              scenario.retryAfter === undefined ? {} : { "retry-after": scenario.retryAfter },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ ok: true, messages: [{ ts: "1", thread_ts: "9" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      const resolver = createSlackThreadTsResolver({
+        client: new WebClient("xoxb-fixture", {
+          slackApiUrl: "https://slack-proof.invalid/api/",
+          fetch,
+          logLevel: LogLevel.ERROR,
+          retryConfig: { retries: 0 },
+        }),
+        cacheTtlMs: 60_000,
+        maxSize: 5,
+      });
+      const message = makeThreadReplyMessage("1");
+      const turnAdoptionLifecycle = createDurableTurnLifecycle();
+
+      await expect(
+        resolver.resolve({ message, source: "message", turnAdoptionLifecycle }),
+      ).rejects.toThrow("Retry header did not contain a valid timeout");
+      await expect(
+        resolver.resolve({ message, source: "app_mention", turnAdoptionLifecycle }),
+      ).resolves.toMatchObject({ thread_ts: "9" });
+      expect(fetch).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    {
+      label: "an actually malformed URL",
+      fail: async () => await globalThis.fetch("http://[invalid"),
+    },
+    {
+      label: "an untrusted TLS certificate",
+      fail: async () => {
+        throw new TypeError("fetch failed", {
+          cause: Object.assign(new Error("certificate fixture"), {
+            code: "ERR_TLS_CERT_ALTNAME_INVALID",
+          }),
+        });
+      },
+    },
+    {
+      label: "a malformed fetch response",
+      fail: async () => null,
+    },
+  ])("keeps real SDK-wrapped $label terminal without retrying the cache", async ({ fail }) => {
+    const fetch = vi.fn().mockImplementation(fail);
+    const resolver = createSlackThreadTsResolver({
+      client: new WebClient("xoxb-test", {
+        fetch,
+        logLevel: LogLevel.ERROR,
+        retryConfig: { retries: 2, minTimeout: 0, maxTimeout: 0, randomize: false },
+      }),
+      cacheTtlMs: 60_000,
+      maxSize: 5,
+    });
+    const message = makeThreadReplyMessage("1");
+    const turnAdoptionLifecycle = createDurableTurnLifecycle();
+
+    await expect(
+      resolver.resolve({ message, source: "message", turnAdoptionLifecycle }),
+    ).resolves.toMatchObject({ _ambiguousThreadReply: true });
+    await expect(
+      resolver.resolve({ message, source: "app_mention", turnAdoptionLifecycle }),
+    ).resolves.toMatchObject({ _ambiguousThreadReply: true });
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it("keeps direct transient failures ambiguous without poisoning their future lookup", async () => {
@@ -219,12 +422,54 @@ describe("createSlackThreadTsResolver", () => {
       error: new WebAPIPlatformError({ ok: false, error: "missing_scope" }),
     },
     {
+      label: "Slack platform invalid_blocks",
+      error: new WebAPIPlatformError({ ok: false, error: "invalid_blocks" }),
+    },
+    {
+      label: "Slack platform user_not_found",
+      error: new WebAPIPlatformError({ ok: false, error: "user_not_found" }),
+    },
+    {
       label: "unclassified local failure",
       error: new Error("local lookup unavailable"),
     },
     {
       label: "operator-canceled Slack request",
       error: new WebAPIRequestError(new DOMException("request was canceled", "AbortError")),
+    },
+    {
+      label: "nested operator-canceled Slack request",
+      error: new WebAPIRequestError(
+        new Error("request wrapper", {
+          cause: new DOMException("request was canceled", "AbortError"),
+        }),
+      ),
+    },
+    {
+      label: "unwrapped local type failure",
+      error: new TypeError("invalid local request"),
+    },
+    {
+      label: "SDK-wrapped invalid URL",
+      error: new WebAPIRequestError(
+        new TypeError("invalid request", {
+          cause: Object.assign(new TypeError("invalid URL"), { code: "ERR_INVALID_URL" }),
+        }),
+      ),
+    },
+    {
+      label: "SDK-wrapped untrusted TLS certificate",
+      error: new WebAPIRequestError(
+        new TypeError("fetch failed", {
+          cause: Object.assign(new Error("certificate fixture"), {
+            code: "DEPTH_ZERO_SELF_SIGNED_CERT",
+          }),
+        }),
+      ),
+    },
+    {
+      label: "SDK-wrapped malformed fetch response",
+      error: new WebAPIRequestError(new TypeError("invalid fetch response")),
     },
   ])("preserves cached ambiguity for definitive $label", async ({ error }) => {
     const historyMock = vi.fn().mockRejectedValue(error);

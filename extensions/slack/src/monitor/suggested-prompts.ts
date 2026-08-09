@@ -2,6 +2,7 @@
 import type { App } from "@slack/bolt";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatSlackError } from "../errors.js";
+import { isTransientSlackApiError } from "./transient-api-error.js";
 
 type SlackSuggestedPrompt = {
   title: string;
@@ -47,6 +48,10 @@ export async function updateSlackSuggestedPrompts(
     });
     return true;
   } catch (error) {
+    if (params.threadTs || isTransientSlackApiError(error)) {
+      // Threaded actions need their real failure; only threadless Home probes may reject quietly.
+      throw error;
+    }
     logVerbose(
       `slack suggested prompts update failed for channel ${params.channelId}: ${formatSlackError(error)}`,
     );
