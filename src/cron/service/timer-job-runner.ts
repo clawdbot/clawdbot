@@ -19,7 +19,7 @@ import {
   timeoutErrorMessage,
 } from "./execution-errors.js";
 import type { CronServiceState } from "./state.js";
-import { tryUpdateCronTaskRunSession } from "./task-runs.js";
+import { tryUpdateCronTaskRunSession, withCronTaskRunId } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
   type IsolatedAgentSetupTimeoutSignal,
@@ -236,8 +236,7 @@ export async function executeJobCoreWithTimeout(
         recordTaskExecutionStart(info);
       };
       const progress: CronRunProgress = {};
-      const corePromise = executeJobCore(state, job, runAbortController.signal, {
-        taskRunId: opts?.runId,
+      const coreOptions = {
         activeJobMarker: opts?.activeJobMarker,
         owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         streamBatch: opts?.streamBatch,
@@ -245,7 +244,10 @@ export async function executeJobCoreWithTimeout(
         streamSourceIdentity: opts?.streamSourceIdentity,
         onExecutionStarted: noteExecutionStarted,
         onExecutionPhase: accumulateExecution,
-      });
+      };
+      const corePromise = withCronTaskRunId(opts?.runId, () =>
+        executeJobCore(state, job, runAbortController.signal, coreOptions),
+      );
       const runPromise = corePromise.then(async (result) => {
         progress.completedCoreResult = result;
         return await deliverPrimaryWebhook(state, job, result, runAbortController.signal, progress);
@@ -311,8 +313,7 @@ export async function executeJobCoreWithTimeout(
       recordTaskExecutionStart(info);
     };
     const progress: CronRunProgress = {};
-    const corePromise = executeJobCore(state, job, runAbortController.signal, {
-      taskRunId: opts?.runId,
+    const coreOptions = {
       activeJobMarker: opts?.activeJobMarker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       streamBatch: opts?.streamBatch,
@@ -321,7 +322,10 @@ export async function executeJobCoreWithTimeout(
       onExecutionStarted: deferTimeoutUntilExecutionStart ? noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
-    });
+    };
+    const corePromise = withCronTaskRunId(opts?.runId, () =>
+      executeJobCore(state, job, runAbortController.signal, coreOptions),
+    );
     watchdog.start();
     const runPromise = corePromise.then(async (result) => {
       progress.completedCoreResult = result;

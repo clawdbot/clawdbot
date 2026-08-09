@@ -242,7 +242,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
               : undefined,
           sessionId: attempt.sessionId,
           runId: attempt.runId,
-          taskRunId: attempt.taskRunId,
           conversationRecall: attempt.conversationRecall,
           approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
           oneShotCliRun: attempt.oneShotCliRun,

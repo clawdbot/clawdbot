@@ -112,8 +112,6 @@ export function createOpenClawTools(
     runSessionKey?: string;
     agentChannel?: string;
     runId?: string;
-    /** Detached task-ledger run id when it differs from the agent run id. */
-    taskRunId?: string;
     agentAccountId?: string;
     /** Trusted account used only for Gateway authorization; delivery keeps agentAccountId. */
     gatewayCallerAccountId?: string;
@@ -519,7 +517,7 @@ export function createOpenClawTools(
                 createTerminalTool({
                   agentId: sessionAgentId,
                   agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-                  taskRunId: options?.taskRunId ?? options?.runId,
+                  runId: options?.runId,
                 }),
               ]),
         ]),

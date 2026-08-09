@@ -447,7 +447,6 @@ async function executeDetachedCronJob(
   const res = await state.deps.runIsolatedAgentJob({
     job,
     message: job.payload.message,
-    taskRunId: options?.taskRunId,
     abortSignal,
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,

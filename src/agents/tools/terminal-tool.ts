@@ -8,6 +8,7 @@ import {
   TerminalOpenDeadlineError,
   waitForTerminalOpenDeadline,
 } from "../../gateway/terminal/open-deadline.js";
+import { getAgentRunTaskRunId } from "../../infra/agent-run-registry.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { isTerminalTaskStatus } from "../../tasks/task-executor-policy.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
@@ -75,7 +76,7 @@ type TerminalToolGatewayContext = Pick<
 type TerminalToolOptions = {
   agentId?: string;
   agentSessionKey?: string;
-  taskRunId?: string;
+  runId?: string;
   lookupTaskByRunId?: (
     runId: string,
   ) => Promise<Pick<TaskRecord, "taskId" | "status" | "childSessionKey"> | undefined>;
@@ -198,8 +199,9 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
           ...launch.plan,
           ...(cwd ? { cwdOverride: cwd } : {}),
         });
-        const taskRunId = opts.taskRunId?.trim();
-        const candidateTask = taskRunId ? await findOwnerTask(taskRunId) : undefined;
+        const runId = opts.runId?.trim();
+        const taskLookupId = runId ? (getAgentRunTaskRunId(runId) ?? runId) : undefined;
+        const candidateTask = taskLookupId ? await findOwnerTask(taskLookupId) : undefined;
         const task =
           candidateTask?.childSessionKey?.trim() === agentSessionKey ? candidateTask : undefined;
         if (task && isTerminalTaskStatus(task.status)) {

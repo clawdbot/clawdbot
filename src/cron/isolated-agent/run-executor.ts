@@ -222,7 +222,6 @@ function createCronPromptExecutor(params: {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   job: CronJob;
-  taskRunId?: string;
   agentId: string;
   agentDir: string;
   agentSessionKey: string;
@@ -670,7 +669,6 @@ function createCronPromptExecutor(params: {
             : undefined,
           sourceReplyDeliveryMode,
           runId: params.cronSession.sessionEntry.sessionId,
-          taskRunId: params.taskRunId,
           allowEmptyAssistantReplyAsSilent,
           // Cron owns the resolved delivery contract. A valid announce route
           // still needs a final payload; none, webhook, and invalid routes do not.
@@ -751,7 +749,6 @@ export async function executeCronRun(params: {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   job: CronJob;
-  taskRunId?: string;
   agentId: string;
   agentDir: string;
   agentSessionKey: string;
@@ -813,7 +810,6 @@ export async function executeCronRun(params: {
     cfg: params.cfg,
     cfgWithAgentDefaults: params.cfgWithAgentDefaults,
     job: params.job,
-    taskRunId: params.taskRunId,
     agentId: params.agentId,
     agentDir: params.agentDir,
     agentSessionKey: params.agentSessionKey,
