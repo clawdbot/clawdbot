@@ -1477,6 +1477,11 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   PRIMARY KEY (store_key, job_id)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS cron_store_epochs (
+  store_key TEXT PRIMARY KEY,
+  store_epoch INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_updated
   ON cron_jobs(store_key, sort_order ASC, updated_at DESC, job_id);
 

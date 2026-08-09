@@ -1,3 +1,4 @@
+import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { nextWakeAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
@@ -20,6 +21,19 @@ export async function start(state: CronServiceState) {
   if (!state.deps.cronEnabled) {
     state.deps.log.info({ enabled: false }, "cron: disabled");
     return;
+  }
+
+  if (state.deps.legacyDefaultAgentId) {
+    const rewritten = materializeLegacyDefaultCronJobOwners({
+      storePath: state.deps.storePath,
+      legacyDefaultAgentId: state.deps.legacyDefaultAgentId,
+    });
+    if (rewritten > 0) {
+      state.deps.log.info(
+        { storePath: state.deps.storePath, rewritten },
+        "cron: assigned legacy jobs to the retained owner",
+      );
+    }
   }
 
   const interruptedJobIds = new Set<string>();
