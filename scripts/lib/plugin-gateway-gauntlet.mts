@@ -1,13 +1,13 @@
 // Collects plugin manifest and metric observations for gateway gauntlet reports.
 import fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import {
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
   collectBundledPluginBuildEntries,
 } from "./bundled-plugin-build-entries.mjs";
 import { parsePositiveInt } from "./numeric-options.mjs";
+import { isRecord } from "./record-shared.mjs";
 
 type PluginGatewayEntry = {
   id: string;
@@ -655,7 +655,7 @@ function validateQaSuiteSummary(summary: unknown) {
     (!isNonNegativeInteger(counts.skipped) || counts.skipped !== statusCounts.skipped)
   ) {
     throw new Error(
-      `QA suite summary skipped count mismatch: counts.skipped=${String(counts.skipped)}, skipped scenarios=${statusCounts.skipped}`,
+      `QA suite summary skipped count mismatch: counts.skipped=${JSON.stringify(counts.skipped) ?? "undefined"}, skipped scenarios=${statusCounts.skipped}`,
     );
   }
   if (counts.failed === 0) {

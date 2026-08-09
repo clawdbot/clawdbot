@@ -2257,7 +2257,7 @@ jobs:
               pnpm dup:check:coverage
               if [ -n "$PR_BASE_SHA" ]; then
                 timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
-                node --import tsx scripts/report-test-temp-creations.mts --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
+                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read

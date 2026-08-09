@@ -360,19 +360,14 @@ describe("report-test-temp-creations", () => {
   it("prints help with usage, outputs, and examples", () => {
     const output = execFileSync(
       process.execPath,
-      [
-        "--import",
-        "tsx",
-        path.join(repoRoot, "scripts", "report-test-temp-creations.mts"),
-        "--help",
-      ],
+      [path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"), "--help"],
       {
         cwd: repoRoot,
         encoding: "utf8",
       },
     );
 
-    expect(output).toContain("Usage: node --import tsx scripts/report-test-temp-creations.mts");
+    expect(output).toContain("Usage: node scripts/report-test-temp-creations.mjs");
     expect(output).toContain("Outputs:");
     expect(output).toContain("--no-merge-base");
     expect(output).toContain("Examples:");
@@ -433,13 +428,7 @@ describe("report-test-temp-creations", () => {
 
     const result = spawnSync(
       process.execPath,
-      [
-        "--import",
-        "tsx",
-        path.join(repoRoot, "scripts", "report-test-temp-creations.mts"),
-        "--staged",
-        "--json",
-      ],
+      [path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"), "--staged", "--json"],
       {
         cwd: root,
         encoding: "utf8",
@@ -497,9 +486,7 @@ describe("report-test-temp-creations", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
-        path.join(repoRoot, "scripts", "report-test-temp-creations.mts"),
+        path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"),
         "--staged",
         "--fail-on-findings",
       ],
@@ -538,9 +525,7 @@ describe("report-test-temp-creations", () => {
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
-        path.join(repoRoot, "scripts", "report-test-temp-creations.mts"),
+        path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"),
         "--base",
         "main",
         "--head",

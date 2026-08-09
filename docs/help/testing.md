@@ -69,7 +69,7 @@ comment with a reason:
 const workspace = fs.mkdtempSync(prefix);
 ```
 
-`node --import tsx scripts/report-test-temp-creations.mts` reports new bare temp-dir
+`node scripts/report-test-temp-creations.mjs` reports new bare temp-dir
 creation and new manual shared-helper usage in added diff lines, without
 blocking existing cleanup styles. It follows the same test-path classification
 as `scripts/changed-lanes.mjs` and skips the shared helper implementation

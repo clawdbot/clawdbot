@@ -1,7 +1,6 @@
 // Test Group Report tests cover test group report script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -30,6 +29,7 @@ import { withEnv } from "../../src/test-utils/env.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs = new Set<string>();
+const tsxImport = import.meta.resolve("tsx");
 
 afterAll(() => {
   cleanupTempDirs(tempDirs);
@@ -215,7 +215,7 @@ describe("scripts/test-group-report aggregation", () => {
         process.execPath,
         [
           "--import",
-          "tsx",
+          tsxImport,
           "scripts/test-group-report.mts",
           "--report",
           missingReport,
@@ -249,7 +249,7 @@ describe("scripts/test-group-report aggregation", () => {
         process.execPath,
         [
           "--import",
-          "tsx",
+          tsxImport,
           "scripts/test-group-report.mts",
           "--report",
           reportPath,
@@ -280,7 +280,7 @@ describe("scripts/test-group-report aggregation", () => {
         process.execPath,
         [
           "--import",
-          "tsx",
+          tsxImport,
           "scripts/test-group-report.mts",
           "--config",
           missingConfig,
@@ -695,7 +695,7 @@ describe("scripts/test-group-report comparison", () => {
         process.execPath,
         [
           "--import",
-          "tsx",
+          tsxImport,
           "scripts/test-group-report.mts",
           "--compare",
           beforePath,
@@ -740,7 +740,7 @@ describe("scripts/test-group-report comparison", () => {
         process.execPath,
         [
           "--import",
-          "tsx",
+          tsxImport,
           "scripts/test-group-report.mts",
           "--compare",
           beforePath,
@@ -1107,11 +1107,15 @@ describe("scripts/test-group-report child process guard", () => {
         ");",
         "process.stdout.write(JSON.stringify(result));",
       ].join("\n");
-      const result = spawnSync(process.execPath, ["--input-type=module", "--eval", runnerScript], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        timeout: 5_000,
-      });
+      const result = spawnSync(
+        process.execPath,
+        ["--import", tsxImport, "--input-type=module", "--eval", runnerScript],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          timeout: 5_000,
+        },
+      );
       if (fs.existsSync(childPidPath)) {
         childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
       }
@@ -1170,10 +1174,14 @@ describe("scripts/test-group-report child process guard", () => {
         ");",
       ].join("\n");
 
-      runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
-        cwd: process.cwd(),
-        stdio: ["ignore", "ignore", "pipe"],
-      });
+      runner = spawn(
+        process.execPath,
+        ["--import", tsxImport, "--input-type=module", "--eval", runnerScript],
+        {
+          cwd: process.cwd(),
+          stdio: ["ignore", "ignore", "pipe"],
+        },
+      );
       // Generous poll deadlines: spawning the nested runner/parent/child node
       // chain can take multiple seconds on loaded CI runners.
       await waitForFile(readyPath, 10_000);

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "./record-shared.mjs";
 
 const AUTH_MODES = new Set(["live", "mock"]);
 const CLI_KEYS = new Set([
@@ -62,6 +62,10 @@ function displayPair(key: string) {
   return key.replace("\u0000", "/");
 }
 
+function displayValue(value: unknown) {
+  return typeof value === "string" ? value : (JSON.stringify(value) ?? "undefined");
+}
+
 function profileId(value: unknown, label: string) {
   return text(object(value, label).id, `${label} id`);
 }
@@ -84,7 +88,7 @@ function validateLiveRecord(record: Record<string, unknown>, key: string, expect
   );
   check(
     provider.source === "openclaw-timeline",
-    `live record ${displayPair(key)} provider source was ${provider.source}`,
+    `live record ${displayPair(key)} provider source was ${displayValue(provider.source)}`,
   );
   check(
     provider.available === true,
@@ -139,7 +143,7 @@ export function validateKovaWorkflowEvidence({
   const laneReport = object(report, "lane report");
   check(lanePlan.schemaVersion === "kova.matrix.plan.v1", "unexpected lane plan schema");
   check(laneReport.schemaVersion === "kova.report.v1", "unexpected lane report schema");
-  check(laneReport.mode === "execution", `lane report mode was ${laneReport.mode}`);
+  check(laneReport.mode === "execution", `lane report mode was ${displayValue(laneReport.mode)}`);
   check(
     profileId(lanePlan.profile, "lane plan profile") === expectedProfile,
     "lane plan profile did not match",

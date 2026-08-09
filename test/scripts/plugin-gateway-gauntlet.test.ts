@@ -28,6 +28,8 @@ import {
   selectPluginEntries,
 } from "../../scripts/lib/plugin-gateway-gauntlet.mts";
 
+const tsxImport = import.meta.resolve("tsx");
+
 describe("plugin gateway gauntlet helpers", () => {
   let repoRoot: string;
 
@@ -80,6 +82,8 @@ describe("plugin gateway gauntlet helpers", () => {
     const result = spawnSync(
       process.execPath,
       [
+        "--import",
+        tsxImport,
         path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
@@ -947,7 +951,7 @@ await runMeasuredCommandLive({
         "utf8",
       );
 
-      const harness = spawn(process.execPath, [harnessPath], {
+      const harness = spawn(process.execPath, ["--import", tsxImport, harnessPath], {
         cwd: repoRoot,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -1052,7 +1056,7 @@ process.exit(7);
         "utf8",
       );
 
-      const harness = spawn(process.execPath, [harnessPath], {
+      const harness = spawn(process.execPath, ["--import", tsxImport, harnessPath], {
         cwd: repoRoot,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -1172,6 +1176,8 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
+        "--import",
+        tsxImport,
         path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
@@ -1207,6 +1213,8 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
+        "--import",
+        tsxImport,
         path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--skip-prebuild",
         "--skip-lifecycle",
@@ -1229,7 +1237,7 @@ process.exit(7);
   it("documents gauntlet guardrail options and env defaults in help", () => {
     const result = spawnSync(
       process.execPath,
-      [path.resolve("scripts/check-plugin-gateway-gauntlet.mts"), "--help"],
+      ["--import", tsxImport, path.resolve("scripts/check-plugin-gateway-gauntlet.mts"), "--help"],
       {
         cwd: path.resolve("."),
         encoding: "utf8",
@@ -1263,6 +1271,8 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
+        "--import",
+        tsxImport,
         path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
@@ -1305,6 +1315,8 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
+        "--import",
+        tsxImport,
         path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
@@ -1393,6 +1405,8 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
+        "--import",
+        tsxImport,
         path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
@@ -1424,6 +1438,8 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
+        "--import",
+        tsxImport,
         path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
@@ -1506,6 +1522,8 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
+        "--import",
+        tsxImport,
         path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
@@ -1607,6 +1625,8 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
+        "--import",
+        tsxImport,
         path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,
@@ -1655,6 +1675,8 @@ process.exit(7);
     const result = spawnSync(
       process.execPath,
       [
+        "--import",
+        tsxImport,
         path.resolve("scripts/check-plugin-gateway-gauntlet.mts"),
         "--repo-root",
         repoRoot,

@@ -2296,15 +2296,7 @@ describe("scripts/changed-lanes", () => {
     expect(shouldRunTestTempCreationReport(result.paths)).toBe(true);
     expect(command).toMatchObject({
       bin: "node",
-      args: [
-        "--import",
-        "tsx",
-        "scripts/report-test-temp-creations.mts",
-        "--base",
-        "main",
-        "--head",
-        "feature",
-      ],
+      args: ["scripts/report-test-temp-creations.mjs", "--base", "main", "--head", "feature"],
     });
   });
 

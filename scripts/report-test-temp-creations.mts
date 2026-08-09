@@ -55,7 +55,7 @@ const TEMP_DIR_ALLOW_COMMENT_RE =
   /(?:^|\s)(?:\/\/|\/\*|\*|#)\s*openclaw-temp-dir:\s*allow\s+(.+)$/u;
 
 function usage(): string {
-  return `Usage: node --import tsx scripts/report-test-temp-creations.mts [options]
+  return `Usage: node scripts/report-test-temp-creations.mjs [options]
 
 Description:
   Reports new test temp-directory migration warnings in added diff lines.
@@ -81,8 +81,8 @@ Outputs:
   JSON mode prints an array of { file, line, reason, source } to stdout.
 
 Examples:
-  node --import tsx scripts/report-test-temp-creations.mts --base origin/main --head HEAD
-  node --import tsx scripts/report-test-temp-creations.mts --staged --json
+  node scripts/report-test-temp-creations.mjs --base origin/main --head HEAD
+  node scripts/report-test-temp-creations.mjs --staged --json
 `;
 }
 

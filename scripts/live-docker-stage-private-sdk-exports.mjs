@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const PRIVATE_SUBPATH_PATTERN = /^[a-z0-9][a-z0-9-]*$/u;
 
-export function addStagedPrivatePluginSdkExports(repoRoot: string) {
+export function addStagedPrivatePluginSdkExports(repoRoot) {
   const packagePath = path.join(repoRoot, "package.json");
   const privateSubpathsPath = path.join(
     repoRoot,

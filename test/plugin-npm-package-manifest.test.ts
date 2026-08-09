@@ -14,6 +14,7 @@ import {
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
+const tsxImport = import.meta.resolve("tsx");
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
@@ -708,7 +709,7 @@ withAugmentedPluginNpmManifestForPackage(
 `;
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", childSource],
+      ["--import", tsxImport, "--input-type=module", "--eval", childSource],
       {
         cwd: repoDir,
         encoding: "utf8",

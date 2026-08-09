@@ -565,9 +565,7 @@ export function createChangedCheckPlan(
       "test temp creation report (warning-only)",
       "node",
       [
-        "--import",
-        "tsx",
-        "scripts/report-test-temp-creations.mts",
+        "scripts/report-test-temp-creations.mjs",
         ...(options.staged
           ? ["--staged"]
           : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
