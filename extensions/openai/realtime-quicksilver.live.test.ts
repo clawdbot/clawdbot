@@ -280,9 +280,10 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
         | Awaited<ReturnType<NonNullable<typeof provider.createBrowserSession>>>
         | undefined;
       let resolveTool!: () => void;
-      let resolveFunctionOutputAck!: () => void;
+      let resolveFunctionOutputAdded!: () => void;
+      let resolveFunctionOutputDone!: () => void;
       let resolveResponse!: () => void;
-      let rejectFunctionOutputAck!: (error: Error) => void;
+      let rejectFunctionOutputAdded!: (error: Error) => void;
       let responseDoneCount = 0;
       let responseCreateCount = 0;
       let responseCreateCountAtToolCall = 0;
@@ -291,9 +292,12 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
       const toolObserved = new Promise<void>((resolve) => {
         resolveTool = resolve;
       });
-      const functionOutputAcknowledged = new Promise<void>((resolve, reject) => {
-        resolveFunctionOutputAck = resolve;
-        rejectFunctionOutputAck = reject;
+      const functionOutputAdded = new Promise<void>((resolve, reject) => {
+        resolveFunctionOutputAdded = resolve;
+        rejectFunctionOutputAdded = reject;
+      });
+      const functionOutputDone = new Promise<void>((resolve) => {
+        resolveFunctionOutputDone = resolve;
       });
       const responseObserved = new Promise<void>((resolve) => {
         resolveResponse = resolve;
@@ -315,17 +319,11 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
               responseCreateCountAtToolCall = responseCreateCount;
               resolveTool();
               try {
-                void Promise.resolve(
-                  controlBridge?.submitToolResult(event.callId, {
-                    result: "OpenClaw GA sideband live proof passed.",
-                  }),
-                ).catch((error: unknown) => {
-                  rejectFunctionOutputAck(
-                    error instanceof Error ? error : new Error("function output submission failed"),
-                  );
+                controlBridge?.submitToolResult(event.callId, {
+                  result: "OpenClaw GA sideband live proof passed.",
                 });
               } catch (error) {
-                rejectFunctionOutputAck(
+                rejectFunctionOutputAdded(
                   error instanceof Error ? error : new Error("function output submission failed"),
                 );
               }
@@ -346,14 +344,21 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
               }
               if (
                 event.direction === "server" &&
-                event.type === "conversation.item.created" &&
+                event.type === "conversation.item.added" &&
                 event.detail === "itemType=function_call_output"
               ) {
-                resolveFunctionOutputAck();
+                resolveFunctionOutputAdded();
+              }
+              if (
+                event.direction === "server" &&
+                event.type === "conversation.item.done" &&
+                event.detail === "itemType=function_call_output"
+              ) {
+                resolveFunctionOutputDone();
               }
               if (event.direction === "server" && event.type === "response.done") {
                 responseDoneCount += 1;
-                if (responseDoneCount >= 2) {
+                if (responseDoneCount === 2) {
                   resolveResponse();
                 }
               }
@@ -387,13 +392,11 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
           toolChoice: { type: "function", name: "openclaw_agent_consult" },
         });
         await waitForLiveMilestone(toolObserved, "tool call", eventClasses);
-        await waitForLiveMilestone(
-          functionOutputAcknowledged,
-          "function output acknowledgement",
-          eventClasses,
-        );
+        await waitForLiveMilestone(functionOutputAdded, "function output added", eventClasses);
+        await waitForLiveMilestone(functionOutputDone, "function output done", eventClasses);
         await waitForLiveMilestone(responseObserved, "terminal response", eventClasses);
         expect(responseCreateCount - responseCreateCountAtToolCall).toBe(1);
+        expect(responseDoneCount).toBe(2);
       } finally {
         if (reservation) {
           await Promise.resolve(realtime.broker.cancelBrowserSession(reservation)).catch(

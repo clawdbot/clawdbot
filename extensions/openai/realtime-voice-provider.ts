@@ -1508,7 +1508,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.config.onError?.(new Error(readRealtimeErrorDetail(event.error)));
         break;
 
-      case "conversation.item.created":
+      case "conversation.item.added":
         break;
 
       case "response.function_call_arguments.delta":
@@ -1972,8 +1972,16 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             : "unset";
       return `tools=${tools} toolChoice=${toolChoice}`;
     }
-    if (event.type === "conversation.item.created" && event.item?.type) {
-      return `itemType=${event.item.type}`;
+    if (
+      (event.type === "conversation.item.added" || event.type === "conversation.item.done") &&
+      event.item?.type
+    ) {
+      return [
+        `itemType=${event.item.type}`,
+        event.item.name ? `name=${event.item.name}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ");
     }
     if (event.type === "response.done") {
       const status = event.response?.status;
@@ -1987,11 +1995,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     if (event.type === "response.cancelled") {
       return "cancelled";
-    }
-    if (event.type === "conversation.item.done" && event.item?.type) {
-      return [event.item.type, event.item.name ? `name=${event.item.name}` : undefined]
-        .filter(Boolean)
-        .join(" ");
     }
     return undefined;
   }

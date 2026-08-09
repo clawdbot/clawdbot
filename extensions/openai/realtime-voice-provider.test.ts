@@ -259,9 +259,9 @@ function emitCompletedToolCalls(
   });
 }
 
-function acknowledgeFunctionOutput(socket: FakeWebSocketInstance, callId: string): void {
+function emitFunctionOutputAdded(socket: FakeWebSocketInstance, callId: string): void {
   emitServerEvent(socket, {
-    type: "conversation.item.created",
+    type: "conversation.item.added",
     item: { type: "function_call_output", call_id: callId },
   });
 }
@@ -3708,10 +3708,19 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       expectedResponseCreateEvent(),
     ]);
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
-    acknowledgeFunctionOutput(socket, "call_1");
+    emitFunctionOutputAdded(socket, "call_1");
     expect(onEvent).toHaveBeenCalledWith({
       direction: "server",
-      type: "conversation.item.created",
+      type: "conversation.item.added",
+      detail: "itemType=function_call_output",
+    });
+    emitServerEvent(socket, {
+      type: "conversation.item.done",
+      item: { type: "function_call_output", call_id: "call_1" },
+    });
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "conversation.item.done",
       detail: "itemType=function_call_output",
     });
     socket.emit(
@@ -3737,7 +3746,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(parseSent(socket).slice(-1)).toEqual([
       expectedFunctionOutput("call_1", { status: "already_delivered" }),
     ]);
-    acknowledgeFunctionOutput(socket, "call_1");
+    emitFunctionOutputAdded(socket, "call_1");
     await submission;
     expect(hasSentEventType(socket, "response.create")).toBe(false);
   });
@@ -3748,13 +3757,13 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     emitCompletedToolCalls(socket, ["call_1", "call_2"]);
 
     const first = bridge.submitToolResult("call_1", { text: "first" });
-    acknowledgeFunctionOutput(socket, "call_1");
+    emitFunctionOutputAdded(socket, "call_1");
     await first;
 
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
 
     const second = bridge.submitToolResult("call_2", { text: "second" });
-    acknowledgeFunctionOutput(socket, "call_2");
+    emitFunctionOutputAdded(socket, "call_2");
     await second;
 
     expect(
@@ -3774,8 +3783,8 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       { status: "already_delivered" },
       { suppressResponse: true },
     );
-    acknowledgeFunctionOutput(socket, "call_1");
-    acknowledgeFunctionOutput(socket, "call_2");
+    emitFunctionOutputAdded(socket, "call_1");
+    emitFunctionOutputAdded(socket, "call_2");
     await Promise.all([first, second]);
 
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
@@ -3816,7 +3825,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       void bridge.submitToolResult("call_reused", { text: "stale" });
     }
     const fresh = bridge.submitToolResult("call_reused", { text: "fresh" });
-    acknowledgeFunctionOutput(reconnectedSocket, "call_reused");
+    emitFunctionOutputAdded(reconnectedSocket, "call_reused");
     await fresh;
 
     expect(onToolCall).toHaveBeenCalledTimes(2);
@@ -3842,7 +3851,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       { status: "working" },
       { willContinue: true },
     );
-    acknowledgeFunctionOutput(socket, "call_1");
+    emitFunctionOutputAdded(socket, "call_1");
     await working;
     bridge.sendUserMessage?.("queue after tool result");
 
@@ -3858,7 +3867,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     const done = bridge.submitToolResult("call_1", { text: "done" });
-    acknowledgeFunctionOutput(socket, "call_1");
+    emitFunctionOutputAdded(socket, "call_1");
     await done;
 
     expect(parseSent(socket).slice(-3)).toEqual([
