@@ -975,7 +975,7 @@ function enqueueSlackBlockActionEvent(params: {
     channelType: params.auth.channelType,
     senderId: params.parsed.userId,
     threadTs: params.parsed.threadTs,
-    ...(params.eventScope ? { eventScope: params.eventScope } : {}),
+    eventScope: params.eventScope,
   });
   const contextParts = [
     "slack:interaction",
