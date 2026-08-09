@@ -958,8 +958,8 @@ extension GatewayChannelActor {
         if let identity {
             if let deviceToken = auth["deviceToken"]?.value as? String {
                 let authRole = auth["role"]?.value as? String ?? role
-                let scopes = ((auth["deviceTokenScopes"] ?? auth["scopes"])?.value as? [ProtoAnyCodable])?
-                    .compactMap { $0.value as? String } ?? []
+                let scopes = (auth["deviceTokenScopes"] ?? auth["scopes"])?.arrayValue?
+                    .compactMap(\.stringValue) ?? []
                 if self.persistIssuedDeviceToken(
                     authSource: self.lastAuthSource,
                     deviceId: identity.deviceId,

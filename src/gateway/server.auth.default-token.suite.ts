@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   GATEWAY_SERVER_CAPS,
+  type HelloOk,
   MIN_NODE_PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -86,26 +87,8 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(health.ok).toBe(true);
     }
 
-    function readHelloOkAuth(payload: unknown):
-      | {
-          role?: unknown;
-          scopes?: unknown;
-          deviceToken?: unknown;
-          deviceTokenScopes?: unknown;
-        }
-      | undefined {
-      return (
-        payload as
-          | {
-              auth?: {
-                role?: unknown;
-                scopes?: unknown;
-                deviceToken?: unknown;
-                deviceTokenScopes?: unknown;
-              };
-            }
-          | undefined
-      )?.auth;
+    function readHelloOkAuth(payload: unknown): HelloOk["auth"] | undefined {
+      return (payload as { auth?: HelloOk["auth"] } | undefined)?.auth;
     }
 
     test("closes silent handshakes after timeout", async () => {

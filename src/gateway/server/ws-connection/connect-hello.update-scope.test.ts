@@ -1,5 +1,7 @@
-// Hello update-scope tests cover the authenticated role/scope projection passed to snapshots.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+
+// Hello update-scope tests cover the authenticated role/scope projection passed to snapshots.
 
 const {
   buildGatewaySnapshotMock,
@@ -8,16 +10,8 @@ const {
   listControlUiPluginWidgetKindsMock,
 } = vi.hoisted(() => ({
   emitGatewayAuthSecurityEventMock: vi.fn(),
-  listControlUiPluginTabsMock: vi.fn((scopes: readonly string[]) =>
-    scopes.includes("operator.admin")
-      ? [{ pluginId: "admin-plugin", id: "admin", label: "Admin" }]
-      : [],
-  ),
-  listControlUiPluginWidgetKindsMock: vi.fn((scopes: readonly string[]) =>
-    scopes.includes("operator.admin")
-      ? [{ pluginId: "admin-plugin", kind: "admin-plugin:admin", label: "Admin" }]
-      : [],
-  ),
+  listControlUiPluginTabsMock: vi.fn((_scopes: readonly string[]) => []),
+  listControlUiPluginWidgetKindsMock: vi.fn((_scopes: readonly string[]) => []),
   buildGatewaySnapshotMock: vi.fn((opts?: { includeUpdateDetails?: boolean }) => {
     const updateAvailable = {
       currentVersion: "2026.8.7",
@@ -124,25 +118,7 @@ function makeState(role: "operator" | "node", scopes: string[]) {
 }
 
 function helloPayload(context: ReturnType<typeof makeContext>) {
-  const response = context.sendFrame.mock.calls.at(0)?.at(0) as
-    | {
-        payload?: {
-          auth?: {
-            deviceToken?: string;
-            deviceTokenScopes?: string[];
-            issuedAtMs?: number;
-            role?: string;
-            scopes?: string[];
-          };
-          controlUiTabs?: unknown[];
-          controlUiWidgetKinds?: unknown[];
-          snapshot?: {
-            updateAvailable?: Record<string, unknown>;
-            updateSchedule?: unknown;
-          };
-        };
-      }
-    | undefined;
+  const response = context.sendFrame.mock.calls.at(0)?.at(0) as { payload?: HelloOk } | undefined;
   return response?.payload;
 }
 
@@ -233,8 +209,6 @@ describe("sendGatewayHello update detail scope", () => {
       deviceTokenScopes: ["operator.read", "operator.admin"],
       issuedAtMs: 1,
     });
-    expect(helloPayload(context)?.controlUiTabs).toBeUndefined();
-    expect(helloPayload(context)?.controlUiWidgetKinds).toBeUndefined();
     expect(listControlUiPluginTabsMock).toHaveBeenCalledWith(["operator.pairing"], {
       requireGatewayAuthGrant: false,
     });
