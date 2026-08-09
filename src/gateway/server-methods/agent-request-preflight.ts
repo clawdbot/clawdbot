@@ -1,10 +1,6 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  ErrorCodes,
-  errorShape,
-  validateAgentParams,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
@@ -16,18 +12,14 @@ import { resolveSwarmConfig } from "../../agents/swarm-config.js";
 import { validateStructuredOutputSchema } from "../../agents/swarm-output-schema.js";
 import { resolveAgentIdFromSessionKey, resolveStorePath } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   isMainSessionRestartRecoveryInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
-import {
-  isAcceptedAgentDedupePayload,
-  readGatewayDedupeEntry,
-  resolveAgentDedupeKeys,
-} from "./agent-dedupe.js";
+import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "../agent-turn/types.js";
+import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
 import {
   resolveExpectedExistingSessionConstraint,
   type ExpectedExistingSessionConstraint,
@@ -38,14 +30,11 @@ import {
   resolveCanUseInternalRuntimeHandoff,
 } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
-import { assertValidParams } from "./validation.js";
 
-type AgentRequestPreflight = {
+export type AgentRequestPreflight = {
   request: AgentRunRequest;
-  cfg: ReturnType<GatewayRequestHandlerOptions["context"]["getRuntimeConfig"]>;
+  cfg: ReturnType<AgentTurnContext["getRuntimeConfig"]>;
   runId: string;
-  lifecycleGeneration: string;
   allowModelOverride: boolean;
   canUseInternalRuntimeHandoff: boolean;
   canUseCronRunContinuation: boolean;
@@ -66,13 +55,13 @@ type AgentRequestPreflight = {
   agentDedupeKeys: string[];
 };
 
-export function prepareAgentRequestPreflight(
-  params: Pick<GatewayRequestHandlerOptions, "params" | "respond" | "context" | "client">,
-): AgentRequestPreflight | undefined {
-  if (!assertValidParams(params.params, validateAgentParams, "agent", params.respond)) {
-    return undefined;
-  }
-  const request = params.params as AgentRunRequest;
+export function prepareAgentRequestPreflight(params: {
+  request: AgentRunRequest;
+  context: AgentTurnContext;
+  client: AgentTurnPrincipal | null;
+  io: AgentTurnIo;
+}): AgentRequestPreflight | undefined {
+  const { request } = params;
   const cfg = params.context.getRuntimeConfig();
   const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(params.client);
   const requestSessionKey = request.sessionKey?.trim();
@@ -99,14 +88,14 @@ export function prepareAgentRequestPreflight(
       ? validateStructuredOutputSchema(request.swarmOutputSchema)
       : undefined;
     if (request.swarmCollector !== true || schemaError) {
-      params.respond(
+      params.io.emitAcceptance([
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
           schemaError ?? "active swarm collector sessions require swarmCollector=true",
         ),
-      );
+      ]);
       return undefined;
     }
     const registeredCollector = findAuthorizedSwarmCollectorRequest({
@@ -138,31 +127,31 @@ export function prepareAgentRequestPreflight(
       !registeredCollector ||
       (!pendingCollectorLaunch && !collectorDedupe)
     ) {
-      params.respond(
+      params.io.emitAcceptance([
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
           "swarm collector fields require an enabled, host-registered collector run",
         ),
-      );
+      ]);
       return undefined;
     }
   }
   if (request.cwd && !path.isAbsolute(request.cwd)) {
-    params.respond(
+    params.io.emitAcceptance([
       false,
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, "cwd must be absolute"),
-    );
+    ]);
     return undefined;
   }
   if (request.cwd && !normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId)) {
-    params.respond(
+    params.io.emitAcceptance([
       false,
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, "cwd is reserved for plugin-owned subagent runs"),
-    );
+    ]);
     return undefined;
   }
   const allowModelOverride = resolveAllowModelOverrideFromClient(params.client);
@@ -173,11 +162,11 @@ export function prepareAgentRequestPreflight(
     internalRuntimeHandoffId: request.internalRuntimeHandoffId,
   });
   if (!expectedSessionResult.ok) {
-    params.respond(
+    params.io.emitAcceptance([
       false,
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, expectedSessionResult.error),
-    );
+    ]);
     return undefined;
   }
   const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
@@ -186,77 +175,77 @@ export function prepareAgentRequestPreflight(
   const isOneShotModelRun = request.modelRun === true;
   const isRawModelRun = isOneShotModelRun || request.promptMode === "none";
   if (request.promptMode === "none" && !isOneShotModelRun) {
-    params.respond(
+    params.io.emitAcceptance([
       false,
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
         'promptMode="none" requires modelRun=true so the run cannot mutate a durable session.',
       ),
-    );
+    ]);
     return undefined;
   }
   if (requestedModelOverride && !allowModelOverride) {
-    params.respond(
+    params.io.emitAcceptance([
       false,
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
         "provider/model overrides are not authorized for this caller.",
       ),
-    );
+    ]);
     return undefined;
   }
   if (
     (requestedInternalSessionEffects || requestedPromptPersistenceSuppression) &&
     !canUseInternalRuntimeHandoff
   ) {
-    params.respond(
+    params.io.emitAcceptance([
       false,
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
         "internal session-effect controls are reserved for backend callers.",
       ),
-    );
+    ]);
     return undefined;
   }
   const runId = request.idempotencyKey;
   const execApprovalFollowupApprovalId = parseExecApprovalFollowupApprovalId(runId);
   if (execApprovalFollowupApprovalId && !canUseInternalRuntimeHandoff) {
-    params.respond(
+    params.io.emitAcceptance([
       false,
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
         "exec approval followup idempotency keys are reserved for backend callers.",
       ),
-    );
+    ]);
     return undefined;
   }
   const inputProvenance = normalizeInputProvenance(request.inputProvenance);
   const isRestartRecoveryResumeRun =
     canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance);
   if (request.internalExecutionIdentityRetry !== undefined && !isRestartRecoveryResumeRun) {
-    params.respond(
+    params.io.emitAcceptance([
       false,
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
         "internal execution identity retry mode is reserved for main-session restart recovery.",
       ),
-    );
+    ]);
     return undefined;
   }
   if (request.forceCodeModeTools === true && !isRestartRecoveryResumeRun) {
-    params.respond(
+    params.io.emitAcceptance([
       false,
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
         "forceCodeModeTools is reserved for main-session restart recovery.",
       ),
-    );
+    ]);
     return undefined;
   }
   const sessionEffects =
@@ -265,44 +254,10 @@ export function prepareAgentRequestPreflight(
     idempotencyKey: runId,
     execApprovalFollowupApprovalId,
   });
-  const cached = readGatewayDedupeEntry({ dedupe: params.context.dedupe, keys: agentDedupeKeys });
-  if (cached) {
-    if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
-      const cachedRunId =
-        typeof cached.payload.runId === "string" && cached.payload.runId.trim()
-          ? cached.payload.runId.trim()
-          : runId;
-      const cachedSessionKey =
-        typeof cached.payload.sessionKey === "string" && cached.payload.sessionKey.trim()
-          ? cached.payload.sessionKey.trim()
-          : undefined;
-      const cachedAgentId =
-        cachedSessionKey === "global" &&
-        typeof cached.payload.agentId === "string" &&
-        cached.payload.agentId.trim()
-          ? cached.payload.agentId.trim()
-          : undefined;
-      params.respond(
-        true,
-        {
-          runId: cachedRunId,
-          status: "in_flight" as const,
-          ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
-          ...(cachedAgentId ? { agentId: cachedAgentId } : {}),
-        },
-        undefined,
-        { cached: true, runId: cachedRunId },
-      );
-    } else {
-      params.respond(cached.ok, cached.payload, cached.error, { cached: true });
-    }
-    return undefined;
-  }
   return {
     request,
     cfg,
     runId,
-    lifecycleGeneration: getAgentEventLifecycleGeneration(),
     allowModelOverride,
     canUseInternalRuntimeHandoff,
     canUseCronRunContinuation,

@@ -23,6 +23,7 @@ import {
   writePersistedInstalledPluginIndex,
 } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginInstallRecordInfo } from "../plugins/installed-plugin-index.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -32,19 +33,58 @@ import { loadTaskFlowRegistryStateFromSqlite } from "../tasks/task-flow-registry
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import {
   autoMigrateLegacyStateDir,
-  autoMigrateLegacyState,
+  autoMigrateLegacyState as autoMigrateLegacyStateWithSurfaces,
   autoMigrateLegacyTaskStateSidecars,
-  detectLegacyStateMigrations,
+  detectLegacyStateMigrations as detectLegacyStateMigrationsWithSurfaces,
   resetAutoMigrateLegacyStateDirForTest,
   resetAutoMigrateLegacyStateForTest,
   resetAutoMigrateLegacyTaskStateSidecarsForTest,
-  runLegacyStateMigrations,
+  runLegacyStateMigrations as runLegacyStateMigrationsWithSurfaces,
 } from "./doctor-state-migrations.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeDoctorStateDir(): string {
   return tempDirs.make("openclaw-doctor-");
+}
+
+type DetectLegacyStateParams = Parameters<typeof detectLegacyStateMigrationsWithSurfaces>[0];
+type RunLegacyStateParams = Parameters<typeof runLegacyStateMigrationsWithSurfaces>[0];
+type AutoMigrateLegacyStateParams = Parameters<typeof autoMigrateLegacyStateWithSurfaces>[0];
+
+// This broad core suite intentionally exercises migration mechanics without plugin-owned keys.
+// Package-shaped coverage owns configured plugin resolution and setup-sidecar loading.
+function detectLegacyStateMigrations(
+  params: Omit<DetectLegacyStateParams, "legacySessionSurfaces"> & {
+    legacySessionSurfaces?: DetectLegacyStateParams["legacySessionSurfaces"];
+  },
+) {
+  return detectLegacyStateMigrationsWithSurfaces({
+    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    ...params,
+  });
+}
+
+function runLegacyStateMigrations(
+  params: Omit<RunLegacyStateParams, "legacySessionSurfaces"> & {
+    legacySessionSurfaces?: RunLegacyStateParams["legacySessionSurfaces"];
+  },
+) {
+  return runLegacyStateMigrationsWithSurfaces({
+    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    ...params,
+  });
+}
+
+function autoMigrateLegacyState(
+  params: Omit<AutoMigrateLegacyStateParams, "legacySessionSurfaces"> & {
+    legacySessionSurfaces?: AutoMigrateLegacyStateParams["legacySessionSurfaces"];
+  },
+) {
+  return autoMigrateLegacyStateWithSurfaces({
+    legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    ...params,
+  });
 }
 
 const mockedChannelMigrationPlans = vi.hoisted(() => ({
@@ -111,15 +151,6 @@ vi.mock("../channels/plugins/bundled.js", async () => {
   ];
   return {
     ...actual,
-    listBundledChannelLegacySessionSurfaces: vi.fn(() => [
-      {
-        isLegacyGroupSessionKey: (key: string) => /^group:.+@g\.us$/i.test(key.trim()),
-        canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) =>
-          /^group:.+@g\.us$/i.test(key.trim())
-            ? `agent:${agentId}:whatsapp:${key.trim().toLowerCase()}`
-            : null,
-      },
-    ]),
   };
 });
 
@@ -1282,7 +1313,7 @@ describe("doctor legacy state migrations", () => {
     expect(outsideStore[sessionKey]?.acp).toBeDefined();
   });
 
-  it("keeps shipped WhatsApp legacy group keys channel-qualified during migration", async () => {
+  it("does not apply WhatsApp session-key reinterpretation when its owner is unselected", async () => {
     const root = makeDoctorStateDir();
     const cfg: OpenClawConfig = {};
     const targetDir = path.join(root, "agents", "main", "sessions");
@@ -1302,7 +1333,7 @@ describe("doctor legacy state migrations", () => {
       now: () => 123,
     });
 
-    expect(store["agent:main:whatsapp:group:123@g.us"]?.sessionId).toBe("wa");
+    expect(store["agent:main:unknown:group:123@g.us"]?.sessionId).toBe("wa");
     expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("generic");
   });
 

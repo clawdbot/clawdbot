@@ -60,7 +60,7 @@ export function resolveTransientCronRetryDecision(params: {
   cronConfig?: CronConfig;
   error: string | undefined;
   errorClassification?: CronRunErrorClassification;
-  lastErrorReason?: string;
+  lastErrorReason?: CronJob["state"]["lastErrorReason"];
   executionStarted?: boolean;
   consecutiveErrors: number | undefined;
 }): TransientCronRetryDecision {

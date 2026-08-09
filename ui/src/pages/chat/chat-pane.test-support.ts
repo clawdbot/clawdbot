@@ -19,6 +19,7 @@ import { createInitialUserMessageHandoff } from "../../app/initial-user-message-
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
+import type { TaskSuggestionAcceptMode } from "../../lib/task-suggestion-acceptance.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
@@ -40,7 +41,11 @@ export type TestChatPane = HTMLElement & {
   restoreArchivedSession: (sessionKey: string) => Promise<void>;
   disconnectedCallback: () => void;
   discardBrowserAnnotations?: () => void;
-  acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
+  acceptTaskSuggestion: (
+    suggestion: TaskSuggestion,
+    mode: TaskSuggestionAcceptMode,
+    cloudProfileId?: string,
+  ) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;

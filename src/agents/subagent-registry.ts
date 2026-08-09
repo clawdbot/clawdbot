@@ -1,4 +1,5 @@
 /** Coordinates subagent registration, lifecycle, delivery, steering, recovery, and persistence. */
+import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
@@ -440,7 +441,7 @@ const subagentRunManager = createSubagentRunManager({
         // Registry waits are Gateway-owned lifecycle work. Keep them on the
         // owning instance when one exists; standalone processes authenticate normally.
         return await gatewayRuntime.waitForAgent<T>(
-          (request.params ?? {}) as Record<string, unknown>,
+          (request.params ?? {}) as AgentWaitParams,
           request.timeoutMs ?? undefined,
         );
       }
