@@ -22,6 +22,7 @@ scenario:
     channel: qa-channel
     summary: Force one resolved announce cron through settled-tool finalization.
     config:
+      requiredProviderMode: mock-openai
       channelId: qa-room
       promptSnippet: Empty response after write recovery QA check
       retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.

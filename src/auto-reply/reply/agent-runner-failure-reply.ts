@@ -24,7 +24,7 @@ import {
   isFailoverError,
 } from "../../agents/failover-error.js";
 import { isMissingProviderAuthError } from "../../agents/model-auth.js";
-import { isFallbackSummaryError } from "../../agents/model-fallback.js";
+import { isFallbackSummaryError } from "../../agents/model-fallback-attempt.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -375,11 +375,7 @@ function supportsChannelCodexLogin(provider: string | null | undefined): boolean
     return false;
   }
   const normalizedProvider = provider.trim().toLowerCase().replace(/_/gu, "-");
-  return (
-    normalizedProvider === "openai" ||
-    normalizedProvider === "codex" ||
-    normalizedProvider === "openai-codex"
-  );
+  return normalizedProvider === "openai" || normalizedProvider === "codex";
 }
 
 export function buildExternalRunFailureReply(
@@ -475,18 +471,24 @@ export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload:
 
 export function buildTerminalAgentRunFailureReplyPayload(params: {
   isHeartbeat?: boolean;
+  visibleReplyDelivered: boolean;
   sessionCtx: ExternalFailureConversationContext;
   cfg?: OpenClawConfig;
 }): ReplyPayload {
+  const text = params.isHeartbeat
+    ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+    : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
+  // Once output is visible, hiding its terminal failure leaves a misleading partial reply.
+  // Keep normal group silence only for failures that produced no visible output.
   return markAgentRunFailureReplyPayload({
-    text: resolveExternalRunFailureTextForConversation({
-      text: params.isHeartbeat
-        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-      sessionCtx: params.sessionCtx,
-      isGenericRunnerFailure: true,
-      cfg: params.cfg,
-    }),
+    text: params.visibleReplyDelivered
+      ? text
+      : resolveExternalRunFailureTextForConversation({
+          text,
+          sessionCtx: params.sessionCtx,
+          isGenericRunnerFailure: true,
+          cfg: params.cfg,
+        }),
   });
 }
 

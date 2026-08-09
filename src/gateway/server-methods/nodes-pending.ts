@@ -10,7 +10,7 @@ import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
   type NodePairingGeneration,
-} from "../../infra/node-pairing-state.js";
+} from "../../infra/device-pairing-node-state.js";
 import {
   drainNodePendingWork,
   enqueueNodePendingWork,

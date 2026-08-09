@@ -1,8 +1,8 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { NodePairingGeneration } from "../../infra/device-pairing-node-state.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { NodePairingGeneration } from "../../infra/node-pairing-state.js";
 import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
@@ -354,7 +354,7 @@ export async function waitForNodeReconnect(params: {
   lifecycle?: NodeWakeLifecycle;
   pairingGeneration?: string;
 }): Promise<boolean> {
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, NODE_WAKE_RECONNECT_WAIT_MS, 250);
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, NODE_WAKE_RECONNECT_WAIT_MS, 1);
   const pollMs = resolveTimerTimeoutMs(params.pollMs, NODE_WAKE_RECONNECT_POLL_MS, 50);
   const deadline = Date.now() + timeoutMs;
 
@@ -371,7 +371,7 @@ export async function waitForNodeReconnect(params: {
     if (resolveDispatchableNodeSession(session)) {
       return true;
     }
-    await delayMs(pollMs);
+    await delayMs(Math.min(pollMs, Math.max(0, deadline - Date.now())));
   }
   if (
     params.lifecycle &&

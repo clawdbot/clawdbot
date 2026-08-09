@@ -1209,6 +1209,38 @@ func TestValidateDocChunkTranslationAllowsTranslatedProseInIsolatedIndentedFence
 	}
 }
 
+func TestValidateDocChunkTranslationAllowsDedentedCodeInIndentedFence(t *testing.T) {
+	t.Parallel()
+
+	sourceFence := "    ```typescript\n" +
+		"const plugin = createPlugin<Account>({\n" +
+		"  // Account resolution belongs on `config`.\n" +
+		"  notify: (code) => `Pairing code: ${code}`,\n" +
+		"});\n" +
+		"    ```\n"
+	translatedFence := "    ```typescript\n" +
+		"const plugin = createPlugin<Account>({\n" +
+		"  // La resolución de cuentas pertenece a `config`.\n" +
+		"  notify: (code) => `Código de emparejamiento: ${code}`,\n" +
+		"});\n" +
+		"    ```\n"
+
+	if err := validateDocChunkTranslation(sourceFence, translatedFence); err != nil {
+		t.Fatalf("expected translated pure fenced chunk to validate, got %v", err)
+	}
+
+	source := "<Example>\n" + sourceFence + "    Run `openclaw doctor` after editing.\n</Example>\n"
+	translated := "<Example>\n" + translatedFence + "    Ejecuta `openclaw doctor` después de editar.\n</Example>\n"
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected translated component fence and preserved trailing inline code to validate, got %v", err)
+	}
+	changedTrailingCode := strings.Replace(translated, "`openclaw doctor`", "`openclaw fix`", 1)
+	err := validateDocChunkTranslation(source, changedTrailingCode)
+	if err == nil || !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected changed inline code after the fence to be rejected, got %v", err)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsChangedCodeInSplitComponentBody(t *testing.T) {
 	t.Parallel()
 

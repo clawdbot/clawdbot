@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   reconcileSessionRunTerminal,
@@ -17,6 +18,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
+import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 // Control UI chat module implements run lifecycle behavior.
@@ -245,6 +247,14 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
   if (intent.sourceClient !== client) {
     return false;
   }
+  const access = readChatSessionActionAccess(
+    { client, hello: host.hello, phase: "connected" },
+    true,
+  ).abort;
+  if (!access.allowed) {
+    setChatError(host, access.reason);
+    return false;
+  }
   const result = await requestChatAbort(client, intent);
   if (result.ok) {
     return true;
@@ -260,6 +270,9 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
     : null;
   const pendingAbort = disconnectedIntent?.runId ? disconnectedIntent : null;
   if (!host.connected && !pendingAbort) {
+    // Session-only stops cannot be replayed safely against a later run.
+    // Explain the blocked action instead of leaving the visible Stop inert.
+    setChatError(host, t("chat.questions.disconnected"));
     return;
   }
   if (!opts?.preserveDraft) {

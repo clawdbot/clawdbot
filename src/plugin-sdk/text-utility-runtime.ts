@@ -2,6 +2,17 @@
 import type { BaseProbeResult } from "../channels/plugins/types.public.js";
 import { withTimeout } from "../utils/with-timeout.js";
 
+export {
+  estimateToolResultTextChars,
+  sliceToolResultTextToBudget,
+} from "../agents/embedded-agent-runner/tool-result-text-budget.js";
+export {
+  DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  resolveLiveToolResultMaxChars,
+} from "../agents/tool-result-limits.js";
+export { escapeHtml } from "../shared/html-escape.js";
+export { estimateStringChars } from "../utils/cjk-chars.js";
+
 type ChannelProbeResult = BaseProbeResult & { elapsedMs?: number };
 
 /** Run a channel probe with shared timeout, elapsed-time, and error-result handling. */
@@ -27,16 +38,6 @@ export async function runChannelProbe<
     }
     return finish(onError(error));
   }
-}
-
-/** Escapes text for safe insertion into HTML text and quoted attribute values. */
-export function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
 }
 
 export {

@@ -1,17 +1,10 @@
 // OpenClaw SDK helper module supports normalize behavior.
+import { asFiniteNumber as readNumber } from "@openclaw/normalization-core/number-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayEvent, JsonObject, OpenClawEvent, OpenClawEventType } from "./types.js";
-
-// Normalize raw Gateway events into stable SDK event types and common metadata.
-function asRecord(value: unknown): JsonObject {
-  return typeof value === "object" && value !== null ? (value as JsonObject) : {};
-}
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function readNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function readLowerString(value: unknown): string | undefined {

@@ -394,6 +394,25 @@ export function mergeDiagnostics(
 }
 
 export function computeCardDiagnostics(card: WorkboardCard, now: number): WorkboardDiagnostic[] {
+  if (card.metadata?.archivedAt) {
+    // Archived cards intentionally skip automation. Keep nonterminal cards
+    // visible as a transient diagnostic without rewriting archived metadata.
+    if (card.status !== "done") {
+      return [
+        diagnostic(
+          {
+            kind: "archived_but_active",
+            severity: "warning",
+            title: "Archived card is still in an active status",
+            detail: `Card status is "${card.status}" but it is archived, so it is excluded from dispatch without any start failure or error. Unarchive it or move it to "done" to stop the silent skip.`,
+            actions: [],
+          },
+          now,
+        ),
+      ];
+    }
+    return [];
+  }
   const diagnostics: WorkboardDiagnostic[] = [];
   const claim = card.metadata?.claim;
   const lastHeartbeatAt = claim?.lastHeartbeatAt ?? card.execution?.updatedAt ?? card.updatedAt;

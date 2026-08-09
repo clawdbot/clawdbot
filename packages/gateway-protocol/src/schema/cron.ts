@@ -151,6 +151,7 @@ const CronFailoverReasonSchema = Type.Union([
   Type.Literal("billing"),
   Type.Literal("server_error"),
   Type.Literal("timeout"),
+  Type.Literal("tls_certificate"),
   Type.Literal("context_overflow"),
   Type.Literal("model_not_found"),
   Type.Literal("session_expired"),
@@ -429,9 +430,16 @@ const CronFailureNotificationDeliverySchema = closedObject({
   error: Type.Optional(Type.String()),
 });
 
+const CronAutoDisabledSchema = closedObject({
+  reason: Type.Union([Type.Literal("consecutive-failures"), Type.Literal("schedule-errors")]),
+  atMs: Type.Integer({ minimum: 0 }),
+  consecutiveErrors: Type.Integer({ minimum: 1 }),
+});
+
 /** Scheduler-maintained state for the latest run/delivery outcome. */
 export const CronJobStateSchema = closedObject({
   nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  scheduleActivatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   lastRunStatus: Type.Optional(CronRunStatusSchema),
@@ -442,6 +450,8 @@ export const CronJobStateSchema = closedObject({
   lastErrorReason: Type.Optional(CronFailoverReasonSchema),
   lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
+  // Report-only scheduler ownership fact; callers cannot patch this field.
+  autoDisabled: Type.Optional(CronAutoDisabledSchema),
   consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
   lastDelivered: Type.Optional(Type.Boolean()),
   lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
@@ -569,6 +579,7 @@ export const CronListParamsSchema = closedObject({
   sortDir: Type.Optional(CronSortDirSchema),
   agentId: Type.Optional(NonEmptyString),
   compact: Type.Optional(Type.Boolean()),
+  includeDeliveryPreviews: Type.Optional(Type.Boolean()),
 });
 
 /** Empty request payload for scheduler status. */

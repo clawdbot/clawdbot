@@ -72,7 +72,6 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
   thinking?: QaSuiteCommandOptions["thinking"];
   cliAuthMode?: QaSuiteCommandOptions["cliAuthMode"];
   parityPack?: QaSuiteCommandOptions["parityPack"];
-  pack?: QaSuiteCommandOptions["pack"];
   scenario?: QaSuiteCommandOptions["scenarioIds"];
   enablePlugin?: QaSuiteCommandOptions["enabledPluginIds"];
   image?: QaSuiteCommandOptions["image"];
@@ -481,10 +480,6 @@ export function registerQaLabCli(program: Command) {
       "CLI backend auth mode for live Claude CLI runs: auto, api-key, or subscription",
     )
     .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
-    .option(
-      "--pack <id>",
-      'Scenario pack id; currently "personal-agent" and "observability" are supported',
-    )
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option(
       "--enable-plugin <id>",
@@ -535,7 +530,6 @@ export function registerQaLabCli(program: Command) {
         thinking: opts.thinking,
         cliAuthMode: opts.cliAuthMode,
         parityPack: opts.parityPack,
-        pack: opts.pack,
         scenarioIds: opts.scenario,
         enabledPluginIds: opts.enablePlugin,
         concurrency: opts.concurrency,

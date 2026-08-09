@@ -91,6 +91,9 @@ class TooltipProvider extends OpenClawLitElement {
 class Tooltip extends OpenClawLitElement {
   @property() content = "";
 
+  /** Let a reveal-only trigger open on click instead of dismissing. */
+  @property({ type: Boolean, attribute: "open-on-click" }) openOnClick = false;
+
   @query("wa-tooltip") private webAwesomeTooltip?: WaTooltip;
 
   private triggerElement: HTMLElement | null = null;
@@ -337,7 +340,17 @@ class Tooltip extends OpenClawLitElement {
     }
     this.close();
   };
-  private readonly handleClick = () => this.close();
+  // Pointer activation normally dismisses, so an action button never strands an
+  // open tooltip. A trigger whose only job is to reveal the tip opts out: on
+  // touch and in browsers that do not focus buttons on click there is no other
+  // way to read it.
+  private readonly handleClick = () => {
+    if (this.openOnClick) {
+      this.show();
+      return;
+    }
+    this.close();
+  };
   private readonly handleDocumentPointerUp = () => {
     document.removeEventListener("pointerup", this.handleDocumentPointerUp);
     this.suppressPointerFocus = false;

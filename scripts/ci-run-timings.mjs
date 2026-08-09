@@ -2,6 +2,7 @@
 
 // Summarizes GitHub Actions run/job timings for CI analysis.
 import { execFileSync } from "node:child_process";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 
@@ -211,6 +212,9 @@ export function summarizePnpmStoreWarmupBarrier(run, windowSeconds = 5) {
 
 /**
  * Selects the latest main push CI run, optionally matching a head SHA.
+ *
+ * @param {Array<Record<string, unknown>>} runs
+ * @param {string | null} [headSha]
  */
 export function selectLatestMainPushCiRun(runs, headSha = null) {
   const pushRuns = runs.filter((run) => run.event === "push");
@@ -263,10 +267,11 @@ function getLatestMainPushCiRunId() {
     { encoding: "utf8" },
   );
   const run = selectLatestMainPushCiRun(parseRunList(raw), headSha);
-  if (!run?.databaseId) {
+  const databaseId = run?.databaseId;
+  if (typeof databaseId !== "string" && typeof databaseId !== "number") {
     throw new Error(`No push CI run found for origin/main ${headSha.slice(0, 10)}`);
   }
-  return String(run.databaseId);
+  return String(databaseId);
 }
 
 function listRecentSuccessfulCiRuns(limit) {
@@ -503,6 +508,6 @@ async function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   await main();
 }

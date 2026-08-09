@@ -10,9 +10,10 @@ import {
   taskStatusLabel,
   taskTimestampMs,
   taskTitle,
-  type TaskSummary,
 } from "../../../lib/tasks/data.ts";
-import { STATUS_TONES, type BackgroundTasksProps } from "./chat-background-tasks.ts";
+import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import { STATUS_TONES } from "./chat-background-tasks-shared.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 
 type BackgroundTasksStatus = { count: number; startedMs: number | null };
 

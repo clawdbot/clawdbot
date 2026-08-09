@@ -1,6 +1,7 @@
+import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 // Tool handler tests cover tool lifecycle events, read-path diagnostics,
 // messaging tool capture, approvals, and emitted summaries.
-import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   onAgentEvent as registerAgentEventListener,
@@ -55,6 +56,15 @@ function endTool(ctx: ToolHandlerContext, event: ToolExecutionEndEvent) {
   return handleToolExecutionEnd(ctx, { type: "tool_execution_end", ...event });
 }
 
+async function executeTool(
+  ctx: ToolHandlerContext,
+  event: ToolExecutionStartEvent & Omit<ToolExecutionEndEvent, "toolName" | "toolCallId">,
+) {
+  const { toolName, toolCallId, args, ...completion } = event;
+  await startTool(ctx, { toolName, toolCallId, args });
+  await endTool(ctx, { toolName, toolCallId, ...completion });
+}
+
 function updateTool(ctx: ToolHandlerContext, event: ToolExecutionUpdateEvent) {
   return handleToolExecutionUpdate(ctx, {
     type: "tool_execution_update",
@@ -65,6 +75,19 @@ function updateTool(ctx: ToolHandlerContext, event: ToolExecutionUpdateEvent) {
 }
 
 const pendingAskUserFinishes = new Set<() => Promise<void>>();
+
+function createBasicAskUserArgs() {
+  return {
+    questions: [
+      {
+        id: "target",
+        header: "Target",
+        question: "Where next?",
+        options: [{ label: "Staging" }, { label: "Production" }],
+      },
+    ],
+  };
+}
 
 async function activateAskUserPrompt(toolCallId: string, args: unknown) {
   let questionId: string | undefined;
@@ -163,12 +186,13 @@ function createTestContext(): {
       pendingMessagingTexts: new Map<string, string>(),
       pendingMessagingMediaUrls: new Map<string, string[]>(),
       pendingToolMediaUrls: [],
+      pendingToolMediaTrustByUrl: new Map(),
       pendingToolAudioAsVoice: false,
-      pendingToolTrustedLocalMedia: false,
       deterministicApprovalPromptPending: false,
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSourceReplyPayloads: [],
       messageToolOnlySourceReplyDelivered: false,
@@ -224,10 +248,6 @@ function requireString(value: unknown, label: string): string {
   return value;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 describe("update_plan progress events", () => {
   it("emits the typed full plan snapshot after a successful result", async () => {
     const { ctx, onAgentEvent } = createTestContext();
@@ -273,12 +293,7 @@ describe("update_plan progress events", () => {
   });
 });
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectRecordFields(value: unknown, label: string, expected: Record<string, unknown>) {
   const record = requireRecord(value, label);
@@ -364,6 +379,7 @@ describe("handleToolExecutionStart read path checks", () => {
       channelData: {
         askUser: {
           questionId,
+          optionValues: ["Staging (Recommended)", "Production"],
         },
       },
       presentationTextMode: "fallback",
@@ -472,16 +488,7 @@ describe("handleToolExecutionStart read path checks", () => {
           releaseFlush = resolve;
         }),
     );
-    const args = {
-      questions: [
-        {
-          id: "target",
-          header: "Target",
-          question: "Where next?",
-          options: [{ label: "Staging" }, { label: "Production" }],
-        },
-      ],
-    };
+    const args = createBasicAskUserArgs();
 
     const pending = startTool(ctx, {
       toolName: "ask_user",
@@ -513,16 +520,7 @@ describe("handleToolExecutionStart read path checks", () => {
           throw failure;
         });
       }
-      const args = {
-        questions: [
-          {
-            id: "target",
-            header: "Target",
-            question: "Where next?",
-            options: [{ label: "Staging" }, { label: "Production" }],
-          },
-        ],
-      };
+      const args = createBasicAskUserArgs();
 
       expect(() =>
         startTool(ctx, {
@@ -545,16 +543,7 @@ describe("handleToolExecutionStart read path checks", () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();
     ctx.params.onToolResult = onToolResult;
-    const args = {
-      questions: [
-        {
-          id: "target",
-          header: "Target",
-          question: "Where next?",
-          options: [{ label: "Staging" }, { label: "Production" }],
-        },
-      ],
-    };
+    const args = createBasicAskUserArgs();
 
     await startTool(ctx, {
       toolName: "ask_user",
@@ -575,6 +564,7 @@ describe("handleToolExecutionStart read path checks", () => {
         channelData: {
           askUser: {
             questionId: activation.questionId,
+            optionValues: ["Staging", "Production"],
           },
         },
       }),
@@ -586,25 +576,12 @@ describe("handleToolExecutionStart read path checks", () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();
     ctx.params.onToolResult = onToolResult;
-    const args = {
-      questions: [
-        {
-          id: "target",
-          header: "Target",
-          question: "Where next?",
-          options: [{ label: "Staging" }, { label: "Production" }],
-        },
-      ],
-    };
+    const args = createBasicAskUserArgs();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "ask_user",
       toolCallId: "ask-denied",
       args,
-    });
-    await endTool(ctx, {
-      toolName: "ask_user",
-      toolCallId: "ask-denied",
       isError: true,
       result: { content: [{ type: "text", text: "denied" }] },
     });
@@ -930,14 +907,10 @@ describe("handleToolExecutionStart read path checks", () => {
   it("keeps an unmarked catalog tool named wait visible", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "wait",
       toolCallId: "tool-catalog-wait",
       args: {},
-    });
-    await endTool(ctx, {
-      toolName: "wait",
-      toolCallId: "tool-catalog-wait",
       isError: false,
       result: { details: { status: "completed" } },
     });
@@ -955,15 +928,10 @@ describe("handleToolExecutionStart read path checks", () => {
 describe("handleToolExecutionEnd cron mutation tracking", () => {
   it("increments successfulCronAdds when cron add succeeds", async () => {
     const { ctx } = createTestContext();
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "cron",
       toolCallId: "tool-cron-1",
       args: { action: "add", job: { name: "reminder" } },
-    });
-
-    await endTool(ctx, {
-      toolName: "cron",
-      toolCallId: "tool-cron-1",
       isError: false,
       result: { details: { status: "ok" } },
     });
@@ -974,15 +942,10 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
 
   it("does not increment successfulCronAdds when cron add fails", async () => {
     const { ctx } = createTestContext();
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "cron",
       toolCallId: "tool-cron-2",
       args: { action: "add", job: { name: "reminder" } },
-    });
-
-    await endTool(ctx, {
-      toolName: "cron",
-      toolCallId: "tool-cron-2",
       isError: true,
       result: { details: { status: "error" } },
     });
@@ -1015,15 +978,10 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     ["exec", "openclaw cron add --at +1h --message 'follow up' 2>&1"],
   ] as const)("increments successfulCronAdds when %s runs %s", async (toolName, command) => {
     const { ctx } = createTestContext();
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName,
       toolCallId: "tool-shell-cron-add",
       args: { command },
-    });
-
-    await endTool(ctx, {
-      toolName,
-      toolCallId: "tool-shell-cron-add",
       isError: false,
       result: {
         details: {
@@ -1040,17 +998,12 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
 
   it("does not increment successfulCronAdds when shell cron add fails", async () => {
     const { ctx } = createTestContext();
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "exec",
       toolCallId: "tool-exec-cron-add-failed",
       args: {
         command: "openclaw cron add --at +1h --message 'follow up' --name reminder",
       },
-    });
-
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-cron-add-failed",
       isError: false,
       result: {
         details: {
@@ -1086,15 +1039,10 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     ["openclaw cron add --bad &>>/tmp/cron.log", "a bash-only append redirection"],
   ])("does not count %s (%s)", async (command) => {
     const { ctx } = createTestContext();
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "exec",
       toolCallId: "tool-exec-not-cron-add",
       args: { command },
-    });
-
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-not-cron-add",
       isError: false,
       result: {
         details: {
@@ -1111,15 +1059,10 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
 
   it("keeps pre-execution cron failures replay-safe", async () => {
     const { ctx } = createTestContext();
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "cron",
       toolCallId: "tool-cron-invalid",
       args: { action: "add" },
-    });
-
-    await endTool(ctx, {
-      toolName: "cron",
-      toolCallId: "tool-cron-invalid",
       isError: true,
       executionStarted: false,
       result: { details: { status: "error", error: "job required" } },
@@ -1136,15 +1079,10 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-cron-aborted-before-execution";
     recordToolExecutionTracked(toolCallId, "run-test");
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "cron",
       toolCallId,
       args: { action: "add", job: { name: "reminder" } },
-    });
-
-    await endTool(ctx, {
-      toolName: "cron",
-      toolCallId,
       isError: true,
       result: { details: { status: "error", error: "tool timed out" } },
     });
@@ -1160,15 +1098,10 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-cron-cancelled-before-body";
     recordToolExecutionTracked(toolCallId, "run-test");
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "cron",
       toolCallId,
       args: { action: "add", job: { name: "reminder" } },
-    });
-
-    await endTool(ctx, {
-      toolName: "cron",
-      toolCallId,
       isError: true,
       executionStarted: true,
       result: { details: { status: "error", error: "cancelled before tool body" } },
@@ -1184,15 +1117,10 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
   it("keeps a policy-blocked cron mutation replay-safe", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-cron-blocked";
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "cron",
       toolCallId,
       args: { action: "add", job: { name: "reminder" } },
-    });
-
-    await endTool(ctx, {
-      toolName: "cron",
-      toolCallId,
       isError: false,
       result: buildBlockedToolResult({
         reason: "blocked by policy",
@@ -1211,15 +1139,10 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
   it("keeps executed mutations replay-unsafe when middleware rewrites the result as blocked", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-cron-rewritten-blocked";
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "cron",
       toolCallId,
       args: { action: "add", job: { name: "reminder" } },
-    });
-
-    await endTool(ctx, {
-      toolName: "cron",
-      toolCallId,
       isError: true,
       result: {
         content: [{ type: "text", text: "blocked by middleware" }],
@@ -1254,14 +1177,10 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
         { name: toolName, execute: vi.fn() } as never,
         "run-test",
       );
-      await startTool(ctx, {
+      await executeTool(ctx, {
         toolName,
         toolCallId,
         args: { action },
-      });
-      await endTool(ctx, {
-        toolName,
-        toolCallId,
         isError: false,
         result: { details: { ok: true } },
       });
@@ -1272,14 +1191,10 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
 
   it("does not trust replay-safe names without concrete instance provenance", async () => {
     const { ctx } = createTestContext();
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "search",
       toolCallId: "tool-shadowed-search",
       args: { query: "scheduler" },
-    });
-    await endTool(ctx, {
-      toolName: "search",
-      toolCallId: "tool-shadowed-search",
       isError: false,
       result: { matches: [] },
     });
@@ -1437,15 +1352,10 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("marks middleware failures on the last tool error", async () => {
     const { ctx } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "exec",
       toolCallId: "tool-exec-middleware-error",
       args: { cmd: "echo ok" },
-    });
-
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-middleware-error",
       isError: false,
       result: {
         content: [
@@ -1470,26 +1380,18 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("preserves an unresolved mutation across a later read failure", async () => {
     const { ctx } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "write",
       toolCallId: "tool-write-failed",
       args: { path: "/tmp/demo.txt", content: "updated" },
-    });
-    await endTool(ctx, {
-      toolName: "write",
-      toolCallId: "tool-write-failed",
       isError: true,
       result: { error: "permission denied" },
     });
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "read",
       toolCallId: "tool-read-failed",
       args: { path: "/tmp/missing.txt" },
-    });
-    await endTool(ctx, {
-      toolName: "read",
-      toolCallId: "tool-read-failed",
       isError: true,
       result: { error: "file not found" },
     });
@@ -1504,7 +1406,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("clears edit failure when the retry succeeds through common file path aliases", async () => {
     const { ctx } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "edit",
       toolCallId: "tool-edit-1",
       args: {
@@ -1512,18 +1414,13 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         old_string: "beta stale",
         new_string: "beta fixed",
       },
-    });
-
-    await endTool(ctx, {
-      toolName: "edit",
-      toolCallId: "tool-edit-1",
       isError: true,
       result: { error: "Could not find the exact text in /tmp/demo.txt" },
     });
 
     expect(ctx.state.lastToolError?.toolName).toBe("edit");
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "edit",
       toolCallId: "tool-edit-2",
       args: {
@@ -1531,11 +1428,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         oldText: "beta",
         newText: "beta fixed",
       },
-    });
-
-    await endTool(ctx, {
-      toolName: "edit",
-      toolCallId: "tool-edit-2",
       isError: false,
       result: { ok: true },
     });
@@ -1547,15 +1439,10 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     const { ctx, onAgentEvent } = createTestContext();
     const error =
       'Validation failed for tool "edit":\n  - edits: must have required properties edits\n\nReceived arguments:\n{"path":"secret.txt","contents":"PTY_PLANTED_SECRET"}';
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "edit",
       toolCallId: "tool-edit-validation",
       args: { path: "secret.txt" },
-    });
-
-    await endTool(ctx, {
-      toolName: "edit",
-      toolCallId: "tool-edit-validation",
       isError: true,
       executionStarted: false,
       errorKind: "argument-validation",
@@ -1576,15 +1463,10 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     const { ctx, onAgentEvent } = createTestContext();
     const error =
       'Validation failed for tool "edit":\n  - secret tool output\n\nReceived arguments:\n{}';
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "edit",
       toolCallId: "tool-edit-spoof",
       args: {},
-    });
-
-    await endTool(ctx, {
-      toolName: "edit",
-      toolCallId: "tool-edit-spoof",
       isError: true,
       executionStarted: true,
       result: { details: { status: "error", error } },
@@ -1600,7 +1482,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("marks successful mutating tool results as replay-invalid for terminal lifecycle truth", async () => {
     const { ctx } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "edit",
       toolCallId: "tool-edit-side-effect",
       args: {
@@ -1608,11 +1490,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         old_string: "beta",
         new_string: "gamma",
       },
-    });
-
-    await endTool(ctx, {
-      toolName: "edit",
-      toolCallId: "tool-edit-side-effect",
       isError: false,
       result: { ok: true },
     });
@@ -1626,15 +1503,10 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("keeps failed mutating tool attempts replay-invalid", async () => {
     const { ctx } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "exec",
       toolCallId: "tool-exec-partial-failure",
       args: { command: "printf changed > /tmp/demo.txt && false" },
-    });
-
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-partial-failure",
       isError: true,
       result: { error: "Command exited with code 1" },
     });
@@ -1648,14 +1520,10 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("keeps unclassified interactive tool calls replay-invalid", async () => {
     const { ctx } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "browser",
       toolCallId: "tool-browser-click",
       args: { action: "act", kind: "click", ref: "e12" },
-    });
-    await endTool(ctx, {
-      toolName: "browser",
-      toolCallId: "tool-browser-click",
       isError: false,
       result: { details: { ok: true } },
     });
@@ -1678,14 +1546,10 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       job: { name: "rewritten mutation" },
     });
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "cron",
       toolCallId,
       args: { action: "status" },
-    });
-    await endTool(ctx, {
-      toolName: "cron",
-      toolCallId,
       isError: false,
       result: { ok: true },
     });
@@ -1742,14 +1606,10 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       mediaUrl: "/tmp/rewritten.png",
     });
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "message",
       toolCallId,
       args: { action: "status" },
-    });
-    await endTool(ctx, {
-      toolName: "message",
-      toolCallId,
       isError: false,
       result: { details: { messageId: "message-rewritten" } },
     });
@@ -1768,11 +1628,48 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     ]);
   });
 
+  it("records preview suppression text only for confirmed current-source sends", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "automatic";
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-message-other-route",
+      args: {
+        action: "send",
+        provider: "telegram",
+        to: "chat-other",
+        text: "Other route text",
+      },
+      isError: false,
+      result: { details: { ok: true } },
+    });
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "tool-message-current-source",
+      args: {
+        action: "send",
+        provider: "telegram",
+        to: "chat-source",
+        text: "QA-MSTEAMS-DM-OK",
+      },
+      isError: false,
+      result: {
+        details: {
+          ok: true,
+          sourceReplyRoute: "current-source",
+        },
+      },
+    });
+
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual(["qa-msteams-dm-ok"]);
+  });
+
   it("records rich-content delivery when visible text is blank", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-rich-content";
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "message",
       toolCallId,
       args: {
@@ -1784,10 +1681,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
           blocks: [{ type: "buttons", buttons: [{ label: "OK", value: "ok" }] }],
         }),
       },
-    });
-    await endTool(ctx, {
-      toolName: "message",
-      toolCallId,
       isError: false,
       result: { details: { messageId: "message-rich" } },
     });
@@ -1806,7 +1699,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-reply-target";
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "message",
       toolCallId,
       args: {
@@ -1815,10 +1708,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         target: "chat-reply",
         message: "visible reply",
       },
-    });
-    await endTool(ctx, {
-      toolName: "message",
-      toolCallId,
       isError: false,
       result: { ok: true },
     });
@@ -1834,11 +1723,98 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "reply",
+      args: {
+        action: "reply",
+        provider: "telegram",
+        target: "chat-reply",
+        message: "Visible reply",
+      },
+      result: {
+        ok: true,
+        messageId: "message-reply",
+        details: { sourceReplyRoute: "current-source" },
+      },
+      expected: "visible reply",
+    },
+    {
+      name: "poll",
+      args: {
+        action: "poll",
+        provider: "telegram",
+        target: "chat-poll",
+        pollQuestion: "Preferred default?",
+        pollOption: ["Tell me right away", "Only important"],
+      },
+      result: {
+        ok: true,
+        pollId: "poll-1",
+        details: { sourceReplyRoute: "current-source" },
+      },
+      expected: "preferred default?",
+    },
+  ])("records confirmed current-source $name text for preview dedupe", async (testCase) => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "automatic";
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-current-source-${testCase.name}`,
+      args: testCase.args,
+      isError: false,
+      result: testCase.result,
+    });
+
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual([testCase.expected]);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(true);
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "reply",
+      args: {
+        action: "reply",
+        provider: "telegram",
+        target: "chat-reply",
+        message: "Visible reply",
+      },
+      result: { ok: true, messageId: "message-reply" },
+    },
+    {
+      name: "poll",
+      args: {
+        action: "poll",
+        provider: "telegram",
+        target: "chat-poll",
+        pollQuestion: "Preferred default?",
+        pollOption: ["Tell me right away", "Only important"],
+      },
+      result: { ok: true, pollId: "poll-1" },
+    },
+  ])("does not record off-route $name text for preview dedupe", async (testCase) => {
+    const { ctx } = createTestContext();
+    ctx.params.sourceReplyDeliveryMode = "automatic";
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-off-route-${testCase.name}`,
+      args: testCase.args,
+      isError: false,
+      result: testCase.result,
+    });
+
+    expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual([]);
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(false);
+  });
+
   it("records conversation creation target evidence", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-message-thread-create-target";
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "message",
       toolCallId,
       args: {
@@ -1847,10 +1823,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         target: "chat-thread",
         message: "new thread",
       },
-    });
-    await endTool(ctx, {
-      toolName: "message",
-      toolCallId,
       isError: false,
       result: { ok: true, thread: { id: "thread-1" } },
     });
@@ -1871,7 +1843,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     const { ctx } = createTestContext();
     const toolCallId = `tool-message-reply-${result.status ?? "dry-run"}`;
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "message",
       toolCallId,
       args: {
@@ -1880,10 +1852,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         target: "chat-reply",
         message: "visible reply",
       },
-    });
-    await endTool(ctx, {
-      toolName: "message",
-      toolCallId,
       isError: false,
       result,
     });
@@ -1896,7 +1864,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("does not treat text or media arguments on non-messaging tools as delivery", async () => {
     const { ctx } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "cron",
       toolCallId: "tool-cron-wake",
       args: {
@@ -1904,10 +1872,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         text: "not an outbound message",
         mediaUrl: "/tmp/not-an-outbound-message.png",
       },
-    });
-    await endTool(ctx, {
-      toolName: "cron",
-      toolCallId: "tool-cron-wake",
       isError: false,
       result: { details: { status: "ok" } },
     });
@@ -1920,18 +1884,13 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("marks successful legacy subagents control actions as replay-invalid", async () => {
     const { ctx } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "subagents",
       toolCallId: "tool-subagents-kill",
       args: {
         action: "kill",
         target: "worker-1",
       },
-    });
-
-    await endTool(ctx, {
-      toolName: "subagents",
-      toolCallId: "tool-subagents-kill",
       isError: false,
       result: { status: "ok", action: "kill", target: "worker-1" },
     });
@@ -1945,17 +1904,12 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("keeps action-dependent subagents calls replay-unsafe", async () => {
     const { ctx } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "subagents",
       toolCallId: "tool-subagents-list",
       args: {
         action: "list",
       },
-    });
-
-    await endTool(ctx, {
-      toolName: "subagents",
-      toolCallId: "tool-subagents-list",
       isError: false,
       result: { status: "ok", action: "list", total: 0, text: "no active subagents." },
     });
@@ -1970,14 +1924,10 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     const { ctx } = createTestContext();
     ctx.params.replaySafeToolNames = new Set(["search"]);
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "search",
       toolCallId: "tool-search",
       args: { query: "scheduler" },
-    });
-    await endTool(ctx, {
-      toolName: "search",
-      toolCallId: "tool-search",
       isError: false,
       result: { matches: [] },
     });
@@ -1994,7 +1944,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
   it("keeps successful mutating retries replay-invalid after an earlier tool failure", async () => {
     const { ctx } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "edit",
       toolCallId: "tool-edit-fail-first",
       args: {
@@ -2002,16 +1952,11 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         old_string: "beta stale",
         new_string: "gamma",
       },
-    });
-
-    await endTool(ctx, {
-      toolName: "edit",
-      toolCallId: "tool-edit-fail-first",
       isError: true,
       result: { error: "Could not find the exact text in /tmp/demo.txt" },
     });
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "edit",
       toolCallId: "tool-edit-retry-success",
       args: {
@@ -2019,11 +1964,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         old_string: "beta",
         new_string: "gamma",
       },
-    });
-
-    await endTool(ctx, {
-      toolName: "edit",
-      toolCallId: "tool-edit-retry-success",
       isError: false,
       result: { ok: true },
     });
@@ -2037,6 +1977,48 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 });
 
 describe("handleToolExecutionEnd timeout metadata", () => {
+  it("marks every finalized built-in call with its explicit outcome", async () => {
+    const { ctx } = createTestContext();
+
+    await endTool(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-complete",
+      isError: false,
+      result: { content: "ok" },
+    });
+    await endTool(ctx, {
+      toolName: "process",
+      toolCallId: "tool-process-running",
+      isError: false,
+      result: { details: { status: "running" } },
+    });
+    await endTool(ctx, {
+      toolName: "image_generate",
+      toolCallId: "tool-image-async-started",
+      isError: false,
+      result: { details: { async: true, status: "started" } },
+    });
+    await endTool(ctx, {
+      toolName: "write",
+      toolCallId: "tool-write-failed",
+      isError: true,
+      result: { error: "failed" },
+    });
+
+    expect(
+      ctx.state.toolMetas.map(({ toolName, isError }) => ({
+        toolName,
+        isError,
+      })),
+    ).toEqual([
+      { toolName: "read", isError: false },
+      { toolName: "process", isError: false },
+      { toolName: "image_generate", isError: false },
+      { toolName: "write", isError: true },
+    ]);
+    expect(ctx.state.toolMetas[2]?.asyncStarted).toBe(true);
+  });
+
   it("retains every failed call after later successes change the last-error slot", async () => {
     const { ctx } = createTestContext();
 
@@ -2055,7 +2037,7 @@ describe("handleToolExecutionEnd timeout metadata", () => {
 
     expect(ctx.state.toolMetas.map(({ toolName, isError }) => ({ toolName, isError }))).toEqual([
       { toolName: "read", isError: true },
-      { toolName: "read", isError: undefined },
+      { toolName: "read", isError: false },
       { toolName: "exec", isError: true },
     ]);
   });
@@ -2091,6 +2073,234 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expect(ctx.state.toolMetas).toEqual([
       expect.objectContaining({ toolName: "exec", isError: true }),
     ]);
+  });
+
+  async function executeProcessResult(
+    ctx: ToolHandlerContext,
+    params: {
+      action?: string;
+      details?: Record<string, unknown>;
+      isError?: boolean;
+      output?: string;
+    } = {},
+  ) {
+    const action = params.action ?? "poll";
+    const output = params.output ?? "SAFE_PROCESS_STDERR";
+    await executeTool(ctx, {
+      toolName: "process",
+      toolCallId: `tool-process-${action}`,
+      args: { action, sessionId: "wild-lagoon" },
+      isError: params.isError ?? true,
+      result: {
+        content: [{ type: "text", text: output }],
+        details: {
+          status: "completed",
+          sessionId: "wild-lagoon",
+          exitReason: "exit",
+          aggregated: output,
+          ...params.details,
+        },
+      },
+    });
+  }
+
+  it.each(["poll", "log"])(
+    "projects a structured terminal process diagnostic from %s",
+    async (action) => {
+      const { ctx } = createTestContext();
+      await executeProcessResult(ctx, { action, details: { exitCode: 7 } });
+
+      expect(ctx.state.lastToolError).toMatchObject({
+        toolName: "process",
+        terminalDiagnostic: {
+          kind: "process",
+          sessionId: "wild-lagoon",
+          reason: { kind: "exit", exitCode: 7 },
+        },
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "signal",
+      details: { exitCode: 0, exitSignal: "SIGKILL", exitReason: "signal" },
+      reason: { kind: "signal", signal: "SIGKILL" },
+    },
+    {
+      label: "overall timeout",
+      details: {
+        exitCode: 0,
+        exitSignal: "SIGTERM",
+        exitReason: "overall-timeout",
+        timedOut: true,
+      },
+      reason: { kind: "timeout", timeoutKind: "overall-timeout" },
+    },
+    {
+      label: "no-output timeout",
+      details: {
+        exitCode: 0,
+        exitSignal: "SIGTERM",
+        exitReason: "no-output-timeout",
+        timedOut: true,
+      },
+      reason: { kind: "timeout", timeoutKind: "no-output-timeout" },
+    },
+  ])(
+    "preserves a typed process $label without fabricating exit status",
+    async ({ details, reason }) => {
+      const { ctx } = createTestContext();
+      await executeProcessResult(ctx, { details });
+
+      expect(ctx.state.lastToolError?.terminalDiagnostic).toMatchObject({ reason });
+      expect(ctx.state.lastToolError?.terminalDiagnostic?.reason).not.toHaveProperty("exitCode");
+    },
+  );
+
+  it("keeps child output out of the terminal diagnostic while retaining a safe full-verbosity error", async () => {
+    const { ctx } = createTestContext();
+    const dummyTelegramToken = `123456:${"A".repeat(28)}WXYZ`;
+    await executeProcessResult(ctx, {
+      output: `${dummyTelegramToken} ${"x".repeat(500)}`,
+      details: { exitCode: 7 },
+    });
+
+    const diagnostic = ctx.state.lastToolError?.terminalDiagnostic;
+    expect(diagnostic).toEqual({
+      kind: "process",
+      sessionId: "wild-lagoon",
+      reason: { kind: "exit", exitCode: 7 },
+    });
+    expect(ctx.state.lastToolError?.error?.length).toBeLessThanOrEqual(401);
+    expect(ctx.state.lastToolError?.error).toMatch(/…$/u);
+    expect(JSON.stringify(ctx.state.lastToolError)).not.toContain(dummyTelegramToken);
+  });
+
+  it("omits full-verbosity process output containing terminal control characters", async () => {
+    const { ctx } = createTestContext();
+    await executeProcessResult(ctx, {
+      output: "SAFE\u001b[31m_PROCESS_STDERR",
+      details: { exitCode: 7 },
+    });
+
+    expect(ctx.state.lastToolError?.terminalDiagnostic).toEqual({
+      kind: "process",
+      sessionId: "wild-lagoon",
+      reason: { kind: "exit", exitCode: 7 },
+    });
+    expect(ctx.state.lastToolError?.error).toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "running poll",
+      isError: false,
+      details: { status: "running", exitReason: undefined, exitCode: undefined },
+    },
+    {
+      label: "failed process operation",
+      details: { status: "failed", exitReason: undefined, exitCode: undefined },
+    },
+    {
+      label: "missing session",
+      details: { status: "failed", sessionId: undefined, exitReason: undefined, exitCode: 7 },
+    },
+    {
+      label: "successful poll",
+      isError: false,
+      details: { exitCode: 0 },
+    },
+    {
+      label: "log without terminal provenance",
+      action: "log",
+      details: { exitReason: undefined, exitCode: 7, exitSignal: "SIGKILL" },
+    },
+    {
+      label: "non-observing process action",
+      action: "write",
+      details: { status: "failed", sessionId: "wild-lagoon", exitCode: 7 },
+    },
+    {
+      label: "kill result",
+      action: "kill",
+      details: {
+        status: "failed",
+        sessionId: undefined,
+        exitReason: undefined,
+        name: "node command.js",
+      },
+    },
+  ])(
+    "does not project a terminal diagnostic for a $label",
+    async ({ label, action, details, isError }) => {
+      const { ctx } = createTestContext();
+      await executeProcessResult(ctx, {
+        action,
+        details,
+        isError,
+        output: `No terminal process result for ${label}.`,
+      });
+
+      expect(ctx.state.lastToolError?.terminalDiagnostic).toBeUndefined();
+    },
+  );
+
+  it("projects outcome-unknown exec results as errors with typed details", async () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx } = createTestContext();
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "The command may have executed. Do not rerun it automatically.",
+        },
+      ],
+      details: {
+        status: "failed",
+        exitCode: null,
+        failureKind: "outcome-unknown",
+        reason: "outcome-unknown",
+        nodeInvokeFailure: {
+          failureCode: "TIMEOUT",
+          message: "node invoke timed out",
+          nodeCommandDispatched: true,
+        },
+        durationMs: 10,
+        aggregated: "The command may have executed. Do not rerun it automatically.",
+      },
+    };
+
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-outcome-unknown",
+      isError: false,
+      result,
+    });
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "exec", isError: true }),
+    ]);
+    const toolResult = events.find(
+      (event) => event.stream === "tool" && event.data?.phase === "result",
+    );
+    expect(toolResult?.data).toMatchObject({
+      isError: true,
+      result: {
+        details: {
+          reason: "outcome-unknown",
+          nodeInvokeFailure: {
+            failureCode: "TIMEOUT",
+            nodeCommandDispatched: true,
+          },
+        },
+      },
+    });
+    resetAgentEventsForTest();
   });
 
   it.each([
@@ -2132,10 +2342,10 @@ describe("handleToolExecutionEnd timeout metadata", () => {
   ])("$name", async ({ toolCallId, args, meta, warning }) => {
     const { ctx } = createTestContext();
     ctx.params.toolProgressDetail = "raw";
-    await startTool(ctx, { toolName: "exec", toolCallId, args });
-    await endTool(ctx, {
+    await executeTool(ctx, {
       toolName: "exec",
       toolCallId,
+      args,
       isError: true,
       result: {
         error: "Command exited with code 1",
@@ -2362,6 +2572,64 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       }),
       isError: true,
     });
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "exec", isError: true }),
+    ]);
+    const [
+      { normalizeAgentRunTerminalReceipt },
+      { createUsageAccumulator },
+      { createEmbeddedRunContextRecoveryState },
+      { prepareEmbeddedRunTerminal },
+    ] = await Promise.all([
+      import("./agent-run-terminal-receipt.js"),
+      import("./embedded-agent-runner/usage-accumulator.js"),
+      import("./embedded-agent-runner/run/context-recovery-state.js"),
+      import("./embedded-agent-runner/run/terminal-preparation.js"),
+    ]);
+    const prepared = prepareEmbeddedRunTerminal({
+      runParams: {
+        sessionId: "session-test-id",
+        runId: "run-test",
+        workspaceDir: "/tmp/openclaw-test",
+        prompt: "run",
+        trigger: "user",
+        timeoutMs: 60_000,
+      },
+      attempt: {
+        terminal: { kind: "ok" },
+        sessionIdUsed: "session-test-id",
+        messagesSnapshot: [],
+        assistantTexts: [],
+        toolMetas: ctx.state.toolMetas.flatMap(({ toolName, ...entry }) =>
+          toolName ? [{ ...entry, toolName }] : [],
+        ),
+        lastAssistant: undefined,
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [],
+        cloudCodeAssistFormatError: false,
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+      },
+      provider: "openai",
+      model: "gpt-5.4",
+      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
+      authProfileStore: { version: 1, profiles: {} },
+      sessionIdUsed: "session-test-id",
+      outerContextTokenMeta: {},
+      usageAccumulator: createUsageAccumulator(),
+      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+      resolvedToolResultFormat: "markdown",
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+    expect(
+      normalizeAgentRunTerminalReceipt(Reflect.get(prepared.agentMeta, "terminalReceipt"))
+        ?.successfulToolNames,
+    ).toEqual([]);
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 
@@ -2390,8 +2658,8 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
   });
 
-  it("does not suppress assistant output when deterministic prompt delivery rejects", async () => {
-    const { ctx } = createTestContext();
+  it("records an actionable failure when deterministic approval delivery rejects", async () => {
+    const { ctx, warn } = createTestContext();
     ctx.params.onToolResult = vi.fn(async () => {
       throw new Error("delivery failed");
     });
@@ -2414,20 +2682,63 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     });
 
     expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to deliver exec approval prompt: delivery failed"),
+    );
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      error: "Approval prompt delivery failed: delivery failed",
+      mutatingAction: false,
+    });
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+    expect(payloads[0]?.text).toContain("approval prompt delivery");
+  });
+
+  it("records an actionable failure when unavailable-approval notice delivery rejects", async () => {
+    const { ctx, warn } = createTestContext();
+    ctx.params.onToolResult = vi.fn(async () => {
+      throw new Error("notice delivery failed");
+    });
+
+    await endTool(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-unavailable-reject",
+      isError: false,
+      result: {
+        details: {
+          status: "approval-unavailable",
+          reason: "no-approval-route",
+          channelLabel: "Discord",
+        },
+      },
+    });
+
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to deliver exec approval prompt: notice delivery failed"),
+    );
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      error: "Approval prompt delivery failed: notice delivery failed",
+      mutatingAction: false,
+    });
   });
 
   it("emits approval + blocked command item events when exec needs approval", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "exec",
       toolCallId: "tool-exec-approval-events",
       args: { command: "npm test" },
-    });
-
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-approval-events",
       isError: false,
       result: {
         details: {
@@ -2733,15 +3044,10 @@ describe("handleToolExecutionEnd derived tool events", () => {
   it("emits command output events for exec results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "exec",
       toolCallId: "tool-exec-output",
       args: { command: "ls" },
-    });
-
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-output",
       isError: false,
       result: {
         details: {
@@ -2772,15 +3078,10 @@ describe("handleToolExecutionEnd derived tool events", () => {
   it("emits patch summary events for apply_patch results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "apply_patch",
       toolCallId: "tool-patch-summary",
       args: { patch: "*** Begin Patch" },
-    });
-
-    await endTool(ctx, {
-      toolName: "apply_patch",
-      toolCallId: "tool-patch-summary",
       isError: false,
       result: {
         details: {
@@ -2970,7 +3271,7 @@ describe("messaging tool media URL tracking", () => {
       },
     });
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "message",
       toolCallId: "tool-mattermost-name",
       args: {
@@ -2979,10 +3280,6 @@ describe("messaging tool media URL tracking", () => {
         to: "town-square",
         content: "hi",
       },
-    });
-    await endTool(ctx, {
-      toolName: "message",
-      toolCallId: "tool-mattermost-name",
       isError: false,
       result: {
         status: "sent",
@@ -3082,11 +3379,9 @@ describe("messaging tool media URL tracking", () => {
     });
   });
 
-  it("commits upload-file args as message delivery evidence", async () => {
-    const { ctx } = createTestContext();
-
-    const startEvt: ToolExecutionStartEvent = {
-      toolName: "message",
+  it.each([
+    {
+      name: "commits upload-file args as message delivery evidence",
       toolCallId: "tool-upload-file",
       args: {
         action: "upload-file",
@@ -3095,36 +3390,12 @@ describe("messaging tool media URL tracking", () => {
         message: "track ready",
         path: "/tmp/generated-song.mp3",
       },
-    };
-    await startTool(ctx, startEvt);
-
-    expect(ctx.state.pendingMessagingMediaUrls.get("tool-upload-file")).toEqual([
-      "/tmp/generated-song.mp3",
-    ]);
-
-    const endEvt: ToolExecutionEndEvent = {
-      toolName: "message",
-      toolCallId: "tool-upload-file",
-      isError: false,
-      result: { ok: true },
-    };
-    await endTool(ctx, endEvt);
-
-    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/generated-song.mp3"]);
-    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
       provider: "discord",
-      to: "channel:123",
-      text: "track ready",
       mediaUrls: ["/tmp/generated-song.mp3"],
-    });
-    expect(ctx.state.pendingMessagingMediaUrls.has("tool-upload-file")).toBe(false);
-  });
-
-  it("commits message attachment aliases as delivery evidence", async () => {
-    const { ctx } = createTestContext();
-
-    const startEvt: ToolExecutionStartEvent = {
-      toolName: "message",
+      verifyPendingMedia: true,
+    },
+    {
+      name: "commits message attachment aliases as delivery evidence",
       toolCallId: "tool-attachment-aliases",
       args: {
         action: "send",
@@ -3133,26 +3404,43 @@ describe("messaging tool media URL tracking", () => {
         media: "/tmp/generated-song.mp3",
         attachments: [{ filePath: "/tmp/generated-cover.png" }],
       },
-    };
-    await startTool(ctx, startEvt);
-
-    const endEvt: ToolExecutionEndEvent = {
+      mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
+    },
+    {
+      name: "commits sendAttachment args as message delivery evidence",
+      toolCallId: "tool-send-attachment",
+      args: {
+        action: "sendAttachment",
+        provider: "discord",
+        to: "channel:123",
+        content: "track ready",
+        filePath: "/tmp/generated-song.mp3",
+      },
+      provider: "discord",
+      mediaUrls: ["/tmp/generated-song.mp3"],
+    },
+  ])("$name", async ({ toolCallId, args, provider, mediaUrls, verifyPendingMedia }) => {
+    const { ctx } = createTestContext();
+    await startTool(ctx, { toolName: "message", toolCallId, args });
+    if (verifyPendingMedia) {
+      expect(ctx.state.pendingMessagingMediaUrls.get(toolCallId)).toEqual(mediaUrls);
+    }
+    await endTool(ctx, {
       toolName: "message",
-      toolCallId: "tool-attachment-aliases",
+      toolCallId,
       isError: false,
       result: { ok: true },
-    };
-    await endTool(ctx, endEvt);
-
-    expect(ctx.state.messagingToolSentMediaUrls).toEqual([
-      "/tmp/generated-song.mp3",
-      "/tmp/generated-cover.png",
-    ]);
+    });
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual(mediaUrls);
     expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      ...(provider === undefined ? {} : { provider }),
       to: "channel:123",
       text: "track ready",
-      mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
+      mediaUrls,
     });
+    if (verifyPendingMedia) {
+      expect(ctx.state.pendingMessagingMediaUrls.has(toolCallId)).toBe(false);
+    }
   });
 
   it("commits internal-ui source replies from successful message sends", async () => {
@@ -3198,14 +3486,10 @@ describe("messaging tool media URL tracking", () => {
   it("does not commit dry-run or external message sends as internal-ui source replies", async () => {
     const { ctx } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "message",
       toolCallId: "tool-dry-run-source-reply",
       args: { action: "send", message: "preview" },
-    });
-    await endTool(ctx, {
-      toolName: "message",
-      toolCallId: "tool-dry-run-source-reply",
       isError: false,
       result: {
         details: {
@@ -3217,14 +3501,10 @@ describe("messaging tool media URL tracking", () => {
       },
     });
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "message",
       toolCallId: "tool-external-source-reply",
       args: { action: "send", to: "channel:123", message: "sent externally" },
-    });
-    await endTool(ctx, {
-      toolName: "message",
-      toolCallId: "tool-external-source-reply",
       isError: false,
       result: {
         details: {
@@ -3236,39 +3516,6 @@ describe("messaging tool media URL tracking", () => {
     });
 
     expect(ctx.state.messagingToolSourceReplyPayloads).toHaveLength(0);
-  });
-
-  it("commits sendAttachment args as message delivery evidence", async () => {
-    const { ctx } = createTestContext();
-
-    const startEvt: ToolExecutionStartEvent = {
-      toolName: "message",
-      toolCallId: "tool-send-attachment",
-      args: {
-        action: "sendAttachment",
-        provider: "discord",
-        to: "channel:123",
-        content: "track ready",
-        filePath: "/tmp/generated-song.mp3",
-      },
-    };
-    await startTool(ctx, startEvt);
-
-    const endEvt: ToolExecutionEndEvent = {
-      toolName: "message",
-      toolCallId: "tool-send-attachment",
-      isError: false,
-      result: { ok: true },
-    };
-    await endTool(ctx, endEvt);
-
-    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/generated-song.mp3"]);
-    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
-      provider: "discord",
-      to: "channel:123",
-      text: "track ready",
-      mediaUrls: ["/tmp/generated-song.mp3"],
-    });
   });
 
   it("trims messagingToolSentMediaUrls to 200 on commit (FIFO)", async () => {
@@ -3383,15 +3630,10 @@ describe("control UI credential redaction (issue #72283)", () => {
   it("redacts secrets in exec aggregated stdout before emitting command_output", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
-    await startTool(ctx, {
+    await executeTool(ctx, {
       toolName: "exec",
       toolCallId: "tool-exec-secret",
       args: { command: "cat ~/.openclaw/openclaw.json" },
-    });
-
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-exec-secret",
       isError: false,
       result: {
         details: {

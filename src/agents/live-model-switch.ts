@@ -3,6 +3,7 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import {
   loadSessionEntry,
@@ -109,7 +110,7 @@ function resolveSelectionFromSessionEntry(params: {
     model,
     ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
     authProfileId,
-    authProfileIdSource: authProfileId ? entry?.authProfileOverrideSource : undefined,
+    authProfileIdSource: authProfileId ? resolveSessionAuthProfileOverrideSource(entry) : undefined,
   };
 }
 

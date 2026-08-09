@@ -40,6 +40,9 @@ export { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/sche
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 
 export {
+  channelBlockedPatch,
+  channelReadyPatch,
+  channelStoppedPatch,
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,
 } from "../gateway/channel-status-patches.js";

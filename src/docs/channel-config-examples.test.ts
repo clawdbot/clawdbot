@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "../config/zod-schema.js";
@@ -12,6 +13,10 @@ const CHANNEL_DOCS_DIR = path.join(process.cwd(), "docs", "channels");
 
 function lineNumberAt(source: string, index: number): number {
   return source.slice(0, index).split("\n").length;
+}
+
+function matchJsonCodeBlocks(markdown: string) {
+  return markdown.matchAll(/```(json5|json)(?:[ \t]+[^\n]*)?\n([\s\S]*?)```/g);
 }
 
 function listChannelDocFiles(): string[] {
@@ -74,11 +79,11 @@ describe("channel docs config examples", () => {
     for (const docPath of listChannelDocFiles()) {
       const fileName = path.basename(docPath);
       const markdown = fs.readFileSync(docPath, "utf8");
-      const blocks = markdown.matchAll(/```(?:json5|json)\n([\s\S]*?)```/g);
+      const blocks = matchJsonCodeBlocks(markdown);
       for (const match of blocks) {
-        const code = match[1] ?? "";
+        const code = match[2] ?? "";
         const location = `${fileName}:${lineNumberAt(markdown, match.index ?? 0)}`;
-        const isStrictJson = match[0].startsWith("```json\n");
+        const isStrictJson = match[1] === "json";
         try {
           if (isStrictJson) {
             JSON.parse(code);
@@ -100,9 +105,9 @@ describe("channel docs config examples", () => {
     for (const docPath of listChannelDocFiles()) {
       const fileName = path.basename(docPath);
       const markdown = fs.readFileSync(docPath, "utf8");
-      const blocks = markdown.matchAll(/```(?:json5|json)\n([\s\S]*?)```/g);
+      const blocks = matchJsonCodeBlocks(markdown);
       for (const match of blocks) {
-        const code = match[1] ?? "";
+        const code = match[2] ?? "";
         if (!/(^|\n)\s*(?:"channels"|channels)\s*:/.test(code)) {
           continue;
         }
@@ -124,6 +129,69 @@ describe("channel docs config examples", () => {
         }
       }
     }
+    expect(failures).toStrictEqual([]);
+  });
+
+  it("keeps full Slack app manifests interactive", () => {
+    const docPath = path.join(CHANNEL_DOCS_DIR, "slack.md");
+    const markdown = fs.readFileSync(docPath, "utf8");
+    const failures: string[] = [];
+    let fullManifestCount = 0;
+
+    for (const match of matchJsonCodeBlocks(markdown)) {
+      const code = match[2] ?? "";
+      const location = `slack.md:${lineNumberAt(markdown, match.index ?? 0)}`;
+      let parsed: unknown;
+      try {
+        parsed = JSON5.parse(code);
+      } catch (error) {
+        failures.push(`${location} JSON5 parse failed: ${String(error)}`);
+        continue;
+      }
+      if (
+        !isRecord(parsed) ||
+        !isRecord(parsed.display_information) ||
+        !isRecord(parsed.features) ||
+        !isRecord(parsed.oauth_config) ||
+        !isRecord(parsed.settings)
+      ) {
+        continue;
+      }
+
+      fullManifestCount += 1;
+      const settings = parsed.settings;
+      const subscriptions = isRecord(settings.event_subscriptions)
+        ? settings.event_subscriptions
+        : undefined;
+      const interactivity = isRecord(settings.interactivity) ? settings.interactivity : undefined;
+      const eventRequestUrl = subscriptions?.request_url;
+
+      if (interactivity?.is_enabled !== true) {
+        failures.push(`${location} settings.interactivity.is_enabled must be true`);
+      }
+
+      if (settings.socket_mode_enabled !== true) {
+        if (typeof eventRequestUrl !== "string" || eventRequestUrl.length === 0) {
+          failures.push(`${location} HTTP event_subscriptions.request_url must be set`);
+        } else if (interactivity?.request_url !== eventRequestUrl) {
+          failures.push(
+            `${location} interactivity.request_url must match event_subscriptions.request_url`,
+          );
+        }
+      }
+
+      if (
+        interactivity &&
+        "message_menu_options_url" in interactivity &&
+        interactivity.message_menu_options_url !== eventRequestUrl
+      ) {
+        failures.push(
+          `${location} interactivity.message_menu_options_url must match event_subscriptions.request_url`,
+        );
+      }
+    }
+
+    expect(fullManifestCount).toBeGreaterThan(0);
     expect(failures).toStrictEqual([]);
   });
 });

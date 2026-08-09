@@ -4,6 +4,7 @@
  * Manages live capture, manual import, summarization, and process-local transcript sessions.
  */
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { resolveStateDir } from "../../config/paths.js";
@@ -57,12 +58,6 @@ function ownsTranscriptSession(
   // Shipped rows predate agent attribution. Treat them as operator-owned legacy
   // state: main can curate them, but isolated agents cannot claim them.
   return ctx.agentId === "main";
-}
-
-function asParamsRecord(params: unknown): Record<string, unknown> {
-  return params && typeof params === "object" && !Array.isArray(params)
-    ? (params as Record<string, unknown>)
-    : {};
 }
 
 const TranscriptsSchema = Type.Object(
@@ -356,7 +351,7 @@ export function createTranscriptsTool(options?: {
       if (!config.enabled) {
         throw new Error("transcripts are disabled");
       }
-      const params = asParamsRecord(rawParams);
+      const params = asOptionalRecord(rawParams) ?? {};
       const action = readStringParam(params, "action", { required: true, trim: true });
       const store = createStore(ctx);
       switch (action) {

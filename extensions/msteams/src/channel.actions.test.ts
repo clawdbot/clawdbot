@@ -123,6 +123,14 @@ function requireMSTeamsHandleAction() {
   return handleAction;
 }
 
+function requireMSTeamsExtractToolSendResult() {
+  const extractToolSendResult = msteamsPlugin.actions?.extractToolSendResult;
+  if (!extractToolSendResult) {
+    throw new Error("msteams actions.extractToolSendResult unavailable");
+  }
+  return extractToolSendResult;
+}
+
 async function runAction(params: {
   action: string;
   cfg?: Record<string, unknown>;
@@ -130,6 +138,7 @@ async function runAction(params: {
   requesterAccountId?: string;
   params?: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
+  mediaAccess?: Parameters<ReturnType<typeof requireMSTeamsHandleAction>>[0]["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   requesterSenderId?: string | null;
@@ -144,6 +153,7 @@ async function runAction(params: {
     accountId: params.accountId,
     requesterAccountId: params.requesterAccountId,
     params: params.params ?? {},
+    mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
     toolContext: params.toolContext,
@@ -210,6 +220,7 @@ async function expectSuccessfulAction(params: {
   requesterAccountId?: Parameters<typeof runAction>[0]["requesterAccountId"];
   actionParams?: Parameters<typeof runAction>[0]["params"];
   toolContext?: Parameters<typeof runAction>[0]["toolContext"];
+  mediaAccess?: Parameters<typeof runAction>[0]["mediaAccess"];
   mediaLocalRoots?: Parameters<typeof runAction>[0]["mediaLocalRoots"];
   mediaReadFile?: Parameters<typeof runAction>[0]["mediaReadFile"];
   requesterSenderId?: Parameters<typeof runAction>[0]["requesterSenderId"];
@@ -226,6 +237,7 @@ async function expectSuccessfulAction(params: {
     accountId: params.accountId,
     requesterAccountId: params.requesterAccountId,
     params: params.actionParams,
+    mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
     toolContext: params.toolContext,
@@ -589,6 +601,16 @@ describe("msteamsPlugin message actions", () => {
 
   it("routes upload-file through sendMessageMSTeams with filename override", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("pdf"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      readFile: mediaReadFile,
+      workspaceDir: "/approved/workspace",
+    };
+    const forgedMediaAccess = {
+      localRoots: ["/forged/workspace"],
+      readFile: vi.fn(async () => Buffer.from("forged")),
+      workspaceDir: "/forged/workspace",
+    };
     await expectSuccessfulAction({
       mockFn: sendMessageMSTeamsMock,
       mockResult: {
@@ -601,7 +623,16 @@ describe("msteamsPlugin message actions", () => {
         path: " /tmp/report.pdf ",
         message: "Quarterly report",
         filename: "Q1-report.pdf",
+        mediaAccess: forgedMediaAccess,
+        mediaLocalRoots: ["/forged/workspace"],
+        mediaReadFile: forgedMediaAccess.readFile,
       },
+      toolContext: {
+        mediaAccess: forgedMediaAccess,
+        mediaLocalRoots: ["/forged/workspace"],
+        mediaReadFile: forgedMediaAccess.readFile,
+      },
+      mediaAccess,
       mediaLocalRoots: ["/tmp"],
       mediaReadFile,
       runtimeParams: {
@@ -609,6 +640,7 @@ describe("msteamsPlugin message actions", () => {
         text: "Quarterly report",
         mediaUrl: " /tmp/report.pdf ",
         filename: "Q1-report.pdf",
+        mediaAccess,
         mediaLocalRoots: ["/tmp"],
         mediaReadFile,
       },
@@ -624,6 +656,42 @@ describe("msteamsPlugin message actions", () => {
         messageId: "msg-upload-1",
         conversationId: "conv-upload-1",
       },
+    });
+    expect(sendMessageMSTeamsMock.mock.calls[0]?.[0]?.mediaAccess).toBe(mediaAccess);
+  });
+
+  it("does not grant forged upload-file media authority when the host grants none", async () => {
+    const forgedMediaAccess = {
+      localRoots: ["/forged/workspace"],
+      readFile: vi.fn(async () => Buffer.from("forged")),
+      workspaceDir: "/forged/workspace",
+    };
+    sendMessageMSTeamsMock.mockResolvedValue({
+      messageId: "msg-upload-1",
+      conversationId: "conv-upload-1",
+    });
+
+    await runAction({
+      action: "upload-file",
+      params: {
+        to: targetChannelId,
+        path: "report.pdf",
+        mediaAccess: forgedMediaAccess,
+        mediaLocalRoots: forgedMediaAccess.localRoots,
+        mediaReadFile: forgedMediaAccess.readFile,
+      },
+      toolContext: { mediaAccess: forgedMediaAccess },
+    });
+
+    expect(sendMessageMSTeamsMock).toHaveBeenCalledWith({
+      cfg: {},
+      to: targetChannelId,
+      text: "",
+      mediaUrl: "report.pdf",
+      filename: undefined,
+      mediaAccess: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
     });
   });
 
@@ -1187,28 +1255,33 @@ describe("msteamsPlugin message actions", () => {
 
   it.each([
     {
+      action: "read",
+      params: { to: graphChannelTarget, messageId: "msg-1" },
+      runtimeMock: getMessageMSTeamsMock,
+    },
+    {
       action: "edit",
-      params: { to: targetChannelId, messageId: "msg-1", content: "updated" },
+      params: { to: graphChannelTarget, messageId: "msg-1", content: "updated" },
       runtimeMock: editMessageMSTeamsMock,
     },
     {
       action: "delete",
-      params: { to: targetChannelId, messageId: "msg-1" },
+      params: { to: graphChannelTarget, messageId: "msg-1" },
       runtimeMock: deleteMessageMSTeamsMock,
     },
     {
       action: "pin",
-      params: { to: targetChannelId, messageId: "msg-1" },
+      params: { to: graphChannelTarget, messageId: "msg-1" },
       runtimeMock: pinMessageMSTeamsMock,
     },
     {
       action: "unpin",
-      params: { to: targetChannelId, pinnedMessageId: "pin-1" },
+      params: { to: graphChannelTarget, pinnedMessageId: "pin-1" },
       runtimeMock: unpinMessageMSTeamsMock,
     },
     {
       action: "react",
-      params: { to: targetChannelId, messageId: "msg-1", emoji: "like" },
+      params: { to: graphChannelTarget, messageId: "msg-1", emoji: "like" },
       runtimeMock: reactMessageMSTeamsMock,
     },
   ])("rejects a blocked $action target before the provider operation", async (testCase) => {
@@ -1354,6 +1427,7 @@ describe("msteamsPlugin.threading.buildToolContext", () => {
     To?: string;
     NativeChannelId?: string;
     ReplyToId?: string;
+    MessageThreadId?: string | number;
   }) {
     const build = msteamsPlugin.threading?.buildToolContext;
     if (!build) {
@@ -1382,6 +1456,57 @@ describe("msteamsPlugin.threading.buildToolContext", () => {
     expect(result?.currentMessagingTarget).toBe("graph-team-1/19:channel-abc@thread.tacv2");
     expect(result?.currentGraphChannelId).toBe("graph-team-1/19:channel-abc@thread.tacv2");
     expect(result?.currentThreadTs).toBe("reply-1");
+    expect(result?.replyToMode).toBe("all");
+  });
+
+  it("prefers MessageThreadId (thread root) over ReplyToId (parent)", () => {
+    const result = callBuildToolContext({
+      ChatType: "channel",
+      To: "conversation:19:channel-abc@thread.tacv2",
+      MessageThreadId: "thread-root",
+      ReplyToId: "nested-parent",
+    });
+    expect(result?.currentThreadTs).toBe("thread-root");
+    expect(result?.replyToMode).toBe("all");
+  });
+
+  it("omits replyToMode when no thread context is present", () => {
+    const result = callBuildToolContext({
+      ChatType: "direct",
+      To: "user:aad-user-1",
+    });
+    expect(result?.currentThreadTs).toBeUndefined();
+    expect(result?.replyToMode).toBeUndefined();
+  });
+
+  it("does not stamp ReplyToId as ambient thread for DM turns", () => {
+    const result = callBuildToolContext({
+      ChatType: "direct",
+      To: "user:aad-user-1",
+      ReplyToId: "quoted-parent",
+    });
+    expect(result?.currentThreadTs).toBeUndefined();
+    expect(result?.replyToMode).toBeUndefined();
+  });
+
+  it("does not stamp ReplyToId as ambient thread for group turns", () => {
+    const result = callBuildToolContext({
+      ChatType: "group",
+      To: "conversation:19:groupchat@thread.v2",
+      ReplyToId: "quoted-parent",
+    });
+    expect(result?.currentThreadTs).toBeUndefined();
+    expect(result?.replyToMode).toBeUndefined();
+  });
+
+  it("stamps channel ReplyToId when MessageThreadId is absent", () => {
+    const result = callBuildToolContext({
+      ChatType: "channel",
+      To: "conversation:19:channel-abc@thread.tacv2",
+      ReplyToId: "channel-parent",
+    });
+    expect(result?.currentThreadTs).toBe("channel-parent");
+    expect(result?.replyToMode).toBe("all");
   });
 
   it("falls back to To for DM turns (no NativeChannelId)", () => {
@@ -1417,6 +1542,232 @@ describe("msteamsPlugin.threading.buildToolContext", () => {
     expect(result?.currentChannelId).toBe("conversation:19:chat@thread.v2");
     expect(result?.currentMessagingTarget).toBeUndefined();
     expect(result?.currentGraphChannelId).toBeUndefined();
+  });
+});
+
+describe("msteamsPlugin.actions.extractToolSendResult", () => {
+  it.each([
+    {
+      name: "receipt raw",
+      result: {
+        details: {
+          result: {
+            receipt: {
+              raw: [{ conversationId: "19:channel@thread.tacv2" }],
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "receipt part raw",
+      result: {
+        details: {
+          result: {
+            receipt: {
+              parts: [{ raw: { conversationId: "19:channel@thread.tacv2" } }],
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "direct delivery result",
+      result: {
+        details: {
+          result: {
+            conversationId: "19:channel@thread.tacv2",
+          },
+        },
+      },
+    },
+  ])("canonicalizes a Graph target from $name", ({ result }) => {
+    expect(
+      requireMSTeamsExtractToolSendResult()({
+        result,
+        send: {
+          to: "team-aad/19:channel@thread.tacv2",
+          threadId: "thread-root",
+        },
+      }),
+    ).toEqual({
+      to: "conversation:19:channel@thread.tacv2",
+    });
+  });
+
+  it("canonicalizes user targets to the resolved conversation", () => {
+    expect(
+      requireMSTeamsExtractToolSendResult()({
+        result: {
+          details: {
+            result: {
+              conversationId: "19:dm@thread.v2",
+            },
+          },
+        },
+        send: {
+          to: "user:aad-user-1",
+        },
+      }),
+    ).toEqual({
+      to: "conversation:19:dm@thread.v2",
+    });
+  });
+
+  it.each([
+    undefined,
+    {},
+    { details: {} },
+    { details: { result: {} } },
+    { details: { result: { receipt: { raw: [{}] } } } },
+  ])("rejects a result without an authoritative conversation id", (result) => {
+    expect(
+      requireMSTeamsExtractToolSendResult()({
+        result,
+        send: {
+          to: "team-aad/19:channel@thread.tacv2",
+          threadId: "thread-root",
+        },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("msteamsPlugin.threading.resolveAutoThreadId", () => {
+  function resolveAutoThreadId(params: {
+    cfg?: OpenClawConfig;
+    to?: string;
+    currentGraphChannelId?: string;
+  }) {
+    const resolve = msteamsPlugin.threading?.resolveAutoThreadId;
+    if (!resolve) {
+      throw new Error("msteams threading.resolveAutoThreadId unavailable");
+    }
+    return resolve({
+      cfg: params.cfg ?? ({} as OpenClawConfig),
+      to: params.to ?? "conversation:19:channel@thread.tacv2",
+      toolContext: {
+        currentChannelId: "conversation:19:channel@thread.tacv2",
+        currentMessagingTarget: params.currentGraphChannelId,
+        currentGraphChannelId: params.currentGraphChannelId,
+        currentThreadTs: "thread-root",
+        replyToMode: "all",
+      },
+    });
+  }
+
+  it("returns ambient thread root for same conversation target", () => {
+    expect(resolveAutoThreadId({})).toBe("thread-root");
+  });
+
+  it("returns undefined for a global top-level reply style", () => {
+    expect(
+      resolveAutoThreadId({
+        cfg: {
+          channels: {
+            msteams: {
+              replyStyle: "top-level",
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when requireMention defaults the reply style to top-level", () => {
+    expect(
+      resolveAutoThreadId({
+        cfg: {
+          channels: {
+            msteams: {
+              requireMention: false,
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("honors team and channel reply style overrides", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          replyStyle: "thread",
+          teams: {
+            "team-1": {
+              replyStyle: "top-level",
+              channels: {
+                "19:channel@thread.tacv2": {
+                  replyStyle: "thread",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveAutoThreadId({
+        cfg,
+        currentGraphChannelId: "team-1/19:other@thread.tacv2",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAutoThreadId({
+        cfg,
+        currentGraphChannelId: "team-1/19:channel@thread.tacv2",
+      }),
+    ).toBe("thread-root");
+  });
+
+  it("preserves an explicit thread target under top-level reply style", () => {
+    expect(
+      resolveAutoThreadId({
+        cfg: {
+          channels: {
+            msteams: {
+              replyStyle: "top-level",
+            },
+          },
+        } as OpenClawConfig,
+        to: "conversation:19:channel@thread.tacv2;messageid=explicit-root",
+      }),
+    ).toBe("explicit-root");
+  });
+
+  it("returns undefined for a different conversation", () => {
+    const resolve = msteamsPlugin.threading?.resolveAutoThreadId;
+    if (!resolve) {
+      throw new Error("msteams threading.resolveAutoThreadId unavailable");
+    }
+    expect(
+      resolve({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:other@thread.tacv2",
+        toolContext: {
+          currentChannelId: "conversation:19:channel@thread.tacv2",
+          currentThreadTs: "thread-root",
+          replyToMode: "all",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for DM tool context without ambient thread", () => {
+    const resolve = msteamsPlugin.threading?.resolveAutoThreadId;
+    if (!resolve) {
+      throw new Error("msteams threading.resolveAutoThreadId unavailable");
+    }
+    expect(
+      resolve({
+        cfg: {} as OpenClawConfig,
+        to: "user:aad-user-1",
+        toolContext: {
+          currentChannelId: "user:aad-user-1",
+        },
+      }),
+    ).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

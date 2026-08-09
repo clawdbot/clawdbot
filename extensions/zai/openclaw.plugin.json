@@ -46,7 +46,8 @@
               "output": 4.4,
               "cacheRead": 0.26,
               "cacheWrite": 0
-            }
+            },
+            "compat": { "codeMode": "preferred" }
           },
           {
             "id": "glm-5-turbo",
@@ -90,7 +91,8 @@
               "output": 4.4,
               "cacheRead": 0.26,
               "cacheWrite": 0
-            }
+            },
+            "compat": { "codeMode": "preferred" }
           }
         ]
       }

@@ -5,7 +5,11 @@ import {
   type GatewayBrowserClient,
   type GatewayHelloOk,
 } from "../../../api/gateway.ts";
-import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import type {
+  ArtifactDownloadResult,
+  SessionWorkspaceGetResult,
+  SessionWorkspaceListResult,
+} from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import {
   normalizeChatWorkspaceDock,
@@ -16,6 +20,7 @@ import {
 import { icons } from "../../../components/icons.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  CUSTODIAN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../../components/panel-toggle-contract.ts";
 import "../../../components/tooltip.ts";
@@ -60,6 +65,7 @@ export type SessionWorkspaceProps = {
   onOpenArtifact: (artifactId: string) => void;
   onToggleTerminal?: () => void;
   onToggleBrowser?: () => void;
+  onToggleCustodian?: () => void;
   /** Opens the session diff panel; absent when the gateway lacks sessions.diff. */
   onOpenDiff?: () => void;
   diffNotGit?: boolean;
@@ -111,9 +117,8 @@ export type SessionWorkspaceHost = {
 };
 
 /** Agent owning the pane's current session: explicit key scope first, then the
- * assistant/default agent. Shared by the workspace and background-tasks rails
- * so both scope their gateway queries the same way. */
-export function paneSessionAgentId(state: SessionScopeHostWithKey): string {
+ * assistant/default agent. */
+function paneSessionAgentId(state: SessionScopeHostWithKey): string {
   const normalizedKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
   const activeAgentId =
     normalizedKey === "global" ? null : resolveAgentIdFromSessionKey(state.sessionKey);
@@ -191,6 +196,64 @@ function basenameForPath(filePath: string): string {
   return filePath.split(/[\\/]/).findLast((part) => part) ?? filePath;
 }
 
+const SESSION_FILE_IMAGE_MIME_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+
+function formatMarkdownCodeSpan(value: string): string {
+  // Markdown finds block boundaries before inline spans, so filenames must
+  // stay on one logical line even when the Gateway returns hostile metadata.
+  const singleLineValue = value.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+  const longestBacktickRun = Math.max(
+    0,
+    ...(singleLineValue.match(/`+/g)?.map((run) => run.length) ?? []),
+  );
+  const delimiter = "`".repeat(longestBacktickRun + 1);
+  const hasBoundarySpaces = singleLineValue.startsWith(" ") && singleLineValue.endsWith(" ");
+  const isOnlySpaces = /^ +$/.test(singleLineValue);
+  const padding =
+    singleLineValue.startsWith("`") ||
+    singleLineValue.endsWith("`") ||
+    (hasBoundarySpaces && !isOnlySpaces)
+      ? " "
+      : "";
+  return `${delimiter}${padding}${singleLineValue}${padding}${delimiter}`;
+}
+
+function formatFileUpdatedAt(updatedAtMs: number | undefined): string | null {
+  if (typeof updatedAtMs !== "number") {
+    return null;
+  }
+  const updatedAt = new Date(updatedAtMs);
+  return Number.isNaN(updatedAt.getTime()) ? null : updatedAt.toISOString();
+}
+
+function unsupportedFileSidebarContent(
+  file: SessionWorkspaceGetResult["file"],
+  fallbackPath: string,
+): SidebarContent {
+  const filePath = file.workspacePath || file.path || fallbackPath;
+  const updatedAt = formatFileUpdatedAt(file.updatedAtMs);
+  const lines = [
+    "This file is not previewable inline.",
+    "",
+    `- Path: ${formatMarkdownCodeSpan(filePath)}`,
+    file.mimeType ? `- Type: ${formatMarkdownCodeSpan(file.mimeType)}` : null,
+    typeof file.size === "number" ? `- Size: ${file.size.toLocaleString()} bytes` : null,
+    updatedAt ? `- Updated: ${updatedAt}` : null,
+  ].filter((line): line is string => line !== null);
+  const content = lines.join("\n");
+  return {
+    kind: "markdown",
+    content,
+    rawText: content,
+  };
+}
+
 function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
   if (!root) {
     return filePath;
@@ -218,19 +281,17 @@ function artifactSidebarContent(params: {
       rawText: url ?? null,
     };
   }
-  if (encoding === "base64" && data && mimeType === "application/json") {
-    const decoded = globalThis.atob(data);
+  if (
+    encoding === "base64" &&
+    data &&
+    (mimeType === "application/json" || mimeType.startsWith("text/"))
+  ) {
+    const bytes = Uint8Array.from(globalThis.atob(data), (char) => char.charCodeAt(0));
+    const decoded = new TextDecoder().decode(bytes);
+    const language = mimeType === "application/json" ? "json" : "";
     return {
       kind: "markdown",
-      content: `# ${title}\n\n\`\`\`json\n${decoded}\n\`\`\``,
-      rawText: decoded,
-    };
-  }
-  if (encoding === "base64" && data && mimeType.startsWith("text/")) {
-    const decoded = globalThis.atob(data);
-    return {
-      kind: "markdown",
-      content: `# ${title}\n\n\`\`\`\n${decoded}\n\`\`\``,
+      content: `# ${title}\n\n\`\`\`${language}\n${decoded}\n\`\`\``,
       rawText: decoded,
     };
   }
@@ -406,10 +467,40 @@ function openFile(
       }),
     (result) => {
       const file = result.file;
-      if (!file || typeof file.content !== "string") {
+      if (!file) {
         return null;
       }
       const name = file.name || basenameForPath(path);
+      if (file.previewKind === "image") {
+        if (
+          file.contentEncoding !== "base64" ||
+          typeof file.content !== "string" ||
+          !file.mimeType ||
+          !SESSION_FILE_IMAGE_MIME_TYPES.has(file.mimeType)
+        ) {
+          return null;
+        }
+        return {
+          kind: "image",
+          title: name,
+          src: `data:${file.mimeType};base64,${file.content}`,
+          mimeType: file.mimeType,
+          rawText: file.workspacePath || file.path || path,
+        };
+      }
+      if (file.previewKind === "unsupported") {
+        return unsupportedFileSidebarContent(file, path);
+      }
+      // Missing previewKind is the pre-image-preview Gateway contract.
+      if (
+        (file.previewKind !== undefined && file.previewKind !== "text") ||
+        (file.previewKind === "text" &&
+          file.contentEncoding !== undefined &&
+          file.contentEncoding !== "utf8") ||
+        typeof file.content !== "string"
+      ) {
+        return null;
+      }
       const canEdit =
         typeof file.hash === "string" &&
         hasUniformLineEndings(file.content) &&
@@ -720,6 +811,10 @@ export function createSessionWorkspaceProps(
           window.dispatchEvent(new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {}));
         }
       : undefined,
+    onToggleCustodian:
+      state.connected && isGatewayMethodAdvertised(state, "openclaw.chat") === true
+        ? () => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))
+        : undefined,
     diffNotGit: workspace.list?.gitCheckout === false,
     onOpenDiff:
       isGatewayMethodAdvertised(state, "sessions.diff") === true && state.client
@@ -878,6 +973,20 @@ export function renderSessionWorkspaceRail(
             @click=${sessionWorkspace.onToggleBrowser}
           >
             ${icons.globe}
+          </button>
+        </openclaw-tooltip>
+      `
+    : nothing;
+  const custodianButton = sessionWorkspace.onToggleCustodian
+    ? html`
+        <openclaw-tooltip .content=${t("custodian.panel.toggle")}>
+          <button
+            type="button"
+            class="chat-workspace-rail__terminal"
+            aria-label=${t("custodian.panel.toggle")}
+            @click=${sessionWorkspace.onToggleCustodian}
+          >
+            ${icons.lobster}
           </button>
         </openclaw-tooltip>
       `
@@ -1190,7 +1299,7 @@ export function renderSessionWorkspaceRail(
           <strong>${t("chat.workspaceFiles.files")}</strong>
         </div>
         <div class="chat-workspace-rail__actions">
-          ${diffButton} ${terminalButton} ${browserButton}
+          ${diffButton} ${terminalButton} ${browserButton} ${custodianButton}
           ${sessionWorkspace.narrowLayout
             ? nothing
             : html`

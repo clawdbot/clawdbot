@@ -47,7 +47,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                                                                                                                  |
 | `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                           |
 
-`spawn_task` lets a coding agent propose confirmed follow-up work without starting it. The Control UI shows the title and summary as an actionable chip; a Gateway-backed TUI shows an equivalent interactive prompt. Accepting either creates a fresh managed-worktree session and sends the full prompt there while the current turn continues. `dismiss_task` withdraws a still-pending suggestion by the ephemeral `task_id` returned from `spawn_task`.
+`spawn_task` lets a coding agent propose confirmed follow-up work without starting it. The suggestion's project directory must be a git checkout; invalid suggestions, including a non-git directory or blank prompt, are rejected when the tool records them. The Control UI shows the title and summary as an actionable chip; a Gateway-backed TUI shows an equivalent interactive prompt. Accepting a suggestion can start it in a fresh managed worktree (the default), start it locally in a new session in the suggested checkout, send it to a cloud worker profile when one is configured, or deliver it into the source session. OpenClaw sends the full prompt to the selected destination while the current turn continues. `dismiss_task` withdraws a still-pending suggestion by the ephemeral `task_id` returned from `spawn_task`.
 
 The tools are offered only when the initiating operator surface can receive and action Gateway task-suggestion events. Channel sessions and local/embedded TUI sessions do not receive them; channel transports need a portable typed task action before they can safely expose this flow. Suggestions are process-local and disappear when the Gateway restarts. Both tools remain in the `coding` profile and `group:sessions`, so normal `tools.allow` and `tools.deny` policy configures them automatically when the surface supports them.
 
@@ -84,17 +84,23 @@ Without that sandbox-layer entry, the MCP server can still load successfully whi
 
 ### `tools.codeMode`
 
-`tools.codeMode` enables the generic OpenClaw code-mode surface. When enabled
+`tools.codeMode` gates the generic OpenClaw code-mode surface. When engaged
 for a run with tools, normal OpenClaw tools move behind the in-sandbox `tools.*`
 catalog bridge, and MCP tools are available through the generated `MCP`
 namespace. The model normally sees `exec` and `wait`; tools such as `computer`
 whose structured results cannot cross the JSON-only bridge stay direct.
 
+`enabled` defaults to `"auto"`, which engages code mode only for models whose
+catalog entry flags `compat.codeMode: "preferred"`. See
+[Code Mode - automatic per-model activation](/tools/code-mode#automatic-per-model-activation).
+
+To opt out for every run:
+
 ```json5
 {
   tools: {
     codeMode: {
-      enabled: true,
+      enabled: false,
     },
   },
 }
@@ -104,9 +110,12 @@ The shorthand is also accepted:
 
 ```json5
 {
-  tools: { codeMode: true },
+  tools: { codeMode: false },
 }
 ```
+
+`enabled: true` forces code mode on for every tool-capable run, regardless of
+model.
 
 MCP declarations are exposed through the read-only virtual API file surface in
 code mode. Guest code can call `API.list("mcp")` and
@@ -145,7 +154,7 @@ Further restrict tools for specific providers or models. Order: base profile →
   tools: {
     profile: "coding",
     byProvider: {
-      "google-antigravity": { profile: "minimal" },
+      anthropic: { profile: "minimal" },
       "openai/gpt-5.4": { allow: ["group:fs", "sessions_list"] },
     },
   },
@@ -570,8 +579,8 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `requiresAssistantAfterToolResult` | Requires an assistant message after tool results. |
     | `requiresThinkingAsText` | Replays reasoning as text rather than structured content. |
     | `requiresReasoningContentOnAssistantMessages` | Preserves DeepSeek-style `reasoning_content` during replay. |
-    | `toolSchemaProfile` | Selects a provider-defined tool-schema normalization profile. |
-    | `unsupportedToolSchemaKeywords` | Removes named JSON Schema keywords rejected by the endpoint. |
+    | `toolSchemaProfile` | Selects a tool-schema normalization profile. Custom model entries recognize `llamacpp` and `gemini`. The `llamacpp` profile removes `pattern` and `maxLength` values at or above 2000; built-in `llama-cpp`, `ollama`, and `lmstudio` providers apply the same cleaner automatically. Custom `llama-server` models must select it explicitly. See the llama.cpp example below. |
+    | `unsupportedToolSchemaKeywords` | Removes named JSON Schema keywords rejected by the endpoint before tool schemas are sent. Use this for endpoint-specific gaps beyond a profile's targeted transformations. |
     | `toolCallArgumentsEncoding` | Selects the endpoint's tool-call argument encoding. |
     | `requiresOpenAiAnthropicToolPayload` | Converts OpenAI-shaped tool calls to Anthropic-family payloads. |
 
@@ -645,6 +654,44 @@ Interactive custom-provider onboarding infers image input for known vision-model
     ```
 
     Anthropic-compatible, built-in provider. Shortcut: `openclaw onboard --auth-choice kimi-code-api-key`.
+
+  </Accordion>
+  <Accordion title="Local models (llama.cpp / llama-server)">
+    Point a **custom** `openai-completions` provider at a remote `llama-server` (or another OpenAI-compatible llama.cpp endpoint). The built-in `llama-cpp`, `ollama`, and `lmstudio` providers apply the llama.cpp schema cleaner automatically; a custom endpoint does not. Set `compat.toolSchemaProfile: "llamacpp"` on each model whose llama-server chat template compiles tool arguments into GBNF. The profile removes `pattern` and `maxLength` values at or above 2000, covering the `cron` tool's `trigger.script` limit of 65536. It is a targeted mitigation, not complete compatibility for every JSON Schema constraint or `minLength`.
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          model: { primary: "my-llamacpp/qwen35" },
+        },
+      },
+      models: {
+        mode: "merge",
+        providers: {
+          "my-llamacpp": {
+            baseUrl: "http://127.0.0.1:8080/v1",
+            apiKey: "llamacpp-no-key",
+            api: "openai-completions",
+            models: [
+              {
+                id: "qwen35",
+                name: "Qwen3.5 (llama-server)",
+                contextWindow: 8192,
+                maxTokens: 2048,
+                compat: {
+                  supportsTools: true,
+                  toolSchemaProfile: "llamacpp",
+                },
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
+    On older builds without `toolSchemaProfile`, the broader fallback is `compat.unsupportedToolSchemaKeywords: ["pattern", "patternProperties", "format", "propertyNames", "uniqueItems", "contains", "minContains", "maxContains", "minLength", "maxLength"]`. Unlike the profile, this removes every listed keyword unconditionally.
 
   </Accordion>
   <Accordion title="Local models (LM Studio)">

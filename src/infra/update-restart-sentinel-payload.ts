@@ -22,13 +22,27 @@ export type UpdateRestartSentinelMeta = {
   continuationMessage?: string | null;
 };
 
+export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): UpdateRunResult {
+  const beforeSha = result.before?.sha?.trim();
+  const afterSha = result.after?.sha?.trim();
+  return result.status === "ok" &&
+    result.mode === "git" &&
+    result.postUpdate?.plugins?.changed !== true &&
+    beforeSha &&
+    afterSha &&
+    beforeSha === afterSha
+    ? { ...result, status: "skipped", reason: "already-current" }
+    : result;
+}
+
 /** Build the restart sentinel payload written after update runs. */
 export function buildUpdateRestartSentinelPayload(params: {
   result: UpdateRunResult;
   meta: UpdateRestartSentinelMeta;
   nowMs?: number;
 }): RestartSentinelPayload {
-  const { result, meta } = params;
+  const result = normalizeControlPlaneUpdateResult(params.result);
+  const { meta } = params;
   const continuation =
     result.status === "ok"
       ? buildRestartSuccessContinuation({

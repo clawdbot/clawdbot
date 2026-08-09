@@ -146,4 +146,37 @@ describe("reconcileHeartbeatMonitorJobs", () => {
     expect(add).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalled();
   });
+
+  it("keeps removing stale monitors when one removal fails", async () => {
+    const add = vi.fn(async () => ({}));
+    const remove = vi
+      .fn(async (_jobId: string) => ({ ok: true }))
+      .mockRejectedValueOnce(new Error("store busy"));
+    const list = vi.fn(async () => [
+      monitorJob("stale-first"),
+      monitorJob("stale-second"),
+      monitorJob("stale-third"),
+    ]);
+    const cleanupLogger = { warn: vi.fn() };
+    const cfg = {
+      agents: { defaults: { heartbeat: { every: "30m" } } },
+    } as OpenClawConfig;
+
+    await expect(
+      reconcileHeartbeatMonitorJobs({
+        cron: { add, list, remove } as never,
+        cfg,
+        logger: cleanupLogger,
+      }),
+    ).resolves.toEqual({ ok: false });
+
+    expect(remove).toHaveBeenCalledTimes(3);
+    expect(remove).toHaveBeenNthCalledWith(1, "job-stale-first", { systemOwned: true });
+    expect(remove).toHaveBeenNthCalledWith(2, "job-stale-second", { systemOwned: true });
+    expect(remove).toHaveBeenNthCalledWith(3, "job-stale-third", { systemOwned: true });
+    expect(cleanupLogger.warn).toHaveBeenCalledExactlyOnceWith(
+      { agentId: "stale-first", err: "Error: store busy" },
+      "cron-heartbeat: stale monitor cleanup failed",
+    );
+  });
 });

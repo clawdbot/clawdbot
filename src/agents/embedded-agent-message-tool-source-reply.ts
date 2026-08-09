@@ -3,6 +3,7 @@
  */
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasNonEmptyString, readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import {
   isMessageToolConversationCreateActionName,
@@ -31,36 +32,54 @@ const BROADCAST_SEND_ENVELOPE_KEYS = ["payload", "result", "sendResult", "toolRe
 const PARTIAL_DELIVERY_ENVELOPE_KEYS = [...RESULT_ENVELOPE_KEYS, "error", "cause"];
 const SESSIONS_SEND_DELIVERY_STATUSES = new Set(["accepted", "ok"]);
 const BARE_OK_DELIVERY_STATUS = "ok";
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
 
 function resultConfirmsCurrentSourceRoute(value: unknown): boolean {
-  return asRecord(asRecord(value).details).sourceReplyRoute === "current-source";
-}
-
-function hasStringValue(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
+  return (
+    (asOptionalRecord(asOptionalRecord(value)?.details) ?? {}).sourceReplyRoute === "current-source"
+  );
 }
 
 function hasConversationIdValue(value: unknown): boolean {
-  return hasStringValue(value) || (typeof value === "number" && Number.isFinite(value));
+  return hasNonEmptyString(value) || (typeof value === "number" && Number.isFinite(value));
 }
 
 function hasExplicitMessageRoute(args: Record<string, unknown>): boolean {
-  if (EXPLICIT_MESSAGE_ROUTE_KEYS.some((key) => hasStringValue(args[key]))) {
+  if (EXPLICIT_MESSAGE_ROUTE_KEYS.some((key) => hasNonEmptyString(args[key]))) {
     return true;
   }
-  return Array.isArray(args.targets) && args.targets.some((value) => hasStringValue(value));
+  return Array.isArray(args.targets) && args.targets.some((value) => hasNonEmptyString(value));
 }
 
 function isMessageToolSourceReplyActionName(action: unknown): boolean {
   if (isMessageToolSendActionName(action)) {
     return true;
   }
-  return typeof action === "string" && action.trim().toLowerCase() === "reply";
+  if (typeof action !== "string") {
+    return false;
+  }
+  // Polls and reply-type actions deliver the visible source answer too; they
+  // qualify only when the runner confirmed the current-source route (or the
+  // caller allows explicit routes), enforced by the caller below.
+  const normalized = action.trim().toLowerCase();
+  return normalized === "reply" || normalized === "thread-reply" || normalized === "poll";
+}
+
+/** Read the visible text delivered by a source-reply message action. */
+export function readMessageToolSourceReplyText(args: unknown): string | undefined {
+  const record = asOptionalRecord(args) ?? {};
+  if (!isMessageToolSourceReplyActionName(record.action)) {
+    return undefined;
+  }
+  if (normalizeStatus(record.action) === "poll") {
+    return readStringValue(record.pollQuestion) ?? readStringValue(record.poll_question);
+  }
+  for (const key of ["content", "message", "text", "body"]) {
+    const value = readStringValue(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function normalizeStatus(value: unknown): string | undefined {
@@ -84,7 +103,7 @@ function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
     const normalized = normalizeStatus(value);
     return Boolean(normalized && !NON_DELIVERY_MESSAGE_IDS.has(normalized));
   };
-  const message = asRecord(record.message);
+  const message = asOptionalRecord(record.message) ?? {};
   if (
     hasDeliveredId(record.messageId) ||
     hasDeliveredId(record.pollId) ||
@@ -478,7 +497,7 @@ export function isDeliveredMessagingToolResult(params: {
   hookResult?: unknown;
   isError?: boolean;
 }): boolean {
-  const args = asRecord(params.args);
+  const args = asOptionalRecord(params.args) ?? {};
   const action = normalizeStatus(args.action);
   if (
     args.dryRun === true ||
@@ -548,8 +567,8 @@ export function isDeliveredMessagingToolResult(params: {
 }
 
 /**
- * Only implicit-route, non-dry-run, delivered `message.send` calls qualify.
- * Explicit routes and other messaging tools are outbound side effects, not source replies.
+ * Only delivered message actions on the confirmed current route qualify.
+ * Explicit routes require an authoritative current-source marker from the action runner.
  */
 export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -560,20 +579,24 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   isError?: boolean;
   allowExplicitSourceRoute?: boolean;
 }): boolean {
-  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
+  const confirmedCurrentSourceRoute =
+    resultConfirmsCurrentSourceRoute(params.result) ||
+    resultConfirmsCurrentSourceRoute(params.hookResult);
+  if (params.sourceReplyDeliveryMode !== "message_tool_only" && !confirmedCurrentSourceRoute) {
     return false;
   }
   if (normalizeToolName(params.toolName) !== MESSAGE_TOOL_NAME) {
     return false;
   }
-  const args = asRecord(params.args);
+  const args = asOptionalRecord(params.args) ?? {};
   const sourceRouteReplyAction =
-    params.allowExplicitSourceRoute === true && isMessageToolSourceReplyActionName(args.action);
+    (params.allowExplicitSourceRoute === true || confirmedCurrentSourceRoute) &&
+    isMessageToolSourceReplyActionName(args.action);
   if (!isMessageToolSendActionName(args.action) && !sourceRouteReplyAction) {
     return false;
   }
   const hasConfirmedExplicitSourceRoute =
-    params.allowExplicitSourceRoute === true || resultConfirmsCurrentSourceRoute(params.result);
+    params.allowExplicitSourceRoute === true || confirmedCurrentSourceRoute;
   if (hasExplicitMessageRoute(args) && !hasConfirmedExplicitSourceRoute) {
     return false;
   }

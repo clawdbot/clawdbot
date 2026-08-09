@@ -5,9 +5,11 @@ import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 function createGlm47Template() {
   return {
@@ -49,6 +51,26 @@ function expectModelFields(
 }
 
 describe("zai provider plugin", () => {
+  it("preserves all regional auth choices and the exact manifest-owned static catalog", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(provider.aliases).toEqual(["z-ai", "z.ai"]);
+    expect(provider.envVars).toEqual(["ZAI_API_KEY", "Z_AI_API_KEY"]);
+    expect(provider.auth.map((method) => method.id)).toEqual([
+      "api-key",
+      "coding-global",
+      "coding-cn",
+      "global",
+      "cn",
+    ]);
+    expect(await provider.staticCatalog?.run({} as never)).toEqual({
+      provider: buildManifestModelProviderConfig({
+        providerId: "zai",
+        catalog: manifest.modelCatalog.providers.zai,
+      }),
+    });
+  });
+
   it("owns replay policy for OpenAI-compatible Z.ai transports", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 

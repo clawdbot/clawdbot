@@ -9,7 +9,10 @@ import type {
   QaLabRunSelection,
 } from "../runner-contract.js";
 import { defaultQaModelForMode as defaultStaticQaModelForMode } from "./model-selection.js";
-import { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
+import {
+  defaultQaRuntimeModelForMode,
+  resolveQaRuntimeModelPair,
+} from "./model-selection.runtime.js";
 import {
   resolveQaRunProfileExecutionSelection,
   resolveQaRunProfileMembership,
@@ -73,8 +76,7 @@ function createDefaultQaRunSelection(
     channelDriver: profile.channelDriver,
     evidenceMode: profile.evidenceMode,
     providerMode,
-    primaryModel: resolveDefaultModel(providerMode),
-    alternateModel: resolveDefaultModel(providerMode, true),
+    ...resolveQaRuntimeModelPair({ providerMode, resolveDefaultModel }),
     fastMode: getQaProvider(providerMode).kind === "live",
     runtimePair: null,
     runtimePairLane: null,
@@ -91,11 +93,6 @@ export function normalizeQaProviderMode(input: unknown): QaProviderMode {
   }
   const details = typeof input === "string" ? `: ${input}` : "";
   throw new Error(`unknown QA provider mode${details}`);
-}
-
-function normalizeModel(input: unknown, fallback: string) {
-  const value = typeof input === "string" ? input.trim() : "";
-  return value || fallback;
 }
 
 function normalizeScenarioIds(input: unknown, scenarios: QaSeedScenario[]): string[] | null {
@@ -230,17 +227,18 @@ export function normalizeQaRunSelection(
   const providerMode = normalizeQaProviderMode(
     payload.providerMode ?? (profile === "smoke-ci" ? "mock-openai" : undefined),
   );
+  const models = resolveQaRuntimeModelPair({
+    providerMode,
+    primaryModel: typeof payload.primaryModel === "string" ? payload.primaryModel : undefined,
+    alternateModel: typeof payload.alternateModel === "string" ? payload.alternateModel : undefined,
+  });
   return {
     profile,
     channel: normalizeQaChannel(payload.channel),
     channelDriver: normalizeQaChannelDriver(payload.channelDriver, profileDefaults.channelDriver),
     evidenceMode: normalizeQaEvidenceMode(payload.evidenceMode, profileDefaults.evidenceMode),
     providerMode,
-    primaryModel: normalizeModel(payload.primaryModel, defaultQaModelForMode(providerMode)),
-    alternateModel: normalizeModel(
-      payload.alternateModel,
-      defaultQaModelForMode(providerMode, true),
-    ),
+    ...models,
     fastMode: getQaProvider(providerMode).kind === "live" || payload.fastMode === true,
     runtimePair: normalizeQaRuntimePair(payload.runtimePair),
     runtimePairLane: normalizeQaRuntimePairLane(payload.runtimePairLane),
@@ -278,6 +276,7 @@ export function resolveQaLabRunPlan(params: {
   scorecardReport: QaScorecardTaxonomyReport;
   defaultChannel?: string;
   supportsChannel?: (channel: string) => boolean;
+  resolveModuleFlowSupport?: (channel?: string) => boolean;
 }): QaLabResolvedRunPlan {
   const { selection } = params;
   const explicitScenarioSelection = selection.scenarioIds !== null;
@@ -314,6 +313,7 @@ export function resolveQaLabRunPlan(params: {
       scenarios: membership.profileScenarios,
       runtimePairLanes: selection.runtimePairLane ? [selection.runtimePairLane] : [],
       runtimePair: selection.runtimePair !== null,
+      resolveModuleFlowSupport: params.resolveModuleFlowSupport,
     });
   } catch (error) {
     errors.push(error instanceof Error ? error.message : String(error));
@@ -367,6 +367,8 @@ export function resolveQaLabRunPlan(params: {
     channelDriver: selection.channelDriver,
     channel: selection.channel,
     defaultChannel: selection.channelDriver === "crabline" ? params.defaultChannel : undefined,
+    supportsChannel: params.supportsChannel,
+    resolveModuleFlowSupport: params.resolveModuleFlowSupport,
   });
   exclusions.push(
     ...profileExecution.excludedScenarios.map(({ scenario, reasons }) => ({
@@ -385,29 +387,7 @@ export function resolveQaLabRunPlan(params: {
       reasons: ["runtimePair requires execution.kind=flow"],
     })),
   );
-  let selectedScenarios = runtimePairSupport.selectedScenarios;
-  if (selection.channelDriver !== "qa-channel" && params.supportsChannel) {
-    const unsupportedChannelScenarios = selectedScenarios.flatMap((scenario) => {
-      const channel = effectiveChannelForScenario({
-        scenario,
-        selection,
-        defaultChannel: params.defaultChannel,
-      });
-      if (scenario.execution.kind !== "flow") {
-        return [];
-      }
-      return channel !== null && !params.supportsChannel?.(channel) ? [{ scenario, channel }] : [];
-    });
-    const unsupportedIds = new Set(unsupportedChannelScenarios.map(({ scenario }) => scenario.id));
-    exclusions.push(
-      ...unsupportedChannelScenarios.map(({ scenario, channel }) => ({
-        scenarioId: scenario.id,
-        executionKind: scenario.execution.kind,
-        reasons: [`unsupported ${selection.channelDriver} channel=${channel}`],
-      })),
-    );
-    selectedScenarios = selectedScenarios.filter((scenario) => !unsupportedIds.has(scenario.id));
-  }
+  const selectedScenarios = runtimePairSupport.selectedScenarios;
   if (membership.categories.length === 0) {
     errors.push(`QA run profile ${selection.profile} did not resolve any taxonomy categories.`);
   }

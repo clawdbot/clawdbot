@@ -69,6 +69,27 @@ describe("provider failover hook structured signals", () => {
     ).toEqual({ kind: "reason", reason: "auth" });
   });
 
+  it("lets provider billing text override a leading 403 in assistant failures", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockImplementation((context) => {
+      return context.provider === "demo-provider" &&
+        context.errorMessage.includes("quota exhausted")
+        ? "billing"
+        : undefined;
+    });
+
+    const errorMessage = '403 {"error":"Account quota exhausted"}';
+    expect(
+      classifyAssistantFailoverReason(
+        makeAssistantMessageFixture({ provider: "demo-provider", errorMessage }),
+      ),
+    ).toBe("billing");
+    expect(
+      classifyAssistantFailoverReason(
+        makeAssistantMessageFixture({ provider: "other-provider", errorMessage }),
+      ),
+    ).toBe("auth");
+  });
+
   it("does not call the direct provider hook for unstructured classified messages", () => {
     // Plain message classifiers run first; provider hooks only see structured
     // descriptors where a plugin can make a reliable decision.
@@ -114,6 +135,95 @@ describe("provider failover hook structured signals", () => {
         },
       }),
     ).toBe("billing");
+  });
+
+  it("classifies raw and typed invalid-request errors through one core mapping", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+    const raw =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: thinking blocks cannot be modified"}}';
+
+    expect(classifyFailoverSignal({ provider: "anthropic", message: raw })).toEqual({
+      kind: "reason",
+      reason: "format",
+    });
+    expect(
+      classifyFailoverSignal({
+        provider: "anthropic",
+        errorType: "invalid_request_error",
+        message: "thinking blocks cannot be modified",
+      }),
+    ).toEqual({ kind: "reason", reason: "format" });
+    expect(
+      classifyAssistantFailoverReason(
+        makeAssistantMessageFixture({
+          provider: "anthropic",
+          errorMessage: raw,
+        }),
+      ),
+    ).toBe("format");
+    expect(classifyProviderRuntimeFailureKind(raw)).toBe("schema");
+  });
+
+  it("classifies replay-invalid carriers as terminal format failures", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+    const carriers = [
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
+      'Validation error: The model returned the following errors: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
+    ];
+
+    for (const errorMessage of carriers) {
+      expect(classifyFailoverSignal({ provider: "anthropic", message: errorMessage })).toEqual({
+        kind: "reason",
+        reason: "format",
+      });
+      expect(
+        classifyAssistantFailoverReason(
+          makeAssistantMessageFixture({
+            provider: "anthropic",
+            errorMessage,
+          }),
+        ),
+      ).toBe("format");
+      expect(classifyProviderRuntimeFailureKind(errorMessage)).toBe("replay_invalid");
+    }
+  });
+
+  it("keeps specific raw API error classifications ahead of invalid-request format", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+
+    expect(
+      classifyFailoverSignal({
+        provider: "anthropic",
+        message:
+          '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
+      }),
+    ).toEqual({ kind: "context_overflow" });
+    expect(
+      classifyFailoverSignal({
+        provider: "anthropic",
+        message:
+          '{"type":"error","error":{"type":"invalid_request_error","message":"You are out of extra usage. Add more at claude.ai/settings/usage"}}',
+      }),
+    ).toEqual({ kind: "reason", reason: "billing" });
+  });
+
+  it("keeps specific typed API error classifications ahead of invalid-request format", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+
+    expect(
+      classifyFailoverSignal({
+        provider: "anthropic",
+        errorType: "invalid_request_error",
+        message: "Request size exceeds model context window",
+      }),
+    ).toEqual({ kind: "context_overflow" });
+    expect(
+      classifyFailoverSignal({
+        provider: "anthropic",
+        errorType: "invalid_request_error",
+        message: "You are out of extra usage. Add more at claude.ai/settings/usage",
+      }),
+    ).toEqual({ kind: "reason", reason: "billing" });
   });
 
   it("lets structured billing details override an ambiguous quota message", () => {

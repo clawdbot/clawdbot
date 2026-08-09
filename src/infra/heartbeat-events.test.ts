@@ -48,6 +48,37 @@ describe("heartbeat events", () => {
     });
   });
 
+  it("adds a delivery-disabled message to target-none events without changing the reason", () => {
+    const listener = vi.fn();
+    const unsubscribe = onHeartbeatEvent(listener);
+
+    emitHeartbeatEvent({ status: "skipped", reason: "target-none" });
+
+    const expected = {
+      ts: 1767960000000,
+      status: "skipped",
+      reason: "target-none",
+      message: "Heartbeat delivery is disabled by configuration (target: none).",
+    };
+    expect(getLastHeartbeatEvent()).toEqual(expected);
+    expect(listener).toHaveBeenCalledWith(expected);
+
+    unsubscribe();
+  });
+
+  it("preserves an explicit message for target-none events", () => {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "target-none",
+      message: "custom diagnostic",
+    });
+
+    expect(getLastHeartbeatEvent()).toMatchObject({
+      reason: "target-none",
+      message: "custom diagnostic",
+    });
+  });
+
   it("delivers events to listeners, isolates listener failures, and supports unsubscribe", () => {
     const seen: string[] = [];
     const unsubscribeFirst = onHeartbeatEvent((evt) => {

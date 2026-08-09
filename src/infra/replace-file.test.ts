@@ -24,7 +24,7 @@ describe("movePathWithCopyFallback", () => {
             sourceHardlinks: "reject",
             to: targetDir,
           }),
-        ).rejects.toThrow("Hardlinked source file is not allowed");
+        ).rejects.toMatchObject({ code: "hardlink" });
 
         await expect(fs.readFile(sourceFile, "utf8")).resolves.toBe("hello");
         let statError: NodeJS.ErrnoException | undefined;

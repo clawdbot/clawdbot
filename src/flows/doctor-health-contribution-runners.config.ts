@@ -10,29 +10,35 @@ import {
 } from "./doctor-health-contribution-utils.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
-function isTruthyEnvValue(value: string | undefined): boolean {
+function isExplicitOptOutEnvValue(value: string | undefined): boolean {
   if (!value) {
     return false;
   }
+  // Update handoff predates canonical opt-in flags: every non-false value means the
+  // parent opted in, so preserve its broad acceptance until that protocol is retired.
   const normalized = value.trim().toLowerCase();
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
 }
 
 function shouldSkipLegacyUpdateDoctorConfigWrite(env: NodeJS.ProcessEnv): boolean {
   return (
-    isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) &&
-    !isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])
+    isExplicitOptOutEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) &&
+    !isExplicitOptOutEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])
   );
 }
 
-export async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+export async function runWriteConfigHealth(
+  ctx: DoctorHealthFlowContext,
+  options: { runPostWriteRepairs?: boolean } = {},
+): Promise<void> {
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
   const { replaceConfigFile } = await import("../config/config.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
+  const configResultWritePending =
+    ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true;
   const shouldWriteConfig =
-    ctx.configResult.shouldWriteConfig ||
-    JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
+    configResultWritePending || JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
     const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
     if (ctx.configResult.skipWizardMetadataForIncludeWrite !== true) {
@@ -55,12 +61,21 @@ export async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promis
         allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
         skipPluginValidation:
           ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
+        ...(configResultWritePending && ctx.configResult.explicitSetPaths
+          ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
+          : {}),
         preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
         ...(legacyParentVersionOverride
           ? { lastTouchedVersionOverride: legacyParentVersionOverride }
           : {}),
       },
     });
+    // The final writer runs again after health repairs. Advance its baseline only
+    // after the atomic write succeeds so later failures cannot mark volatile state durable.
+    ctx.cfgForPersistence = structuredClone(ctx.cfg);
+    if (ctx.configResult.shouldWriteConfig === true) {
+      ctx.configResultWriteCommitted = true;
+    }
     // logConfigUpdated already prints the `.bak` backup line when it exists.
     logConfigUpdated(ctx.runtime);
     const preUpdateSnapshotPath = `${ctx.configPath}.pre-update`;
@@ -70,7 +85,25 @@ export async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promis
       );
     }
   }
-  if (ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true) {
+  if (options.runPostWriteRepairs === false) {
+    return;
+  }
+  if (ctx.configResult.retiredPhoneControlStateCleanupPending === true) {
+    const { finalizeRetiredPhoneControlCleanup } =
+      await import("../commands/doctor-retired-phone-control.js");
+    const { note } = await import("../../packages/terminal-core/src/note.js");
+    const cleanup = await finalizeRetiredPhoneControlCleanup({ env: ctx.env ?? process.env });
+    if (cleanup.changes.length > 0) {
+      note(cleanup.changes.join("\n"), "Doctor changes");
+    }
+    if (cleanup.warnings.length > 0) {
+      note(cleanup.warnings.join("\n"), "Doctor warnings");
+    }
+  }
+  if (
+    ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true ||
+    ctx.postConfigWriteRepairsCommitted === true
+  ) {
     return;
   }
   // The config write above must finish before cron rows are rewritten against
@@ -83,6 +116,7 @@ export async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promis
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
       : {}),
   });
+  ctx.postConfigWriteRepairsCommitted = true;
   const { note } = await import("../../packages/terminal-core/src/note.js");
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
@@ -90,6 +124,14 @@ export async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promis
   if (result.warnings.length > 0) {
     note(result.warnings.join("\n"), "Doctor warnings");
   }
+}
+
+/** Commits the finalized config-flow candidate before fallible health diagnostics start. */
+export async function runInitialConfigWriteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.configResult.shouldWriteConfig !== true) {
+    return;
+  }
+  await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
 }
 
 export async function collectWriteConfigHealthFindings(

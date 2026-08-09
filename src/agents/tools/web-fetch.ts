@@ -11,10 +11,15 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
-import { resolveWebProviderConfig } from "../../../packages/web-content-core/src/provider-runtime-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
-import { logDebug } from "../../logger.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
+import {
+  mergeSsrFPolicies,
+  SsrFBlockedError,
+  type LookupFn,
+  type SsrFPolicy,
+} from "../../infra/net/ssrf.js";
+import { logDebug, logWarn } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
@@ -22,6 +27,7 @@ import { wrapExternalContent, wrapWebContent } from "../../security/external-con
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
+import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
 import { stringEnum } from "../schema/string-enum.js";
 import { writePrivateTempFile } from "../sessions/tools/private-temp-file.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
@@ -69,6 +75,26 @@ const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 const FETCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+
+// Accept and Accept-Language are part of the fetch/readability contract,
+// User-Agent has its own tools.web.fetch.userAgent key, and Undici owns
+// Sec-Fetch-Mode.
+const FETCH_BLOCKED_HEADER_NAMES = new Set([
+  "accept",
+  "accept-language",
+  "user-agent",
+  "sec-fetch-mode",
+  "connection",
+  "content-length",
+  "expect",
+  "host",
+  "keep-alive",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
 
 const WebFetchSchema = Type.Object({
   url: Type.String({ description: "HTTP(S) URL." }),
@@ -180,6 +206,79 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
 
 function resolveFetchUseTrustedEnvProxy(fetch?: WebFetchConfig): boolean {
   return fetch?.useTrustedEnvProxy === true;
+}
+
+/**
+ * Operator headers web_fetch may actually send. Every dropped entry gets its own
+ * warning: a silently ignored routing header looks exactly like working egress.
+ * Header names are safe to log; values are not.
+ */
+function resolveFetchHeaders(fetch?: WebFetchConfig): Record<string, string> | undefined {
+  const configured = fetch?.headers;
+  if (!configured) {
+    return undefined;
+  }
+  const resolved = new Map<string, { name: string; value: string }>();
+  for (const [rawName, rawValue] of Object.entries(configured)) {
+    const name = rawName.trim();
+    const lowerName = name.toLowerCase();
+    const prior = resolved.get(lowerName);
+    if (prior) {
+      resolved.delete(lowerName);
+      logWarn(
+        `[web-fetch] dropped case-colliding tools.web.fetch.headers entry: ${JSON.stringify(prior.name)}`,
+      );
+    }
+    let value: string;
+    try {
+      value = new Headers([[name, rawValue]]).get(name) ?? "";
+    } catch {
+      logWarn(
+        `[web-fetch] dropped tools.web.fetch.headers entry a request cannot carry: ${JSON.stringify(rawName)}`,
+      );
+      continue;
+    }
+    if (FETCH_BLOCKED_HEADER_NAMES.has(lowerName)) {
+      logWarn(`[web-fetch] dropped reserved or framing tools.web.fetch.headers entry: ${name}`);
+      continue;
+    }
+    resolved.set(lowerName, { name, value });
+  }
+  const entries = [...resolved.values()]
+    .map(({ name, value }) => [name, value] as const)
+    .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+/**
+ * Secret-free cache discriminator for operator headers. The fetch cache is a
+ * process-wide map and routing headers can point the same URL at a different
+ * backend, so the header set must partition the cache without storing its values.
+ */
+function resolveFetchHeadersCacheKey(headers?: Record<string, string>): string | undefined {
+  if (!headers) {
+    return undefined;
+  }
+  return sha256Hex(JSON.stringify(Object.entries(headers)));
+}
+
+/**
+ * Builds the outgoing header record. Fetch-owned headers keep their canonical
+ * casing and order because a plain record reaches the wire verbatim: undici does
+ * not re-normalize it, so switching to `Headers` here would change the request
+ * fingerprint of every fetch, including ones with no configured headers.
+ * `resolveFetchHeaders` has already removed anything that could collide.
+ */
+function buildWebFetchRequestHeaders(params: {
+  userAgent: string;
+  operatorHeaders?: Record<string, string>;
+}): Record<string, string> {
+  return {
+    Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
+    "User-Agent": params.userAgent,
+    "Accept-Language": "en-US,en;q=0.9",
+    ...params.operatorHeaders,
+  };
 }
 
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
@@ -427,13 +526,11 @@ type WebFetchRuntimeParams = {
   timeoutSeconds: number;
   cacheTtlMs: number;
   userAgent: string;
+  headers?: Record<string, string>;
   readabilityEnabled: boolean;
   config?: OpenClawConfig;
   useTrustedEnvProxy: boolean;
-  ssrfPolicy?: {
-    allowRfc2544BenchmarkRange?: boolean;
-    allowIpv6UniqueLocalRange?: boolean;
-  };
+  ssrfPolicy?: SsrFPolicy;
   providerCacheKey?: string;
   lookupFn?: LookupFn;
   signal?: AbortSignal;
@@ -591,16 +688,11 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
-  const allowIpv6UniqueLocalRange = params.ssrfPolicy?.allowIpv6UniqueLocalRange === true;
+  const ssrfPolicy = mergeSsrFPolicies(params.ssrfPolicy);
+  const dangerouslyAllowPrivateNetwork = ssrfPolicy?.dangerouslyAllowPrivateNetwork === true;
+  const allowRfc2544BenchmarkRange = ssrfPolicy?.allowRfc2544BenchmarkRange === true;
+  const allowIpv6UniqueLocalRange = ssrfPolicy?.allowIpv6UniqueLocalRange === true;
   const useTrustedEnvProxy = params.useTrustedEnvProxy;
-  const ssrfPolicy: SsrFPolicy | undefined =
-    allowRfc2544BenchmarkRange || allowIpv6UniqueLocalRange
-      ? {
-          ...(allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : {}),
-          ...(allowIpv6UniqueLocalRange ? { allowIpv6UniqueLocalRange } : {}),
-        }
-      : undefined;
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(params.url);
@@ -610,8 +702,26 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   if (!["http:", "https:"].includes(parsedUrl.protocol)) {
     throw new Error("Invalid URL: must be http or https");
   }
+  const headersCacheKey = resolveFetchHeadersCacheKey(params.headers);
+  // Append the operator header set after the existing cache discriminators so
+  // requests without custom headers keep their current cache key.
+  const cacheDiscriminators = [
+    `user-agent:${sha256Hex(params.userAgent)}`,
+    params.providerCacheKey ? `provider:${params.providerCacheKey}` : "",
+    dangerouslyAllowPrivateNetwork ? "allow-private-network" : "",
+    allowRfc2544BenchmarkRange ? "allow-rfc2544" : "",
+    allowIpv6UniqueLocalRange ? "allow-ipv6-ula" : "",
+    ssrfPolicy?.allowedHostnames?.length
+      ? `allowed-hostnames:${sha256Hex(ssrfPolicy.allowedHostnames.join("\n"))}`
+      : "",
+    useTrustedEnvProxy ? "trusted-env-proxy" : "",
+    headersCacheKey ? `headers:${headersCacheKey}` : "",
+  ].filter(Boolean);
   const cacheKey = normalizeCacheKey(
-    `fetch:${parsedUrl.href}:${params.extractMode}:${params.maxChars}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
+    [
+      `fetch:${parsedUrl.href}:${params.extractMode}:${params.maxChars}`,
+      ...cacheDiscriminators,
+    ].join(":"),
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -632,12 +742,14 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       lookupFn: params.lookupFn,
       useEnvProxy: useTrustedEnvProxy,
       policy: ssrfPolicy,
+      capture: params.headers
+        ? { sensitiveRequestHeaderNames: Object.keys(params.headers) }
+        : undefined,
       init: {
-        headers: {
-          Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
-          "User-Agent": params.userAgent,
-          "Accept-Language": "en-US,en;q=0.9",
-        },
+        headers: buildWebFetchRequestHeaders({
+          userAgent: params.userAgent,
+          operatorHeaders: params.headers,
+        }),
       },
     });
     res = result.response;
@@ -815,6 +927,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
   } finally {
+    if (!res.bodyUsed) {
+      // Fallbacks and provider failures can abandon the upstream stream. Cancel
+      // without awaiting so a stalled cancellation cannot block guard release.
+      void res.body?.cancel().catch(() => undefined);
+    }
     if (release) {
       await release();
     }
@@ -835,6 +952,7 @@ export function createWebFetchTool(options?: {
   const tool: AnyAgentTool = {
     label: "Web Fetch",
     name: "web_fetch",
+    resultContentSource: "network",
     description: "Fetch URL; extract readable markdown/text. Lightweight; no browser automation.",
     parameters: WebFetchSchema,
     outputSchema: WebFetchOutputSchema,
@@ -919,6 +1037,7 @@ export function createWebFetchTool(options?: {
           ),
           cacheTtlMs: resolveCacheTtlMs(executionFetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
           userAgent,
+          headers: resolveFetchHeaders(executionFetch),
           readabilityEnabled,
           config,
           useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),

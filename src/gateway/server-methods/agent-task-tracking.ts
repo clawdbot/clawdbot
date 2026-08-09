@@ -4,10 +4,9 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import { isTimeoutError } from "../../agents/failover-error.js";
 import { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isAbortError } from "../../infra/abort-signal.js";
+import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -16,7 +15,6 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
 import type { TaskStatus } from "../../tasks/task-registry.types.js";
-import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -158,7 +156,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   runId: string;
   childSessionKey: string;
   task: string;
-  requesterOrigin?: DeliveryContext;
+  requester?: PluginSubagentRequesterContext;
   pluginId?: string;
 }): Promise<void> {
   const childSessionKey = params.childSessionKey.trim();
@@ -169,26 +167,38 @@ export async function registerPluginSubagentRunFromGateway(params: {
     cfg: params.cfg,
     agentId: resolveAgentIdFromSessionKey(childSessionKey),
   });
-  const { registerSubagentRun } = await import("../../agents/subagent-registry.js");
+  const requesterSessionKey = params.requester?.sessionKey ?? ownerSessionKey;
+  const { adoptPausedSubagentRunForFollowUp, registerSubagentRun } =
+    await import("../../agents/subagent-registry.js");
+  // A follow-up aimed at a session paused by sessions_yield continues that run.
+  // Registering a sibling row here would reassign the requester to this agent's
+  // own main session and leave the original requester waiting behind a row that
+  // can no longer announce. A follow-up that names its own requester is opting
+  // into its own delivery, so it registers normally rather than silently
+  // inheriting the paused row's audience.
+  if (
+    !params.requester &&
+    adoptPausedSubagentRunForFollowUp({
+      childSessionKey,
+      runId: params.runId,
+      task: params.task,
+    })
+  ) {
+    return;
+  }
   registerSubagentRun({
     runId: params.runId,
     childSessionKey,
     controllerSessionKey: ownerSessionKey,
-    requesterSessionKey: ownerSessionKey,
-    requesterOrigin: params.requesterOrigin,
-    requesterDisplayKey: "main",
+    requesterSessionKey,
+    requesterOrigin: params.requester?.origin,
+    requesterDisplayKey: params.requester ? requesterSessionKey : "main",
     task: params.task,
     cleanup: "keep",
     ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
-    expectsCompletionMessage: false,
+    expectsCompletionMessage: params.requester !== undefined,
     spawnMode: "run",
   });
-}
-
-export function resolveFailedTrackedAgentTaskStatus(
-  error: unknown,
-): GatewayAgentTaskTerminalStatus {
-  return isAbortError(error) || isTimeoutError(error) ? "timed_out" : "failed";
 }
 
 export function tryFinalizeTrackedAgentTask(params: {

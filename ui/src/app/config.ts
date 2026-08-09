@@ -7,7 +7,6 @@ import {
   type ControlUiPluginFrameGrantAck,
 } from "../../../src/gateway/control-ui-contract.js";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
-import { setUiTimeFormatPreference } from "../lib/format.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 
 type ApplicationConfigAuthSource = {
@@ -44,6 +43,7 @@ type ApplicationConfig = {
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   terminalEnabled: boolean;
+  cliAgentsEnabled?: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
 };
 
@@ -80,6 +80,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
+  cliAgentsEnabled: false,
   pluginFrameGrants: [],
 };
 
@@ -156,6 +157,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
           : "scripts",
     allowExternalEmbedUrls: parsed.allowExternalEmbedUrls === true,
     terminalEnabled: parsed.terminalEnabled === true,
+    cliAgentsEnabled: parsed.cliAgentsEnabled === true,
     pluginFrameGrants: Array.isArray(parsed.pluginFrameGrants)
       ? parsed.pluginFrameGrants.filter(
           (grant): grant is ControlUiPluginFrameGrantAck =>
@@ -213,7 +215,6 @@ async function loadApplicationConfig(params: {
       return null;
     }
     const parsed = (await res.json()) as ControlUiBootstrapConfig;
-    setUiTimeFormatPreference(parsed.timeFormat);
     applyControlUiSeamColor(parsed.seamColor);
     return normalizeApplicationConfig(parsed);
   } catch {

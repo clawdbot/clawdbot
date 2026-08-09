@@ -48,7 +48,7 @@ function createDoctorCronService(storePath: string, cfg: OpenClawConfig): CronSe
     requestHeartbeat: noop,
     runIsolatedAgentJob: async () => ({
       status: "skipped",
-      error: "doctor does not execute cron jobs",
+      error: "doctor does not execute automations",
     }),
   });
 }

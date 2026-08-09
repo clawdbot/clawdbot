@@ -21,7 +21,7 @@ function runningRow(key: string): SidebarRecentSession {
     hasActiveRun: true,
     modelSelectionLocked: false,
     pinned: false,
-    cloudWorkerActive: false,
+    cloudWorkerStopAction: null,
     hasAutomation: false,
     unread: false,
     attention: { kind: "none" },
@@ -67,6 +67,33 @@ describe("SidebarSessionNarrationController", () => {
     // isolate:false shares the worker clock: a leaked fake timer deterministically
     // times out unrelated later files (seen: chat-background-tasks 60s hangs).
     vi.useRealTimers();
+  });
+
+  it("subscribes only to sessions with a projected active run", async () => {
+    const subscribeMessages = vi.fn((key: string) => Promise.resolve({ key, agentId: null }));
+    const unsubscribeMessages = vi.fn(() => Promise.resolve());
+    const source = { subscribeMessages, unsubscribeMessages } as unknown as SessionCapability;
+    const controller = new SidebarSessionNarrationController(() => undefined);
+
+    controller.sync({
+      enabled: true,
+      connected: true,
+      connectionIdentity: {},
+      source,
+      rows: [
+        { ...runningRow("agent:main:stale"), hasActiveRun: false, status: "running" },
+        { ...runningRow("agent:main:failed"), hasActiveRun: false, status: "failed" },
+        runningRow("agent:main:active"),
+      ],
+      openSessionKey: "",
+      agentId: "main",
+    });
+    await Promise.resolve();
+
+    expect(subscribeMessages).toHaveBeenCalledTimes(1);
+    expect(subscribeMessages).toHaveBeenCalledWith("agent:main:active", { agentId: undefined });
+
+    controller.disconnect();
   });
 
   it("hands subtitle ownership only to a run-identified digest", async () => {

@@ -5,7 +5,10 @@ import { registerSlackAgentEvents } from "./events/agent.js";
 import { registerSlackAssistantEvents } from "./events/assistant.js";
 import { registerSlackChannelEvents } from "./events/channels.js";
 import { registerSlackHomeEvents } from "./events/home.js";
-import { registerSlackInteractionEvents } from "./events/interactions.js";
+import {
+  registerSlackApprovalInteractionEvents,
+  registerSlackInteractionEvents,
+} from "./events/interactions.js";
 import { registerSlackMemberEvents } from "./events/members.js";
 import { registerSlackMessageEvents } from "./events/messages.js";
 import { registerSlackPinEvents } from "./events/pins.js";
@@ -25,6 +28,7 @@ export function registerSlackMonitorEvents(params: {
     handleSlackMessage: params.handleSlackMessage,
   });
   if (params.ctx.installationIdentity.kind === "enterprise") {
+    registerSlackApprovalInteractionEvents({ ctx: params.ctx, trackEvent: params.trackEvent });
     return;
   }
   registerSlackReactionEvents({ ctx: params.ctx, trackEvent: params.trackEvent });

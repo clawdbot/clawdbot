@@ -34,7 +34,6 @@ Inside the workspace, OpenClaw expects these user-editable files:
 | -------------- | ---------------------------------------------------- |
 | `AGENTS.md`    | Operating instructions + "memory"                    |
 | `SOUL.md`      | Persona, boundaries, tone                            |
-| `TOOLS.md`     | User-maintained tool notes and conventions           |
 | `IDENTITY.md`  | Agent name/vibe/emoji                                |
 | `USER.md`      | User profile + preferred address                     |
 | `BOOTSTRAP.md` | One-time first-run ritual (deleted after completion) |
@@ -67,8 +66,7 @@ To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 
 Core tools (read/exec/edit/write and related system tools) are always available,
 subject to tool policy. `apply_patch` is on by default for OpenAI models and gated by
-`tools.exec.applyPatch` (`enabled`, `workspaceOnly`, `allowModels`). `TOOLS.md` does **not** control which tools exist; it's
-guidance for how _you_ want them used.
+`tools.exec.applyPatch` (`enabled`, `workspaceOnly`, `allowModels`). The `## Tools` section of `AGENTS.md` does **not** control which tools exist; it is guidance for how _you_ want them used.
 
 ## Skills
 
@@ -108,9 +106,10 @@ OpenClaw. OpenClaw does not read session folders from other tools.
 ## Steering while streaming
 
 Inbound prompts that arrive mid-run are steered into the current run by default.
-Steering is delivered **after the current assistant turn finishes executing its
-tool calls**, before the next LLM call, and no longer skips remaining tool calls
-from the current assistant message.
+The OpenClaw runtime checks for steering before unstarted tool launches and the
+next model call. A running tool continues; unstarted sequential calls are skipped,
+while parallel calls continue after their batch crosses its launch checkpoint.
+Skipped calls receive synthetic paired results before the model sees the steer.
 
 `/queue steer` is the default active-run behavior. `/queue followup` and
 `/queue collect` make messages wait for a later turn instead of steering.

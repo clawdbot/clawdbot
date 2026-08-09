@@ -954,7 +954,7 @@ function formatVerdict(lane: QaConfidenceLaneResult): string {
 }
 
 function escapeTableCell(value: string): string {
-  return value.replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
+  return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
 }
 
 export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): string {

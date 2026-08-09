@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase } from "./lib/npm-publish-plan.mjs";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
@@ -16,9 +17,8 @@ import {
   compareReleaseVersions as compareReleaseVersionsBase,
   collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
   parseReleaseVersion as parseReleaseVersionBase,
-  type ParsedReleaseVersion,
 } from "./lib/release-version.mjs";
-import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type PackageJson = {
@@ -40,6 +40,18 @@ type ParsedReleaseTag = {
   baseVersion: string;
   channel: "stable" | "alpha" | "beta";
   correctionNumber?: number;
+};
+
+type ParsedReleaseVersion = {
+  alphaNumber?: number;
+  baseVersion: string;
+  betaNumber?: number;
+  channel: "stable" | "alpha" | "beta";
+  correctionNumber?: number;
+  month: number;
+  patch: number;
+  version: string;
+  year: number;
 };
 
 type NpmPublishPlan = {
@@ -575,16 +587,20 @@ export function parseNpmPackJsonOutput(stdout: string): NpmPackResult[] | null {
   }
 
   const candidates = [trimmed];
-  const trailingArrayStart = trimmed.lastIndexOf("\n[");
-  if (trailingArrayStart !== -1) {
-    candidates.push(trimmed.slice(trailingArrayStart + 1).trim());
+  const trailingJsonStart = Math.max(trimmed.lastIndexOf("\n["), trimmed.lastIndexOf("\n{"));
+  if (trailingJsonStart !== -1) {
+    candidates.push(trimmed.slice(trailingJsonStart + 1).trim());
   }
 
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate) as unknown;
-      if (Array.isArray(parsed)) {
-        return parsed as NpmPackResult[];
+      const entries = resolveNpmJsonEntries(parsed).filter(
+        (entry): entry is NpmPackResult =>
+          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
+      );
+      if (entries.length > 0) {
+        return entries;
       }
     } catch {
       // Try the next candidate. npm lifecycle output can prepend non-JSON logs.

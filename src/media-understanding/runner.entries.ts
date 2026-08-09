@@ -1020,6 +1020,7 @@ export async function runCliEntry(params: {
     throw new Error(`CLI entry missing command for ${capability}`);
   }
   const requestOverrides = resolveMediaRequestOverrides(params.config);
+  const language = requestOverrides.language ?? entry.language ?? params.config?.language;
   const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
     entry,
@@ -1038,45 +1039,45 @@ export async function runCliEntry(params: {
   const outputDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-cli-"),
   );
-  const mediaPath = await resolveCliMediaPath({
-    capability,
-    command,
-    mediaPath: pathResult.path,
-    outputDir,
-  });
-  const outputBase = path.join(outputDir, path.parse(mediaPath).name);
-
-  const templCtx: TemplateContext = {
-    ...ctx,
-    AttachmentPath: mediaPath,
-    AttachmentUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
-    AttachmentContentType: params.attachment.mime,
-    AttachmentDir: path.dirname(mediaPath),
-    AttachmentIndex: params.attachment.index,
-    MediaPath: mediaPath,
-    MediaUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
-    MediaType: params.attachment.mime,
-    MediaDir: path.dirname(mediaPath),
-    OutputDir: outputDir,
-    OutputBase: outputBase,
-    Prompt: requestOverrides.prompt ?? prompt,
-    ...(requestOverrides.language ? { Language: requestOverrides.language } : {}),
-    MaxChars: maxChars,
-  };
-  for (const key of [
-    "MediaPaths",
-    "MediaUrls",
-    "MediaTypes",
-    "MediaWorkspaceDir",
-    "MediaTranscribedIndexes",
-    "MediaStaged",
-  ]) {
-    delete (templCtx as unknown as Record<string, unknown>)[key];
-  }
-  const argv = [command, ...args].map((part, index) =>
-    index === 0 ? part : applyTemplate(part, templCtx),
-  );
   try {
+    const mediaPath = await resolveCliMediaPath({
+      capability,
+      command,
+      mediaPath: pathResult.path,
+      outputDir,
+    });
+    const outputBase = path.join(outputDir, path.parse(mediaPath).name);
+
+    const templCtx: TemplateContext = {
+      ...ctx,
+      AttachmentPath: mediaPath,
+      AttachmentUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
+      AttachmentContentType: params.attachment.mime,
+      AttachmentDir: path.dirname(mediaPath),
+      AttachmentIndex: params.attachment.index,
+      MediaPath: mediaPath,
+      MediaUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
+      MediaType: params.attachment.mime,
+      MediaDir: path.dirname(mediaPath),
+      OutputDir: outputDir,
+      OutputBase: outputBase,
+      Prompt: requestOverrides.prompt ?? prompt,
+      ...(capability === "audio" && language ? { Language: language } : {}),
+      MaxChars: maxChars,
+    };
+    for (const key of [
+      "MediaPaths",
+      "MediaUrls",
+      "MediaTypes",
+      "MediaWorkspaceDir",
+      "MediaTranscribedIndexes",
+      "MediaStaged",
+    ]) {
+      delete (templCtx as unknown as Record<string, unknown>)[key];
+    }
+    const argv = [command, ...args].map((part, index) =>
+      index === 0 ? part : applyTemplate(part, templCtx),
+    );
     if (shouldLogVerbose()) {
       logVerbose(`Media understanding via CLI: ${argv.join(" ")}`);
     }

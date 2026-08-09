@@ -18,6 +18,10 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
+import {
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+} from "./state-migrations.receipts.js";
 import { resolveWorkspaceMigrationSourceKey } from "./state-migrations.workspace-setup-receipts.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
 
@@ -29,7 +33,6 @@ type WorkspaceMigrationDatabase = Pick<
   | "workspace_path_aliases"
   | "workspace_attestations"
   | "workspace_generated_bootstrap_hashes"
-  | "migration_runs"
   | "migration_sources"
 >;
 
@@ -337,10 +340,7 @@ export function importAndRecordReceipt(params: {
     (database) => {
       const { db } = database;
       const kysely = getNodeSqliteKysely<WorkspaceMigrationDatabase>(db);
-      const existingReceipt = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely.selectFrom("migration_sources").select("source_key").where("source_key", "=", key),
-      );
+      const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, key);
       if (existingReceipt) {
         throw new Error("workspace migration receipt appeared concurrently; retry Doctor");
       }
@@ -658,33 +658,18 @@ export function importAndRecordReceipt(params: {
         resolution,
         imported,
       });
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("migration_runs").values({
-          id: runId,
-          started_at: now,
-          finished_at: now,
-          status: "completed",
-          report_json: reportJson,
-        }),
-      );
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("migration_sources").values({
-          source_key: key,
-          migration_kind: MIGRATION_KIND,
-          source_path: params.source.sourcePath,
-          target_table: targetTable,
-          source_sha256: params.snapshot.sha256,
-          source_size_bytes: params.snapshot.size,
-          source_record_count: params.parsed.recordCount,
-          last_run_id: runId,
-          status: "completed",
-          imported_at: now,
-          removed_source: 0,
-          report_json: reportJson,
-        }),
-      );
+      recordLegacyMigrationReceipt(db, {
+        sourceKey: key,
+        migrationKind: MIGRATION_KIND,
+        sourcePath: params.source.sourcePath,
+        targetTable,
+        sourceSha256: params.snapshot.sha256,
+        sourceSizeBytes: params.snapshot.size,
+        sourceRecordCount: params.parsed.recordCount,
+        runId,
+        now,
+        reportJson,
+      });
       return { sourceKey: key, imported };
     },
     { env: params.env },

@@ -16,6 +16,10 @@ afterEach(() => {
 });
 
 describe("shared toast", () => {
+  it("reports when no host can present the toast", () => {
+    expect(showToast({ message: "Unavailable" })).toBe(false);
+  });
+
   it("shows and replaces the active toast", async () => {
     const host = await mountHost();
 
@@ -52,5 +56,31 @@ describe("shared toast", () => {
 
     expect(onAction).toHaveBeenCalledOnce();
     expect(host.querySelector(".app-toast")).toBeNull();
+  });
+
+  it("reports why a toast is replaced, dismissed, acted on, or disconnected", async () => {
+    const host = await mountHost();
+    const reasons: string[] = [];
+
+    showToast({ message: "First", onDismiss: (reason) => reasons.push(reason) });
+    showToast({
+      message: "Second",
+      actionLabel: "Undo",
+      onAction: () => reasons.push("ran-action"),
+      onDismiss: (reason) => reasons.push(reason),
+    });
+    await host.updateComplete;
+    host.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
+    await host.updateComplete;
+
+    showToast({ message: "Third", onDismiss: (reason) => reasons.push(reason) });
+    await host.updateComplete;
+    host.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
+    await host.updateComplete;
+
+    showToast({ message: "Fourth", onDismiss: (reason) => reasons.push(reason) });
+    host.remove();
+
+    expect(reasons).toEqual(["replaced", "action", "ran-action", "dismiss", "disconnected"]);
   });
 });

@@ -1,44 +1,21 @@
-/** Windows Task Scheduler installation and migration. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
-import { execSchtasks } from "./schtasks-exec.js";
 import {
-  assertReplacementPortAvailableForTakeover,
-  resolveFallbackRuntime,
-  resolveScheduledTaskPort,
-  shouldManageGatewayListenerPort,
-  terminateBusyPortListeners,
-  terminateGatewayProcessTree,
-  terminateScheduledTaskGatewayListeners,
-  terminateScheduledTaskNodeHost,
-  waitForGatewayPortRelease,
-} from "./schtasks-process.js";
-import {
-  assertSchtasksAvailable,
-  hasScheduledTaskRunningEvidence,
-  isRegisteredScheduledTask,
-  isStartupEntryInstalled,
-  launchFallbackTaskScript,
-  removeStartupEntries,
-  restartStartupEntry,
+  restartRegisteredScheduledTask,
   runScheduledTaskOrThrow,
-  startStartupEntry,
-  stopStartupEntry,
-  terminateInstalledStartupRuntime,
   type ScheduledTaskActivation,
-  waitForFallbackTakeoverRuntime,
-  waitForScheduledTaskRunningEvidence,
-} from "./schtasks-runtime.js";
+} from "./schtasks-control.js";
+import { execSchtasks } from "./schtasks-exec.js";
 import {
   buildHiddenLauncherScript,
   buildScheduledTaskXml,
   buildStartupLauncherScript,
   buildTaskScript,
+  encodeWindowsLauncherScript,
   quoteSchtasksArg,
   readScheduledTaskCommand,
   resolveSchtasksCreateUser,
@@ -50,15 +27,26 @@ import {
   shouldFallbackToStartupEntry,
   shouldUseHiddenWindowsTaskLauncher,
   writeTaskXmlTempFile,
-} from "./schtasks-script.js";
-import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
+} from "./schtasks-layout.js";
+import {
+  assertReplacementPortAvailableForTakeover,
+  terminateGatewayProcessTree,
+} from "./schtasks-process.js";
+import {
+  assertSchtasksAvailable,
+  isRegisteredScheduledTask,
+  isStartupEntryInstalled,
+  launchFallbackTaskScript,
+  removeStartupEntries,
+  probeScheduledTaskExists,
+  resolveFallbackRuntime,
+  waitForFallbackTakeoverRuntime,
+  waitForScheduledTaskRunningEvidence,
+} from "./schtasks-runtime.js";
 import type {
-  GatewayServiceControlArgs,
   GatewayServiceEnv,
-  GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
-  GatewayServiceRestartResult,
 } from "./service-types.js";
 
 const CALLER_OWNED_SERVICE_IDENTITY_KEYS = [
@@ -144,22 +132,17 @@ async function writeScheduledTaskScript({
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   const taskDescription = resolveGatewayServiceDescription({
     env: taskEnv,
-    environment,
     description,
   });
-  const scriptEnvironment = resolveScheduledTaskScriptEnvironment(taskEnv, environment);
   const script = buildTaskScript({
     description: taskDescription,
     programArguments,
     workingDirectory,
-    environment: scriptEnvironment,
+    environment: resolveScheduledTaskScriptEnvironment(taskEnv, environment),
   });
   await fs.writeFile(scriptPath, encodeWindowsLauncherScript({ format: "cmd", content: script }));
   if (taskLaunchPath !== scriptPath) {
-    const launcher = buildHiddenLauncherScript({
-      description: taskDescription,
-      scriptPath,
-    });
+    const launcher = buildHiddenLauncherScript({ description: taskDescription, scriptPath });
     await fs.writeFile(
       taskLaunchPath,
       encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
@@ -201,11 +184,8 @@ async function updateExistingScheduledTask(params: {
   if (change.code !== 0) {
     return null;
   }
-  // Re-apply the full XML on top of the `/Change` so tasks installed by older
-  // versions inherit the `<DisallowStartIfOnBatteries>false</...>` and
-  // `<StopIfGoingOnBatteries>false</...>` flags on upgrade (#59299). Best
-  // effort: a non-zero result here leaves the existing settings in place, so
-  // upgraders keep the prior buggy defaults rather than losing the task.
+  // Re-apply the full XML so older tasks inherit both false battery flags (#59299).
+  // Best effort: failure keeps the prior settings rather than losing the task.
   const upgradeXmlPath = await writeTaskXmlTempFile(
     buildScheduledTaskXml({
       taskDescription: params.description ?? "OpenClaw Gateway",
@@ -242,10 +222,8 @@ async function activateScheduledTask(params: {
   description?: string;
 }): Promise<ScheduledTaskActivation | "startup-fallback"> {
   const taskDescription = params.description ?? "OpenClaw Gateway";
-
   const taskName = resolveTaskName(params.env);
   const quotedLaunchPath = quoteSchtasksArg(params.taskLaunchPath);
-
   const existingActivation = await updateExistingScheduledTask({
     ...params,
     taskName,
@@ -256,27 +234,18 @@ async function activateScheduledTask(params: {
   }
 
   const taskUser = resolveTaskUser(params.env);
-  // Use `schtasks /Create /XML` so the task carries explicit
-  // `DisallowStartIfOnBatteries=false` and `StopIfGoingOnBatteries=false`
-  // settings. The CLI flag form (`/Create /SC ONLOGON ...`) cannot set those
-  // flags and inherits the Task Scheduler defaults (both true), which kills
-  // the Gateway when a laptop unplugs from AC power (#59299).
+  // Use `schtasks /Create /XML` so the task carries explicit battery settings.
+  // The CLI flag form cannot set these and kills the Gateway when a laptop unplugs (#59299).
   const xmlPath = await writeTaskXmlTempFile(
-    buildScheduledTaskXml({
-      taskDescription,
-      taskUser,
-      launchPath: params.taskLaunchPath,
-    }),
+    buildScheduledTaskXml({ taskDescription, taskUser, launchPath: params.taskLaunchPath }),
   );
   let create: Awaited<ReturnType<typeof execSchtasks>>;
   try {
     const xmlArgs = ["/Create", "/F", "/TN", taskName, "/XML", xmlPath];
     const createUser = resolveSchtasksCreateUser(params.env, taskUser);
-    const xmlArgsWithUser = createUser ? [...xmlArgs, "/RU", createUser, "/NP"] : xmlArgs;
-    create = await execSchtasks(xmlArgsWithUser);
+    create = await execSchtasks(createUser ? [...xmlArgs, "/RU", createUser, "/NP"] : xmlArgs);
     if (create.code !== 0 && createUser) {
-      // Retry without the elevated `/RU` form, matching the pre-XML behavior
-      // for accounts whose service password cannot be stored.
+      // Retry without elevated `/RU` when the account password cannot be stored.
       create = await execSchtasks(xmlArgs);
     }
   } finally {
@@ -289,10 +258,7 @@ async function activateScheduledTask(params: {
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
       const useHiddenLauncher = shouldUseHiddenWindowsTaskLauncher(params.env);
       const launcher = useHiddenLauncher
-        ? buildHiddenLauncherScript({
-            description: taskDescription,
-            scriptPath: params.scriptPath,
-          })
+        ? buildHiddenLauncherScript({ description: taskDescription, scriptPath: params.scriptPath })
         : buildStartupLauncherScript({
             description: taskDescription,
             scriptPath: params.scriptPath,
@@ -340,8 +306,7 @@ export async function installScheduledTask(
 ): Promise<{ scriptPath: string }> {
   const installedCommand = await readScheduledTaskCommand(args.env).catch(() => null);
   const fallbackEnv = resolveScheduledTaskActivationEnv(args.env, installedCommand?.environment);
-  // Capture fallback ownership from installed metadata before replacing the
-  // script. A repair can change the port or profile that locates the old process.
+  // Capture ownership before repair changes the port/profile that locates the old process.
   const startupEntryInstalled = await isStartupEntryInstalled(fallbackEnv);
   let startupRuntime = startupEntryInstalled
     ? await resolveFallbackRuntime(fallbackEnv, installedCommand, "control").catch(() => null)
@@ -388,34 +353,27 @@ export async function installScheduledTask(
   if (activation !== "scheduled-task") {
     return { scriptPath: staged.scriptPath };
   }
-  // Config writes can briefly drop the old listener before the service script
-  // is replaced. Re-probe through the captured command so a resumed fallback
-  // cannot be hidden by the newly staged port or entrypoint.
+  // Re-probe the captured command so a config-reload fallback is not hidden by the staged script.
   const takeoverRuntime =
     startupRuntime?.status === "stopped"
       ? await resolveFallbackRuntime(fallbackEnv, installedCommand, "control").catch(
           () => startupRuntime,
         )
       : startupRuntime;
-  if (takeoverRuntime?.status === "running") {
-    // The old launcher can still own the listener after the task is created.
-    // Terminate its captured PID, then restart and prove the replacement.
-    if (takeoverRuntime.pid) {
-      await terminateGatewayProcessTree(takeoverRuntime.pid, 300);
-      try {
-        // The captured fallback is already gone. Re-reading ownership after
-        // replacing its script would inspect the new task command instead.
-        await restartRegisteredScheduledTask({
-          env: activationEnv,
-          stdout: args.stdout,
-          mode: { kind: "fallback-takeover" },
-        });
-      } catch (err) {
-        // Keep the gateway available if Task Scheduler takeover fails after
-        // terminating the captured fallback process.
-        await launchFallbackTaskScript(fallbackEnv, installedCommand);
-        throw err;
-      }
+  if (takeoverRuntime?.status === "running" && takeoverRuntime.pid) {
+    // The old launcher can still own the listener; terminate it and prove the replacement.
+    await terminateGatewayProcessTree(takeoverRuntime.pid, 300);
+    try {
+      // Re-reading ownership now would inspect the replacement command, not the captured fallback.
+      await restartRegisteredScheduledTask({
+        env: activationEnv,
+        stdout: args.stdout,
+        mode: { kind: "fallback-takeover" },
+      });
+    } catch (err) {
+      // Restore availability if takeover fails after terminating the captured fallback.
+      await launchFallbackTaskScript(fallbackEnv, installedCommand);
+      throw err;
     }
   } else if (
     takeoverRuntime?.status === "stopped" &&
@@ -432,11 +390,24 @@ export async function uninstallScheduledTask({
 }: GatewayServiceManageArgs): Promise<void> {
   await assertSchtasksAvailable();
   const taskName = resolveTaskName(env);
-  const taskInstalled = await isRegisteredScheduledTask(env).catch(() => false);
-  if (taskInstalled) {
-    await execSchtasks(["/Delete", "/F", "/TN", taskName]);
+  const query = await execSchtasks(["/Query", "/TN", taskName]);
+  const queryDetail = normalizeLowercaseStringOrEmpty(query.stderr || query.stdout);
+  const exists =
+    query.code === 0
+      ? true
+      : queryDetail.includes("cannot find the file")
+        ? false
+        : probeScheduledTaskExists(taskName);
+  if (exists === null) {
+    throw new Error(`Could not verify whether Scheduled Task ${taskName} exists.`);
   }
-
+  if (exists) {
+    const deletion = await execSchtasks(["/Delete", "/F", "/TN", taskName]);
+    if (deletion.code !== 0) {
+      const detail = (deletion.stderr || deletion.stdout).trim() || "unknown error";
+      throw new Error(`schtasks delete failed: ${detail}`);
+    }
+  }
   await removeStartupEntries(env, stdout);
 
   const scriptPath = resolveTaskScriptPath(env);
@@ -452,224 +423,19 @@ export async function uninstallScheduledTask({
     try {
       await fs.unlink(launcherPath);
       stdout.write(`${formatLine("Removed task launcher", launcherPath)}\n`);
-    } catch {}
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
   }
   try {
     await fs.unlink(scriptPath);
     stdout.write(`${formatLine("Removed task script", scriptPath)}\n`);
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
     stdout.write(`Task script not found at ${scriptPath}\n`);
   }
-}
-
-function isTaskNotRunning(res: { stdout: string; stderr: string; code: number }): boolean {
-  const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
-  return detail.includes("not running");
-}
-
-export async function stopScheduledTask({
-  stdout,
-  env,
-  onMutation,
-}: GatewayServiceControlArgs): Promise<void> {
-  const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
-  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
-  try {
-    await assertSchtasksAvailable();
-  } catch (err) {
-    if (await isStartupEntryInstalled(effectiveEnv)) {
-      await stopStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-stop"));
-      return;
-    }
-    throw err;
-  }
-  if (!(await isRegisteredScheduledTask(effectiveEnv))) {
-    if (await isStartupEntryInstalled(effectiveEnv)) {
-      await stopStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-stop"));
-      return;
-    }
-  }
-  const taskName = resolveTaskName(effectiveEnv);
-  const res = await execSchtasks(["/End", "/TN", taskName]);
-  if (res.code !== 0 && !isTaskNotRunning(res)) {
-    throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
-  }
-  reportMutation("schtasks-stop");
-  const manageGatewayPort = shouldManageGatewayListenerPort(effectiveEnv);
-  const stopPort = manageGatewayPort ? await resolveScheduledTaskPort(effectiveEnv) : null;
-  if (manageGatewayPort) {
-    await terminateScheduledTaskGatewayListeners(effectiveEnv);
-  } else {
-    await terminateScheduledTaskNodeHost(effectiveEnv);
-  }
-  await terminateInstalledStartupRuntime(effectiveEnv);
-  if (stopPort) {
-    const released = await waitForGatewayPortRelease(stopPort);
-    if (!released) {
-      await terminateBusyPortListeners(stopPort);
-      const releasedAfterForce = await waitForGatewayPortRelease(stopPort, 2_000);
-      if (!releasedAfterForce) {
-        throw new Error(`gateway port ${stopPort} is still busy after stop`);
-      }
-    }
-  }
-  stdout.write(`${formatLine("Stopped Scheduled Task", taskName)}\n`);
-}
-
-export async function startScheduledTask({
-  stdout,
-  env,
-  onMutation,
-}: GatewayServiceControlArgs): Promise<void> {
-  const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
-  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
-  try {
-    await assertSchtasksAvailable();
-  } catch (err) {
-    if (await isStartupEntryInstalled(effectiveEnv)) {
-      await startStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-start"));
-      return;
-    }
-    throw err;
-  }
-  if (!(await isRegisteredScheduledTask(effectiveEnv))) {
-    if (await isStartupEntryInstalled(effectiveEnv)) {
-      await startStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-start"));
-      return;
-    }
-  }
-  const taskName = resolveTaskName(effectiveEnv);
-  await runScheduledTaskOrThrow({
-    taskName,
-    env: effectiveEnv,
-    scriptPath: resolveTaskScriptPath(effectiveEnv),
-    onMutation: () => reportMutation("schtasks-start"),
-  });
-  stdout.write(`${formatLine("Started Scheduled Task", taskName)}\n`);
-}
-
-async function restartRegisteredScheduledTask(params: {
-  env: GatewayServiceEnv;
-  stdout: NodeJS.WritableStream;
-  mode: { kind: "standard" } | { kind: "fallback-takeover" };
-  onEndMutation?: () => void;
-  onRunMutation?: () => void;
-}): Promise<GatewayServiceRestartResult> {
-  const taskName = resolveTaskName(params.env);
-  const end = await execSchtasks(["/End", "/TN", taskName]);
-  if (end.code === 0) {
-    params.onEndMutation?.();
-  }
-  const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
-  const restartPort = manageGatewayPort ? await resolveScheduledTaskPort(params.env) : null;
-  if (params.mode.kind === "standard") {
-    if (manageGatewayPort) {
-      await terminateScheduledTaskGatewayListeners(params.env);
-    } else {
-      await terminateScheduledTaskNodeHost(params.env);
-    }
-    await terminateInstalledStartupRuntime(params.env);
-  } else {
-    const replacementRuntime = await resolveFallbackRuntime(params.env, undefined, "control");
-    if (replacementRuntime.status === "unknown") {
-      throw new Error(
-        replacementRuntime.detail ??
-          "Could not verify the replacement Windows Scheduled Task process.",
-      );
-    }
-    if (replacementRuntime.status === "running" && replacementRuntime.pid) {
-      await terminateGatewayProcessTree(replacementRuntime.pid, 300);
-    }
-  }
-  if (restartPort) {
-    const released = await waitForGatewayPortRelease(restartPort);
-    if (!released) {
-      if (params.mode.kind === "fallback-takeover") {
-        throw new Error(
-          `replacement gateway port ${restartPort} is occupied by an unverified process`,
-        );
-      }
-      await terminateBusyPortListeners(restartPort);
-      const releasedAfterForce = await waitForGatewayPortRelease(restartPort, 2_000);
-      if (!releasedAfterForce) {
-        throw new Error(`gateway port ${restartPort} is still busy before restart`);
-      }
-    }
-  }
-  const activation = await runScheduledTaskOrThrow({
-    taskName,
-    env: params.env,
-    scriptPath: resolveTaskScriptPath(params.env),
-    ...(params.onRunMutation ? { onMutation: params.onRunMutation } : {}),
-  });
-  const startupEntryInstalled = await isStartupEntryInstalled(params.env);
-  const hasRunningEvidence = startupEntryInstalled
-    ? activation === "scheduled-task" && (await waitForScheduledTaskRunningEvidence(params.env))
-    : await hasScheduledTaskRunningEvidence(params.env);
-  // A direct launch is the replacement fallback; keep the Startup entry so
-  // the same command remains available at the next login.
-  if (
-    params.mode.kind === "fallback-takeover" &&
-    startupEntryInstalled &&
-    activation === "scheduled-task" &&
-    !hasRunningEvidence
-  ) {
-    await execSchtasks(["/End", "/TN", taskName]);
-    const failedRuntime = await resolveFallbackRuntime(params.env, undefined, "control").catch(
-      () => null,
-    );
-    if (failedRuntime?.status === "running" && failedRuntime.pid) {
-      await terminateGatewayProcessTree(failedRuntime.pid, 300);
-    }
-    throw new Error("Replacement Windows Scheduled Task did not produce running evidence.");
-  }
-  if (startupEntryInstalled && hasRunningEvidence) {
-    await removeStartupEntries(params.env, params.stdout);
-  }
-  params.stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
-  return { outcome: "completed" };
-}
-
-export async function restartScheduledTask({
-  stdout,
-  env,
-  onMutation,
-}: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
-  const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
-  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
-  try {
-    await assertSchtasksAvailable();
-  } catch (err) {
-    if (await isStartupEntryInstalled(effectiveEnv)) {
-      const result = await restartStartupEntry(effectiveEnv, stdout, (kind) =>
-        reportMutation(kind === "stop" ? "startup-entry-stop" : "startup-entry-restart"),
-      );
-      return result;
-    }
-    throw err;
-  }
-  if (!(await isRegisteredScheduledTask(effectiveEnv))) {
-    if (await isStartupEntryInstalled(effectiveEnv)) {
-      const result = await restartStartupEntry(effectiveEnv, stdout, (kind) =>
-        reportMutation(kind === "stop" ? "startup-entry-stop" : "startup-entry-restart"),
-      );
-      return result;
-    }
-  }
-  const result = await restartRegisteredScheduledTask({
-    env: effectiveEnv,
-    stdout,
-    mode: { kind: "standard" },
-    onEndMutation: () => reportMutation("schtasks-end"),
-    onRunMutation: () => reportMutation("schtasks-restart"),
-  });
-  return result;
-}
-
-export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Promise<boolean> {
-  const effectiveEnv = args.env ?? (process.env as GatewayServiceEnv);
-  if (await isRegisteredScheduledTask(effectiveEnv)) {
-    return true;
-  }
-  return await isStartupEntryInstalled(effectiveEnv);
 }

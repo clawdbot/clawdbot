@@ -41,7 +41,6 @@ vi.mock("../../agents/sessions/reset-boundary.js", () => ({
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
@@ -168,6 +167,60 @@ describe("resolveCronSession", () => {
     expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
   });
 
+  it("rolls an archived isolated heartbeat session into a fresh run", () => {
+    const result = resolveWithStoredEntry({
+      sessionKey: "agent:main:main:heartbeat",
+      entry: {
+        sessionId: "archived-heartbeat-session-id",
+        updatedAt: NOW_MS - 1000,
+        archivedAt: NOW_MS,
+        heartbeatIsolatedBaseSessionKey: "agent:main:main",
+      },
+      forceNew: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.previousSessionId).toBe("archived-heartbeat-session-id");
+    expect(result.sessionEntry.sessionId).not.toBe("archived-heartbeat-session-id");
+    expect(result.sessionEntry.archivedAt).toBeUndefined();
+    expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
+  });
+
+  it("keeps an initializing isolated heartbeat blocked during forced rollover", () => {
+    expect(() =>
+      resolveWithStoredEntry({
+        sessionKey: "agent:main:main:heartbeat",
+        entry: {
+          sessionId: "initializing-heartbeat-session-id",
+          updatedAt: NOW_MS - 1000,
+          archivedAt: NOW_MS,
+          initializationPending: true,
+          heartbeatIsolatedBaseSessionKey: "agent:main:main",
+        },
+        forceNew: true,
+      }),
+    ).toThrow(
+      'Session "agent:main:main:heartbeat" is still initializing. Retry after initialization completes.',
+    );
+    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("keeps an archived isolated heartbeat read-only without forceNew", () => {
+    expect(() =>
+      resolveWithStoredEntry({
+        sessionKey: "agent:main:main:heartbeat",
+        entry: {
+          sessionId: "archived-heartbeat-session-id",
+          updatedAt: NOW_MS - 1000,
+          archivedAt: NOW_MS,
+          heartbeatIsolatedBaseSessionKey: "agent:main:main",
+        },
+      }),
+    ).toThrow(
+      'Session "agent:main:main:heartbeat" is archived. Restore it before starting new work.',
+    );
+  });
+
   // New tests for session reuse behavior (#18027)
   describe("session reuse for webhooks/cron", () => {
     it("reuses existing sessionId when session is fresh", () => {
@@ -217,13 +270,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
       expect(result.sessionEntry.compactionCount).toBe(0);
       expect(result.sessionEntry.sendPolicy).toBe("allow");
-      expect(result.sessionEntry.sessionFile).toBe(
-        formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: "old-session-id",
-          storePath: "/tmp/test-store.json",
-        }),
-      );
+      expect(result.sessionEntry).not.toHaveProperty("sessionFile");
       expect(result.resetBoundaryPending).toMatchObject({ reason: "cron-stale" });
       expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
@@ -359,9 +406,12 @@ describe("resolveCronSession", () => {
           cliSessionBindings: {},
           claudeCliSessionId: "old-claude-session",
           liveModelSwitchPending: true,
-          fallbackNoticeSelectedModel: "anthropic/claude-opus-4-6",
-          fallbackNoticeActiveModel: "anthropic/claude-sonnet-4-6",
-          fallbackNoticeReason: "rate limit",
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "anthropic/claude-opus-4-6",
+            activeModel: "anthropic/claude-sonnet-4-6",
+            reason: "rate limit",
+          },
           inputTokens: 1,
           outputTokens: 2,
           totalTokens: 3,
@@ -375,7 +425,7 @@ describe("resolveCronSession", () => {
           cacheWrite: 5,
           contextTokens: 200_000,
           compactionCount: 9,
-          memoryFlushAt: NOW_MS - 500,
+          memoryFlush: { kind: "succeeded", compactionCount: 9 },
           abortCutoffMessageSid: "old-message",
           spawnedBy: "agent:main:session:parent",
           skillsSnapshot: {
@@ -421,7 +471,6 @@ describe("resolveCronSession", () => {
             lastActivityAt: NOW_MS - 1_000,
           },
           authProfileOverride: "auto-auth",
-          authProfileOverrideSource: "auto",
           authProfileOverrideCompactionCount: 2,
           modelOverride: "auto-model",
           providerOverride: "anthropic",
@@ -447,9 +496,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
       expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
       expect(result.sessionEntry.liveModelSwitchPending).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
-      expect(result.sessionEntry.fallbackNoticeReason).toBeUndefined();
+      expect(result.sessionEntry.fallbackNotice).toBeUndefined();
       expect(result.sessionEntry.inputTokens).toBeUndefined();
       expect(result.sessionEntry.outputTokens).toBeUndefined();
       expect(result.sessionEntry.totalTokens).toBeUndefined();
@@ -463,7 +510,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.cacheWrite).toBeUndefined();
       expect(result.sessionEntry.contextTokens).toBeUndefined();
       expect(result.sessionEntry.compactionCount).toBeUndefined();
-      expect(result.sessionEntry.memoryFlushAt).toBeUndefined();
+      expect(result.sessionEntry.memoryFlush).toBeUndefined();
       expect(result.sessionEntry.abortCutoffMessageSid).toBeUndefined();
       expect(result.sessionEntry.spawnedBy).toBeUndefined();
       expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
@@ -517,6 +564,22 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.authProfileOverride).toBe("work-profile");
       expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
       expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(3);
+    });
+
+    it("stamps a legacy source-less user auth override on fresh sessions", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-legacy-auth",
+          updatedAt: NOW_MS - 1_000,
+          authProfileOverride: "work-profile",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.sessionEntry.authProfileOverride).toBe("work-profile");
+      expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
+      expect(result.sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
     });
 
     it("preserves non-delivery ambient session context for non-isolated expiration rollovers", () => {

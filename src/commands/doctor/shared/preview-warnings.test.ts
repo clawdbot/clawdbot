@@ -70,6 +70,7 @@ const staleAuthOrderState = vi.hoisted(() => ({
 
 const activeToolSchemaState = vi.hoisted(() => ({
   warnings: [] as string[],
+  params: undefined as { runWithPluginMetadataSnapshot?: unknown } | undefined,
 }));
 
 const commandSecretState = vi.hoisted(() => ({
@@ -315,7 +316,12 @@ vi.mock("./stale-auth-order.js", () => ({
 }));
 
 vi.mock("./active-tool-schema-warnings.js", () => ({
-  collectActiveToolSchemaProjectionWarnings: () => activeToolSchemaState.warnings,
+  collectActiveToolSchemaProjectionWarnings: async (params: {
+    runWithPluginMetadataSnapshot?: unknown;
+  }) => {
+    activeToolSchemaState.params = params;
+    return activeToolSchemaState.warnings;
+  },
 }));
 
 vi.mock("./codex-route-warnings.js", () => ({
@@ -389,6 +395,7 @@ describe("doctor preview warnings", () => {
     staleOAuthShadowState.warnings = [];
     staleAuthOrderState.warnings = [];
     activeToolSchemaState.warnings = [];
+    activeToolSchemaState.params = undefined;
     commandSecretState.targetIds = new Set<string>();
     commandSecretState.resolvedConfig = undefined;
     commandSecretState.diagnostics = [];
@@ -696,6 +703,23 @@ describe("doctor preview warnings", () => {
     expect(
       warnings.some((warning) => warning.includes('active tool "fuzzplugin_move_angles"')),
     ).toBe(true);
+  });
+
+  it("scopes active tool schema preview checks to the Doctor metadata lifecycle", async () => {
+    const runWithPluginMetadataSnapshot = <T>(
+      _scope: { config: OpenClawConfig; workspaceDir?: string },
+      run: () => T,
+    ): T => run();
+
+    await collectDoctorPreviewWarnings({
+      cfg: {},
+      doctorFixCommand: "openclaw doctor --fix",
+      runWithPluginMetadataSnapshot,
+    });
+
+    expect(activeToolSchemaState.params?.runWithPluginMetadataSnapshot).toBe(
+      runWithPluginMetadataSnapshot,
+    );
   });
 
   it("warns but skips auto-removal when plugin discovery has errors", async () => {

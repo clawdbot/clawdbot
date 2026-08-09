@@ -134,6 +134,11 @@ export type ProviderAppGuidedSetupCandidate = {
 };
 
 export type ProviderAppGuidedSetup = {
+  /**
+   * Report whether the provider's local service is reachable, even when no
+   * model is suitable for automatic activation. This probe must be read-only.
+   */
+  detectAvailability?: (ctx: ProviderAppGuidedSetupContext) => Promise<boolean>;
   /** Detection is read-only: no model pull, download, login, or config write. */
   detect: (ctx: ProviderAppGuidedSetupContext) => Promise<ProviderAppGuidedSetupCandidate | null>;
   /** Recheck one detected model and return the config required for a live probe. */

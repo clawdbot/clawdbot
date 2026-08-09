@@ -153,7 +153,7 @@ docker_e2e_build_or_reuse() {
 docker_e2e_test_state_shell_b64() {
   local label="${1:?missing test-state label}"
   local scenario="${2:-empty}"
-  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell \
+  node --import tsx "$ROOT_DIR/scripts/lib/openclaw-test-state.mts" shell \
     --label "$label" \
     --scenario "$scenario" |
     base64 |
@@ -161,7 +161,7 @@ docker_e2e_test_state_shell_b64() {
 }
 
 docker_e2e_test_state_function_b64() {
-  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell-function |
+  node --import tsx "$ROOT_DIR/scripts/lib/openclaw-test-state.mts" shell-function |
     base64 |
     tr -d '\n'
 }

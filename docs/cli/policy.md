@@ -20,7 +20,7 @@ Policy checks configured channels, MCP servers, model providers, network SSRF
 posture, ingress/channel access, Gateway exposure and node command posture,
 authored message-routing probes,
 agent workspace access, sandbox posture, data-handling posture, secret
-provider/auth profile posture, and governed tool metadata (`TOOLS.md`). Use it
+provider/auth profile posture, and governed tool metadata (the `## Tools` section of `AGENTS.md`). Use it
 when a workspace needs a durable, checkable statement such as "Telegram must
 not be enabled" or "governed tools must declare risk and owner metadata." If
 you only need local behavior with no attestation or drift detection, plain
@@ -300,10 +300,15 @@ more restrictive; a weaker duplicate claim is rejected (allow-lists are
 subsets, deny-lists are supersets, required booleans are fixed).
 
 Container posture rules (`sandbox.containers.*`) are checked only against
-evidence the matched agent's sandbox backend can expose. If a backend cannot
-observe a rule you enabled for it, policy reports
+evidence the matched agent's sandbox backend can expose. The Docker and Podman
+backends expose the same `sandbox.docker.*` container posture settings. If a
+backend cannot observe a rule you enabled for it, policy reports
 `policy/sandbox-container-posture-unobservable` instead of passing; scope
 container rules to the agent groups that use a backend which can expose them.
+
+Backend authorization uses the configured identity. `backend: "docker"`
+requires `allowBackends: ["docker"]`, while `backend: "podman"` requires
+`allowBackends: ["podman"]`.
 
 Top-level `ingress.session.requireDmScope` stays global; `session.dmScope` is
 not channel-attributable evidence, so it cannot be scoped by `channelIds`.
@@ -396,16 +401,16 @@ node command should update `policy.jsonc` after review instead of relying on
 
 #### Sandbox posture
 
-| Policy field                                          | Observed state                                          | Use when                                                       |
-| ----------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------- |
-| `sandbox.requireMode`                                 | `agents.defaults.sandbox.mode` and per-agent mode       | Allow only reviewed sandbox modes such as `all` or `non-main`. |
-| `sandbox.allowBackends`                               | `agents.defaults.sandbox.backend` and per-agent backend | Allow only reviewed sandbox backends such as `docker`.         |
-| `sandbox.containers.denyHostNetwork`                  | Container-backed sandbox/browser network mode           | Deny host network mode.                                        |
-| `sandbox.containers.denyContainerNamespaceJoin`       | Container-backed sandbox/browser network mode           | Deny joining another container network namespace.              |
-| `sandbox.containers.requireReadOnlyMounts`            | Container-backed sandbox/browser mount mode             | Require mounts to be read-only.                                |
-| `sandbox.containers.denyContainerRuntimeSocketMounts` | Container-backed sandbox/browser mount targets          | Deny container runtime socket mounts.                          |
-| `sandbox.containers.denyUnconfinedProfiles`           | Container security profile posture                      | Deny unconfined container security profiles.                   |
-| `sandbox.browser.requireCdpSourceRange`               | Sandbox browser CDP source range                        | Require browser CDP exposure to declare a source range.        |
+| Policy field                                          | Observed state                                          | Use when                                                           |
+| ----------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------ |
+| `sandbox.requireMode`                                 | `agents.defaults.sandbox.mode` and per-agent mode       | Allow only reviewed sandbox modes such as `all` or `non-main`.     |
+| `sandbox.allowBackends`                               | `agents.defaults.sandbox.backend` and per-agent backend | Allow only reviewed sandbox backends such as `docker` or `podman`. |
+| `sandbox.containers.denyHostNetwork`                  | Container-backed sandbox/browser network mode           | Deny host network mode.                                            |
+| `sandbox.containers.denyContainerNamespaceJoin`       | Container-backed sandbox/browser network mode           | Deny joining another container network namespace.                  |
+| `sandbox.containers.requireReadOnlyMounts`            | Container-backed sandbox/browser mount mode             | Require mounts to be read-only.                                    |
+| `sandbox.containers.denyContainerRuntimeSocketMounts` | Container-backed sandbox/browser mount targets          | Deny container runtime socket mounts.                              |
+| `sandbox.containers.denyUnconfinedProfiles`           | Container security profile posture                      | Deny unconfined container security profiles.                       |
+| `sandbox.browser.requireCdpSourceRange`               | Sandbox browser CDP source range                        | Require browser CDP exposure to declare a source range.            |
 
 Policy treats missing `sandbox.mode` as its implicit default `off`, so
 `sandbox.requireMode` reports a fresh or unconfigured sandbox as outside an
@@ -413,12 +418,12 @@ allowlist such as `["all"]`.
 
 #### Data Handling
 
-| Policy field                                        | Observed state                                                                                     | Use when                                                               |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `dataHandling.sensitiveLogging.requireRedaction`    | Runtime invariant `oc://openclaw.invariant/logging/redaction`                                      | Set to `true` to record the requirement; OpenClaw always satisfies it. |
-| `dataHandling.telemetry.denyContentCapture`         | `diagnostics.otel.captureContent`                                                                  | Set to `true` to reject telemetry content capture.                     |
-| `dataHandling.retention.requireSessionMaintenance`  | `session.maintenance.mode`                                                                         | Set to `true` to require effective session maintenance mode `enforce`. |
-| `dataHandling.memory.denySessionTranscriptIndexing` | `memory.qmd.sessions.enabled`, `memory.search.experimental.sessionMemory`, and per-agent overrides | Set to `true` to reject session transcript indexing into memory.       |
+| Policy field                                        | Observed state                                                                                                   | Use when                                                               |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `dataHandling.sensitiveLogging.requireRedaction`    | Runtime invariant `oc://openclaw.invariant/logging/redaction`                                                    | Set to `true` to record the requirement; OpenClaw always satisfies it. |
+| `dataHandling.telemetry.denyContentCapture`         | `diagnostics.otel.captureContent`                                                                                | Set to `true` to reject telemetry content capture.                     |
+| `dataHandling.retention.requireSessionMaintenance`  | `session.maintenance.mode`                                                                                       | Set to `true` to require effective session maintenance mode `enforce`. |
+| `dataHandling.memory.denySessionTranscriptIndexing` | `memory.search.experimental.sessionMemory`, `memory.search.rememberAcrossConversations`, and per-agent overrides | Set to `true` to reject session transcript indexing into memory.       |
 
 #### Secrets
 
@@ -500,9 +505,9 @@ only reviewed exec approval posture for selected agents.
 
 #### Tool metadata
 
-| Policy field            | Observed state                   | Use when                                                                                   |
-| ----------------------- | -------------------------------- | ------------------------------------------------------------------------------------------ |
-| `tools.requireMetadata` | Governed `TOOLS.md` declarations | Require governed tools to declare metadata keys such as `risk`, `sensitivity`, or `owner`. |
+| Policy field            | Observed state                         | Use when                                                                                   |
+| ----------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `tools.requireMetadata` | Governed `AGENTS.md` tool declarations | Require governed tools to declare metadata keys such as `risk`, `sensitivity`, or `owner`. |
 
 #### Tool posture
 
@@ -741,7 +746,7 @@ Example JSON output:
     "tools": [
       {
         "id": "deploy",
-        "source": "oc://TOOLS.md/tools/deploy",
+        "source": "oc://AGENTS.md/tools/deploy",
         "line": 12,
         "risk": "critical",
         "sensitivity": "restricted",
@@ -897,12 +902,12 @@ Example findings:
 {
   "checkId": "policy/tools-missing-risk-level",
   "severity": "error",
-  "message": "TOOLS.md tool 'deploy' has no explicit risk classification.",
+  "message": "AGENTS.md tool 'deploy' has no explicit risk classification.",
   "source": "policy",
-  "path": "TOOLS.md",
+  "path": "AGENTS.md",
   "line": 12,
-  "ocPath": "oc://TOOLS.md/tools/deploy",
-  "target": "oc://TOOLS.md/tools/deploy",
+  "ocPath": "oc://AGENTS.md/tools/deploy",
+  "target": "oc://AGENTS.md/tools/deploy",
   "requirement": "oc://policy.jsonc/tools/requireMetadata"
 }
 ```

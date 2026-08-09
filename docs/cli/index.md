@@ -24,7 +24,7 @@ Setup commands by intent:
 | Setup and onboarding         | [`openclaw`](/cli/openclaw) · [`setup`](/cli/setup) · [`onboard`](/cli/onboard) · [`configure`](/cli/configure) · [`config`](/cli/config) · [`completion`](/cli/completion) · [`doctor`](/cli/doctor) · [`dashboard`](/cli/dashboard) |
 | Reset, backup, and migration | [`backup`](/cli/backup) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                                                                 |
 | Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                                                         |
-| Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`sessions`](/cli/sessions) · [`audit`](/cli/audit)                                                                                                                               |
+| Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                                                     |
 | Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                             |
 | Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`commitments`](/cli/commitments) · [`wiki`](/cli/wiki)                        |
 | Network and nodes            | [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`devices`](/cli/devices) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                                                     |
@@ -48,12 +48,21 @@ Setup commands by intent:
 | `--update`              | Shorthand for [`openclaw update`](/cli/update); works for both source checkouts and package installs    |
 | `-V`, `--version`, `-v` | Print version and exit                                                                                  |
 
+A named `--profile` replaces canonical state and config paths inherited from
+another profile, including a running Gateway service. Explicitly customized
+state directories and config paths remain unchanged.
+
 ## Output modes
 
 - ANSI colors and progress indicators render only in TTY sessions.
 - OSC-8 hyperlinks render as clickable links where supported; otherwise the
   CLI falls back to plain URLs.
-- `--json` (and `--plain` where supported) disables styling for clean output.
+- On bounded reporting commands, `--json` reserves stdout for one JSON document;
+  styling and progress output are suppressed, and warnings and diagnostics stay on
+  stderr.
+- Interactive UIs and wizards, long-running servers and streams, shell integration,
+  and pure side-effect commands may omit `--json` when they have no meaningful
+  report to return.
 - Long-running commands show a progress indicator (OSC 9;4 when supported).
 
 ## Color palette
@@ -409,6 +418,7 @@ openclaw [--dev] [--profile <name>] <command>
   docs
   dns
     setup
+  resume
   tui
   chat (alias: tui --local)
   terminal (alias: tui --local)

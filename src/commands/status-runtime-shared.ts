@@ -183,6 +183,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   gatewayReachable: boolean;
+  type?: string;
   callOverrides?: {
     url: string;
     token?: string;
@@ -195,7 +196,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
   const { callGateway } = await loadGatewayCallModule();
   return await callGateway<unknown>({
     method: "diagnostics.stability",
-    params: { limit: 1000 },
+    params: { limit: 1000, ...(params.type ? { type: params.type } : {}) },
     timeoutMs: params.timeoutMs,
     config: params.config,
     ...params.callOverrides,
@@ -235,6 +236,7 @@ export async function resolveStatusServiceSummaries(timeoutMs?: number) {
 
 type StatusUsageSummary = Awaited<ReturnType<typeof resolveStatusUsageSummary>>;
 type StatusGatewayHealth = Awaited<ReturnType<typeof resolveStatusGatewayHealth>>;
+type StatusGatewayHealthResult = StatusGatewayHealth | { error: string };
 type StatusLastHeartbeat = Awaited<ReturnType<typeof resolveStatusLastHeartbeat>>;
 type StatusGatewayServiceSummary = Awaited<ReturnType<typeof getDaemonStatusSummary>>;
 type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSummary>>;
@@ -262,12 +264,13 @@ async function resolveStatusRuntimeDetails(params: {
         config: params.config,
       })
     : undefined;
+  // JSON status remains nonthrowing, but requested probe failures must stay visible.
   const health = params.deep
     ? params.suppressHealthErrors
       ? await resolveGatewayHealthSummary({
           config: params.config,
           timeoutMs: params.timeoutMs,
-        }).catch(() => undefined)
+        }).catch((error: unknown) => ({ error: String(error) }))
       : await resolveGatewayHealthSummary({
           config: params.config,
           timeoutMs: params.timeoutMs,
@@ -291,7 +294,7 @@ async function resolveStatusRuntimeDetails(params: {
   };
   return result satisfies {
     usage?: StatusUsageSummary;
-    health?: StatusGatewayHealth;
+    health?: StatusGatewayHealthResult;
     lastHeartbeat: StatusLastHeartbeat;
     gatewayService: StatusGatewayServiceSummary;
     nodeService: StatusNodeServiceSummary;
@@ -342,7 +345,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
   } satisfies {
     securityAudit?: StatusSecurityAudit;
     usage?: StatusUsageSummary;
-    health?: StatusGatewayHealth;
+    health?: StatusGatewayHealthResult;
     lastHeartbeat: StatusLastHeartbeat;
     gatewayService: StatusGatewayServiceSummary;
     nodeService: StatusNodeServiceSummary;

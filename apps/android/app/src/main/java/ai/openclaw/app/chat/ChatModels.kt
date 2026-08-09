@@ -63,15 +63,23 @@ data class ChatTranscriptAnchorState(
 )
 
 /**
- * One content part in a chat message; binary parts carry base64 plus their MIME metadata.
+ * One content part in a chat message; media carries either bounded base64 or a managed artifact reference.
  */
 data class ChatMessageContent(
   val type: String = "text",
   val text: String? = null,
   val mimeType: String? = null,
   val fileName: String? = null,
+  val artifactId: String? = null,
+  val url: String? = null,
+  val openUrl: String? = null,
+  val alt: String? = null,
+  val width: Int? = null,
+  val height: Int? = null,
+  val sizeBytes: Long? = null,
   val base64: String? = null,
   val durationMs: Long? = null,
+  val playback: String? = null,
   val widget: ChatWidgetPreview? = null,
 )
 
@@ -175,6 +183,13 @@ internal val defaultChatThinkingLevelSelection =
     isGatewayProvided = false,
   )
 
+internal data class ChatActiveRunPresentation(
+  val count: Int = 0,
+  val runId: String? = null,
+  val clockKey: String? = null,
+  val outputTokens: Long? = null,
+)
+
 /**
  * Stable session selector row; [key] is the gateway session key used in chat requests.
  */
@@ -182,6 +197,13 @@ data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
   val ownerAgentId: String? = null,
+  val classification: String? = null,
+  val accountId: String? = null,
+  val peerKind: String? = null,
+  val isMain: Boolean? = null,
+  val isBackground: Boolean? = null,
+  val hasClassificationMetadata: Boolean =
+    classification != null || accountId != null || peerKind != null || isMain != null || isBackground != null,
   val displayName: String? = null,
   val derivedTitle: String? = null,
   val label: String? = null,

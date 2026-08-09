@@ -49,7 +49,7 @@ function resolveRawHomeDir(
   const explicitHome = normalize(env.OPENCLAW_HOME);
   if (explicitHome) {
     const fallbackHome = resolveRawOsHomeDir(env, homedir);
-    return fallbackHome ? explicitHome.replace(/^~(?=$|[\\/])/, fallbackHome) : explicitHome;
+    return fallbackHome ? explicitHome.replace(/^~(?=$|[\\/])/, () => fallbackHome) : explicitHome;
   }
   return resolveRawOsHomeDir(env, homedir);
 }

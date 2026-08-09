@@ -36,8 +36,8 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./agents.command-shared.js", () => ({
   createQuietRuntime: <T>(runtime: T) => runtime,
-  requireValidConfig: async () => {
-    const snapshot = (await readConfigFileSnapshotMock()) as
+  requireValidConfig: async (_runtime: unknown, opts?: unknown) => {
+    const snapshot = (await readConfigFileSnapshotMock(opts)) as
       | { config?: OpenClawConfig; sourceConfig?: OpenClawConfig }
       | undefined;
     return snapshot?.sourceConfig ?? snapshot?.config ?? null;

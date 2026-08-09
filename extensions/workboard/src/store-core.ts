@@ -270,7 +270,7 @@ export class WorkboardCoreStore {
       if (card.metadata?.archivedAt) {
         archived += 1;
       }
-      if (card.status === "ready") {
+      if (card.status === "ready" && !card.metadata?.archivedAt) {
         oldestReadyAt = Math.min(oldestReadyAt ?? card.updatedAt, card.updatedAt);
       }
       updatedAt = Math.max(updatedAt ?? 0, card.updatedAt);
@@ -389,7 +389,7 @@ export class WorkboardCoreStore {
         templateId: normalizeTemplateId(input.templateId),
         ...(childAutomation ? { automation: childAutomation } : {}),
       },
-      { allowDependencyLinks: false },
+      { allowDependencyLinks: false, allowArchivedAt: false },
     );
     const syncedMetadata = trimMetadataToBudget(
       syncExecutionAttemptMetadata(metadata, execution, now),
@@ -916,6 +916,9 @@ export class WorkboardCoreStore {
     const card = await this.get(id);
     if (!card) {
       throw new Error(`card not found: ${id}`);
+    }
+    if (card.metadata?.archivedAt) {
+      return card;
     }
     const target = await this.dependencyTargetStatus(card, now);
     if (target === card.status) {

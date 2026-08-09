@@ -74,6 +74,11 @@ export function createGatewayActiveWorkTracker(options: {
     const omitted = blockers.length - shown.length;
     return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
   };
+  const formatDeferredWorkStatus = (status: "active" | "still active") => {
+    const details = formatActiveDetails(getActiveCounts()).join(", ");
+    const taskBlockers = formatTaskBlockers();
+    return `${details} ${status}${taskBlockers ? ` (${taskBlockers})` : ""}`;
+  };
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,
     isTransactionCurrent: () => boolean,
@@ -134,6 +139,7 @@ export function createGatewayActiveWorkTracker(options: {
 
   return {
     formatActiveDetails,
+    formatDeferredWorkStatus,
     formatTaskBlockers,
     getActiveCounts,
     waitForActiveWorkBeforeChannelReload,

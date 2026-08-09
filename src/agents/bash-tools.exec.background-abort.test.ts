@@ -96,7 +96,7 @@ const TEST_EXEC_DEFAULTS = {
   ask: "off" as const,
 };
 
-let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let createExecTool: typeof import("./bash-tools.exec-run.js").createExecTool;
 let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
 let getSession: typeof import("./bash-process-registry.js").getSession;
 let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
@@ -107,7 +107,7 @@ const createTestExecTool = (
 ): ReturnType<typeof createExecTool> => createExecTool({ ...TEST_EXEC_DEFAULTS, ...defaults });
 
 beforeAll(async () => {
-  ({ createExecTool } = await import("./bash-tools.exec.js"));
+  ({ createExecTool } = await import("./bash-tools.exec-run.js"));
   ({ getFinishedSession, getSession } = await import("./bash-process-registry.js"));
   ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
 });

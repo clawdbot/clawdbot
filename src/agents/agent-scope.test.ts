@@ -29,12 +29,6 @@ import {
 } from "./agent-scope.js";
 
 describe("resolveAgentConfig", () => {
-  it("should return undefined when no agents config exists", () => {
-    const cfg: OpenClawConfig = {};
-    const result = resolveAgentConfig(cfg, "main");
-    expect(result).toBeUndefined();
-  });
-
   it("should return undefined when agent id does not exist", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -705,9 +699,12 @@ describe("resolveAgentConfig", () => {
       authProfileOverride: "fallback-key",
       authProfileOverrideSource: "auto",
       authProfileOverrideCompactionCount: 1,
-      fallbackNoticeSelectedModel: "google/gemini-3-pro",
-      fallbackNoticeActiveModel: "google/gemini-3-pro",
-      fallbackNoticeReason: "rate_limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "google/gemini-3-pro",
+        activeModel: "google/gemini-3-pro",
+        reason: "rate_limit",
+      },
     };
 
     clearAutoFallbackPrimaryProbeSelection(entry, 2);
@@ -871,7 +868,8 @@ describe("resolveAgentConfig", () => {
       "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "agent-model")).toEqual([
-      "google/gemini-3-pro",
+      "openai/gpt-5.4",
+      "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "fallback-only-agent-model")).toEqual([
       "openai/gpt-5.4",

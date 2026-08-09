@@ -1,6 +1,7 @@
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
+import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
   runCoreContributionHealth,
@@ -54,27 +55,32 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairLegacyFlatAuthProfileStores, maybeRepairCanonicalApiKeyFieldAlias } =
+  const { maybeMigrateAuthProfileJsonStoresToSqlite } =
     await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
   const { maybeRepairLegacyOAuthSidecarProfiles } =
     await import("../commands/doctor-auth-oauth-sidecar.js");
+  const { maybeMigrateLegacyPluginModelCatalogs } =
+    await import("../commands/doctor-plugin-model-catalog.js");
   const { noteAuthProfileHealth, noteLegacyCodexProviderOverride } =
     await import("../commands/doctor-auth.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await loadNoteModule();
-  await maybeRepairLegacyFlatAuthProfileStores({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-  });
-  await maybeRepairCanonicalApiKeyFieldAlias({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-  });
   await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: ctx.cfg,
     prompter: ctx.prompter,
+  });
+  await maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+    ...(ctx.env ? { env: ctx.env } : {}),
+  });
+  await maybeMigrateLegacyPluginModelCatalogs({
+    cfg: ctx.cfg,
+    ...(ctx.env ? { env: ctx.env } : {}),
+    prompter: ctx.prompter,
+    runtime: ctx.runtime,
   });
   ctx.cfg = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
   await noteAuthProfileHealth({
@@ -208,10 +214,13 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
   await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
+  const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
+  const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
   const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
     ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
+    legacySessionSurfaces,
   });
   if (legacyState.warnings.length > 0) {
     note(legacyState.warnings.join("\n"), "Doctor warnings");
@@ -238,6 +247,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     config: ctx.cfg,
     ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
     recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
+    legacySessionSurfaces,
   });
   if (migrated.changes.length > 0) {
     note(migrated.changes.join("\n"), "Doctor changes");
@@ -301,12 +311,20 @@ async function detectSystemdLingerFindings(
   if (!loaded) {
     return [];
   }
-  const { isSystemdUserServiceAvailable, readSystemdUserLingerStatus } =
-    await import("../daemon/systemd.js");
+  const {
+    isSystemdUserServiceAvailable,
+    readSystemdUserLingerStatus,
+    resolveSystemdUserServiceAccount,
+  } = await import("../daemon/systemd.js");
   if (!(await isSystemdUserServiceAvailable(process.env))) {
     return [];
   }
-  const status = await readSystemdUserLingerStatus(process.env);
+  // Doctor must inspect the same user manager as the Gateway service operation.
+  const user = resolveSystemdUserServiceAccount(process.env);
+  if (!user) {
+    return [];
+  }
+  const status = await readSystemdUserLingerStatus({ env: process.env, user });
   if (!status || status.linger === "yes") {
     return [];
   }
@@ -401,14 +419,44 @@ export async function resolveDoctorContributionHealthChecks(): Promise<readonly 
   return checks;
 }
 
-export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
-  for (const contribution of resolveDoctorHealthContributions()) {
-    await contribution.run(ctx);
+async function runDoctorHealthContributionList(
+  ctx: DoctorHealthFlowContext,
+  contributions: readonly DoctorHealthContribution[],
+): Promise<void> {
+  const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
+  for (const contribution of contributions) {
+    try {
+      if (!runWithPluginMetadataSnapshot) {
+        await contribution.run(ctx);
+        continue;
+      }
+      const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+        await import("../agents/agent-scope.js");
+      const workspaceDir = resolveAgentWorkspaceDir(
+        ctx.cfg,
+        resolveDefaultAgentId(ctx.cfg),
+        ctx.env ?? process.env,
+      );
+      await runWithPluginMetadataSnapshot({ config: ctx.cfg, workspaceDir }, () =>
+        contribution.run(ctx),
+      );
+    } catch (error) {
+      const { note } = await loadNoteModule();
+      note(`${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`, "Doctor warnings");
+    }
   }
+}
+
+export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runDoctorHealthContributionList(ctx, resolveDoctorHealthContributions());
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.doctorHealthContributionsTestApi")
-  ] = { createDoctorHealthContribution, resolveDoctorHealthContributions };
+  ] = {
+    createDoctorHealthContribution,
+    resolveDoctorHealthContributions,
+    runDoctorHealthContributionList,
+  };
 }

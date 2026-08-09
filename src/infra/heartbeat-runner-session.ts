@@ -147,11 +147,29 @@ export function resolveHeartbeatSession(
 }
 
 export function resolveIsolatedHeartbeatSessionKey(params: {
+  agentId: string;
   sessionKey: string;
   configuredSessionKey: string;
   sessionEntry?: { heartbeatIsolatedBaseSessionKey?: string };
 }) {
   const storedBaseSessionKey = params.sessionEntry?.heartbeatIsolatedBaseSessionKey?.trim();
+  if (params.configuredSessionKey === "global") {
+    // The base global row stays literal inside its agent store; its isolated sibling
+    // must be agent-qualified so ordinary session writes remain canonical.
+    const isolatedSessionKey = toAgentStoreSessionKey({
+      agentId: params.agentId,
+      requestKey: "global:heartbeat",
+    });
+    const suffix = params.sessionKey.slice(isolatedSessionKey.length);
+    if (
+      params.sessionKey === "global" ||
+      (storedBaseSessionKey === "global" &&
+        (params.sessionKey === isolatedSessionKey ||
+          (params.sessionKey.startsWith(isolatedSessionKey) && /^(:heartbeat)+$/.test(suffix))))
+    ) {
+      return { isolatedSessionKey, isolatedBaseSessionKey: "global" };
+    }
+  }
   if (storedBaseSessionKey) {
     const suffix = params.sessionKey.slice(storedBaseSessionKey.length);
     if (

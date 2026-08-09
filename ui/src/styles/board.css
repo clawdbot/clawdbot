@@ -307,7 +307,7 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__frame {
-  background: transparent;
+  background: var(--board-surface);
   border: 0;
   display: block;
   height: 100%;

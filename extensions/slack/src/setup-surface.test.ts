@@ -1,3 +1,4 @@
+import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 // Slack tests cover setup surface plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -6,11 +7,10 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
   runSetupWizardPrepare,
-  runSetupWizardFinalize,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSlackSetupWizardBase, slackSetupAdapter } from "./setup-core.js";
+import { createSlackSetupWizardBase, slackSetupContract } from "./setup-core.js";
 import { buildSlackSetupLines } from "./setup-shared.js";
 
 const slackSetupWizard = createSlackSetupWizardBase({
@@ -53,60 +53,13 @@ function requireFirstStringArg(mock: ReturnType<typeof vi.fn>, label: string): s
   return call[0];
 }
 
-describe("slackSetupWizard.finalize", () => {
-  it("prompts to enable interactive replies for newly configured Slack accounts", async () => {
-    const confirm = vi.fn(async () => true);
-
-    const result = await runSetupWizardFinalize({
-      finalize: slackSetupWizard.finalize,
-      cfg: baseCfg,
-      prompter: createTestWizardPrompter({
-        confirm: confirm as WizardPrompter["confirm"],
-      }),
-    });
-    if (!result?.cfg) {
-      throw new Error("expected finalize to patch config");
-    }
-
-    expect(confirm).toHaveBeenCalledWith({
-      message: "Enable Slack interactive replies (buttons/selects) for agent responses?",
-      initialValue: true,
-    });
-    expect(
-      (result.cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } })
-        ?.capabilities?.interactiveReplies,
-    ).toBe(true);
-  });
-
-  it("auto-enables interactive replies for quickstart defaults without prompting", async () => {
-    const confirm = vi.fn(async () => false);
-
-    const result = await runSetupWizardFinalize({
-      finalize: slackSetupWizard.finalize,
-      cfg: baseCfg,
-      options: { quickstartDefaults: true },
-      prompter: createTestWizardPrompter({
-        confirm: confirm as WizardPrompter["confirm"],
-      }),
-    });
-    if (!result?.cfg) {
-      throw new Error("expected finalize to patch config");
-    }
-
-    expect(confirm).not.toHaveBeenCalled();
-    expect(
-      (result.cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } })
-        ?.capabilities?.interactiveReplies,
-    ).toBe(true);
-  });
-});
-
 describe("slackSetupWizard.prepare", () => {
   it("keeps the manifest out of framed intro note lines", () => {
     const lines = buildSlackSetupLines();
 
     expect(lines.join("\n")).not.toContain("Manifest (JSON):");
     expect(lines.join("\n")).not.toContain('"display_information"');
+    expect(lines.join("\n")).toContain("Enable Interactivity");
     expect(lines).toContain("Manifest JSON follows as plain text for copy/paste.");
   });
 
@@ -215,6 +168,9 @@ describe("slackSetupWizard.prepare", () => {
             "reaction_removed",
           ],
         },
+        interactivity: {
+          is_enabled: true,
+        },
       },
     });
   });
@@ -232,7 +188,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["default"],
           defaultAccountId: () => "default",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -258,6 +214,7 @@ describe("slackSetupWizard.prepare", () => {
     const instructions = requireFirstStringArg(queued.note, "Slack user identity instructions");
     expect(instructions).toContain("User Token Scopes");
     expect(instructions).toContain("Subscribe to events on behalf of users");
+    expect(instructions).toContain("Enable Interactivity");
     expect(instructions).toContain("/channels/slack#user-identity-post-as-a-real-person");
     expect(queued.select.mock.invocationCallOrder[0]).toBeLessThan(
       queued.note.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -277,7 +234,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["default"],
           defaultAccountId: () => "default",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -314,7 +271,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["work"],
           defaultAccountId: () => "work",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -367,7 +324,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["default"],
           defaultAccountId: () => "default",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -403,7 +360,7 @@ describe("slackSetupWizard.prepare", () => {
           listAccountIds: () => ["work"],
           defaultAccountId: () => "work",
         },
-        setup: slackSetupAdapter,
+        setupContract: slackSetupContract,
       } as never,
       wizard: credentialOnlySlackSetupWizard,
     }).configure;
@@ -476,57 +433,17 @@ describe("slackSetupWizard.prepare", () => {
 });
 
 describe("slackSetupWizard.dmPolicy", () => {
-  it("reads the named-account DM policy instead of the channel root", () => {
-    expect(
-      slackSetupWizard.dmPolicy?.getCurrent(
-        {
-          channels: {
-            slack: {
-              dmPolicy: "disabled",
-              accounts: {
-                alerts: {
-                  dmPolicy: "allowlist",
-                  botToken: "xoxb-alerts",
-                  appToken: "xapp-alerts",
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        "alerts",
-      ),
-    ).toBe("allowlist");
-  });
-
-  it("reports account-scoped config keys for named accounts", () => {
-    expect(slackSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "alerts")).toEqual({
-      policyKey: "channels.slack.accounts.alerts.dmPolicy",
-      allowFromKey: "channels.slack.accounts.alerts.allowFrom",
-    });
-  });
-
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
-    const next = slackSetupWizard.dmPolicy?.setPolicy(
+  installChannelDmPolicyContractSuite({
+    dmPolicy: slackSetupWizard.dmPolicy!,
+    cases: [
       {
-        channels: {
-          slack: {
-            allowFrom: ["U123"],
-            accounts: {
-              alerts: {
-                botToken: "xoxb-alerts",
-                appToken: "xapp-alerts",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      "open",
-      "alerts",
-    );
-
-    expect(next?.channels?.slack?.dmPolicy).toBeUndefined();
-    expect(next?.channels?.slack?.accounts?.alerts?.dmPolicy).toBe("open");
-    expect(next?.channels?.slack?.accounts?.alerts?.allowFrom).toEqual(["U123", "*"]);
+        name: "Slack named accounts",
+        channel: "slack",
+        accountId: "alerts",
+        accountConfig: { botToken: "xoxb-alerts", appToken: "xapp-alerts" },
+        inheritedAllowFrom: ["U123"],
+      },
+    ],
   });
 });
 

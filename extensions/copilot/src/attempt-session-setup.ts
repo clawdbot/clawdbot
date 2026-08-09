@@ -17,6 +17,7 @@ import type {
   ModelRef,
 } from "./attempt-types.js";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
+import { filterCopilotToolsForAllowlist, shouldForceCopilotMessageTool } from "./tool-bridge.js";
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.js";
 export async function createCopilotSessionSetup(params: {
@@ -76,6 +77,17 @@ export async function createCopilotSessionSetup(params: {
         });
   const attemptInput =
     promptBuild.prompt === input.prompt ? input : { ...input, prompt: promptBuild.prompt };
+  const promptTools = filterCopilotToolsForAllowlist(
+    sdkTools,
+    promptBuild.toolsAllow,
+    shouldForceCopilotMessageTool(input) ? { forceToolNames: ["message"] } : undefined,
+  );
+  // Restricted turns may expose native ask_user only when its policy-filtered
+  // OpenClaw equivalent survived the canonical tool catalog.
+  const includeAskUser =
+    !ringZeroSystemAgentRun &&
+    (attemptInput.pluginHarnessToolPolicyRestricted !== true ||
+      promptTools.some((tool) => tool.name === "ask_user"));
   let promptImagesCount = 0;
   const emitLlmInput = (prompt: string, additionalContext?: string) => {
     if (settledToolFinalization) {
@@ -93,7 +105,7 @@ export async function createCopilotSessionSetup(params: {
         prompt: additionalContext ? `${prompt}\n\n${additionalContext}` : prompt,
         historyMessages: [],
         imagesCount: promptImagesCount,
-        tools: sdkTools,
+        tools: promptTools,
       },
       ctx: hookContext,
     });
@@ -107,7 +119,7 @@ export async function createCopilotSessionSetup(params: {
   const sessionConfig = createSessionConfig(
     attemptInput,
     modelRef.id,
-    sdkTools,
+    promptTools,
     poolAcquire.auth,
     sessionProvider,
     promptBuild.developerInstructions || undefined,
@@ -121,7 +133,7 @@ export async function createCopilotSessionSetup(params: {
               emitLlmInput(prompt, additionalContext),
           }
         : undefined,
-      includeAskUser: !ringZeroSystemAgentRun,
+      includeAskUser,
       operation: operation ?? "attempt",
     },
   );
@@ -129,7 +141,7 @@ export async function createCopilotSessionSetup(params: {
     ? createSessionConfig(
         attemptInput,
         modelRef.id,
-        sdkTools,
+        promptTools,
         poolAcquire.auth,
         poolAcquire.provider,
         promptBuild.developerInstructions || undefined,
@@ -143,7 +155,7 @@ export async function createCopilotSessionSetup(params: {
                   emitLlmInput(prompt, additionalContext),
               }
             : undefined,
-          includeAskUser: !ringZeroSystemAgentRun,
+          includeAskUser,
           operation: operation ?? "attempt",
         },
       )

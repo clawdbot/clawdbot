@@ -1,6 +1,6 @@
 // Default CLI dependency surface with lazy outbound channel send adapters.
 import { normalizeChannelId } from "../channels/registry.js";
-import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { CliDeps } from "./deps.types.js";
 import { CLI_OUTBOUND_SEND_FACTORY } from "./outbound-send-mapping.js";
 
@@ -60,14 +60,13 @@ function createLazySender(
   channelId: string,
   loader: () => Promise<RuntimeSendModule>,
 ): (...args: unknown[]) => Promise<unknown> {
-  const loadRuntimeSend = createLazyRuntimeSurface(loader, ({ runtimeSend }) => runtimeSend);
   return async (...args: unknown[]) => {
-    let cached = senderCache.get(channelId);
-    if (!cached) {
-      cached = loadRuntimeSend();
-      senderCache.set(channelId, cached);
-    }
-    const runtimeSend = await cached;
+    const runtimeSend = await getOrCreatePromise(
+      senderCache,
+      channelId,
+      async () => (await loader()).runtimeSend,
+      { cacheRejections: false },
+    );
     return await runtimeSend.sendMessage(...args);
   };
 }

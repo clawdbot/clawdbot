@@ -29,11 +29,13 @@ import {
   finalizeTransportStream,
   mergeTransportHeaders,
   sanitizeTransportPayloadText,
+  sortPromptCacheToolsByName,
   stripSystemPromptCacheBoundary,
   transformTransportMessages,
   type WritableTransportStream,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -93,6 +95,7 @@ type GoogleGenerateContentRequest = {
 
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS = 45_000;
 const GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV = "OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS";
+const GOOGLE_SSE_EVENT_BOUNDARY_RE = /(?:\r\n|\r(?!\n)|\n){2}/u;
 
 type GoogleTransportContentBlock =
   | { type: "text"; text: string; textSignature?: string }
@@ -129,6 +132,10 @@ const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
 
 type GoogleSseChunk = {
   responseId?: string;
+  promptFeedback?: {
+    blockReason?: string;
+    blockReasonMessage?: string;
+  };
   candidates?: Array<{
     content?: {
       parts?: Array<{
@@ -143,12 +150,14 @@ type GoogleSseChunk = {
       }>;
     };
     finishReason?: string;
+    finishMessage?: string;
   }>;
   usageMetadata?: {
     promptTokenCount?: number;
     cachedContentTokenCount?: number;
     candidatesTokenCount?: number;
     thoughtsTokenCount?: number;
+    toolUsePromptTokenCount?: number;
     totalTokenCount?: number;
   };
 };
@@ -709,7 +718,7 @@ function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
   }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
+      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
         parametersJsonSchema: tool.parameters,
@@ -1178,33 +1187,54 @@ async function* parseGoogleSseChunks(
   signal?.addEventListener("abort", abortHandler);
   try {
     while (true) {
-      if (signal?.aborted) {
-        throw new Error("Request was aborted");
-      }
+      signal?.throwIfAborted();
       const { done, value } = await reader.read();
+      // Cancellation settles a pending read as done; never mistake that for EOF.
+      signal?.throwIfAborted();
       if (done) {
+        buffer += decoder.decode();
+        if (
+          buffer
+            .split(/\r\n|\n|\r/u)
+            .some((line) => line.startsWith("data:") && line.slice(5).trim().length > 0)
+        ) {
+          throw new Error("Google SSE stream ended with an incomplete frame");
+        }
         completed = true;
         break;
       }
-      buffer += decoder.decode(value, { stream: true }).replace(/\r/g, "");
-      let boundary = buffer.indexOf("\n\n");
-      while (boundary >= 0) {
-        const rawEvent = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        boundary = buffer.indexOf("\n\n");
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
+      while (boundary) {
+        const rawEvent = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        boundary = GOOGLE_SSE_EVENT_BOUNDARY_RE.exec(buffer);
         const data = rawEvent
-          .split("\n")
+          .split(/\r\n|\n|\r/u)
           .filter((line) => line.startsWith("data:"))
           .map((line) => line.slice(5).trim())
           .join("\n");
         if (!data || data === "[DONE]") {
           continue;
         }
+        let chunk: unknown;
         try {
-          yield JSON.parse(data) as GoogleSseChunk;
+          chunk = JSON.parse(data);
         } catch {
           throw new Error("Google SSE stream returned malformed JSON");
         }
+        if (isRecord(chunk) && isRecord(chunk.error)) {
+          const providerError = chunk.error;
+          throw Object.assign(
+            new Error(normalizeOptionalString(providerError.message) ?? "Google stream failed"),
+            {
+              code: normalizeOptionalString(providerError.status) ?? "GOOGLE_STREAM_ERROR",
+              status: typeof providerError.code === "number" ? providerError.code : undefined,
+              type: "google_stream_failed",
+            },
+          );
+        }
+        yield chunk as GoogleSseChunk;
       }
     }
   } finally {
@@ -1220,19 +1250,29 @@ function updateUsage(
   output: MutableAssistantOutput,
   model: GoogleTransportModel,
   chunk: GoogleSseChunk,
-) {
-  const usage = chunk.usageMetadata;
-  if (!usage) {
+  knownUsage: NonNullable<GoogleSseChunk["usageMetadata"]>,
+): void {
+  if (!chunk.usageMetadata) {
     return;
   }
-  const promptTokens = usage.promptTokenCount || 0;
-  const cacheRead = usage.cachedContentTokenCount || 0;
+  for (const field of Object.keys(knownUsage) as Array<keyof typeof knownUsage>) {
+    const value = chunk.usageMetadata[field];
+    if (typeof value === "number") {
+      knownUsage[field] = value;
+    }
+  }
+  const promptTokens = knownUsage.promptTokenCount ?? 0;
+  const cacheRead = knownUsage.cachedContentTokenCount ?? 0;
+  const toolUsePromptTokens = knownUsage.toolUsePromptTokenCount ?? 0;
+  const outputTokens =
+    (knownUsage.candidatesTokenCount ?? 0) + (knownUsage.thoughtsTokenCount ?? 0);
   output.usage = {
-    input: Math.max(0, promptTokens - cacheRead),
-    output: (usage.candidatesTokenCount || 0) + (usage.thoughtsTokenCount || 0),
+    input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
+    output: outputTokens,
     cacheRead,
     cacheWrite: 0,
-    totalTokens: usage.totalTokenCount || 0,
+    totalTokens:
+      chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model, output.usage);
@@ -1327,6 +1367,15 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
             : await openSse(apiKey);
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;
+        let sawTerminalReason = false;
+        let terminalGenerationError: Error | undefined;
+        const knownUsage: NonNullable<GoogleSseChunk["usageMetadata"]> = {
+          promptTokenCount: 0,
+          cachedContentTokenCount: 0,
+          toolUsePromptTokenCount: 0,
+          candidatesTokenCount: 0,
+          thoughtsTokenCount: 0,
+        };
         const toolCallBlocksById = new Map<
           string,
           Extract<GoogleTransportContentBlock, { type: "toolCall" }>
@@ -1340,8 +1389,19 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
               })(sse.firstChunk);
         for await (const chunk of chunks) {
           output.responseId ||= chunk.responseId;
-          updateUsage(output, model, chunk);
+          updateUsage(output, model, chunk, knownUsage);
           const candidate = chunk.candidates?.[0];
+          const promptFeedback = chunk.promptFeedback;
+          if (!candidate && promptFeedback) {
+            const blockReason =
+              normalizeOptionalString(promptFeedback.blockReason) ?? "PROMPT_BLOCKED";
+            const blockMessage = normalizeOptionalString(promptFeedback.blockReasonMessage);
+            const message = `Google prompt blocked (${blockReason})${blockMessage ? `: ${blockMessage}` : ""}`;
+            throw Object.assign(new Error(message), {
+              code: blockReason,
+              type: "google_prompt_blocked",
+            });
+          }
           if (candidate?.content?.parts) {
             for (const part of candidate.content.parts) {
               const hasThoughtSignature =
@@ -1433,10 +1493,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   id: toolCallId,
                   name: part.functionCall.name || "",
                   arguments: part.functionCall.args ?? {},
-                  thoughtSignature: retainThoughtSignature(
-                    existingToolCall?.thoughtSignature,
-                    part.thoughtSignature,
-                  ),
+                  ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
                 };
                 output.content.push(toolCall);
                 if (!toolCallBlocksById.has(toolCall.id)) {
@@ -1464,7 +1521,17 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
             }
           }
           if (typeof candidate?.finishReason === "string") {
+            sawTerminalReason = true;
             output.stopReason = mapStopReasonString(candidate.finishReason);
+            if (output.stopReason === "error") {
+              const finishMessage = normalizeOptionalString(candidate.finishMessage);
+              terminalGenerationError = Object.assign(
+                new Error(
+                  `Google generation stopped (${candidate.finishReason})${finishMessage ? `: ${finishMessage}` : ""}`,
+                ),
+                { code: candidate.finishReason, type: "google_generation_failed" },
+              );
+            }
             // MAX_TOKENS can leave a complete-looking partial call. Only a normal
             // Google stop may promote parsed calls into an executable tool-use turn.
             if (
@@ -1477,6 +1544,15 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         }
         if (currentBlockIndex >= 0) {
           pushTextBlockEnd(stream, output, currentBlockIndex);
+        }
+        if (terminalGenerationError && !options?.signal?.aborted) {
+          throw terminalGenerationError;
+        }
+        if (!sawTerminalReason && !options?.signal?.aborted) {
+          throw Object.assign(new Error("Google stream ended before a terminal finish reason"), {
+            code: "STREAM_INCOMPLETE",
+            type: "google_incomplete_stream",
+          });
         }
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {

@@ -89,12 +89,5 @@ export function normalizeTarget(target: string): string | undefined {
  * Return true when the string looks like a QQ Bot target ID.
  */
 export function looksLikeQQBotTarget(id: string): boolean {
-  const unqualifiedId = id.replace(/^qqbot:/i, "");
-  if (parseTypedTarget(unqualifiedId)) {
-    return true;
-  }
-  if (/^[0-9a-fA-F]{32}$/.test(id)) {
-    return true;
-  }
-  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id);
+  return normalizeTarget(id) !== undefined;
 }

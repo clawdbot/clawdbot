@@ -148,18 +148,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   box-shadow: 0 -12px 32px color-mix(in srgb, black 16%, transparent);
 }
 
-.shell--mobile-nav .board-session-surface__reopen {
-  top: auto;
-  right: 12px;
-  bottom: 8px;
-  left: auto;
-  transform: none;
-}
-
-.shell--mobile-nav .board-session-surface__reopen span {
-  writing-mode: horizontal-tb;
-}
-
 .shell--mobile-nav .sidebar-resizer {
   display: none;
 }
@@ -167,23 +155,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 .shell--mobile-nav.shell--nav-drawer-open .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed.shell--nav-drawer-open .shell-nav {
   transform: translateX(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.shell--mobile-nav .shell-nav-backdrop {
-  display: block;
-  position: fixed;
-  inset: 0;
-  z-index: 65;
-  border: 0;
-  background: color-mix(in srgb, black 52%, transparent);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--shell-focus-duration) var(--shell-focus-ease);
-}
-
-.shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
   opacity: 1;
   pointer-events: auto;
 }
@@ -355,11 +326,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     font-size: 12px;
   }
 
-  /* Content */
-  .content-header {
-    display: none;
-  }
-
   /* Hide the entire content-header on mobile chat — controls are in mobile gear menu */
   .content--chat .content-header {
     display: none;
@@ -450,12 +416,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     grid-area: session;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
-    min-height: 44px;
-    padding: 10px 12px;
-    font-size: 14px;
-  }
-
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
     grid-area: model;
   }
@@ -474,8 +434,7 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     width: 100%;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select,
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select {
     width: 100%;
     font-size: 14px;
     min-height: 44px;
@@ -526,20 +485,11 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     border-radius: var(--radius-md);
   }
 
-  .stat-label {
-    font-size: 12px; /* was 11px */
-  }
-
   .stat-value {
     font-size: 18px;
   }
 
   /* Forms */
-  .form-grid {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
-
   .field input,
   .field textarea,
   .field select {
@@ -561,21 +511,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   /* Chat */
-  .chat-header {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-  }
-
-  .chat-header__left {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .chat-header__right {
-    justify-content: space-between;
-  }
-
   .chat-session {
     min-width: unset;
     width: 100%;
@@ -605,20 +540,7 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
     margin: 0 8px calc(10px + var(--safe-area-bottom));
   }
 
-  .agent-chat__toolbar {
-    align-items: stretch;
-    gap: 8px;
-    padding: 6px 8px;
-  }
-
-  .agent-chat__toolbar-left,
-  .agent-chat__toolbar-right {
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
   .agent-chat__input-btn,
-  .agent-chat__toolbar .btn--ghost,
   .chat-send-btn {
     width: 44px;
     min-width: 44px;
@@ -626,7 +548,6 @@ html.openclaw-native-macos body .shell--mobile-nav .topnav-shell__actions {
   }
 
   .agent-chat__input-btn svg,
-  .agent-chat__toolbar .btn--ghost svg,
   .chat-send-btn svg {
     width: 16px;
     height: 16px;

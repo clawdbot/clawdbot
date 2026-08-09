@@ -135,9 +135,7 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
       agents: {
         defaults: { models: {} },
         entries: {
-          main: {
-            ...(model === undefined ? {} : { model }),
-          },
+          main: model === undefined ? {} : { model },
         },
       },
       models: { providers: {} },

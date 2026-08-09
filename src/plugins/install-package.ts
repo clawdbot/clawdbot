@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { resolveUserPath } from "../utils.js";
+import {
+  inspectBundlePluginArtifact,
+  inspectNativePluginArtifact,
+  type PluginInstallArtifactInspection,
+} from "./install-artifact-inspection.js";
 import {
   scanAndLinkInstalledPackage,
   validatePackagePluginInstallSource,
@@ -34,6 +38,7 @@ const PLUGIN_ARCHIVE_ROOT_MARKERS = [
   ".codex-plugin/plugin.json",
   ".claude-plugin/plugin.json",
   ".cursor-plugin/plugin.json",
+  "plugin.json",
 ];
 
 function pickPackageInstallCommonParams(
@@ -171,7 +176,7 @@ async function installBundleFromSourceDir(
     return scanResult;
   }
 
-  return await installPluginDirectoryIntoExtensions({
+  const installed = await installPluginDirectoryIntoExtensions({
     sourceDir: params.sourceDir,
     pluginId,
     manifestName: manifestRes.manifest.name,
@@ -187,6 +192,22 @@ async function installBundleFromSourceDir(
     hasDeps: false,
     depsLogMessage: "",
   });
+  return installed.ok
+    ? {
+        ...installed,
+        artifactInspection: inspectBundlePluginArtifact({
+          format: manifestRes.manifest.bundleFormat,
+          capabilities: manifestRes.manifest.capabilities,
+        }),
+      }
+    : installed;
+}
+
+function withArtifactInspection(
+  result: InstallPluginResult,
+  artifactInspection: PluginInstallArtifactInspection,
+): InstallPluginResult {
+  return result.ok ? { ...result, artifactInspection } : result;
 }
 
 async function installPluginFromSourceDir(
@@ -194,12 +215,16 @@ async function installPluginFromSourceDir(
     sourceDir: string;
   } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
-  const nativePackageDetected = await detectNativePackageInstallSource(params.sourceDir);
-  if (nativePackageDetected) {
-    return await installPluginFromPackageDir({
-      packageDir: params.sourceDir,
-      ...pickPackageInstallCommonParams(params),
-    });
+  const nativePackageManifest = await detectNativePackageInstallSource(params.sourceDir);
+  if (nativePackageManifest) {
+    return withArtifactInspection(
+      await installPluginFromPackageDir({
+        packageDir: params.sourceDir,
+        packageManifest: nativePackageManifest,
+        ...pickPackageInstallCommonParams(params),
+      }),
+      inspectNativePluginArtifact(),
+    );
   }
   const bundleResult = await installBundleFromSourceDir({
     sourceDir: params.sourceDir,
@@ -208,30 +233,28 @@ async function installPluginFromSourceDir(
   if (bundleResult) {
     return bundleResult;
   }
-  return await installPluginFromPackageDir({
-    packageDir: params.sourceDir,
-    ...pickPackageInstallCommonParams(params),
-  });
+  return withArtifactInspection(
+    await installPluginFromPackageDir({
+      packageDir: params.sourceDir,
+      ...pickPackageInstallCommonParams(params),
+    }),
+    inspectNativePluginArtifact(),
+  );
 }
 
-async function detectNativePackageInstallSource(packageDir: string): Promise<boolean> {
+async function detectNativePackageInstallSource(
+  packageDir: string,
+): Promise<PackageManifest | undefined> {
   const runtime = await loadPluginInstallRuntime();
-  const manifestPath = path.join(packageDir, "package.json");
-  if (!(await runtime.fileExists(manifestPath))) {
-    return false;
-  }
-
-  try {
-    const manifest = await runtime.readJsonFile<PackageManifest>(manifestPath);
-    return ensureOpenClawExtensions({ manifest }).ok;
-  } catch {
-    return false;
-  }
+  const result = await readOptionalPackageManifest({ runtime, packageDir });
+  const manifest = result.ok ? result.manifest : undefined;
+  return manifest && ensureOpenClawExtensions({ manifest }).ok ? manifest : undefined;
 }
 
 async function installPluginFromPackageDir(
   params: {
     packageDir: string;
+    packageManifest?: PackageManifest;
   } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -260,6 +283,7 @@ async function installPluginFromPackageDir(
   const validated = await validatePackagePluginInstallSource({
     runtime,
     packageDir: params.packageDir,
+    manifest: params.packageManifest,
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
@@ -292,6 +316,7 @@ async function installPluginFromPackageDir(
     manifestName: plugin.manifestName,
     version: plugin.version,
     extensions: plugin.extensions,
+    setup: plugin.setup,
     targetDir: preparedTarget.targetPath,
     extensionsDir: params.extensionsDir,
     logger,

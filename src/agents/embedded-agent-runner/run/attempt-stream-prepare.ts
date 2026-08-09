@@ -21,10 +21,12 @@ import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-
 import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { isToolResultError } from "../../tool-result-error.js";
 import {
   projectToolSearchTargetTranscriptMessages,
   type ToolSearchCatalogToolExecutor,
@@ -90,6 +92,9 @@ export function prepareEmbeddedAttemptStream(input: {
   const attempt = input.attempt;
   const hookRunner = input.hookRunner;
   let beforeAgentFinalizeRevisionReason: string | undefined;
+  let beforeAgentFinalizeRevisionEntryId: string | undefined;
+  let acceptingSteerMessages = true;
+  let activeQueueAdmissions = 0;
   const shouldRunBeforeAgentFinalize =
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("before_agent_finalize");
@@ -97,6 +102,7 @@ export function prepareEmbeddedAttemptStream(input: {
     ? async (event: {
         messages: AgentMessage[];
         willRetry: boolean;
+        assistantEntryId?: string;
         lastAssistant?: AgentMessage;
         assistantTexts: readonly string[];
         hasAssistantVisibleText: boolean;
@@ -156,53 +162,80 @@ export function prepareEmbeddedAttemptStream(input: {
           );
           return;
         }
-        const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
-          event: {
-            runId: attempt.runId,
-            sessionId: attempt.sessionId,
-            ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-            provider: reportedModelRef.provider,
-            model: reportedModelRef.model,
-            ...((attempt.cwd ?? attempt.workspaceDir)
-              ? { cwd: attempt.cwd ?? attempt.workspaceDir }
-              : {}),
-            ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
-            stopHookActive: false,
-            lastAssistantMessage,
-            messages: hookMessages,
-          },
-          ctx: {
-            runId: attempt.runId,
-            trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
-            agentId: input.hookAgentId,
-            sessionKey: attempt.sessionKey,
-            sessionId: attempt.sessionId,
-            workspaceDir: attempt.workspaceDir,
-            modelProviderId: reportedModelRef.provider,
-            modelId: reportedModelRef.model,
-            trigger: attempt.trigger,
-            ...buildAgentHookContextChannelFields(attempt),
-            ...buildAgentHookContextIdentityFields({
+        // A queued user message wins over finalization. Close admission before
+        // awaiting the hook so no later steer can become a child of the draft.
+        acceptingSteerMessages = false;
+        if (
+          activeQueueAdmissions > 0 ||
+          input.activeSession.pendingMessageCount > 0 ||
+          input.activeSession.agent.hasQueuedMessages()
+        ) {
+          acceptingSteerMessages = true;
+          return;
+        }
+        let keepAdmissionClosed = false;
+        try {
+          const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
+            event: {
+              runId: attempt.runId,
+              sessionId: attempt.sessionId,
+              ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
+              provider: reportedModelRef.provider,
+              model: reportedModelRef.model,
+              ...((attempt.cwd ?? attempt.workspaceDir)
+                ? { cwd: attempt.cwd ?? attempt.workspaceDir }
+                : {}),
+              ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
+              stopHookActive: false,
+              lastAssistantMessage,
+              messages: hookMessages,
+            },
+            ctx: {
+              runId: attempt.runId,
+              trace: freezeDiagnosticTraceContext(input.diagnosticTrace),
+              agentId: input.hookAgentId,
+              sessionKey: attempt.sessionKey,
+              sessionId: attempt.sessionId,
+              workspaceDir: attempt.workspaceDir,
+              modelProviderId: reportedModelRef.provider,
+              modelId: reportedModelRef.model,
               trigger: attempt.trigger,
-              senderId: attempt.senderId,
-              chatId: attempt.chatId,
-              channelContext: attempt.channelContext,
-            }),
-          },
-          hookRunner,
-        });
-        if (outcome.action !== "revise") {
-          return;
+              ...buildAgentHookContextChannelFields(attempt),
+              ...buildAgentHookContextIdentityFields({
+                trigger: attempt.trigger,
+                senderId: attempt.senderId,
+                chatId: attempt.chatId,
+                channelContext: attempt.channelContext,
+              }),
+            },
+            hookRunner,
+          });
+          if (outcome.action !== "revise") {
+            return;
+          }
+          if (event.hadDeterministicSideEffect) {
+            log.warn(
+              `before_agent_finalize requested revision after potential side effects; finalizing ` +
+                `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
+            );
+            return;
+          }
+          if (!event.assistantEntryId) {
+            log.warn(
+              `before_agent_finalize revision lacks a persisted assistant entry; finalizing ` +
+                `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
+            );
+            return;
+          }
+          keepAdmissionClosed = true;
+          beforeAgentFinalizeRevisionEntryId = event.assistantEntryId;
+          beforeAgentFinalizeRevisionReason = outcome.reason;
+          return { suppressTerminalDelivery: true };
+        } finally {
+          if (!keepAdmissionClosed) {
+            acceptingSteerMessages = true;
+          }
         }
-        if (event.hadDeterministicSideEffect) {
-          log.warn(
-            `before_agent_finalize requested revision after potential side effects; finalizing ` +
-              `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
-          );
-          return;
-        }
-        beforeAgentFinalizeRevisionReason = outcome.reason;
-        return { suppressTerminalDelivery: true };
       }
     : undefined;
 
@@ -318,12 +351,16 @@ export function prepareEmbeddedAttemptStream(input: {
       // Settlement persists every queued projection. Validate the final result
       // first so a rejected hidden-tool value never enters session history.
       const acceptedResult = await toolParams.acceptResultBeforeProjection(result);
+      const isError = isToolResultError(acceptedResult);
       input.toolSearchTargetTranscriptProjections.push({
         parentToolCallId: toolParams.parentToolCallId,
         toolCallId: toolParams.toolCallId,
         toolName: toolParams.toolName,
         input: toolParams.input,
         result: acceptedResult,
+        // Fulfilled tools can still carry a canonical failure result (for example MCP isError).
+        // Preserve that fact before the hidden target call is projected into session history.
+        isError,
         timestamp: Date.now(),
       });
       notifyToolActivity(attempt.runId);
@@ -347,25 +384,58 @@ export function prepareEmbeddedAttemptStream(input: {
     }
   };
 
+  let externalAbortAccepted = false;
   const abortActiveRunExternally = (reason?: "user_abort" | "restart" | "superseded") => {
+    // Reply cancellation can synchronously re-enter through this same backend.
+    // Latch before callbacks so the first reason owns every abort side effect.
+    if (externalAbortAccepted) {
+      return;
+    }
+    externalAbortAccepted = true;
     input.markExternalAbort();
     attempt.onAttemptAbort?.();
-    input.abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
+    const abortReason =
+      reason === "restart"
+        ? createAgentRunRestartAbortError()
+        : reason === "superseded"
+          ? createAgentRunSupersededAbortError()
+          : undefined;
+    input.abortRun(false, abortReason);
   };
-  let acceptingSteerMessages = true;
-  const queueHandle: AttemptStreamQueueHandle = {
-    kind: "embedded",
-    runId: attempt.runId,
-    queueMessage: async (text: string, options) => {
+  const queueMessage: AttemptStreamQueueHandle["queueMessage"] = async (text, options) => {
+    const canInject = () =>
+      acceptingSteerMessages &&
+      !input.getRunState().aborted &&
+      !input.runAbortController.signal.aborted;
+    if (!canInject()) {
+      throw new Error("active session is finalizing");
+    }
+    activeQueueAdmissions++;
+    try {
       if (options?.steeringMode) {
         input.activeSession.agent.steeringMode = options.steeringMode;
       }
-      await steerActiveSessionWithOptionalDeliveryWait(
+      return await steerActiveSessionWithOptionalDeliveryWait(
         input.activeSession,
         text,
         options,
         attempt.sessionKey,
+        canInject,
       );
+    } finally {
+      activeQueueAdmissions--;
+    }
+  };
+  const queueHandle: AttemptStreamQueueHandle = {
+    kind: "embedded",
+    runId: attempt.runId,
+    queueMessage,
+    messageInjection: {
+      isAvailable: () =>
+        acceptingSteerMessages &&
+        !input.getRunState().aborted &&
+        !input.runAbortController.signal.aborted,
+      queueMessage,
     },
     isStreaming: () => input.activeSession.isStreaming,
     isAborted: () => input.getRunState().aborted,
@@ -393,6 +463,7 @@ export function prepareEmbeddedAttemptStream(input: {
     queueHandle,
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: () => beforeAgentFinalizeRevisionReason,
+    getBeforeAgentFinalizeRevisionEntryId: () => beforeAgentFinalizeRevisionEntryId,
     stopAcceptingSteerMessages: () => {
       acceptingSteerMessages = false;
     },

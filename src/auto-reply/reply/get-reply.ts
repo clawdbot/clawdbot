@@ -10,7 +10,9 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -29,6 +31,7 @@ import {
   isModelSelectionLocked,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
+import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   sessionDeliveryChannel,
@@ -72,6 +75,7 @@ import {
   PENDING_FINAL_DELIVERY_CLEAR_PATCH,
   sanitizePendingFinalDeliveryText,
 } from "./pending-final-delivery.js";
+import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -117,7 +121,6 @@ const mediaUnderstandingApplyRuntimeLoader = createLazyImportLoader(
 const linkUnderstandingApplyRuntimeLoader = createLazyImportLoader(
   () => import("../../link-understanding/apply.runtime.js"),
 );
-
 const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-timing");
 const commandsCoreRuntimeLoader = createLazyImportLoader(
   () => import("./commands-core.runtime.js"),
@@ -219,11 +222,16 @@ export async function getReplyFromConfig(
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const isFastTestEnv = isFastTestRuntimeEnv();
-  const cfg = resolveGetReplyConfig({
-    getRuntimeConfig,
-    isFastTestEnv,
-    configOverride,
-  });
+  const preparedReplyDispatchRuntime = configOverride
+    ? undefined
+    : getPreparedReplyDispatchRuntime();
+  const cfg =
+    preparedReplyDispatchRuntime?.config ??
+    resolveGetReplyConfig({
+      getRuntimeConfig,
+      isFastTestEnv,
+      configOverride,
+    });
   // Profiler spans stay inert unless diagnostics enable `profiler` or
   // `reply.profiler`, so normal replies do not pay per-stage Date.now/array
   // bookkeeping while we can still split resolver costs on demand.
@@ -244,21 +252,32 @@ export async function getReplyFromConfig(
   const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
     finalizeInboundContext(ctx),
   );
-  const { agentSessionKey, agentId } = resolverTiming.measureSync(
-    "reply.resolve_agent_scope",
-    () => {
-      const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
-      const resolvedAgentSessionKey = targetSessionKey || finalized.SessionKey;
-      return {
-        agentSessionKey: resolvedAgentSessionKey,
-        agentId: resolveSessionAgentId({
-          sessionKey: resolvedAgentSessionKey,
-          config: cfg,
-          fallbackAgentId: finalized.AgentId,
-        }),
-      };
-    },
-  );
+  const initialAgentScope = resolverTiming.measureSync("reply.resolve_agent_scope", () => {
+    const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
+    const resolvedAgentSessionKey = targetSessionKey || finalized.SessionKey;
+    return {
+      agentSessionKey: resolvedAgentSessionKey,
+      agentId: resolveSessionAgentId({
+        sessionKey: resolvedAgentSessionKey,
+        config: cfg,
+        fallbackAgentId: finalized.AgentId,
+      }),
+    };
+  });
+  const agentSessionKey = initialAgentScope.agentSessionKey;
+  const agentId = initialAgentScope.agentId;
+  if (
+    preparedReplyDispatchRuntime &&
+    !publishedModelCatalogOwnerMatchesAgent(preparedReplyDispatchRuntime, agentId)
+  ) {
+    throw new Error(
+      `reply model catalog owner changed from ${agentId} to ${preparedReplyDispatchRuntime.agentId}`,
+    );
+  }
+  const preparedAgentDir = preparedReplyDispatchRuntime?.agentDir;
+  const preparedWorkspaceDir = preparedReplyDispatchRuntime?.workspaceDir;
+  const preparedModelCatalog: ModelCatalogSnapshot | undefined =
+    preparedReplyDispatchRuntime?.modelCatalog;
   const traceAttributes = resolverTiming.measureSync("reply.resolve_trace_context", () => ({
     surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
     hasSessionKey: Boolean(agentSessionKey),
@@ -340,11 +359,13 @@ export async function getReplyFromConfig(
   const { workspaceDirRaw, workspaceDirForNativeCommand, agentDir, timeoutMs } =
     resolverTiming.measureSync("reply.resolve_workspace_agent_dir", () => {
       const workspaceDirRawLocal =
-        resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+        preparedWorkspaceDir ??
+        resolveAgentWorkspaceDir(cfg, agentId) ??
+        DEFAULT_AGENT_WORKSPACE_DIR;
       return {
         workspaceDirRaw: workspaceDirRawLocal,
         workspaceDirForNativeCommand: workspaceDirRawLocal,
-        agentDir: resolveAgentDir(cfg, agentId),
+        agentDir: preparedAgentDir ?? resolveAgentDir(cfg, agentId),
         timeoutMs: resolveAgentTimeoutMs({
           cfg,
           overrideSeconds: opts?.timeoutOverrideSeconds,
@@ -501,6 +522,29 @@ export async function getReplyFromConfig(
     }
     throw error;
   }
+  if (!useFastTestBootstrap) {
+    try {
+      const baselineEntry = await traceGetReplyPhase("reply.capture_session_diff_baseline", () =>
+        ensureSessionDiffBaseline({
+          cwd:
+            normalizeOptionalString(sessionState.sessionEntry.spawnedCwd) ??
+            normalizeOptionalString(sessionState.sessionEntry.spawnedWorkspaceDir) ??
+            workspaceDir,
+          entry: sessionState.sessionEntry,
+          isNewSession: sessionState.isNewSession,
+          sessionKey: sessionState.sessionKey,
+          storePath: sessionState.storePath,
+        }),
+      );
+      sessionState.sessionEntry = baselineEntry;
+      sessionState.sessionEntryHandle.replaceCurrent(baselineEntry);
+      sessionState.sessionStore[sessionState.sessionKey] = baselineEntry;
+    } catch (error) {
+      logVerbose(
+        `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
+      );
+    }
+  }
   const {
     sessionCtx,
     sessionEntry,
@@ -530,11 +574,14 @@ export async function getReplyFromConfig(
   }
   // Utility-model narration is turn-local decoration. Initialize the durable
   // session first, then keep it completely outside model-locked native runs.
+  const optsWithSessionSkillOverrides = sessionEntry.toolOverrides?.skills
+    ? { ...optsWithSkillFilter, skillOverrides: sessionEntry.toolOverrides.skills }
+    : optsWithSkillFilter;
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
     userMessage: finalized.agentText,
-    opts: optsWithSkillFilter,
+    opts: optsWithSessionSkillOverrides,
     disabled: sessionModelSelectionLocked,
   });
   const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
@@ -546,8 +593,8 @@ export async function getReplyFromConfig(
     storePath,
   });
 
-  if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
-    const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDeliveryText);
+  if (sessionEntry?.pendingFinalDelivery?.kind === "replayable") {
+    const text = sanitizePendingFinalDeliveryText(sessionEntry.pendingFinalDelivery.text);
 
     // Heartbeats may safely clear ack-only pending state, but must not replay
     // user-facing pending finals through a different delivery target.
@@ -819,6 +866,7 @@ export async function getReplyFromConfig(
       typing,
       opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
       skillFilter: mergedSkillFilter,
+      preparedModelCatalog,
     }),
   );
   if (directiveResult.kind === "reply") {
@@ -871,6 +919,7 @@ export async function getReplyFromConfig(
     const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
+      agentId,
       ctx,
       cfg,
       command,
@@ -878,6 +927,7 @@ export async function getReplyFromConfig(
       storePath,
       sessionEntry,
       previousSessionEntry,
+      onObservedReplyDelivery: resolvedOpts?.onObservedReplyDelivery,
       workspaceDir,
     });
   };
@@ -976,6 +1026,7 @@ export async function getReplyFromConfig(
         skipStoredModelOverride: true,
         hasResolvedHeartbeatModelOverride,
         isHeartbeat: opts?.isHeartbeat === true,
+        preparedModelCatalog,
       });
     } catch (error) {
       if (error instanceof ModelSelectionLockedError) {

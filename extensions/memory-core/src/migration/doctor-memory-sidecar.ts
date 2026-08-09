@@ -3,21 +3,16 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { reclaimDefinitelyStaleFileLock } from "openclaw/plugin-sdk/file-lock";
-import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import {
-  ensureMemoryIndexSchema,
-  loadSqliteVecExtension,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
+// Doctor enumeration cold-loads this closure; the host engine schema pulls the
+// runtime-sqlite/kysely graph, so its helpers load lazily in the async migration.
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   legacyStateFileExists,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
-import {
-  ensureOpenClawAgentDatabaseSchema,
-  openNodeSqliteDatabase,
-  resolveOpenClawAgentSqlitePath,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+// sqlite-runtime re-exports the agent-db/kysely graph; keep it lazy so doctor
+// enumeration does not cold-load it with this closure.
 import {
   importLegacyMemorySidecarIndex,
   LEGACY_MEMORY_SIDECAR_SUFFIXES,
@@ -144,6 +139,7 @@ async function collectLegacyMemorySidecarSources(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
 }): Promise<LegacyMemorySidecarSource[]> {
+  const { resolveOpenClawAgentSqlitePath } = await import("openclaw/plugin-sdk/sqlite-runtime");
   const agentIds = new Set(resolveConfiguredAgentIds(params.config));
   const legacyDir = path.join(params.stateDir, "memory");
   const retrySidecars: Array<{ agentId: string; legacyPath: string }> = [];
@@ -335,6 +331,37 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
   );
 }
 
+/**
+ * List the sidecar files when every persisted byte is absent: the main file is
+ * zero bytes and no WAL/journal sidecar holds content. Returns null when any
+ * file carries bytes, because WAL frames alone can contain legacy rows.
+ */
+async function listEmptyLegacySidecarFiles(legacyPath: string): Promise<string[] | null> {
+  const emptyFiles: string[] = [];
+  for (const suffix of LEGACY_MEMORY_SIDECAR_SUFFIXES) {
+    const candidate = `${legacyPath}${suffix}`;
+    try {
+      const stat = await fs.stat(candidate);
+      if (!stat.isFile()) {
+        continue;
+      }
+      if (stat.size > 0) {
+        return null;
+      }
+      emptyFiles.push(candidate);
+    } catch (err: unknown) {
+      // Only ENOENT means the sidecar is genuinely absent (never written or
+      // cleaned up by SQLite).  Other errors (EACCES, EIO, ELOOP, EMFILE)
+      // mean we cannot determine the state — fail closed by treating the
+      // sidecar as non-empty so no legacy data is silently dropped.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        return null;
+      }
+    }
+  }
+  return emptyFiles.length > 0 ? emptyFiles : null;
+}
+
 async function migrateLegacyMemorySidecarSource(params: {
   source: LegacyMemorySidecarSource;
   config: unknown;
@@ -342,6 +369,33 @@ async function migrateLegacyMemorySidecarSource(params: {
   changes: string[];
   warnings: string[];
 }): Promise<{ archiveReady: boolean }> {
+  const { ensureMemoryIndexSchema, loadSqliteVecExtension } =
+    await import("openclaw/plugin-sdk/memory-core-host-engine-schema");
+  const { ensureOpenClawAgentDatabaseSchema, openNodeSqliteDatabase } =
+    await import("openclaw/plugin-sdk/sqlite-runtime");
+  // OpenClaw itself can leave a zero-byte placeholder at the legacy sidecar
+  // path while the live index is the per-agent SQLite database. An empty file
+  // holds no legacy rows, so remove it quietly instead of emitting a permanent
+  // self-inflicted "not a legacy memory index" warning.
+  const emptySidecarFiles = await listEmptyLegacySidecarFiles(params.source.legacyPath);
+  if (emptySidecarFiles) {
+    let removedAll = true;
+    for (const emptyPath of emptySidecarFiles) {
+      try {
+        await fs.rm(emptyPath, { force: true });
+      } catch {
+        removedAll = false;
+      }
+    }
+    if (removedAll) {
+      params.changes.push(
+        `Removed empty Memory Core legacy memory index sidecar placeholder: ${params.source.legacyPath}`,
+      );
+      return { archiveReady: false };
+    }
+    // Fall through to the regular import path when cleanup fails so the file
+    // is still diagnosed instead of silently ignored.
+  }
   await fs.mkdir(path.dirname(params.source.agentDatabasePath), { recursive: true });
   const db = openNodeSqliteDatabase(params.source.agentDatabasePath, { allowExtension: true });
   try {
@@ -539,6 +593,53 @@ async function collectRetiredQmdFileLocks(stateDir: string): Promise<string[]> {
   }
   return lockPaths;
 }
+
+async function collectRetiredQmdWorkspaceHomes(stateDir: string): Promise<string[]> {
+  const agentsDir = path.join(stateDir, "agents");
+  const homes: string[] = [];
+  for (const entry of await readDirectoryEntries(agentsDir)) {
+    if (!entry.isDirectory() || entry.name !== normalizeAgentId(entry.name)) {
+      continue;
+    }
+    const agentDir = path.join(agentsDir, entry.name);
+    const agentEntries = await readDirectoryEntries(agentDir);
+    if (agentEntries.some((candidate) => candidate.name === "qmd" && candidate.isDirectory())) {
+      homes.push(path.join(agentDir, "qmd"));
+    }
+  }
+  return homes;
+}
+
+export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
+  id: "memory-core-qmd-workspace-retired",
+  label: "Memory Core retired QMD workspaces",
+  doctorOnly: true,
+  async detectLegacyState(params) {
+    const homes = await collectRetiredQmdWorkspaceHomes(params.stateDir);
+    if (homes.length === 0) {
+      return null;
+    }
+    return {
+      preview: homes.map(
+        (home) =>
+          `- Retired Memory Core QMD workspace: ${home} -> remove derived index, config, cache, and session-export artifacts`,
+      ),
+    };
+  },
+  async migrateLegacyState(params) {
+    const changes: string[] = [];
+    const warnings: string[] = [];
+    for (const home of await collectRetiredQmdWorkspaceHomes(params.stateDir)) {
+      try {
+        await fs.rm(home, { recursive: true, force: true });
+        changes.push(`Removed retired Memory Core QMD workspace: ${home}`);
+      } catch (err) {
+        warnings.push(`Failed removing retired Memory Core QMD workspace ${home}: ${String(err)}`);
+      }
+    }
+    return { changes, warnings };
+  },
+};
 
 export const qmdLocksStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-qmd-file-locks-to-sqlite-leases",

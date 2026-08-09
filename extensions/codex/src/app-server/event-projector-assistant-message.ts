@@ -1,21 +1,18 @@
 import {
   formatErrorMessage,
   type EmbeddedRunAttemptParams,
+  type NormalizedUsage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 
+type CodexAssistantUsage = Usage & {
+  // Codex is a managed runtime; keep reasoning telemetry private to managed consumers.
+  reasoningTokens?: number;
+};
+
 export type AssistantMessageOptions = {
-  tokenUsage:
-    | {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        total?: number;
-        contextUsage?: Usage["contextUsage"];
-      }
-    | undefined;
+  tokenUsage: NormalizedUsage | undefined;
   aborted: boolean;
   promptError: unknown;
 };
@@ -41,12 +38,15 @@ export function createAssistantMessage(
   options: AssistantMessageOptions,
 ): AssistantMessage {
   const attribution = resolveCodexLocalRuntimeAttribution(params);
-  const usage: Usage = options.tokenUsage
+  const usage: CodexAssistantUsage = options.tokenUsage
     ? {
         input: options.tokenUsage.input ?? 0,
         output: options.tokenUsage.output ?? 0,
         cacheRead: options.tokenUsage.cacheRead ?? 0,
         cacheWrite: options.tokenUsage.cacheWrite ?? 0,
+        ...(options.tokenUsage.reasoningTokens !== undefined
+          ? { reasoningTokens: options.tokenUsage.reasoningTokens }
+          : {}),
         ...(options.tokenUsage.contextUsage
           ? { contextUsage: options.tokenUsage.contextUsage }
           : {}),

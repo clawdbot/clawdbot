@@ -1,23 +1,22 @@
 // Registers the terminal UI subcommand and normalizes its local-vs-gateway options.
 import type { Command } from "commander";
+import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
+import { addTuiOptions } from "./tui-cli-options.js";
 
 /** Attach the `tui` command plus its `terminal`/`chat` aliases to the root CLI. */
 export function registerTuiCli(program: Command) {
-  program
+  const command = program
     .command("tui")
     .alias("terminal")
     .alias("chat")
     .description("Open a terminal UI connected to the Gateway")
-    .option("--local", "Run against the local embedded agent runtime", false)
-    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
-    .option("--token <token>", "Gateway token (if required)")
-    .option("--password <password>", "Gateway password (if required)")
-    .option("--tls-fingerprint <sha256>", "Expected Gateway TLS certificate fingerprint")
+    .option("--local", "Run against the local embedded agent runtime", false);
+  addTuiOptions(command)
     .option("--session <key>", 'Session key (default: "main", or "global" when scope is global)')
     .option("--deliver", "Deliver assistant replies", false)
     .option("--thinking <level>", "Thinking level override")
@@ -50,6 +49,9 @@ export function registerTuiCli(program: Command) {
         const historyLimit = parseStrictPositiveInteger(opts.historyLimit ?? "200");
         if (historyLimit === undefined) {
           throw new Error("--history-limit must be a positive integer.");
+        }
+        if (!isLocal && historyLimit > CHAT_HISTORY_MAX_ENTRIES) {
+          throw new Error(`--history-limit must be at most ${CHAT_HISTORY_MAX_ENTRIES}.`);
         }
         const { runTui } = await import("../tui/tui.js");
         await runTui({

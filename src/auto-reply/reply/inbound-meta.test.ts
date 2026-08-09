@@ -19,7 +19,8 @@ const { formattingHintCalls } = vi.hoisted(() => ({
   formattingHintCalls: [] as Array<{ cfg: OpenClawConfig; accountId?: string | null }>,
 }));
 
-vi.mock("../../channels/plugins/registry-loaded.js", () => ({
+vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/registry-loaded.js")>()),
   getLoadedChannelPluginById: (channelId: string) =>
     channelId === "slack"
       ? {
@@ -393,27 +394,6 @@ describe("buildInboundMetaSystemPrompt", () => {
 });
 
 describe("buildInboundUserContextPrefix", () => {
-  it("injects a pending skill suggestion into the current user-role context", () => {
-    const entry: SessionEntry = {
-      sessionId: "skill-suggestion-session",
-      updatedAt: 1,
-      pendingSkillSuggestion: {
-        skillName: "github-pr-workflow",
-        detectedAt: 1,
-      },
-    };
-
-    const text = buildInboundUserContextPrefix({} as TemplateContext, undefined, entry);
-
-    expect(text).toContain("✨ SKILL OPPORTUNITY");
-    expect(text).toContain("Candidate skill: github-pr-workflow");
-    expect(text).toContain("Approval: Recommendation only");
-    expect(text).toContain("Opportunity idempotency key: unavailable");
-    expect(text).toContain("Optional extension capture: [blocked]");
-    expect(text).not.toContain("workboard_create");
-    expect(text.split("\n").length).toBeGreaterThan(5);
-  });
-
   it("injects an active goal into the current user-role context", () => {
     const text = buildInboundUserContextPrefix(
       {} as TemplateContext,
@@ -422,7 +402,7 @@ describe("buildInboundUserContextPrefix", () => {
     );
 
     expect(text).toBe(
-      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).",
+      "Active goal: Publish the release evidence — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.",
     );
   });
 
@@ -447,7 +427,7 @@ describe("buildInboundUserContextPrefix", () => {
     );
 
     expect(text).toBe(
-      `Active goal: ${"x".repeat(199)}… — advance it or update its status (get_goal/update_goal).`,
+      `Active goal: ${"x".repeat(199)}… — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.`,
     );
     expect(text).not.toContain("\n");
   });
@@ -456,6 +436,7 @@ describe("buildInboundUserContextPrefix", () => {
     const entry = createGoalSessionEntry("active");
     entry.totalTokens = 10;
     entry.totalTokensFresh = true;
+    entry.totalTokensVersion = 1;
     entry.goal = { ...entry.goal!, tokenBudget: 10 };
 
     expect(buildInboundUserContextPrefix({} as TemplateContext, undefined, entry)).toBe("");
@@ -464,7 +445,7 @@ describe("buildInboundUserContextPrefix", () => {
 
   it("removes a captured goal line when a queued turn is admitted after completion", () => {
     const goalContext =
-      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).";
+      "Active goal: Publish the release evidence — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.";
     const context = {
       text: ["Conversation info:", goalContext, "Current message:\nmessage_id=next-turn"].join(
         "\n\n",
@@ -486,13 +467,13 @@ describe("buildInboundUserContextPrefix", () => {
     );
 
     expect(refreshed?.text).toBe(
-      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).\n\nCurrent message:\nmessage_id=queued-turn",
+      "Active goal: Publish the release evidence — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.\n\nCurrent message:\nmessage_id=queued-turn",
     );
   });
 
   it("keeps the current-message anchor last when refreshing a queued goal", () => {
     const goalContext =
-      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).";
+      "Active goal: Publish the release evidence — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.";
     const refreshed = refreshActiveGoalContext(
       {
         text: `${goalContext}\n\nCurrent message:\n#34975 obviyus:`,
@@ -508,7 +489,7 @@ describe("buildInboundUserContextPrefix", () => {
 
   it("does not remove a user event that matches the generated goal wording", () => {
     const goalContext =
-      "Active goal: Publish the release evidence — advance it or update its status (get_goal/update_goal).";
+      "Active goal: Publish the release evidence — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.";
     const refreshed = refreshActiveGoalContext(
       {
         text: `${goalContext}\n\nCurrent event:\n${goalContext}`,

@@ -12,63 +12,71 @@ import { createPluginGatewayMethodDescriptor } from "../methods/registry.js";
 import { createBoardHarness } from "./board.test-support.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+function createWorkboardCapabilityRegistry(params: {
+  readHandler: GatewayRequestHandlers[string];
+  actionHandler: GatewayRequestHandlers[string];
+}) {
+  const registry = createEmptyPluginRegistry();
+  registry.gatewayHandlers["workboard.cards.list"] = params.readHandler;
+  registry.gatewayHandlers["workboard.cards.dispatch"] = params.actionHandler;
+  registry.gatewayMethodDescriptors.push(
+    createPluginGatewayMethodDescriptor({
+      pluginId: "workboard",
+      name: "workboard.cards.list",
+      handler: params.readHandler,
+      scope: "operator.read",
+    }),
+    createPluginGatewayMethodDescriptor({
+      pluginId: "workboard",
+      name: "workboard.cards.dispatch",
+      handler: params.actionHandler,
+      scope: "operator.write",
+    }),
+  );
+  const plugin = createPluginRecord({
+    id: "workboard",
+    source: "workboard-stub-plugin-fixture",
+    origin: "bundled",
+    enabled: true,
+    configSchema: false,
+    dashboard: {
+      dataBindings: [
+        {
+          id: "cards.list",
+          method: "workboard.cards.list",
+          description: "List fixture cards",
+        },
+      ],
+      actionVerbs: [
+        {
+          id: "dispatch",
+          method: "workboard.cards.dispatch",
+          description: "Dispatch fixture cards",
+          paramShape: {
+            type: "object",
+            additionalProperties: false,
+            required: ["force"],
+            properties: { force: { type: "boolean" } },
+          },
+        },
+      ],
+    },
+  });
+  registerPluginDashboardCapabilities({ record: plugin, registry });
+  registry.plugins.push(plugin);
+  return registry;
+}
+
 describe("board plugin capabilities", () => {
   it("routes granted bindings and actions only while their plugin registry is active", async () => {
     const previousRegistry = getActivePluginRegistry();
-    const registry = createEmptyPluginRegistry();
     const readHandler = vi.fn<GatewayRequestHandlers[string]>(async ({ params, respond }) => {
       respond(true, { items: [params.filter ?? "all"] });
     });
     const actionHandler = vi.fn<GatewayRequestHandlers[string]>(async ({ params, respond }) => {
       respond(true, { refreshed: params.force });
     });
-    registry.gatewayHandlers["workboard.cards.list"] = readHandler;
-    registry.gatewayHandlers["workboard.cards.dispatch"] = actionHandler;
-    registry.gatewayMethodDescriptors.push(
-      createPluginGatewayMethodDescriptor({
-        pluginId: "workboard",
-        name: "workboard.cards.list",
-        handler: readHandler,
-        scope: "operator.read",
-      }),
-      createPluginGatewayMethodDescriptor({
-        pluginId: "workboard",
-        name: "workboard.cards.dispatch",
-        handler: actionHandler,
-        scope: "operator.write",
-      }),
-    );
-    const plugin = createPluginRecord({
-      id: "workboard",
-      source: "workboard-stub-plugin-fixture",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-      dashboard: {
-        dataBindings: [
-          {
-            id: "cards.list",
-            method: "workboard.cards.list",
-            description: "List fixture cards",
-          },
-        ],
-        actionVerbs: [
-          {
-            id: "dispatch",
-            method: "workboard.cards.dispatch",
-            description: "Dispatch fixture cards",
-            paramShape: {
-              type: "object",
-              additionalProperties: false,
-              required: ["force"],
-              properties: { force: { type: "boolean" } },
-            },
-          },
-        ],
-      },
-    });
-    registerPluginDashboardCapabilities({ record: plugin, registry });
-    registry.plugins.push(plugin);
+    const registry = createWorkboardCapabilityRegistry({ readHandler, actionHandler });
     setActivePluginRegistry(registry);
 
     try {

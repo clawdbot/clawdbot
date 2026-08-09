@@ -21,11 +21,7 @@ function resolveXaiUserAgentVersion(): string {
   if (packageVersion && packageVersion !== UNUSABLE_PACKAGE_VERSION) {
     return packageVersion;
   }
-  return (
-    trimToUndefined(process.env.OPENCLAW_SERVICE_VERSION) ??
-    trimToUndefined(process.env.npm_package_version) ??
-    FALLBACK_VERSION
-  );
+  return trimToUndefined(process.env.npm_package_version) ?? FALLBACK_VERSION;
 }
 
 export function xaiUserAgent(): string {

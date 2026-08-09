@@ -39,6 +39,26 @@ function deferred<T>() {
 }
 
 describe("Skill Workshop history scan controller", () => {
+  it("does not scan history with read-only operator access", async () => {
+    const request = vi.fn();
+    const appGateway = gateway(request);
+    (appGateway.snapshot as ApplicationGateway["snapshot"]).hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["skills.proposals.historyScan"] },
+    } as ApplicationGateway["snapshot"]["hello"];
+
+    await expect(
+      runSkillWorkshopHistoryScan({
+        agentId: "main",
+        gateway: appGateway,
+        state: createSkillWorkshopHistoryScanState(),
+      }),
+    ).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("loads status and starts with the newest window", async () => {
     const request = vi
       .fn()
@@ -100,7 +120,7 @@ describe("Skill Workshop history scan controller", () => {
     });
   });
 
-  it("uses the current gateway client after a status retry", async () => {
+  it("does not transfer a pending scan to a replacement gateway client", async () => {
     const status = deferred<SkillWorkshopHistoryScanResult>();
     const oldRequest = vi.fn(() => status.promise);
     const newRequest = vi.fn().mockResolvedValue(result({ hasScanned: true, hasMore: true }));
@@ -115,11 +135,8 @@ describe("Skill Workshop history scan controller", () => {
     };
     status.resolve(result());
 
-    await expect(scan).resolves.toBe(true);
-    expect(newRequest).toHaveBeenCalledWith("skills.proposals.historyScan", {
-      agentId: "main",
-      direction: "older",
-    });
+    await expect(scan).resolves.toBe(false);
+    expect(newRequest).not.toHaveBeenCalled();
   });
 
   it("does not race a scan against status loading", async () => {

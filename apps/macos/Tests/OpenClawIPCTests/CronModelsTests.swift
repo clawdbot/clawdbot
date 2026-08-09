@@ -72,6 +72,30 @@ struct CronModelsTests {
         #expect(decoded == payload)
     }
 
+    @Test func `delivery advanced routing encodes and decodes`() throws {
+        for threadId in [#""thread-42""#, "42"] {
+            let json = """
+            {
+              "mode": "announce",
+              "threadId": \(threadId),
+              "completionDestination": { "mode": "webhook", "to": "https://example.test/complete" },
+              "failureDestination": {
+                "mode": "announce",
+                "channel": "telegram",
+                "to": "ops",
+                "accountId": "alerts"
+              }
+            }
+            """
+            let delivery = try JSONDecoder().decode(CronDelivery.self, from: Data(json.utf8))
+            let roundTripped = try JSONDecoder().decode(CronDelivery.self, from: JSONEncoder().encode(delivery))
+
+            #expect(roundTripped == delivery)
+            #expect(roundTripped.completionDestination?["mode"]?.value as? String == "webhook")
+            #expect(roundTripped.failureDestination?["accountId"]?.value as? String == "alerts")
+        }
+    }
+
     @Test func `payload command encodes and decodes`() throws {
         let payload = CronPayload.command(
             argv: ["printf", "done"],

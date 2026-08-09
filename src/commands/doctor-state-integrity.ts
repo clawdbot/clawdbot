@@ -23,6 +23,7 @@ import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
 } from "../config/sessions/artifacts.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
   resolveSessionFilePath,
@@ -34,16 +35,15 @@ import {
   applySessionEntryReplacements,
   listSessionEntriesReadOnly,
 } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { safeRealpathSync } from "../infra/boundary-path.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
 } from "../infra/state-migrations.legacy-session-store.js";
-import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../routing/session-key.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -354,13 +354,7 @@ function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
   );
 }
 
-function tryResolveRealPath(targetPath: string): string | null {
-  try {
-    return fs.realpathSync(targetPath);
-  } catch {
-    return null;
-  }
-}
+const tryResolveRealPath = safeRealpathSync;
 
 function resolvePathThroughExistingAncestor(
   targetPath: string,
@@ -774,11 +768,6 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   return false;
 }
 
-function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: string): boolean {
-  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
-  return backendConfig?.backend === "qmd" && backendConfig.qmd?.sessions.enabled === true;
-}
-
 export function detectStateIntegrityHealthIssues(
   cfg: OpenClawConfig,
   params?: {
@@ -1055,6 +1044,7 @@ export async function noteStateIntegrity(
   cfg: OpenClawConfig,
   prompter: DoctorPrompterLike,
   configPath?: string,
+  options?: { stateDirExistedAtStart?: boolean },
 ) {
   const warnings: string[] = [];
   const changes: string[] = [];
@@ -1080,9 +1070,6 @@ export async function noteStateIntegrity(
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
   const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
-  const suppressOrphanTranscriptWarning = agentId
-    ? shouldSuppressOrphanTranscriptWarning(cfg, agentId)
-    : false;
 
   if (cloudSyncedStateDir) {
     warnings.push(
@@ -1102,6 +1089,11 @@ export async function noteStateIntegrity(
   }
 
   let stateDirExists = existsDir(stateDir);
+  if (stateDirExists && options?.stateDirExistedAtStart === false) {
+    warnings.push(
+      `- State directory was missing at doctor start and was initialized during startup checks (${displayStateDir}).`,
+    );
+  }
   if (!stateDirExists) {
     warnings.push(
       `- CRITICAL: state directory missing (${displayStateDir}). Sessions, credentials, logs, and config are stored there.`,
@@ -1349,12 +1341,16 @@ export async function noteStateIntegrity(
       })
       .slice(0, 5);
     const recentTranscriptCandidates = recent.filter(([key]) => !isSlashRoutingSessionKey(key));
-    const missing = recentTranscriptCandidates.filter(([, entry]) => {
+    const missing = recentTranscriptCandidates.filter(([key, entry]) => {
+      if (sqliteSessionKeys.has(key)) {
+        return false;
+      }
       const sessionId = entry.sessionId;
       if (!sessionId) {
         return false;
       }
-      if (parseSqliteSessionFileMarker(entry.sessionFile)) {
+      const legacySessionFile = (entry as SessionEntry & { sessionFile?: string }).sessionFile;
+      if (parseSqliteSessionFileMarker(legacySessionFile)) {
         return false;
       }
       const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
@@ -1469,7 +1465,9 @@ export async function noteStateIntegrity(
 
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
-    if (mainEntry?.sessionId) {
+    // SQLite-owned transcripts live in the agent DB after import.
+    // Do not require the archived legacy JSONL for those sessions.
+    if (mainEntry?.sessionId && !sqliteSessionKeys.has(mainKey)) {
       const transcriptPath = resolveSessionFilePath(
         mainEntry.sessionId,
         mainEntry,
@@ -1515,7 +1513,7 @@ export async function noteStateIntegrity(
       .filter(
         (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
       );
-    if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
+    if (orphanTranscriptPaths.length > 0) {
       const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
       const orphanPreview = formatFilePreview(orphanTranscriptPaths);
       warnings.push(

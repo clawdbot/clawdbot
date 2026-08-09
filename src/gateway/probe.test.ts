@@ -40,8 +40,15 @@ const deviceIdentityState = vi.hoisted(() => ({
     scopes: ["operator.read"],
     updatedAtMs: 1,
   } as Record<string, unknown> | null,
+  cachedOriginToken: {
+    token: "cached-origin-operator-token",
+    role: "operator",
+    scopes: ["operator.read"],
+    updatedAtMs: 1,
+  } as Record<string, unknown> | null,
   identityPaths: [] as unknown[],
   tokenParams: [] as unknown[],
+  originTokenParams: [] as unknown[],
 }));
 
 const eventLoopReadyState = vi.hoisted(() => ({
@@ -185,6 +192,10 @@ vi.mock("../infra/device-auth-store.js", () => ({
     deviceIdentityState.tokenParams.push(params);
     return deviceIdentityState.cachedToken;
   },
+  loadOriginDeviceToken: (params: unknown) => {
+    deviceIdentityState.originTokenParams.push(params);
+    return deviceIdentityState.cachedOriginToken;
+  },
 }));
 
 vi.mock("./event-loop-ready.js", () => ({
@@ -293,8 +304,15 @@ describe("probeGateway", () => {
       scopes: ["operator.read"],
       updatedAtMs: 1,
     };
+    deviceIdentityState.cachedOriginToken = {
+      token: "cached-origin-operator-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 1,
+    };
     deviceIdentityState.identityPaths = [];
     deviceIdentityState.tokenParams = [];
+    deviceIdentityState.originTokenParams = [];
     gatewayClientState.startMode = "hello";
     gatewayClientState.socketOpened = true;
     gatewayClientState.transportValidated = true;
@@ -451,6 +469,16 @@ describe("probeGateway", () => {
     });
 
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(gatewayClientState.options?.deviceAuthScope).toBe("wss://gateway.example/ws");
+    expect(deviceIdentityState.originTokenParams).toEqual([
+      {
+        gatewayScope: "wss://gateway.example/ws",
+        deviceId: "test-device-identity",
+        role: "operator",
+        env: undefined,
+      },
+    ]);
+    expect(deviceIdentityState.tokenParams).toEqual([]);
   });
 
   it("does not create or attach a device identity for first-time authenticated probes", async () => {
@@ -646,6 +674,7 @@ describe("probeGateway", () => {
   it("prefers the structured connect error over the generic close reason", async () => {
     gatewayClientState.startMode = "connect-error-close";
     gatewayClientState.socketOpened = true;
+    gatewayClientState.close = { code: 1008, reason: "connect failed" };
 
     const result = await runTokenLightweightProbe({
       timeoutMs: 5_000,
@@ -654,9 +683,23 @@ describe("probeGateway", () => {
     expectProbeResultFields(result, {
       ok: false,
       error: "scope upgrade pending approval (requestId: req-123)",
-      close: { code: 1008, reason: "pairing required" },
+      close: { code: 1008, reason: "connect failed" },
     });
+    expectProbeAuthFields(result, { capability: "pairing_pending" });
     expect(result.connectLatencyMs).not.toBeNull();
+  });
+
+  it("keeps probe capability unknown for temporary authentication lockouts", async () => {
+    gatewayClientState.startMode = "connect-error-close";
+    gatewayClientState.connectError =
+      "unauthorized: too many failed authentication attempts (retry later)";
+    gatewayClientState.connectErrorDetails = { code: "AUTH_RATE_LIMITED" };
+    gatewayClientState.close = { code: 1008, reason: "connect failed" };
+
+    const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
+
+    expectProbeResultFields(result, { ok: false });
+    expectProbeAuthFields(result, { capability: "unknown" });
   });
 
   it("keeps latency unknown when the opened transport fails validation", async () => {

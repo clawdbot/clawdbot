@@ -9,8 +9,11 @@ const mocks = vi.hoisted(() => ({
   getRemoteModelCatalogOverlay: vi.fn(),
 }));
 
-vi.mock("../../plugins/plugin-registry.js", () => ({
+vi.mock("../../plugins/plugin-registry-contributions.js", () => ({
   resolvePluginContributionOwners: mocks.resolvePluginContributionOwners,
+}));
+
+vi.mock("../../plugins/plugin-registry-snapshot.js", () => ({
   getPluginRecord: mocks.getPluginRecord,
   isPluginEnabled: mocks.isPluginEnabled,
 }));
@@ -26,6 +29,7 @@ vi.mock("../../model-catalog/remote-overlay.js", () => ({
 
 const moonshotPlugin = {
   id: "moonshot",
+  origin: "bundled",
   providers: ["moonshot"],
   modelCatalog: {
     providers: {
@@ -41,6 +45,7 @@ const moonshotPlugin = {
 
 const openrouterPlugin = {
   id: "openrouter",
+  origin: "bundled",
   providers: ["openrouter"],
   modelCatalog: {
     providers: {
@@ -56,6 +61,7 @@ const openrouterPlugin = {
 
 const openaiRuntimePlugin = {
   id: "openai",
+  origin: "bundled",
   providers: ["openai"],
   modelCatalog: {
     providers: {
@@ -65,6 +71,23 @@ const openaiRuntimePlugin = {
     },
     discovery: {
       openai: "runtime",
+    },
+  },
+};
+
+const anthropicRuntimeAugmentPlugin = {
+  id: "anthropic",
+  origin: "bundled",
+  providers: ["anthropic"],
+  modelCatalog: {
+    runtimeAugment: true,
+    providers: {
+      anthropic: {
+        models: [{ id: "claude-known", name: "Known Claude" }],
+      },
+    },
+    discovery: {
+      anthropic: "refreshable",
     },
   },
 };
@@ -100,9 +123,8 @@ describe("loadStaticManifestCatalogRowsForList", () => {
     });
   });
 
-  it("loads refreshable manifest rows as registry-backed supplements", async () => {
-    const { loadSupplementalManifestCatalogRowsForList } =
-      await import("./list.manifest-catalog.js");
+  it("does not expose refreshable provider previews as prepared models", async () => {
+    const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
     const manifestRegistry = {
       plugins: [openrouterPlugin, moonshotPlugin],
       diagnostics: [],
@@ -114,15 +136,36 @@ describe("loadStaticManifestCatalogRowsForList", () => {
     });
 
     expect(
-      loadSupplementalManifestCatalogRowsForList({
+      loadStaticManifestCatalogRowsForList({
         cfg: {},
       }).map((row) => row.ref),
-    ).toEqual(["moonshot/kimi-k2.6", "openrouter/auto"]);
+    ).toEqual(["moonshot/kimi-k2.6"]);
   });
 
-  it("supplements runtime-owned providers with refreshed rows only", async () => {
-    const { loadStaticManifestCatalogRowsForList, loadSupplementalManifestCatalogRowsForList } =
-      await import("./list.manifest-catalog.js");
+  it("loads runtime manifest rows for an explicitly scoped lightweight view", async () => {
+    const { loadManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
+    const manifestRegistry = {
+      plugins: [openaiRuntimePlugin, moonshotPlugin],
+      diagnostics: [],
+    };
+    const metadataSnapshot = {
+      index: { plugins: [], diagnostics: [] },
+      manifestRegistry,
+      plugins: manifestRegistry.plugins,
+    };
+
+    expect(
+      loadManifestCatalogRowsForList({
+        cfg: {},
+        metadataSnapshot: metadataSnapshot as unknown as Parameters<
+          typeof loadManifestCatalogRowsForList
+        >[0]["metadataSnapshot"],
+      }).map((row) => row.ref),
+    ).toEqual(["moonshot/kimi-k2.6", "openai/gpt-known"]);
+  });
+
+  it("does not expose runtime overlay rows as static manifest models", async () => {
+    const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
     const manifestRegistry = {
       plugins: [openaiRuntimePlugin],
       diagnostics: [],
@@ -144,19 +187,11 @@ describe("loadStaticManifestCatalogRowsForList", () => {
       cfg: {},
       providerFilter: "openai",
       metadataSnapshot: metadataSnapshot as unknown as Parameters<
-        typeof loadSupplementalManifestCatalogRowsForList
+        typeof loadStaticManifestCatalogRowsForList
       >[0]["metadataSnapshot"],
     };
 
     expect(loadStaticManifestCatalogRowsForList(params)).toEqual([]);
-    expect(loadSupplementalManifestCatalogRowsForList(params)).toMatchObject([
-      {
-        provider: "openai",
-        id: "gpt-refreshed",
-        ref: "openai/gpt-refreshed",
-        source: "runtime-refresh",
-      },
-    ]);
   });
 
   it("uses an injected metadata snapshot instead of loading metadata again", async () => {
@@ -179,5 +214,91 @@ describe("loadStaticManifestCatalogRowsForList", () => {
       }).map((row) => row.ref),
     ).toEqual(["moonshot/kimi-k2.6"]);
     expect(mocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveManifestCatalogCoverageForList", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getPluginRecord.mockImplementation(({ pluginId }: { pluginId: string }) => ({
+      pluginId,
+    }));
+    mocks.isPluginEnabled.mockReturnValue(true);
+    mocks.resolvePluginContributionOwners.mockImplementation(({ matches }: { matches: string }) => [
+      matches,
+    ]);
+  });
+
+  it("marks only static non-augment owners as complete", async () => {
+    const { resolveManifestCatalogCoverageForList } = await import("./list.manifest-catalog.js");
+    const metadataSnapshot = {
+      index: { plugins: [], diagnostics: [] },
+      manifestRegistry: {
+        plugins: [
+          anthropicRuntimeAugmentPlugin,
+          moonshotPlugin,
+          openrouterPlugin,
+          openaiRuntimePlugin,
+        ],
+        diagnostics: [],
+      },
+    };
+
+    const coverage = resolveManifestCatalogCoverageForList({
+      cfg: {},
+      providerIds: new Set(["anthropic", "moonshot", "openrouter", "openai"]),
+      metadataSnapshot: metadataSnapshot as never,
+    });
+
+    expect(coverage.ownedProviderIds).toEqual(
+      new Set(["anthropic", "moonshot", "openrouter", "openai"]),
+    );
+    expect(coverage.completeProviderIds).toEqual(new Set(["moonshot"]));
+  });
+
+  it("requires runtime augmentation for external provider plugins", async () => {
+    const { resolveManifestCatalogCoverageForList } = await import("./list.manifest-catalog.js");
+    const externalPlugin = {
+      ...moonshotPlugin,
+      id: "external-moonshot",
+      origin: "external",
+    };
+    const metadataSnapshot = {
+      index: { plugins: [], diagnostics: [] },
+      manifestRegistry: {
+        plugins: [externalPlugin],
+        diagnostics: [],
+      },
+    };
+    mocks.resolvePluginContributionOwners.mockReturnValue(["external-moonshot"]);
+    mocks.getPluginRecord.mockReturnValue(undefined);
+
+    const coverage = resolveManifestCatalogCoverageForList({
+      cfg: {},
+      providerIds: new Set(["moonshot"]),
+      metadataSnapshot: metadataSnapshot as never,
+    });
+
+    expect(coverage.ownedProviderIds).toEqual(new Set(["moonshot"]));
+    expect(coverage.completeProviderIds).toEqual(new Set());
+  });
+
+  it("treats replace mode as explicit opt-out from provider discovery", async () => {
+    const { resolveManifestCatalogCoverageForList } = await import("./list.manifest-catalog.js");
+    const metadataSnapshot = {
+      index: { plugins: [], diagnostics: [] },
+      manifestRegistry: {
+        plugins: [openaiRuntimePlugin],
+        diagnostics: [],
+      },
+    };
+
+    const coverage = resolveManifestCatalogCoverageForList({
+      cfg: { models: { mode: "replace" } },
+      providerIds: new Set(["openai"]),
+      metadataSnapshot: metadataSnapshot as never,
+    });
+
+    expect(coverage.completeProviderIds).toEqual(new Set(["openai"]));
   });
 });

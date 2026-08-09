@@ -49,6 +49,11 @@ function resolveEmbeddedCliBackendDispatch(
   if (params.cliBackendDispatch !== "subscription-auth") {
     return undefined;
   }
+  // The one-shot bridge cannot carry authenticated source-channel delivery
+  // context; private source replies must stay with their embedded owner.
+  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+    return undefined;
+  }
   // The CLI runner needs the caller-owned transcript path; runs without one
   // stay on the passthrough where session targets are resolved internally.
   const sessionFile = params.sessionFile?.trim();
@@ -117,6 +122,13 @@ async function runEmbeddedAgentViaCliBackend(
     model: params.model,
     cwd: params.cwd ?? params.workspaceDir,
     config: params.config,
+    ...(params.sessionTarget?.expectedLifecycleRevision !== undefined
+      ? { expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision }
+      : {}),
+    ...(params.sessionTarget?.expectedWriterRunId !== undefined
+      ? { expectedWriterRunId: params.sessionTarget.expectedWriterRunId }
+      : {}),
+    ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
   });
   // CLI tool results arrive as agent events with transport-prefixed MCP
   // names; strip and normalize so observers and transcript records see the
@@ -152,12 +164,14 @@ async function runEmbeddedAgentViaCliBackend(
       return;
     }
     const isError = evt.data.isError === true || isToolResultError(evt.data.result);
+    const resultContentSource = evt.data.resultContentSource === "network" ? "network" : undefined;
     transcript.noteToolEvent({
       phase,
       toolName,
       toolCallId,
       result: evt.data.result,
       isError,
+      ...(resultContentSource ? { resultContentSource } : {}),
     });
     onAgentToolResult?.({
       toolName,
@@ -186,7 +200,15 @@ async function runEmbeddedAgentViaCliBackend(
     const result = await runCliAgent({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      ...(params.sessionTarget?.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision }
+        : {}),
+      ...(params.sessionTarget?.expectedWriterRunId !== undefined
+        ? { expectedWriterRunId: params.sessionTarget.expectedWriterRunId }
+        : {}),
+      chatType: params.chatType,
       agentId: params.agentId,
+      ...(params.sessionTarget?.storePath ? { storePath: params.sessionTarget.storePath } : {}),
       trigger: params.trigger,
       sessionFile: dispatch.sessionFile,
       workspaceDir: params.workspaceDir,

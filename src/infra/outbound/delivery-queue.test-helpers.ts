@@ -8,6 +8,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import type { DeliverFn, RecoveryLogger } from "./delivery-queue.js";
 
 /** Installs Vitest hooks that provide a fresh delivery-queue state dir per case. */
@@ -50,10 +51,8 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
 export function readQueuedEntry(tmpDir: string, id: string): Record<string, unknown> {
   const { db } = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } });
   const row = db
-    .prepare(
-      "SELECT entry_json FROM delivery_queue_entries WHERE queue_name = 'outbound' AND id = ?",
-    )
-    .get(id) as { entry_json?: string } | undefined;
+    .prepare("SELECT entry_json FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+    .get(OUTBOUND_DELIVERY_QUEUE_NAME, id) as { entry_json?: string } | undefined;
   if (!row?.entry_json) {
     throw new Error(`Missing queued entry ${id}`);
   }
@@ -67,11 +66,11 @@ export function readQueuedEntries(tmpDir: string): Record<string, unknown>[] {
       `
         SELECT entry_json
           FROM delivery_queue_entries
-         WHERE queue_name = 'outbound' AND status = 'pending'
+         WHERE queue_name = ? AND status = 'pending'
          ORDER BY enqueued_at ASC, id ASC
       `,
     )
-    .all() as Array<{ entry_json: string }>;
+    .all(OUTBOUND_DELIVERY_QUEUE_NAME) as Array<{ entry_json: string }>;
   return rows.map((row) => JSON.parse(row.entry_json) as Record<string, unknown>);
 }
 
@@ -85,6 +84,8 @@ export function setQueuedEntryState(
     enqueuedAt?: number;
     platformSendStartedAt?: number;
     recoveryState?: "send_attempt_started" | "unknown_after_send";
+    producerClaimId?: string;
+    availableAt?: number;
   },
 ): void {
   const entry = readQueuedEntry(tmpDir, id);
@@ -108,6 +109,12 @@ export function setQueuedEntryState(
   if (state.recoveryState !== undefined) {
     entry.recoveryState = state.recoveryState;
   }
+  if (state.producerClaimId !== undefined) {
+    entry.producerClaimId = state.producerClaimId;
+  }
+  if (state.availableAt !== undefined) {
+    entry.availableAt = state.availableAt;
+  }
   const { db } = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } });
   db.prepare(
     `
@@ -120,7 +127,7 @@ export function setQueuedEntryState(
              recovery_state = ?,
              entry_json = ?,
              updated_at = ?
-       WHERE queue_name = 'outbound' AND id = ?
+       WHERE queue_name = ? AND id = ?
     `,
   ).run(
     state.retryCount,
@@ -131,6 +138,7 @@ export function setQueuedEntryState(
     state.recoveryState ?? null,
     JSON.stringify(entry),
     Date.now(),
+    OUTBOUND_DELIVERY_QUEUE_NAME,
     id,
   );
 }

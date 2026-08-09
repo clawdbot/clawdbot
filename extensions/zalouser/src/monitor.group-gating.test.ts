@@ -1,4 +1,5 @@
 // Zalouser tests cover monitor.group gating plugin behavior.
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
@@ -18,6 +19,8 @@ import {
   sendTypingZalouserMock,
 } from "./monitor.send.test-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
+import { createZalouserSendReceipt } from "./send-receipt.js";
+import { sendMessageZalouser } from "./send.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 import {
@@ -92,15 +95,23 @@ function dispatchReplyCall(mock: unknown, index = 0): DispatchReplyCallArg {
 function installRuntime(params: {
   commandAuthorized?: boolean;
   replyPayload?: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
+  replyKind?: "block" | "tool";
   resolveCommandAuthorizedFromAuthorizers?: (params: {
     useAccessGroups: boolean;
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
   }) => boolean;
 }) {
+  const deliveryErrors: unknown[] = [];
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions, ctx }) => {
     await dispatcherOptions.typingCallbacks?.onReplyStart?.();
     if (params.replyPayload) {
-      await dispatcherOptions.deliver(params.replyPayload);
+      const info = { kind: params.replyKind ?? "block" };
+      try {
+        await dispatcherOptions.deliver(params.replyPayload, info);
+      } catch (error) {
+        deliveryErrors.push(error);
+        dispatcherOptions.onError(error, info);
+      }
     }
     return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 }, ctx };
   });
@@ -165,7 +176,9 @@ function installRuntime(params: {
         ...replyPipeline,
         ...turn.dispatcherOptions,
         deliver: async (...args: Parameters<typeof turn.delivery.deliver>) => {
-          await turn.delivery.deliver(...args);
+          const result = await turn.delivery.deliver(...args);
+          await turn.delivery.onDelivered?.(args[0], args[1], result);
+          return result;
         },
         onError: turn.delivery.onError,
       },
@@ -276,6 +289,7 @@ function installRuntime(params: {
   } as unknown as PluginRuntime);
 
   return {
+    deliveryErrors,
     dispatchReplyWithBufferedBlockDispatcher,
     resolveAgentRoute,
     resolveCommandAuthorizedFromAuthorizers,
@@ -297,7 +311,7 @@ async function processMessageThroughMonitor(params: {
   config: OpenClawConfig;
   runtime: ReturnType<typeof createZalouserRuntimeEnv>;
   historyState?: { historyLimit?: number };
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }): Promise<void> {
   const messages = params.messages ?? (params.message ? [params.message] : []);
   const account = params.historyState?.historyLimit
@@ -476,16 +490,9 @@ describe("zalouser monitor group mention gating", () => {
     const runtime = installRuntime({
       commandAuthorized: false,
     });
-    const account = createAccount();
     await processMessageWithDefaults({
       message: createDmMessage(params?.message),
-      account: {
-        ...account,
-        config: {
-          ...account.config,
-          dmPolicy: "open",
-        },
-      },
+      account: createAccount(),
     });
     return runtime;
   }
@@ -612,24 +619,18 @@ describe("zalouser monitor group mention gating", () => {
 
   it("passes long markdown replies through once so formatting happens before chunking", async () => {
     const replyText = `**${"a".repeat(2501)}**`;
+    const statusSink = vi.fn();
     installRuntime({
       commandAuthorized: false,
       replyPayload: { text: replyText },
     });
 
     await processMessageThroughMonitor({
-      message: createDmMessage({
-        content: "hello",
-      }),
-      account: {
-        ...createAccount(),
-        config: {
-          ...createAccount().config,
-          dmPolicy: "open",
-        },
-      },
+      message: createDmMessage(),
+      account: createAccount(),
       config: createConfig(),
       runtime: createRuntimeEnv(),
+      statusSink,
     });
 
     expect(sendMessageZalouserMock).toHaveBeenCalledTimes(1);
@@ -639,7 +640,103 @@ describe("zalouser monitor group mention gating", () => {
       textMode: "markdown",
       textChunkMode: "length",
       textChunkLimit: 1200,
+      onDeliveryResult: expect.any(Function),
     });
+    expect(statusSink).toHaveBeenCalledWith({ lastOutboundAt: expect.any(Number) });
+  });
+
+  it.each([
+    {
+      name: "text block",
+      kind: "block" as const,
+      payload: { text: "reply" },
+    },
+    {
+      name: "first attachment tool",
+      kind: "tool" as const,
+      payload: { text: "caption", mediaUrls: ["https://a/1"] },
+    },
+    {
+      name: "later attachment block",
+      kind: "block" as const,
+      payload: {
+        text: "caption",
+        mediaUrls: ["https://a/1", "https://a/2", "https://a/3"],
+      },
+      partial: true,
+      successfulSends: 1,
+    },
+    {
+      name: "later text chunk block",
+      kind: "block" as const,
+      payload: { text: "reply" },
+      partial: true,
+    },
+  ])("reports $name delivery failures through the canonical dispatcher", async (testCase) => {
+    const failure = new Error(`${testCase.name} unavailable`);
+    if (testCase.partial) {
+      vi.mocked(sendMessageZalouser).mockImplementationOnce(async (_threadId, _text, options) => {
+        const result = {
+          ok: true,
+          messageId: "accepted-1",
+          receipt: createZalouserSendReceipt({ messageId: "accepted-1", threadId: "u-1" }),
+        };
+        await options?.onDeliveryResult?.(result);
+        if (!testCase.successfulSends) {
+          throw failure;
+        }
+        return result;
+      });
+    }
+    if (!testCase.partial || testCase.successfulSends) {
+      sendMessageZalouserMock.mockRejectedValueOnce(failure);
+    }
+    const runtime = { ...createRuntimeEnv(), error: vi.fn() };
+    const statusSink = vi.fn();
+    const { deliveryErrors } = installRuntime({
+      replyPayload: testCase.payload,
+      replyKind: testCase.kind,
+    });
+
+    await processMessageThroughMonitor({
+      message: createDmMessage(),
+      account: createAccount(),
+      config: createConfig(),
+      runtime,
+      statusSink,
+    });
+
+    expect(sendMessageZalouserMock).toHaveBeenCalledTimes((testCase.successfulSends ?? 0) + 1);
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      `[default] Zalouser ${testCase.kind} reply failed: Error: ${testCase.name} unavailable`,
+    );
+    expect(deliveryErrors).toHaveLength(1);
+    if (testCase.partial) {
+      expect(deliveryErrors[0]).toMatchObject({
+        cause: failure,
+        sentBeforeError: true,
+        deliveryResult: { messageIds: ["accepted-1"], visibleReplySent: true },
+      });
+      expect(statusSink).toHaveBeenCalledWith({ lastOutboundAt: expect.any(Number) });
+    } else {
+      expect(deliveryErrors[0]).toBe(failure);
+      expect(statusSink).not.toHaveBeenCalledWith({ lastOutboundAt: expect.any(Number) });
+    }
+    if (testCase.successfulSends) {
+      expect(sendMessageZalouserMock).toHaveBeenNthCalledWith(
+        1,
+        "u-1",
+        "caption",
+        expect.objectContaining({ mediaUrl: "https://a/1" }),
+      );
+      expect(sendMessageZalouserMock).toHaveBeenNthCalledWith(
+        2,
+        "u-1",
+        "",
+        expect.objectContaining({ mediaUrl: "https://a/2" }),
+      );
+    }
   });
 
   it("allows DM senders from static access groups", async () => {
@@ -878,16 +975,9 @@ describe("zalouser monitor group mention gating", () => {
     const { readAllowFromStore } = installRuntime({
       commandAuthorized: false,
     });
-    const account = createAccount();
     await processMessageThroughMonitor({
       message: createDmMessage({ content: "/new", commandContent: "/new" }),
-      account: {
-        ...account,
-        config: {
-          ...account.config,
-          dmPolicy: "open",
-        },
-      },
+      account: createAccount(),
       config: createConfig(),
       runtime: createRuntimeEnv(),
     });
@@ -899,16 +989,9 @@ describe("zalouser monitor group mention gating", () => {
     const { readAllowFromStore } = installRuntime({
       commandAuthorized: false,
     });
-    const account = createAccount();
     await processMessageThroughMonitor({
       message: createDmMessage({ content: "hello there" }),
-      account: {
-        ...account,
-        config: {
-          ...account.config,
-          dmPolicy: "open",
-        },
-      },
+      account: createAccount(),
       config: createConfig(),
       runtime: createRuntimeEnv(),
     });
@@ -961,7 +1044,6 @@ describe("zalouser monitor group mention gating", () => {
     ]);
     expect(firstDispatch?.ctx?.Body ?? "").toContain("first unmentioned line");
 
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
     const secondDispatch = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher, 1);
     expect(secondDispatch?.ctx?.InboundHistory).toStrictEqual([]);
   });

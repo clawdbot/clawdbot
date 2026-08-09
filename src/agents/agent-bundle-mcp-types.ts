@@ -5,8 +5,11 @@ import type {
   ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
+import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { McpCodexToolAnnotations } from "./mcp-codex-tool-approval.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 /** Materialized MCP tools plus diagnostics and cleanup handle for one run. */
@@ -41,6 +44,8 @@ export type McpServerCatalog = {
     include?: string[];
     exclude?: string[];
   };
+  deniedToolNames?: string[];
+  codexApprovalMode?: McpCodexToolApprovalMode;
 };
 
 /** MCP tool entry after server-name sanitization and schema normalization. */
@@ -54,6 +59,8 @@ export type McpCatalogTool = {
   fallbackDescription: string;
   uiResourceUri?: string;
   uiVisibility?: Array<"app" | "model">;
+  deniedBySession?: true;
+  codexAnnotations?: McpCodexToolAnnotations;
 };
 
 /** Complete tool catalog for a session-scoped MCP runtime. */
@@ -62,6 +69,8 @@ export type McpToolCatalog = {
   generatedAt: number;
   servers: Record<string, McpServerCatalog>;
   tools: McpCatalogTool[];
+  /** Listed tools hidden only by the session override, retained for read-only inventory. */
+  sessionDeniedTools?: McpCatalogTool[];
   diagnostics?: readonly McpToolCatalogDiagnostic[];
 };
 
@@ -138,6 +147,7 @@ export type SessionMcpRuntimeManager = {
     requesterSenderId?: string | null;
     agentAccountId?: string | null;
     messageChannel?: string | null;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }) => Promise<SessionMcpRuntime>;
   /**
    * Requester-scoped partition only — never creates static transports.
@@ -153,6 +163,7 @@ export type SessionMcpRuntimeManager = {
     requesterSenderId?: string | null;
     agentAccountId?: string | null;
     messageChannel?: string | null;
+    toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }) => Promise<SessionMcpRuntime | undefined>;
   /**
    * Session-stable advertised catalog for scoped servers. Used by shared-thread

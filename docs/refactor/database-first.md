@@ -183,7 +183,7 @@ without exceptions outside doctor/import/export/debug boundaries.
 - [x] Keep Kysely generated types aligned after any schema change.
       Files: `src/state/openclaw-state-schema.sql`,
       `src/state/openclaw-agent-schema.sql`,
-      `src/state/*generated*`.
+      `src/state/*-db.generated.d.ts`.
       Proof: no schema change in this pass; `pnpm db:kysely:check`;
       `pnpm lint:kysely`.
 - [x] Re-run focused tests for touched stores, commands, and scripts.
@@ -296,12 +296,12 @@ The branch already has a real shared SQLite base:
   macOS runtime locator, CI, and public install docs all agree.
 - `src/state/openclaw-state-db.ts` opens `openclaw.sqlite`, sets WAL,
   `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, and applies
-  the generated schema module derived from
+  the build-inlined schema bytes derived from
   `src/state/openclaw-state-schema.sql`.
-- Kysely table types and runtime schema modules are generated from disposable
-  SQLite databases created from the committed `.sql` files; runtime code no
-  longer keeps copy-pasted schema strings for global, per-agent, or proxy
-  capture databases.
+- Kysely table types are generated from disposable SQLite databases created
+  from the committed `.sql` files. Source runs read those canonical files;
+  packaged builds inline the same bytes, so runtime code keeps no committed
+  copy-pasted schema strings or packaged SQL assets.
 - Runtime stores derive selected and inserted row types from those generated
   Kysely `DB` interfaces instead of shadowing SQLite row shapes by hand. Raw SQL
   remains limited to schema application, pragmas, and migration-only DDL.
@@ -1065,9 +1065,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   of `crestodian/rescue-pending/*.json` or `openclaw/rescue-pending/*.json`.
   These short-lived security capabilities are never imported; doctor discards
   both retired directories so an upgrade cannot reactivate a stale write.
-- Phone Control temporary arm state now uses SQLite plugin state instead of
-  `plugins/phone-control/armed.json`. Doctor imports the legacy armed-state
-  file into the `phone-control/arm-state` namespace and removes the file.
+- The retired Phone Control lease state is no longer runtime state. Doctor
+  drops its SQLite plugin-state journal and archives the legacy
+  `plugins/phone-control/armed.json` source after canonical config cleanup.
 - Doctor no longer repairs JSONL transcripts in place or creates backup JSONL
   files. It imports the active branch into SQLite and removes the legacy source.
 - Session-memory hook transcript lookup uses `{agentId, sessionId}` scope-only

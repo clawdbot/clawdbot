@@ -1,14 +1,16 @@
 // Tests get-reply config override handling for a single inbound turn.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   buildGetReplyCtx,
   createGetReplySessionState,
   expectResolvedTelegramTimezone,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
-import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
+import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
@@ -16,12 +18,32 @@ const mocks = vi.hoisted(() => ({
 }));
 registerGetReplyRuntimeOverrides(mocks);
 
-let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let getReplyFromConfig: typeof import("../../plugin-sdk/reply-runtime.js").getReplyFromConfig;
 let loadConfigMock: typeof import("../../config/config.js").getRuntimeConfig;
 
 async function loadGetReplyRuntimeForTest() {
-  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ getReplyFromConfig } = await import("../../plugin-sdk/reply-runtime.js"));
   ({ getRuntimeConfig: loadConfigMock } = await import("../../config/config.js"));
+}
+
+function createPreparedDispatchRuntime(
+  overrides: Partial<PreparedReplyDispatchRuntime> = {},
+): PreparedReplyDispatchRuntime {
+  return Object.freeze({
+    agentId: "main",
+    agentDir: "/tmp/prepared-model-owner",
+    workspaceDir: "/tmp/prepared-model-workspace",
+    config: {
+      channels: { telegram: { botToken: "resolved-telegram-token" } },
+      agents: {
+        defaults: { userTimezone: "America/New_York" },
+        list: [{ id: "main", default: true }],
+      },
+    },
+    modelCatalog: { entries: [], routeVariants: [] },
+    inboundPluginRegistry: createEmptyPluginRegistry(),
+    ...overrides,
+  });
 }
 
 describe("getReplyFromConfig configOverride", () => {
@@ -72,7 +94,8 @@ describe("getReplyFromConfig configOverride", () => {
       throw new Error("getRuntimeConfig should not be called for complete runtime config");
     });
 
-    await getReplyFromConfig(
+    const conflictingRuntime = createPreparedDispatchRuntime();
+    await bindPreparedReplyDispatchRuntime(conflictingRuntime, getReplyFromConfig)(
       buildGetReplyCtx(),
       undefined,
       withFullRuntimeReplyConfig({
@@ -91,6 +114,43 @@ describe("getReplyFromConfig configOverride", () => {
 
     expect(loadConfigMock).not.toHaveBeenCalled();
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: expect.not.stringMatching(/prepared-model-owner/),
+        preparedModelCatalog: undefined,
+      }),
+    );
+  });
+
+  it("uses one request-scoped prepared runtime through the raw Plugin SDK resolver", async () => {
+    const preparedRuntime = createPreparedDispatchRuntime();
+    vi.mocked(loadConfigMock).mockImplementation(() => {
+      throw new Error("getRuntimeConfig should not be called for a prepared Gateway dispatch");
+    });
+
+    await bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(buildGetReplyCtx());
+
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        agentDir: "/tmp/prepared-model-owner",
+        workspaceDir: "/tmp/prepared-model-workspace",
+        preparedModelCatalog: preparedRuntime.modelCatalog,
+      }),
+    );
+  });
+
+  it("rejects a prepared dispatch runtime that crosses the admitted session agent", async () => {
+    const preparedRuntime = createPreparedDispatchRuntime({
+      agentId: "worker",
+      config: { agents: { list: [{ id: "worker", default: true }] } },
+    });
+
+    await expect(
+      bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(buildGetReplyCtx()),
+    ).rejects.toThrow("reply model catalog owner changed from main to worker");
   });
 
   it("marks a frozen complete config without changing its identity or own keys", async () => {
