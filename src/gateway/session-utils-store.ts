@@ -11,6 +11,7 @@ import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metada
 import {
   listAgentEntries,
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
@@ -397,6 +398,7 @@ export function listAgentsForGateway(
       thinkingRuntime,
     );
     const workspace = resolveAgentWorkspaceDir(cfg, id);
+    const newSessionFolder = resolveAgentConfig(cfg, id)?.newSessionFolder ?? "last-used";
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
     // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
     const workspaceGit = insideGitCheckout(workspace);
@@ -408,6 +410,7 @@ export function listAgentsForGateway(
         identity: meta?.identity,
         workspace,
         workspaceGit,
+        newSessionFolder,
         agentRuntime,
         thinkingLevels,
         thinkingOptions: thinkingLevels.map((level) => level.label),

@@ -81,6 +81,7 @@ export const AgentDefaultsSchema = z
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
     workspace: z.string().optional(),
+    newSessionFolder: z.union([z.literal("workspace"), z.literal("last-used")]).optional(),
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
     repoRoot: z.string().optional(),

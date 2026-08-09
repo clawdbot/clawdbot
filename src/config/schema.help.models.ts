@@ -157,6 +157,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
+  "agents.defaults.newSessionFolder":
+    'Control UI new-session folder behavior: "last-used" (default) remembers the folder last picked in the Place picker, "workspace" always pre-selects the agent workspace.',
   "agents.defaults.skipOptionalBootstrapFiles":
     "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, IDENTITY.md (HEARTBEAT.md is accepted but a no-op).",
   "agents.defaults.contextInjection":

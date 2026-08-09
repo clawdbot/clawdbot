@@ -37,6 +37,19 @@ Optional repository root shown in the system prompt's Runtime line. If unset, Op
 }
 ```
 
+### `agents.defaults.newSessionFolder`
+
+Control UI new-session folder behavior. `"last-used"` (default) pre-selects the
+folder last picked in the Place picker; `"workspace"` always pre-selects the
+agent workspace (the `agents.defaults.workspace` value). Picking a different
+folder for a single session still works in either mode.
+
+```json5
+{
+  agents: { defaults: { newSessionFolder: "workspace" } },
+}
+```
+
 ### `agents.defaults.skills`
 
 Optional default skill allowlist for agents that do not set

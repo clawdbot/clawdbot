@@ -47,6 +47,7 @@ export type GatewayAgentRow = {
   identity?: GatewayAgentIdentity;
   workspace?: string;
   workspaceGit?: boolean;
+  newSessionFolder?: "workspace" | "last-used";
   model?: GatewayAgentModel;
   agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];

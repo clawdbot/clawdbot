@@ -160,6 +160,12 @@ export type AgentDefaultsConfig = {
   silentReply?: SilentReplyPolicyShape;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
+  /**
+   * Control UI new-session folder behavior: "last-used" (default) remembers the
+   * folder last picked in the Place picker; "workspace" always defaults new
+   * sessions to the agent workspace.
+   */
+  newSessionFolder?: "workspace" | "last-used";
   /** Provider-independent prompt overlays applied by model family. */
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;

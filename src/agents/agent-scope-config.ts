@@ -35,6 +35,7 @@ export type ResolvedAgentConfig = {
   utilityModel?: AgentEntry["utilityModel"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
+  newSessionFolder?: AgentDefaultsConfig["newSessionFolder"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
   contextTokens?: AgentEntry["contextTokens"];
@@ -215,6 +216,7 @@ export function resolveAgentConfig(
     ...(hasExplicitModelPolicyAllow(entry.modelPolicy) ? { modelPolicy: entry.modelPolicy } : {}),
     ...(entry.agentRuntime ? { agentRuntime: entry.agentRuntime } : {}),
     utilityModel: readStringValue(entry.utilityModel),
+    newSessionFolder: agentDefaults?.newSessionFolder,
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,

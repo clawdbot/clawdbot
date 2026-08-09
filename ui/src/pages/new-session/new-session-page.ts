@@ -625,6 +625,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     // shows its staged repo; neither may be replaced by a workspace refresh.
     if (!this.execNode && !keepSelectedFolder && !this.pendingCloud.sessionKey) {
       const workspace = this.workspacePath();
+      // "workspace" mode pins the new-session folder to the agent workspace;
+      // "last-used" (default) restores the folder last picked in the Place picker.
+      const restoreLastUsed =
+        (this.selectedAgent()?.newSessionFolder ?? "last-used") === "last-used";
       const storedFolder = preference?.folder ?? "";
       // An old agent workspace path is not a custom folder. If the configured
       // workspace moved, use the current value instead of reviving the stale path.
@@ -635,12 +639,13 @@ class NewSessionPage extends OpenClawLightDomElement {
       // Only an admin can browse outside the workspace, so any other stored
       // folder is unreachable for this viewer.
       const storedFolderUsable =
+        restoreLastUsed &&
         Boolean(storedFolder) &&
         !storedWorkspaceMoved &&
         (storedFolder === workspace || this.isAdmin());
       this.folder = storedFolderUsable ? storedFolder : workspace;
       this.folderSelectedByUser = false;
-      this.preferredWorktreeRestore = preference?.worktree === true;
+      this.preferredWorktreeRestore = restoreLastUsed && preference?.worktree === true;
       this.worktreeSelectedByUser = false;
       if (storedWorkspaceMoved) {
         this.persistPreference({ folder: workspace });
