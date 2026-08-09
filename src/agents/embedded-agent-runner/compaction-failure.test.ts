@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyCompactionResultForModelFallback,
   compactionFailureFromFailoverReason,
-  failoverReasonFromCompactionFailure,
   hasCompactionFailureDisposition,
   isStructuredCompactionFailure,
   terminalCompactionFailure,
@@ -15,7 +15,14 @@ describe("compaction failure policy", () => {
 
       expect(failure).toEqual({ disposition: "retryable", reason, status: 429 });
       expect(isStructuredCompactionFailure(failure)).toBe(true);
-      expect(failoverReasonFromCompactionFailure(failure)).toBe(reason);
+      expect(
+        classifyCompactionResultForModelFallback({
+          ok: false,
+          compacted: false,
+          reason: "failed",
+          failure,
+        }),
+      ).toMatchObject({ reason });
     },
   );
 
@@ -36,7 +43,14 @@ describe("compaction failure policy", () => {
 
     expect(failure).toEqual({ disposition: "terminal", reason, status: 401 });
     expect(isStructuredCompactionFailure(failure)).toBe(true);
-    expect(failoverReasonFromCompactionFailure(failure)).toBe(reason);
+    expect(
+      classifyCompactionResultForModelFallback({
+        ok: false,
+        compacted: false,
+        reason: "failed",
+        failure,
+      }),
+    ).toMatchObject({ reason });
   });
 
   it("fails closed for missing or unsupported failure identities", () => {
@@ -55,7 +69,14 @@ describe("compaction failure policy", () => {
 
       expect(failure).toEqual({ disposition: "fallback", reason });
       expect(isStructuredCompactionFailure(failure)).toBe(true);
-      expect(failoverReasonFromCompactionFailure(failure)).toBe("unknown");
+      expect(
+        classifyCompactionResultForModelFallback({
+          ok: false,
+          compacted: false,
+          reason: "failed",
+          failure,
+        }),
+      ).toBeNull();
     },
   );
 
@@ -107,6 +128,13 @@ describe("compaction failure policy", () => {
     const failure = terminalCompactionFailure("summary_rejected");
 
     expect(isStructuredCompactionFailure(failure)).toBe(true);
-    expect(failoverReasonFromCompactionFailure(failure)).toBe("unknown");
+    expect(
+      classifyCompactionResultForModelFallback({
+        ok: false,
+        compacted: false,
+        reason: "failed",
+        failure,
+      }),
+    ).toMatchObject({ reason: "unknown" });
   });
 });

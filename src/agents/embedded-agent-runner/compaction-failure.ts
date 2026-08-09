@@ -159,7 +159,7 @@ export function compactionFailureFromFailoverReason(
   return terminalCompactionFailure("unknown", status);
 }
 
-export function failoverReasonFromCompactionFailure(failure: CompactionFailure): FailoverReason {
+function failoverReasonFromCompactionFailure(failure: CompactionFailure): FailoverReason {
   return RETRYABLE_REASONS.has(failure.reason as RetryableCompactionFailureReason) ||
     TERMINAL_FAILOVER_REASONS.has(failure.reason as TerminalCompactionFailureReason)
     ? (failure.reason as FailoverReason)
