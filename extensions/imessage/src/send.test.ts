@@ -1793,6 +1793,63 @@ describe("sendMessageIMessage receipts", () => {
     );
   });
 
+  it("resolves service-qualified remote media through the canonical send RPC", async () => {
+    const client = createClient({
+      guid: "p:0/remote-resolved-media",
+      chat_guid: "any;-;+15550004567",
+      service: "iMessage",
+    });
+    const createClientForAccount = vi.fn(async () => client);
+    const withRemoteFile = vi.fn(
+      async (params: { use: (remotePath: string) => Promise<Record<string, unknown>> }) =>
+        await params.use("/tmp/openclaw-imessage-safe/photo.png"),
+    );
+
+    const result = await sendMessageIMessage("imessage:+15550004567", "", {
+      config: {
+        channels: {
+          imessage: {
+            accounts: {
+              default: {
+                remoteHost: "work@messages-b",
+              },
+            },
+          },
+        },
+      },
+      mediaUrl: "/gateway/photo.png",
+      resolveAttachmentImpl: async () => ({ path: "/gateway/photo.png" }),
+      createClient: createClientForAccount,
+      withRemoteFile: withRemoteFile as never,
+    });
+
+    expect(withRemoteFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remoteHost: "work@messages-b",
+        localPath: "/gateway/photo.png",
+      }),
+    );
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        to: "+15550004567",
+        file: "/tmp/openclaw-imessage-safe/photo.png",
+        service: "imessage",
+      }),
+      expect.any(Object),
+    );
+    expect(getClientMocks(client).request).not.toHaveBeenCalledWith(
+      "send.attachment",
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(result).toMatchObject({
+      messageId: "p:0/remote-resolved-media",
+      chatGuid: "any;-;+15550004567",
+      service: "imessage",
+    });
+  });
+
   it("auto-detects a wrapper-only remote account for raw db paths and media staging", async () => {
     const cliPath = createOutboundMediaFile(
       "imsg-legacy-ssh",
@@ -2503,10 +2560,14 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("preserves explicit SMS service for bare-handle media sends", async () => {
-    const client = createClient({ message_id: 12345 });
-    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/sms-media-guid" });
+    const client = createClient({
+      guid: "p:0/sms-media-guid",
+      chat_guid: "SMS;-;+15550004567",
+      service: "SMS",
+    });
+    const runCliJson = vi.fn();
 
-    await sendMessageIMessage("+15550004567", "", {
+    const result = await sendMessageIMessage("+15550004567", "", {
       config: IMESSAGE_TEST_CFG,
       client,
       service: "sms",
@@ -2515,23 +2576,38 @@ describe("sendMessageIMessage receipts", () => {
       runCliJson,
     });
 
-    expect(runCliJson.mock.calls[0]?.[0]).toEqual([
-      "send-attachment",
-      "--chat",
-      "SMS;-;+15550004567",
-      "--file",
-      "/tmp/image.png",
-      "--transport",
-      "auto",
-    ]);
-    expect(getClientMocks(client).request).not.toHaveBeenCalled();
+    expect(runCliJson).not.toHaveBeenCalled();
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        to: "+15550004567",
+        file: "/tmp/image.png",
+        service: "sms",
+      }),
+      expect.any(Object),
+    );
+    expect(result).toMatchObject({
+      messageId: "p:0/sms-media-guid",
+      chatGuid: "SMS;-;+15550004567",
+      service: "sms",
+    });
+    expect(
+      findLatestIMessageEntryForChat({
+        accountId: "default",
+        chatGuid: "SMS;-;+15550004567",
+      }),
+    ).toEqual(expect.objectContaining({ messageId: "p:0/sms-media-guid", isFromMe: true }));
   });
 
   it("preserves configured iMessage service for bare-handle media sends", async () => {
-    const client = createClient({ message_id: 12345 });
-    const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/imessage-media-guid" });
+    const client = createClient({
+      guid: "p:0/imessage-media-guid",
+      chat_guid: "any;-;+15550004567",
+      service: "iMessage",
+    });
+    const runCliJson = vi.fn();
 
-    await sendMessageIMessage("+15550004567", "", {
+    const result = await sendMessageIMessage("+15550004567", "", {
       config: {
         channels: {
           imessage: {
@@ -2549,14 +2625,55 @@ describe("sendMessageIMessage receipts", () => {
       runCliJson,
     });
 
-    expect(runCliJson.mock.calls[0]?.[0]).toEqual([
+    expect(runCliJson).not.toHaveBeenCalled();
+    expect(getClientMocks(client).request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        to: "+15550004567",
+        file: "/tmp/image.png",
+        service: "imessage",
+      }),
+      expect.any(Object),
+    );
+    expect(result).toMatchObject({
+      messageId: "p:0/imessage-media-guid",
+      chatGuid: "any;-;+15550004567",
+      service: "imessage",
+    });
+    expect(
+      findLatestIMessageEntryForChat({
+        accountId: "default",
+        chatIdentifier: "iMessage;-;+15550004567",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        messageId: "p:0/imessage-media-guid",
+        chatGuid: "any;-;+15550004567",
+        isFromMe: true,
+      }),
+    );
+  });
+
+  it("preserves explicit bridge delivery for a new service-qualified media chat", async () => {
+    const client = createClient({ guid: "should-not-send" });
+    const runCliJson = vi.fn().mockResolvedValueOnce({ messageGuid: "p:0/bridge-media-guid" });
+
+    await sendMessageIMessage("imessage:+15550004567", "", {
+      config: { channels: { imessage: { sendTransport: "bridge" } } },
+      client,
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      runCliJson,
+    });
+
+    expect(runCliJson).toHaveBeenCalledWith([
       "send-attachment",
       "--chat",
       "iMessage;-;+15550004567",
       "--file",
       "/tmp/image.png",
       "--transport",
-      "auto",
+      "dylib",
     ]);
     expect(getClientMocks(client).request).not.toHaveBeenCalled();
   });
@@ -2648,9 +2765,13 @@ describe("sendMessageIMessage receipts", () => {
     expect(fs.readdirSync(openClawState.statePath("media", "outbound"))).toHaveLength(1);
   });
 
-  it("sends DM handle media captions as attachment plus follow-up text", async () => {
-    const client = createClient({ guid: "p:0/caption-guid" });
-    const runCliJson = vi.fn().mockResolvedValueOnce({ messageGuid: "p:0/dm-media-guid" });
+  it("sends service-qualified DM media and its caption through the resolved RPC chat", async () => {
+    const client = createClient({
+      guid: "p:0/caption-guid",
+      chat_guid: "any;-;+15550004567",
+      service: "iMessage",
+    });
+    const runCliJson = vi.fn();
     const onDeliveryResult = vi.fn();
 
     const result = await sendMessageIMessage("imessage:+15550004567", "caption", {
@@ -2662,39 +2783,30 @@ describe("sendMessageIMessage receipts", () => {
       onDeliveryResult,
     });
 
-    expect(runCliJson).toHaveBeenCalledTimes(1);
-    const captionAttachmentArgs = runCliJson.mock.calls[0]?.[0] as string[];
-    expect(captionAttachmentArgs[0]).toBe("send-attachment");
-    expect(captionAttachmentArgs[1]).toBe("--chat");
-    expect(captionAttachmentArgs[2]).toBe("iMessage;-;+15550004567");
-    expect(captionAttachmentArgs.slice(3)).toEqual([
-      "--file",
-      "/tmp/image.png",
-      "--transport",
-      "auto",
-    ]);
+    expect(runCliJson).not.toHaveBeenCalled();
     expect(getClientMocks(client).request).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({
         to: "+15550004567",
         text: "caption",
+        file: "/tmp/image.png",
+        service: "imessage",
       }),
       expect.any(Object),
     );
-    expect(result.sentText).toBe("caption");
-    expect(result.receipt.platformMessageIds).toEqual(["p:0/dm-media-guid", "p:0/caption-guid"]);
-    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media", "text"]);
-    expect(onDeliveryResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageId: "p:0/dm-media-guid",
-        messageIds: ["p:0/dm-media-guid"],
-        receipt: expect.objectContaining({ platformMessageIds: ["p:0/dm-media-guid"] }),
-      }),
-    );
+    expect(result).toMatchObject({
+      messageId: "p:0/caption-guid",
+      sentText: "caption",
+      chatGuid: "any;-;+15550004567",
+      service: "imessage",
+    });
+    expect(result.receipt.platformMessageIds).toEqual(["p:0/caption-guid"]);
+    expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media"]);
+    expect(onDeliveryResult).not.toHaveBeenCalled();
     expect(
       hasPersistedIMessageEcho({
         scope: "default:imessage:+15550004567",
-        messageId: "p:0/dm-media-guid",
+        messageId: "p:0/caption-guid",
       }),
     ).toBe(true);
   });
@@ -2707,7 +2819,7 @@ describe("sendMessageIMessage receipts", () => {
 
     let observedError: unknown;
     try {
-      await sendMessageIMessage("imessage:+15550004567", "caption", {
+      await sendMessageIMessage("+15550004567", "caption", {
         config: IMESSAGE_TEST_CFG,
         client,
         mediaUrl: "/tmp/image.png",
@@ -2764,7 +2876,7 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     await expect(
-      sendMessageIMessage("imessage:+15550004567", "caption", {
+      sendMessageIMessage("+15550004567", "caption", {
         config: IMESSAGE_TEST_CFG,
         client,
         mediaUrl: "/tmp/image.png",
