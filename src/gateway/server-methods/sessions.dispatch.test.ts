@@ -55,6 +55,7 @@ function failedPlacementRecord(): WorkerSessionPlacementRecord {
     ...reclaimedPlacementRecord(),
     state: "failed",
     recoveryError: "gateway restarted during worker dispatch",
+    turnClaim: null,
   };
 }
 
