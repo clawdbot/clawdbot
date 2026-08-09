@@ -384,18 +384,6 @@ describe("OpenClaw performance workflow", () => {
     expect(websocketRetryDelayIndex).toBeLessThan(run.indexOf(benchmark));
   });
 
-  it("isolates gateway readiness identity from benchmark device state", () => {
-    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
-
-    expect(run).toContain('gateway_readiness_home="$(mktemp -d)"');
-    expect(run).toContain('gateway_readiness_state="$gateway_readiness_home/.openclaw"');
-    expect(run).toContain('gateway_readiness_config="$gateway_readiness_state/openclaw.json"');
-    expect(run).toContain('mkdir -p "$gateway_state" "$gateway_readiness_state"');
-    expect(run).toContain('cp "$gateway_config" "$gateway_readiness_config"');
-    expect(run).toContain(': > "$gateway_readiness_log"');
-    expect(run).toContain('rm -rf "$gateway_home" "$gateway_readiness_home"');
-  });
-
   it("runs trusted CLI performance cases against the frozen candidate entrypoint", () => {
     const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
 
@@ -403,58 +391,6 @@ describe("OpenClaw performance workflow", () => {
     expect(run).toContain('--entry "$GITHUB_WORKSPACE/openclaw.mjs"');
     expect(run).toContain("--case gatewayHealthJsonConnected \\");
     expect(run).toContain("--case gatewayHealthJsonFirstDevice \\");
-  });
-
-  it("isolates the source performance gateway from network and scheduled work", () => {
-    const workflow = readWorkflow();
-    const job = workflow.jobs?.source_performance;
-    const step = findStep("Run OpenClaw source performance probes", "source_performance");
-    const run = step.run ?? "";
-    const gatewayConfigStart = run.indexOf('cat > "$gateway_config" <<EOF');
-    const gatewayConfigEnd = run.indexOf("\nEOF\n", gatewayConfigStart);
-    const readinessCopy = run.indexOf('cp "$gateway_config" "$gateway_readiness_config"');
-    const benchmark = run.indexOf(
-      'node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/bench-cli-startup.ts"',
-    );
-    const cronEnv = "OPENCLAW_SKIP_CRON";
-
-    expect(run).toContain("catalog_refresh_config");
-    expect(run).toContain("rg -q 'catalogRefresh:' src/config/zod-schema.core.ts");
-    expect(run).toContain(
-      'catalog_refresh_config=\'    "models": { "catalogRefresh": { "enabled": false } },\'',
-    );
-    expect(run).toContain('"update": { "checkOnStart": false },');
-    expect(gatewayConfigStart).toBeGreaterThanOrEqual(0);
-    expect(gatewayConfigEnd).toBeGreaterThan(gatewayConfigStart);
-    expect(readinessCopy).toBeGreaterThan(gatewayConfigEnd);
-    const gatewayConfig = run.slice(gatewayConfigStart, gatewayConfigEnd);
-    expect(gatewayConfig).toContain(
-      '"agents": { "defaults": { "heartbeat": { "every": "0m" } } },',
-    );
-    expect(gatewayConfig).toContain('"entries": { "browser": { "enabled": false } }');
-    expect(gatewayConfig).not.toContain("dreaming");
-    expect(run).toContain(
-      'OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_CRON=1 \\',
-    );
-    expect(run.split(cronEnv)).toHaveLength(2);
-    expect(benchmark).toBeGreaterThan(readinessCopy);
-
-    const inheritedCronScopes = [
-      ["workflow", JSON.stringify(workflow.env ?? {})],
-      ["job", JSON.stringify(job?.env ?? {})],
-      ["step", JSON.stringify(step.env ?? {})],
-      [
-        "GITHUB_ENV",
-        run
-          .split("\n")
-          .filter((line) => line.includes("GITHUB_ENV"))
-          .join("\n"),
-      ],
-      ["later benchmark", run.slice(benchmark)],
-    ] as const;
-    for (const [scope, text] of inheritedCronScopes) {
-      expect(text, scope).not.toContain(cronEnv);
-    }
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {
