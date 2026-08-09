@@ -94,6 +94,9 @@ importers:
       '@openclaw/proxyline':
         specifier: 0.3.4
         version: 0.3.4(undici@8.9.0)
+      '@openclaw/session-url-contract':
+        specifier: workspace:*
+        version: link:packages/session-url-contract
       '@silvia-odwyer/photon-node':
         specifier: 0.3.4
         version: 0.3.4
