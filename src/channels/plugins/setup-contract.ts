@@ -163,56 +163,9 @@ export function resolveChannelSetupExecutionAdapter(plugin: {
   setupContract?: ChannelOwnedSetupContract;
   setup?: ChannelOwnedSetupAdapterShape<ChannelSetupInput>;
 }): ChannelSetupExecutionAdapter | undefined {
-  if (plugin.setupContract) {
-    return plugin.setupContract;
-  }
-  const legacy = plugin.setup;
-  if (!legacy) {
-    return undefined;
-  }
-  const legacyInput = (input: unknown): ChannelSetupInput => input as ChannelSetupInput;
-  const prepareAccountConfigInput = legacy.prepareAccountConfigInput;
-  return {
-    ...(legacy.resolveAccountId
-      ? {
-          resolveAccountId: (params) =>
-            legacy.resolveAccountId?.({ ...params, input: legacyInput(params.input) }) ??
-            params.accountId ??
-            "default",
-        }
-      : {}),
-    ...(prepareAccountConfigInput
-      ? {
-          prepareAccountConfigInput: (params) =>
-            prepareAccountConfigInput({
-              ...params,
-              input: legacyInput(params.input),
-            }),
-        }
-      : {}),
-    resolveBindingAccountId: legacy.resolveBindingAccountId,
-    applyAccountName: legacy.applyAccountName,
-    applyAccountConfig: (params) =>
-      legacy.applyAccountConfig({ ...params, input: legacyInput(params.input) }),
-    ...(legacy.afterAccountConfigWritten
-      ? {
-          afterAccountConfigWritten: (params) =>
-            legacy.afterAccountConfigWritten?.({
-              ...params,
-              input: legacyInput(params.input),
-            }),
-        }
-      : {}),
-    ...(legacy.validateInput
-      ? {
-          validateInput: (params) =>
-            legacy.validateInput?.({ ...params, input: legacyInput(params.input) }) ?? null,
-        }
-      : {}),
-    singleAccountKeysToMove: legacy.singleAccountKeysToMove,
-    namedAccountPromotionKeys: legacy.namedAccountPromotionKeys,
-    resolveSingleAccountPromotionTarget: legacy.resolveSingleAccountPromotionTarget,
-  };
+  // Legacy callbacks receive the same caller-prepared object as owned contracts;
+  // retain their published shape without allocating a parallel wrapper chain.
+  return plugin.setupContract ?? (plugin.setup as ChannelSetupExecutionAdapter | undefined);
 }
 
 function parseStringList(value: unknown): string[] | undefined {

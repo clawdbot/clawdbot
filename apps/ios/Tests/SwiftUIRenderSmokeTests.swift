@@ -270,8 +270,9 @@ struct SwiftUIRenderSmokeTests {
                 onToggleUserMessageExpanded: {},
                 inlineWidgetResolverReady: true,
                 inlineWidgetResourceResolver: { _, _ in nil },
-                imageArtifactResolverReady: false,
-                loadImageArtifact: { _ in nil })
+                mediaArtifactResolverReady: false,
+                mediaPlaybackAllowed: { true },
+                loadMediaArtifact: { _, _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 420))
@@ -309,13 +310,16 @@ struct SwiftUIRenderSmokeTests {
             onToggleUserMessageExpanded: {},
             inlineWidgetResolverReady: true,
             inlineWidgetResourceResolver: { _, _ in nil },
-            imageArtifactResolverReady: true,
-            loadImageArtifact: { requested in
+            mediaArtifactResolverReady: true,
+            mediaPlaybackAllowed: { true },
+            loadMediaArtifact: { requested, kind, _ in
                 requestedArtifactId = requested
-                return OpenClawChatLoadedImage(
+                #expect(kind == .image)
+                return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
                     data: Data(base64Encoded:
-                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=")!,
-                    mimeType: "image/png")
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A" +
+                            "AusB9Y9Zl1sAAAAASUVORK5CYII=")!,
+                    mimeType: "image/png"))
             })
         let window = Self.host(root, size: CGSize(width: 393, height: 420))
         defer { window.isHidden = true }
@@ -389,8 +393,9 @@ struct SwiftUIRenderSmokeTests {
                     onToggleUserMessageExpanded: {},
                     inlineWidgetResolverReady: true,
                     inlineWidgetResourceResolver: { _, _ in nil },
-                    imageArtifactResolverReady: false,
-                    loadImageArtifact: { _ in nil })
+                    mediaArtifactResolverReady: false,
+                    mediaPlaybackAllowed: { true },
+                    loadMediaArtifact: { _, _, _ in nil })
                 ChatStreamingAssistantBubble(
                     text: text,
                     markdownVariant: .standard,
@@ -445,8 +450,9 @@ struct SwiftUIRenderSmokeTests {
                 onToggleUserMessageExpanded: {},
                 inlineWidgetResolverReady: true,
                 inlineWidgetResourceResolver: { _, _ in nil },
-                imageArtifactResolverReady: false,
-                loadImageArtifact: { _ in nil })
+                mediaArtifactResolverReady: false,
+                mediaPlaybackAllowed: { true },
+                loadMediaArtifact: { _, _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 280))
@@ -496,7 +502,6 @@ struct SwiftUIRenderSmokeTests {
     @Test @MainActor func `onboarding activation screens build across appearance and type size`() {
         let screens: [AnyView] = [
             AnyView(OnboardingIntroStep(onContinue: {})),
-            AnyView(OnboardingPermissionsStep(onContinue: {})),
             AnyView(OnboardingWelcomeStep(
                 statusLine: "",
                 isConnecting: false,
@@ -615,7 +620,7 @@ struct SwiftUIRenderSmokeTests {
 
     @Test @MainActor func `root prompt alert stack still presents deep link prompt`() async throws {
         let appModel = NodeAppModel()
-        appModel._test_setGatewayConnected(true)
+        appModel.gatewayConnected = true
         let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
         let root = Color.clear
             .gatewayTrustPromptAlert()

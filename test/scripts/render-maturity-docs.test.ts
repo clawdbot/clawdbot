@@ -112,7 +112,7 @@ function writeQaEvidence(params: {
   );
 }
 
-function allProfileScorecardFixture() {
+function allProfileScorecardFixture(evidenceEntryCount = 1) {
   const taxonomy = parseYaml(
     fs.readFileSync(path.join(repoRoot, "taxonomy.yaml"), "utf8"),
   ) as TaxonomyFixture;
@@ -155,7 +155,7 @@ function allProfileScorecardFixture() {
   );
   return {
     filters: { surface: null, category: null },
-    run: { evidenceEntryCount: 1 },
+    run: { evidenceEntryCount },
     categories: {
       total: categoryReports.length,
       fulfilled: 0,
@@ -237,6 +237,35 @@ describe("maturity docs renderer CLI", () => {
     expect(result.stderr).toContain("maturity docs require passing QA evidence");
     expect(result.stderr).toContain("failing-scenario (fail)");
     expect(result.stderr).toContain("blocked-scenario (blocked)");
+  });
+
+  it("allows incomplete evidence without awarding Coverage to non-passing checks", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [
+        { id: "failing-scenario", status: "fail" },
+        { id: "blocked-scenario", status: "blocked" },
+        { id: "skipped-scenario", status: "skipped" },
+      ],
+      scorecard: allProfileScorecardFixture(3),
+    });
+
+    const result = runCli(
+      "--output-dir",
+      outputDir,
+      "--evidence-dir",
+      evidenceDir,
+      "--allow-failures",
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
+    expect(scorecard).not.toContain("Incomplete QA evidence accepted.");
+    expect(scorecard).toContain("Coverage Experimental - 0%");
+    expect(scorecard).toContain("0 passed, 1 failed, 1 blocked, 1 skipped");
   });
 
   it("renders passing evidence without impossible failed or blocked result counts", () => {

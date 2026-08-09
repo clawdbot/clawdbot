@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -13,9 +14,14 @@ import {
 } from "../config/sessions/transcript.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { persistUserTurnTranscript } from "../sessions/user-turn-transcript.test-support.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-profiles.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import { SSE_CONTENT_TYPE } from "./http-common.js";
+import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
@@ -32,6 +38,7 @@ installGatewayTestHooks();
 const AUTH_HEADER = { Authorization: "Bearer test-gateway-token-1234567890" };
 const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const cleanupDirs: string[] = [];
+const requireRecord = createRequireRecord("object", "expected-label");
 
 afterEach(async () => {
   testState.sessionConfig = undefined;
@@ -300,12 +307,39 @@ async function readSessionHistoryBody(
   return (await res.json()) as SessionHistoryBody;
 }
 
-async function expectSessionHistoryText(params: { sessionKey: string; expectedText: string }) {
-  await withGatewayHarness(async (harness) => {
-    const body = await readSessionHistoryBody(harness.port, params.sessionKey);
-    expect(body.sessionKey).toBe(params.sessionKey);
-    expect(body.messages?.[0]?.content?.[0]?.text).toBe(params.expectedText);
-  });
+function attributedHistoryMessageProjection(value: unknown) {
+  const message = requireRecord(value, "attributed history message");
+  const metadata = requireRecord(message["__openclaw"], "attributed history metadata");
+  return {
+    role: message.role,
+    content: message.content,
+    __openclaw: {
+      id: metadata.id,
+      seq: metadata.seq,
+      senderId: metadata.senderId,
+      senderName: metadata.senderName,
+      senderUsername: metadata.senderUsername,
+      senderProfileAvatarUrl: metadata.senderProfileAvatarUrl,
+    },
+  };
+}
+
+function withMockedDateNow<T>(now: number, run: () => T): T {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    return run();
+  } finally {
+    clock.mockRestore();
+  }
+}
+
+function currentProfileAvatarUrl(profileId: string): string {
+  const display = resolveCurrentUserProfileDisplay(profileId);
+  expect(display.kind).toBe("resolved");
+  if (display.kind !== "resolved") {
+    throw new Error("expected a resolved current profile display");
+  }
+  return display.avatarUrl;
 }
 
 async function readSseEvent(
@@ -450,7 +484,203 @@ async function openBoundedHistoryStreamWithSecondMessage(
   return stream;
 }
 
+describe("session history Accept parsing", () => {
+  test.each([
+    { accept: undefined, expected: false, name: "missing field" },
+    { accept: "", expected: false, name: "empty field" },
+    { accept: "application/json", expected: false, name: "JSON only" },
+    { accept: "text/event-stream", expected: true, name: "exact media type" },
+    { accept: "TEXT/EVENT-STREAM", expected: true, name: "case-insensitive media type" },
+    { accept: "  text/event-stream  ", expected: true, name: "optional whitespace" },
+    { accept: "text/event-stream;", expected: true, name: "omitted trailing parameter" },
+    {
+      accept: "text/event-stream; ; q=0.5;",
+      expected: true,
+      name: "omitted parameter slots",
+    },
+    {
+      accept: "text/event-stream; charset=utf-8",
+      expected: true,
+      name: "media parameter",
+    },
+    {
+      accept: 'text/event-stream; note="quoted,comma;semicolon\\\"quote"; q=0.5',
+      expected: false,
+      name: "quoted and escaped unmatched parameter delimiters",
+    },
+    {
+      accept: 'text/event-stream; profile="quoted,comma;semicolon\\\"quote"; q=0.5',
+      expected: true,
+      name: "quoted and escaped matching parameter delimiters",
+      representation: 'text/event-stream; profile="quoted,comma;semicolon\\\"quote"',
+    },
+    {
+      accept: 'text/event-stream; profile="https://example.test/profile"',
+      expected: false,
+      name: "case-sensitive parameter mismatch",
+      representation: 'text/event-stream; profile="https://example.test/Profile"',
+    },
+    {
+      accept: "text/event-stream; charset=UTF-8",
+      expected: true,
+      name: "case-insensitive charset parameter",
+    },
+    { accept: "text/event-stream;q=0.001", expected: true, name: "minimum positive qvalue" },
+    { accept: "text/event-stream;Q=1.000", expected: true, name: "maximum qvalue" },
+    {
+      accept: "application/json, text/event-stream;q=0.5",
+      expected: true,
+      name: "explicit media range in a list",
+    },
+    {
+      accept: "text/event-stream;q=0, text/event-stream;q=0.5",
+      expected: true,
+      name: "duplicate exact ranges with a positive quality",
+    },
+    {
+      accept: "text/event-stream;q=1, text/event-stream;charset=utf-8;q=0",
+      expected: false,
+      name: "more-specific matching parameter rejection",
+    },
+    {
+      accept: "text/event-stream;q=0, text/event-stream;charset=utf-8;q=0.5",
+      expected: true,
+      name: "more-specific matching parameter acceptance",
+    },
+    {
+      accept: "text/event-stream;q=0.5;charset=utf-8",
+      expected: true,
+      name: "matching media parameter after q",
+    },
+    {
+      accept: "text/event-stream;q=1;charset=utf-16",
+      expected: false,
+      name: "mismatched media parameter after q",
+    },
+    {
+      accept: "text/event-stream; charset=utf-16",
+      expected: false,
+      name: "mismatched representation parameter",
+    },
+    { accept: "text/event-streaming", expected: false, name: "lookalike subtype" },
+    { accept: "text/event-streamx", expected: false, name: "suffixed subtype" },
+    {
+      accept: 'application/json; note="text/event-stream"',
+      expected: false,
+      name: "quoted parameter decoy",
+    },
+    { accept: "text/*", expected: false, name: "type wildcard" },
+    { accept: "*/*", expected: false, name: "all wildcard" },
+    { accept: "text/event-stream;q=0", expected: false, name: "zero qvalue" },
+    { accept: "text/event-stream;q=0.000", expected: false, name: "zero decimal qvalue" },
+    {
+      accept: "text/event-stream;q=0, */*;q=1",
+      expected: false,
+      name: "explicit rejection overriding wildcard",
+    },
+    { accept: "text/event-stream;q=.5", expected: false, name: "missing leading zero" },
+    { accept: "text/event-stream;q =0.5", expected: false, name: "whitespace before equals" },
+    { accept: "text/event-stream;q= 0.5", expected: false, name: "whitespace after equals" },
+    {
+      accept: "text/event-stream;\u00a0q=0.5",
+      expected: false,
+      name: "non-HTTP parameter whitespace",
+    },
+    { accept: "text/event-stream;q=0.1234", expected: false, name: "too many q digits" },
+    { accept: "text/event-stream;q=1.001", expected: false, name: "qvalue above one" },
+    { accept: "text/event-stream;q=1e0", expected: false, name: "exponent qvalue" },
+    { accept: 'text/event-stream;q="0.5"', expected: false, name: "quoted qvalue" },
+    { accept: "text/event-stream;q=0.5;q=1", expected: false, name: "duplicate q parameter" },
+    {
+      accept: 'text/event-stream;q=0.5;legacy;note="quoted,comma;semicolon"',
+      expected: false,
+      name: "obsolete bare Accept extension after q",
+    },
+    {
+      accept: 'text/event-stream; note="unterminated',
+      expected: false,
+      name: "unterminated quoted parameter",
+    },
+  ])("returns $expected for $name", ({ accept, expected, representation }) => {
+    expect(hasExplicitAcceptableMediaRange(accept, representation ?? SSE_CONTENT_TYPE)).toBe(
+      expected,
+    );
+  });
+});
+
 describe("session history HTTP endpoints", () => {
+  test("uses SSE only for an explicit acceptable event-stream media range", async () => {
+    const expectedText = "accept negotiation sentinel";
+    await seedSession({ text: expectedText });
+    await withGatewayHarness(async (harness) => {
+      const cases = [
+        { accept: "text/event-stream", expected: "sse" },
+        { accept: "TEXT/EVENT-STREAM", expected: "sse" },
+        { accept: "  text/event-stream  ", expected: "sse" },
+        { accept: "text/event-stream;", expected: "sse" },
+        { accept: "text/event-stream; ; q=0.5;", expected: "sse" },
+        { accept: "text/event-stream; charset=utf-8", expected: "sse" },
+        {
+          accept: 'text/event-stream; note="quoted,comma;semicolon\\\"quote"; q=0.5',
+          expected: "json",
+        },
+        { accept: "text/event-stream;q=0.001", expected: "sse" },
+        { accept: "text/event-stream;Q=1.000", expected: "sse" },
+        { accept: "text/event-stream;q=0, text/event-stream;q=0.5", expected: "sse" },
+        {
+          accept: "text/event-stream;q=1, text/event-stream;charset=utf-8;q=0",
+          expected: "json",
+        },
+        {
+          accept: "text/event-stream;q=0, text/event-stream;charset=utf-8;q=0.5",
+          expected: "sse",
+        },
+        { accept: "text/event-stream;q=0.5;charset=utf-8", expected: "sse" },
+        { accept: "text/event-stream;q=1;charset=utf-16", expected: "json" },
+        { accept: "text/event-stream;charset=utf-16", expected: "json" },
+        { accept: "text/event-streaming", expected: "json" },
+        { accept: "text/event-streamx", expected: "json" },
+        { accept: 'application/json; note="text/event-stream"', expected: "json" },
+        { accept: "text/*", expected: "json" },
+        { accept: "*/*", expected: "json" },
+        { accept: "text/event-stream;q=0", expected: "json" },
+        { accept: "text/event-stream;q=0, */*;q=1", expected: "json" },
+        { accept: "text/event-stream;q=0.1234", expected: "json" },
+        { accept: "text/event-stream;q =0.5", expected: "json" },
+        { accept: "text/event-stream;q= 0.5", expected: "json" },
+        { accept: "text/event-stream;\u00a0q=0.5", expected: "json" },
+        {
+          accept: 'text/event-stream;q=0.5;legacy;note="quoted,comma;semicolon"',
+          expected: "json",
+        },
+      ] as const;
+
+      for (const testCase of cases) {
+        const response = await fetchSessionHistory(harness.port, "agent:main:main", {
+          headers: { Accept: testCase.accept },
+        });
+        expect(response.status, testCase.accept).toBe(200);
+        const contentType = response.headers.get("content-type") ?? "";
+        if (testCase.expected === "sse") {
+          expect(contentType, testCase.accept).toContain("text/event-stream");
+          const reader = response.body?.getReader();
+          expect(reader, testCase.accept).toBeDefined();
+          const event = await readSseEvent(reader!, { buffer: "" });
+          expect(event.event, testCase.accept).toBe("history");
+          expect(
+            (event.data as SessionHistoryBody).messages?.[0]?.content?.[0]?.text,
+            testCase.accept,
+          ).toBe(expectedText);
+          await reader!.cancel();
+          continue;
+        }
+        expect(contentType, testCase.accept).toContain("application/json");
+        const body = (await response.json()) as SessionHistoryBody;
+        expect(body.messages?.[0]?.content?.[0]?.text, testCase.accept).toBe(expectedText);
+      }
+    });
+  });
+
   test("returns session history over direct REST", async () => {
     await seedSession({ text: "hello from history" });
     await withGatewayHarness(async (harness) => {
@@ -461,6 +691,123 @@ describe("session history HTTP endpoints", () => {
       expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
         seq: 1,
       });
+    });
+  });
+
+  test("shares revisioned current-profile projection across REST and initial and inline SSE", async () => {
+    const OLD_REV = 1_800_000_000_000;
+    const NEW_REV = 1_900_000_000_000;
+    const { storePath } = await seedSession();
+    const sessionId = "sess-main";
+    const sessionKey = "agent:main:main";
+    const sessionEntry = { sessionId, updatedAt: 1 };
+
+    const profile = withMockedDateNow(OLD_REV, () => {
+      const created = ensureProfileForEmail("session-history-profile@example.com");
+      setDisplayName(created.id, "Old Display Name");
+      expect(setAvatar(created.id, new Uint8Array([1, 2, 3]), "image/png").ok).toBe(true);
+      return created;
+    });
+    const oldAvatarUrl = currentProfileAvatarUrl(profile.id);
+    const persistAttributedTurn = async (id: string, senderName: string, text: string) => {
+      const turn = await persistUserTurnTranscript({
+        agentId: AGENT_ID,
+        sessionEntry,
+        sessionId,
+        sessionKey,
+        storePath,
+        input: {
+          idempotencyKey: `session-history-profile:${id}`,
+          sender: { id: profile.id, name: senderName, username: "ada" },
+          text,
+        },
+      });
+      expect(turn).toBeDefined();
+      return turn!;
+    };
+    const first = await persistAttributedTurn(
+      "first",
+      "Historical Ada",
+      "first attributed history turn",
+    );
+
+    await withGatewayHarness(async (harness) => {
+      const initialRest = await readSessionHistoryBody(harness.port, sessionKey);
+      const stream = await openSessionHistorySse(harness.port, sessionKey);
+      try {
+        const initialSse = await readSseEvent(stream.reader, stream.streamState);
+        expect(initialSse.event).toBe("history");
+        const oldExpected = {
+          role: "user",
+          content: "first attributed history turn",
+          __openclaw: {
+            id: first.messageId,
+            seq: 1,
+            senderId: profile.id,
+            senderName: "Historical Ada",
+            senderUsername: "ada",
+            senderProfileAvatarUrl: oldAvatarUrl,
+          },
+        };
+        expect(attributedHistoryMessageProjection(initialRest.messages?.[0])).toEqual(oldExpected);
+        expect(
+          attributedHistoryMessageProjection((initialSse.data as SessionHistoryBody).messages?.[0]),
+        ).toEqual(oldExpected);
+
+        withMockedDateNow(NEW_REV, () => {
+          setDisplayName(profile.id, "Current Ada");
+          expect(setAvatar(profile.id, new Uint8Array([4, 5, 6]), "image/png").ok).toBe(true);
+        });
+        const newAvatarUrl = currentProfileAvatarUrl(profile.id);
+        expect(newAvatarUrl).not.toBe(oldAvatarUrl);
+
+        const inlineEventPromise = readSseEvent(stream.reader, stream.streamState);
+        const second = await persistAttributedTurn(
+          "second",
+          "Current Ada",
+          "second attributed history turn",
+        );
+        const refreshEvent = await inlineEventPromise;
+        expect(refreshEvent.event).toBe("history");
+        const newSecondExpected = {
+          role: "user",
+          content: "second attributed history turn",
+          __openclaw: {
+            id: second.messageId,
+            seq: 2,
+            senderId: profile.id,
+            senderName: "Current Ada",
+            senderUsername: "ada",
+            senderProfileAvatarUrl: newAvatarUrl,
+          },
+        };
+        const newFirstExpected = {
+          ...oldExpected,
+          __openclaw: {
+            ...oldExpected["__openclaw"],
+            senderProfileAvatarUrl: newAvatarUrl,
+          },
+        };
+        const refreshedSse = refreshEvent.data as SessionHistoryBody;
+        expect(refreshedSse.messages).toHaveLength(2);
+        expect(attributedHistoryMessageProjection(refreshedSse.messages?.[0])).toEqual(
+          newFirstExpected,
+        );
+        expect(attributedHistoryMessageProjection(refreshedSse.messages?.[1])).toEqual(
+          newSecondExpected,
+        );
+
+        const refreshedRest = await readSessionHistoryBody(harness.port, sessionKey);
+        expect(refreshedRest.messages).toHaveLength(2);
+        expect(attributedHistoryMessageProjection(refreshedRest.messages?.[0])).toEqual(
+          newFirstExpected,
+        );
+        expect(attributedHistoryMessageProjection(refreshedRest.messages?.[1])).toEqual(
+          newSecondExpected,
+        );
+      } finally {
+        await stream.reader.cancel();
+      }
     });
   });
 
@@ -573,6 +920,24 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("claims invalid encoded session keys on a listening Gateway", async () => {
+    await withGatewayHarness(async (harness) => {
+      for (const encodedSessionKey of ["%20", "%zz"]) {
+        const response = await fetch(
+          `http://127.0.0.1:${harness.port}/sessions/${encodedSessionKey}/history`,
+        );
+        const body = await response.json();
+        expect(response.status).toBe(400);
+        expect(body).toEqual({
+          error: {
+            type: "invalid_request_error",
+            message: "invalid session key",
+          },
+        });
+      }
+    });
+  });
+
   test("keeps standalone delivery-mirror rows in direct REST history", async () => {
     const { storePath } = await seedSession({ text: "visible history" });
     await appendTranscriptMessage({
@@ -603,7 +968,7 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("prefers the freshest duplicate row for direct history reads", async () => {
+  test("rejects duplicate canonical rows with an actionable migration error", async () => {
     testState.sessionConfig = { mainKey: "work" };
     const storePath = await createSessionStoreFile();
     await replaceTranscriptEvents(
@@ -650,9 +1015,14 @@ describe("session history HTTP endpoints", () => {
       ],
     });
 
-    await expectSessionHistoryText({
-      sessionKey: "agent:main:work",
-      expectedText: "fresh history",
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:work");
+      expect(res.status).toBe(409);
+      expectErrorResponse(await res.json(), {
+        type: "migration_required",
+        message:
+          "duplicate rows resolve to canonical session key agent:main:work; stop the Gateway and run openclaw doctor --fix",
+      });
     });
   });
 

@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
+  gatewayService,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
   resetCleanupCommandMocks,
@@ -20,6 +21,30 @@ describe("resetCommand", () => {
   beforeEach(() => {
     resetCleanupCommandMocks();
     silenceCleanupCommandRuntime(runtime);
+  });
+
+  it.each([
+    {
+      failure: "inspection fails",
+      arrange: () => gatewayService.isLoaded.mockRejectedValue(new Error("inspection failed")),
+    },
+    {
+      failure: "stop fails",
+      arrange: () => gatewayService.stop.mockRejectedValue(new Error("stop failed")),
+    },
+  ])("preserves user data when gateway $failure", async ({ arrange }) => {
+    arrange();
+
+    await expect(
+      resetCommand(runtime, {
+        scope: "full",
+        yes: true,
+        nonInteractive: true,
+      }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+    expect(removeStateAndLinkedPaths).not.toHaveBeenCalled();
+    expect(removeWorkspaceDirs).not.toHaveBeenCalled();
   });
 
   it("recommends creating a backup before state-destructive reset scopes", async () => {

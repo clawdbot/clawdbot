@@ -351,7 +351,7 @@ Dedicated doc: [Sandboxing](/gateway/sandboxing)
 Two complementary approaches:
 
 - **Full Gateway in Docker** (container boundary): [Docker](/install/docker)
-- **Tool sandbox** (`agents.defaults.sandbox`; host gateway + sandbox-isolated tools; Docker is the default backend): [Sandboxing](/gateway/sandboxing)
+- **Tool sandbox** (`agents.defaults.sandbox`; host gateway + sandbox-isolated tools; built-in Docker and Podman backends): [Sandboxing](/gateway/sandboxing)
 
 <Note>
 To prevent cross-agent access, keep `agents.defaults.sandbox.scope` at `"agent"` (default) or use `"session"` for stricter per-session isolation. `scope: "shared"` uses a single container or workspace.
@@ -483,6 +483,21 @@ Enabling browser control gives the model a real browser. If that profile already
 - Keep Gateway and node hosts tailnet-only; avoid exposing browser control ports to LAN or public internet.
 - Disable browser proxy routing when not needed (`gateway.nodes.browser.mode="off"`).
 - Chrome MCP existing-session mode is not "safer" - it can act as you in whatever that host Chrome profile can reach.
+- Browser Relay Authentication v2 never sends the persistent extension relay
+  key. The extension and external CDP clients verify a signed server challenge
+  before returning a short-lived, one-time, connection-bound HMAC proof. Proofs
+  bind the protocol version, role, transport, method, resource, flow, profile,
+  and relay instance; replay on the same or another socket fails.
+- `browser.extensionRelay.allowLegacyAuth` defaults to `true` for one migration
+  window. This temporarily accepts old Bearer, Basic, and token-subprotocol
+  relay clients. Update every relay client, then set it to `false`. V2 clients
+  never downgrade after a failed proof or unsupported response.
+- Chrome extension pairing stores its access mode in extension-owned Chrome
+  storage, not Gateway config. **All tabs** exposes every eligible ordinary tab
+  in that Chrome profile except session-paused tabs; **Selected tabs** uses the
+  OpenClaw tab group as its ACL. Existing pairings migrate to **Selected tabs**,
+  while new personal-browser pairings recommend **All tabs**. Incognito and
+  internal Chrome pages remain excluded in either mode.
 - Run a **node host** on the browser machine and let the Gateway proxy browser actions when the Gateway is remote from the browser (see [Browser tool](/tools/browser)); treat node pairing like admin access, keep Gateway and node host on the same tailnet, and avoid exposing relay/control ports over LAN, public internet, or Tailscale Funnel.
 
 ### Browser SSRF policy (strict by default)
@@ -653,6 +668,7 @@ Trusted proxy headers do not make node device pairing automatically trusted - `g
 - OpenClaw's gateway is local/loopback first. If you terminate TLS at a reverse proxy, set HSTS there.
 - If the gateway itself terminates HTTPS, `gateway.http.securityHeaders.strictTransportSecurity` emits the HSTS header from OpenClaw responses.
 - Non-loopback Control UI deployments require `gateway.controlUi.allowedOrigins` by default; `allowedOrigins: ["*"]` is an explicit allow-all policy, not a hardened default - avoid it outside tightly controlled local testing.
+- Failed authentication from loopback is never locked out, so a local CLI cannot be denied before its credentials are checked. Wrong credentials are still tracked and progressively delayed (bounded delay, one shared timer per key); successful authentication resets the failure history. This raises the cost of repeated guessing from one loopback source; it is not a defense against an attacker who can already open many parallel loopback connections, because credentials are compared before the failure response is delayed. Loopback reachability is a trust boundary in its own right - see [Node pairing](/gateway/pairing#silent-local-pairing).
 - Browser-origin auth failures on loopback are still rate-limited even with the general loopback exemption enabled, but the lockout key is scoped per normalized `Origin` value instead of one shared localhost bucket.
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode; treat it as a dangerous operator-selected policy.
 - Treat DNS rebinding and proxy-host header behavior as deployment hardening concerns; keep `trustedProxies` tight and avoid exposing the gateway directly to the public internet.
@@ -662,11 +678,9 @@ Trusted proxy headers do not make node device pairing automatically trusted - `g
 
 The Control UI needs a secure context (HTTPS or localhost) to generate device identity.
 
-- `gateway.controlUi.allowInsecureAuth`: local compatibility toggle. On localhost, allows Control UI auth without device identity when the page loads over non-secure HTTP. Does not bypass pairing checks and does not relax remote (non-localhost) device identity requirements. Prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
+- Token/password auth does not replace browser device identity over remote plain HTTP. Use HTTPS (for example, Tailscale Serve) or open the UI on `127.0.0.1` from the Gateway host.
 - `gateway.controlUi.dangerouslyDisableDeviceAuth`: retired break-glass input. Older configs preserve authenticated, pairing-only Control UI access for remediation until a browser reopened over HTTPS or localhost completes the bounded, explicit self-pairing migration; do not add it to current config.
-- Separate from those flags, a successful `gateway.auth.mode: "trusted-proxy"` can admit **operator** Control UI sessions without device identity - an intentional auth-mode behavior, not an `allowInsecureAuth` shortcut, and it does not extend to node-role Control UI sessions.
-
-`openclaw security audit` warns when `allowInsecureAuth` is enabled.
+- Separately, successful `gateway.auth.mode: "trusted-proxy"` authentication can admit **operator** Control UI sessions without device identity. This does not extend to node-role Control UI sessions.
 
 ### Insecure/dangerous flags
 
@@ -674,7 +688,6 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
 
 <AccordionGroup>
   <Accordion title="Flags tracked by the audit today">
-    - `gateway.controlUi.allowInsecureAuth=true`
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
     - pending Control UI device-auth migration imported from retired `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
     - `security.audit.suppressions configured (<count>)`

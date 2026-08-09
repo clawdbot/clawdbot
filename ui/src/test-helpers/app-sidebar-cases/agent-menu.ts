@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
-import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
+import {
+  SESSION_COMPOSER_FOCUS_PARAM,
+  SESSION_FACE_PREFERENCE_PARAM,
+} from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -30,7 +33,7 @@ describe("AppSidebar agent chip", () => {
       {
         defaultId: "main",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "main" }],
       },
       [],
@@ -63,7 +66,7 @@ describe("AppSidebar agent chip", () => {
       {
         defaultId: "main",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "main" }],
       },
       [],
@@ -163,6 +166,35 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });
 
+  it("requests composer focus and highlighting from the capabilities action", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const onNavigate = vi.fn();
+    sidebar.connected = true;
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+    await sidebar.updateComplete;
+    const item = sidebar.querySelector<HTMLElement>(
+      'wa-dropdown-item[value="command:capabilities"]',
+    );
+    sidebar
+      .querySelector(".sidebar-agent-menu")
+      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
+
+    expect(onNavigate).toHaveBeenCalledOnce();
+    const options = onNavigate.mock.calls[0]?.[1] as { search: string };
+    const search = new URLSearchParams(options.search);
+    expect(search.get("draft")).toBe("What can you do?");
+    expect(search.get(SESSION_COMPOSER_FOCUS_PARAM)).toBe("1");
+  });
+
   it("drops the menu below the agent card instead of covering it", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
@@ -190,6 +222,37 @@ describe("AppSidebar agent chip", () => {
     expect(menu?.querySelector('[slot="trigger"]')?.getAttribute("style")).toContain("top: 92px");
   });
 
+  it("opens the agent menu on right-click without toggling an open menu", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const card = sidebar.querySelector<HTMLElement>("openclaw-sidebar-agent-card");
+    const trigger = card?.querySelector<HTMLElement>(".sidebar-agent-card__main");
+    const label = card?.querySelector<HTMLElement>(".sidebar-agent-card__name");
+    if (!card || !trigger || !label) {
+      throw new Error("Expected the sidebar agent card");
+    }
+    trigger.getBoundingClientRect = () =>
+      ({ bottom: 88, left: 12, right: 252, top: 40 }) as DOMRect;
+
+    const firstContextMenu = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    label.dispatchEvent(firstContextMenu);
+    await sidebar.updateComplete;
+    const firstMenu = sidebar.querySelector(".sidebar-agent-menu");
+    expect(firstContextMenu.defaultPrevented).toBe(true);
+    expect(firstMenu).not.toBeNull();
+
+    label.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(firstMenu);
+  });
+
   it("collapses a single-agent roster to the three agent actions", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
@@ -199,7 +262,7 @@ describe("AppSidebar agent chip", () => {
       {
         defaultId: "main",
         mainKey: "main",
-        scope: "agent",
+        scope: "per-sender",
         agents: [{ id: "main", identity: { name: "Molty", emoji: "🦞" } }],
       },
     );

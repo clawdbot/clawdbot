@@ -26,6 +26,8 @@ describe("media store", () => {
       await tempHome.restore();
     } catch {
       // ignore cleanup failures in tests
+    } finally {
+      vi.resetModules();
     }
   });
 
@@ -1019,9 +1021,9 @@ describe("media store", () => {
         expectedExtractedFilename: "report.txt",
       },
       {
-        name: "sanitizes unsafe characters in original filename",
-        originalFilename: "my<file>:test.txt",
-        expectedIdPattern: /^my_file_test---[a-f0-9-]{36}\.txt$/,
+        name: "strips Windows-invalid and underscores non-portable characters",
+        originalFilename: "my <file>:test!.txt",
+        expectedIdPattern: /^my_filetest---[a-f0-9-]{36}\.txt$/,
       },
       {
         name: "truncates long original filenames",

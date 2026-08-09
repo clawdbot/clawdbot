@@ -15,6 +15,7 @@ import {
   resolveSessionLifecycleTimestamps,
 } from "../../config/sessions/lifecycle.js";
 import {
+  canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
 } from "../../config/sessions/main-session.js";
@@ -26,7 +27,7 @@ import {
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
 import { listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   classifySessionKeyShape,
@@ -66,6 +67,7 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     ...entry,
     sessionFile: undefined,
     status: undefined,
+    lifecycleRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
@@ -91,6 +93,7 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     sessionStartedAt: undefined,
     sessionDiffBaseline: undefined,
     lastInteractionAt: undefined,
+    pendingTranscriptRepair: undefined,
   };
   transitionMainSessionRecovery(next, { kind: "clear" });
   clearAllCliSessions(next);
@@ -264,7 +267,13 @@ export function resolveSessionKeyForRequest(opts: {
 
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
-    explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
+    (explicitSessionKey
+      ? canonicalizeMainSessionAlias({
+          cfg: opts.cfg,
+          agentId: storeAgentId,
+          sessionKey: explicitSessionKey,
+        })
+      : undefined) ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
 
   // Entrypoint migration owners canonicalize legacy state before runtime reads. A missing target
   // row is not evidence that another agent's main session belongs to the configured default agent.

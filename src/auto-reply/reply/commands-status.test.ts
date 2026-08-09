@@ -170,7 +170,7 @@ function registerStatusCodexHarness(): void {
 function saveStatusTestAuthProfile(params: {
   dir: string;
   profileId: string;
-  provider: "openai" | "openai-codex" | "anthropic";
+  provider: "openai" | "anthropic";
 }): void {
   saveStatusTestAuthProfiles({
     dir: params.dir,
@@ -180,7 +180,7 @@ function saveStatusTestAuthProfile(params: {
 
 function saveStatusTestAuthProfiles(params: {
   dir: string;
-  profiles: Array<{ profileId: string; provider: "openai" | "openai-codex" | "anthropic" }>;
+  profiles: Array<{ profileId: string; provider: "openai" | "anthropic" }>;
 }): void {
   const agentDir = path.join(params.dir, ".openclaw", "agents", "main", "agent");
   fs.mkdirSync(agentDir, { recursive: true });
@@ -190,7 +190,7 @@ function saveStatusTestAuthProfiles(params: {
       profiles: Object.fromEntries(
         params.profiles.map((profile) => [
           profile.profileId,
-          profile.provider === "openai" || profile.provider === "openai-codex"
+          profile.provider === "openai"
             ? {
                 type: "oauth",
                 provider: profile.provider,
@@ -715,6 +715,7 @@ describe("buildStatusReply subagent summary", () => {
         model: "kimi-k2.7-code",
         totalTokens: 0,
         totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
       },
       sessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
@@ -872,7 +873,7 @@ describe("buildStatusReply subagent summary", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Runtime: OpenAI Codex");
-    expect(normalized).toContain("Fast");
+    expect(normalized).toContain("fast");
     expect(normalized).not.toContain("Fast · codex");
     expect(
       providerUsageMock.loadProviderUsageSummary.mock.calls.some(([params]) =>
@@ -1229,72 +1230,6 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("forwards legacy Codex profile providers to Codex synthetic usage", async () => {
-    registerStatusCodexHarness();
-    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
-      updatedAt: Date.now(),
-      providers: [
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          windows: [{ label: "5h", usedPercent: 9 }],
-        },
-      ],
-    });
-
-    await withTempHome(
-      async (dir) => {
-        saveStatusTestAuthProfile({
-          dir,
-          profileId: "openai-codex:legacy",
-          provider: "openai-codex",
-        });
-
-        await buildStatusText({
-          cfg: {
-            ...baseCfg,
-            agents: {
-              defaults: {
-                agentRuntime: { id: "codex" },
-              },
-            },
-          },
-          sessionEntry: {
-            sessionId: "sess-status-codex-legacy-profile",
-            updatedAt: 0,
-            authProfileOverride: "openai-codex:legacy",
-          },
-          sessionKey: "agent:main:main",
-          parentSessionKey: "agent:main:main",
-          sessionScope: "per-sender",
-          statusChannel: "mobilechat",
-          provider: "openai",
-          model: "gpt-5.5",
-          contextTokens: 32_000,
-          resolvedFastMode: false,
-          resolvedVerboseLevel: "off",
-          resolvedReasoningLevel: "off",
-          resolveDefaultThinkingLevel: async () => undefined,
-          isGroup: false,
-          defaultGroupActivation: () => "mention",
-          modelAuthOverride: "oauth",
-          activeModelAuthOverride: "oauth",
-        });
-
-        const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
-          ([params]) => params?.providers?.includes("openai"),
-        );
-        expect(providerUsageCall?.[0]?.auth).toEqual([
-          {
-            ...expectedCodexRuntimeUsageAuth[0],
-            authProfileId: "openai-codex:legacy",
-          },
-        ]);
-      },
-      { skipSessionCleanup: true, skipHomeCleanup: true },
-    );
-  });
-
   it("loads Codex synthetic usage when no local OpenAI profile label exists", async () => {
     registerStatusCodexHarness();
     providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
@@ -1470,6 +1405,7 @@ describe("buildStatusReply subagent summary", () => {
         },
         totalTokens: 49_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
         contextTokens: 1_048_576,
       },
       sessionKey: "agent:main:main",
@@ -1536,6 +1472,7 @@ describe("buildStatusReply subagent summary", () => {
         },
         totalTokens: 49_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         contextTokens: 1_048_576,
       },
       sessionKey: "agent:main:main",
@@ -2090,6 +2027,8 @@ describe("buildStatusReply subagent summary", () => {
         sessionId: "sess-status-codex-context",
         updatedAt: 0,
         totalTokens: 25_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
@@ -2136,6 +2075,8 @@ describe("buildStatusReply subagent summary", () => {
         sessionId: "sess-status-codex-stale-context",
         updatedAt: 0,
         totalTokens: 181_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
         contextTokens: 400_000,
       },
       sessionKey: "agent:main:main",
@@ -2273,7 +2214,7 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fast");
+    expect(normalized).toContain("fast");
     expect(normalized).not.toContain("codex");
   });
 
@@ -2307,8 +2248,8 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Think: max");
-    expect(normalized).not.toContain("Think: ultra");
+    expect(normalized).toContain("think max");
+    expect(normalized).not.toContain("think ultra");
   });
 
   it("clamps off to the active provider's always-thinking level", async () => {
@@ -2342,7 +2283,7 @@ describe("buildStatusReply subagent summary", () => {
       activeModelAuthOverride: "api-key",
     });
 
-    expect(normalizeTestText(text)).toContain("Think: max");
+    expect(normalizeTestText(text)).toContain("think max");
     expect(activeProviderThinkingMock.resolveThinkingProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "moonshot",
@@ -2446,7 +2387,7 @@ describe("buildStatusReply", () => {
 
     const reply = await buildKiraStatusReply(cfg);
 
-    expect(reply?.text).toContain("Think: xhigh");
+    expect(reply?.text).toContain("think xhigh");
   });
 
   it("shows per-agent fallback overrides in the status card", async () => {

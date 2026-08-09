@@ -15,8 +15,44 @@ import { ChannelIngressUnavailableError } from "./ingress-unavailable.js";
 
 const DEFAULT_APPEND_RETRY_DELAYS_MS = [0, 100, 300] as const;
 
+type ChannelIngressErrorClass<TError extends Error, TArgs extends unknown[]> = {
+  new (...args: TArgs): TError;
+  readonly name: string;
+  readonly prototype: TError;
+};
+
+export function createChannelIngressError(
+  name: string,
+): ChannelIngressErrorClass<Error, [message: string, options?: ErrorOptions]>;
+export function createChannelIngressError<TReason extends string>(
+  name: string,
+  options: { withReason: true },
+): ChannelIngressErrorClass<
+  Error & { readonly reason: TReason },
+  [reason: TReason, message: string, errorOptions?: ErrorOptions]
+>;
+export function createChannelIngressError(
+  name: string,
+  options?: { withReason?: boolean },
+): unknown {
+  const IngressError = class extends Error {
+    declare readonly reason?: string;
+
+    constructor(first: string, second?: string | ErrorOptions, third?: ErrorOptions) {
+      const reasoned = options?.withReason === true;
+      super(reasoned ? (second as string) : first, reasoned ? third : (second as ErrorOptions));
+      this.name = name;
+      if (reasoned) {
+        this.reason = first;
+      }
+    }
+  };
+  Object.defineProperty(IngressError, "name", { configurable: true, value: name });
+  return IngressError;
+}
+
 /** Stable identity and serialization lane extracted before durable admission. */
-type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
+export type ChannelIngressMonitorFacts = { eventId: string; laneKey: string };
 
 /** Versioned body presented to a channel's persisted-payload encoder. */
 type ChannelIngressPayloadEnvelope<TBody> = { version: number; body: TBody };
@@ -48,7 +84,7 @@ type ChannelIngressMonitorInspectionContext =
 
 type ChannelIngressMonitorClaimErrorKind = "invalid-version" | "identity-mismatch";
 
-type ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata> = {
+export type ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata> = {
   version: number;
   serialize: (
     raw: TRaw,
@@ -84,12 +120,21 @@ type ChannelIngressMonitorRetention = {
   failedMaxEntries?: number;
 };
 
-type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
+/** Replay-guard retention defaults; changing a value requires a per-channel keyspace audit. */
+export const CHANNEL_INGRESS_RETENTION_DEFAULTS = Object.freeze({
+  pruneIntervalMs: 60 * 60 * 1_000,
+  completedTtlMs: 30 * 24 * 60 * 60 * 1_000,
+  completedMaxEntries: 20_000,
+  failedTtlMs: 30 * 24 * 60 * 60 * 1_000,
+  failedMaxEntries: 20_000,
+} satisfies ChannelIngressMonitorRetention);
+
+export type ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata> = Omit<
   CreateChannelIngressDrainOptions<TStoredPayload, TMetadata>,
   "queue" | "dispatchClaimedEvent" | "abortSignal" | "now" | "ownerId" | "claimLeaseMs"
 >;
 
-type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> = {
+export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> = {
   queue:
     | ChannelIngressQueue<TStoredPayload, TMetadata>
     | (() => ChannelIngressQueue<TStoredPayload, TMetadata>);
@@ -107,7 +152,7 @@ type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> 
     | ChannelIngressMonitorDeliveryResult
     | void;
   pollIntervalMs: number;
-  retention: ChannelIngressMonitorRetention;
+  retention: "standard" | Partial<ChannelIngressMonitorRetention>;
   appendRetryDelaysMs?: readonly number[];
   onDurableAdmission?: (
     raw: TRaw,
@@ -120,6 +165,8 @@ type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata> 
   runPumpTask?: (work: () => Promise<void>) => Promise<void>;
   /** False lets a channel apply its own bounded delivery grace before final disposal. */
   waitForDeliveryIdleOnStop?: boolean;
+  /** Tracks deferred reply ownership through stop, abort, or an explicit channel-owned wait. */
+  deferredClaims?: "wait-on-stop" | "settle-on-abort" | "manual";
   drain?: ChannelIngressMonitorDrainOptions<TStoredPayload, TMetadata>;
   abortSignal?: AbortSignal;
   now?: () => number;
@@ -138,14 +185,18 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   options: CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata>,
 ) {
   const now = options.now ?? Date.now;
-  const appendRetryDelaysMs = options.appendRetryDelaysMs ?? DEFAULT_APPEND_RETRY_DELAYS_MS;
   const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
-  const { pruneIntervalMs, ...pruneOptions } = options.retention;
+  const retention =
+    options.retention === "standard"
+      ? CHANNEL_INGRESS_RETENTION_DEFAULTS
+      : { ...CHANNEL_INGRESS_RETENTION_DEFAULTS, ...options.retention };
+  const { pruneIntervalMs, ...pruneOptions } = retention;
   const shutdown = new AbortController();
   const drainAbortSignal = options.abortSignal
     ? AbortSignal.any([shutdown.signal, options.abortSignal])
     : shutdown.signal;
   const activeDeliveries = new Set<Promise<unknown>>();
+  const deferredClaims = new Set<Promise<void>>();
   type Queue = ChannelIngressQueue<TStoredPayload, TMetadata>;
   const queueFactory: () => Queue =
     typeof options.queue === "function" ? options.queue : () => options.queue as Queue;
@@ -248,6 +299,12 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     }
   };
 
+  const waitForDeferredClaims = async (): Promise<void> => {
+    while (deferredClaims.size > 0) {
+      await Promise.allSettled(deferredClaims.values());
+    }
+  };
+
   const getDrain = (): ChannelIngressDrain => {
     drain ??= createChannelIngressDrain<TStoredPayload, TMetadata>({
       ...options.drain,
@@ -289,17 +346,46 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 
         let handedOff = false;
         let deferredHandoff = false;
+        let resolveDeferredClaim = () => {};
+        const deferredClaim = options.deferredClaims
+          ? new Promise<void>((resolve) => {
+              resolveDeferredClaim = resolve;
+            })
+          : undefined;
+        let deferredClaimSettled = false;
+        const settleDeferredClaim = () => {
+          if (!deferredClaim || deferredClaimSettled) {
+            return;
+          }
+          deferredClaimSettled = true;
+          lifecycle.abortSignal.removeEventListener("abort", settleDeferredClaim);
+          deferredClaims.delete(deferredClaim);
+          resolveDeferredClaim();
+        };
+        if (options.deferredClaims === "settle-on-abort") {
+          lifecycle.abortSignal.addEventListener("abort", settleDeferredClaim, { once: true });
+          if (lifecycle.abortSignal.aborted) {
+            settleDeferredClaim();
+          }
+        }
         const wrappedLifecycle: ChannelIngressMonitorLifecycle = {
           ...lifecycle,
           admission: "exclusive",
           onAdopted: async () => {
             handedOff = true;
-            await lifecycle.onAdopted();
-            requestDrain();
+            try {
+              await lifecycle.onAdopted();
+              requestDrain();
+            } finally {
+              settleDeferredClaim();
+            }
           },
           onDeferred: () => {
             handedOff = true;
             deferredHandoff = true;
+            if (deferredClaim && !deferredClaimSettled) {
+              deferredClaims.add(deferredClaim);
+            }
             lifecycle.onDeferred();
           },
           onAdoptionFinalizing: () => {
@@ -310,14 +396,22 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           onFailed: async (error) => {
             handedOff = true;
             deferredHandoff = true;
-            await lifecycle.onFailed?.(error);
-            requestDrain();
+            try {
+              await lifecycle.onFailed?.(error);
+              requestDrain();
+            } finally {
+              settleDeferredClaim();
+            }
           },
           onAbandoned: async () => {
             handedOff = true;
             deferredHandoff = true;
-            await lifecycle.onAbandoned();
-            requestDrain();
+            try {
+              await lifecycle.onAbandoned();
+              requestDrain();
+            } finally {
+              settleDeferredClaim();
+            }
           },
         };
 
@@ -488,7 +582,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     receivedAt: number;
   }): Promise<Awaited<ReturnType<Queue["enqueue"]>>> => {
     let lastError: unknown;
-    for (const delayMs of appendRetryDelaysMs) {
+    for (const delayMs of options.appendRetryDelaysMs ?? DEFAULT_APPEND_RETRY_DELAYS_MS) {
       if (delayMs > 0) {
         await sleep(delayMs);
       }
@@ -653,6 +747,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         if (options.waitForDeliveryIdleOnStop !== false) {
           await drain?.waitForIdle();
         }
+        if (options.deferredClaims && options.deferredClaims !== "manual") {
+          await waitForDeferredClaims();
+        }
       })();
       return stopTask;
     },
@@ -667,6 +764,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         }
       }
     },
+    waitForDeferredClaims,
     waitForPumpIdle,
     isRunning: () => running,
     isStopped: () => stopped,

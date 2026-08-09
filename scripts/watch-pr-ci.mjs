@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { execGhJson } from "./lib/plain-gh.mjs";
 
 const USAGE =
-  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120]";
+  "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run]";
 const FAILURE_CONCLUSIONS = new Set([
   "ACTION_REQUIRED",
   "CANCELLED",
@@ -15,6 +15,10 @@ const FAILURE_CONCLUSIONS = new Set([
   "TIMED_OUT",
 ]);
 const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor} nodes{kind:__typename ... on CheckRun{name status conclusion databaseId checkSuite{workflowRun{databaseId workflow{databaseId}}}} ... on StatusContext{context state}}}}}}}`;
+const GH_READ_OPTIONS = {
+  stdio: ["ignore", "pipe", "pipe"],
+  timeout: 60_000,
+};
 // Adapted from Node's MIT-licensed util.stripVTControlCharacters implementation.
 const ANSI_ESCAPE_SEQUENCE = new RegExp(
   "[\\u001B\\u009B][[\\]()#;?]*" +
@@ -47,6 +51,7 @@ export function parseArgs(argv) {
         "attach-timeout": { type: "string", default: "900" },
         timeout: { type: "string", default: "3600" },
         interval: { type: "string", default: "120" },
+        completion: { type: "string", default: "rollup" },
       },
     });
   } catch {
@@ -63,6 +68,7 @@ export function parseArgs(argv) {
     attachTimeout: positiveInteger(parsed.values["attach-timeout"], "--attach-timeout"),
     timeout: positiveInteger(parsed.values.timeout, "--timeout"),
     interval: positiveInteger(parsed.values.interval, "--interval"),
+    completion: parsed.values.completion,
   };
   if (parsed.values.after !== undefined) {
     args.after = positiveInteger(parsed.values.after, "--after");
@@ -72,6 +78,9 @@ export function parseArgs(argv) {
   }
   if (!/^[^/\s]+\/[^/\s]+$/u.test(args.repo)) {
     throw new Error("--repo must be owner/repo");
+  }
+  if (!new Set(["rollup", "ci-run"]).has(args.completion)) {
+    throw new Error("--completion must be rollup or ci-run");
   }
   return args;
 }
@@ -207,18 +216,11 @@ export function classifyRollup(rollup) {
   return { verdict: "PENDING", pendingCount, failingNames: [], supersededCount };
 }
 
-function ghJson(...args) {
-  return JSON.parse(
-    execFileSync("gh", args, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 60_000,
-    }),
-  );
-}
-
 const readPr = (pr, repo) =>
-  ghJson(...`pr view ${pr} --repo ${repo} --json state,mergeable,headRefOid`.split(" "));
+  execGhJson(
+    `pr view ${pr} --repo ${repo} --json state,mergeable,headRefOid`.split(" "),
+    GH_READ_OPTIONS,
+  );
 export const buildFindRunArgs = (repo, sha) => [
   "run",
   "list",
@@ -237,9 +239,13 @@ export const buildFindRunArgs = (repo, sha) => [
 ];
 export const selectRunAfter = (runs, after) =>
   runs.find((run) => after === undefined || run.databaseId > after);
-const findRun = (repo, sha, after) => selectRunAfter(ghJson(...buildFindRunArgs(repo, sha)), after);
+const findRun = (repo, sha, after) =>
+  selectRunAfter(execGhJson(buildFindRunArgs(repo, sha), GH_READ_OPTIONS), after);
 const readRun = (repo, runId) =>
-  ghJson(...`run view ${runId} --repo ${repo} --json status,conclusion`.split(" "));
+  execGhJson(
+    `run view ${runId} --repo ${repo} --json status,conclusion`.split(" "),
+    GH_READ_OPTIONS,
+  );
 
 export function classifyRunAttachment(runId, run, after) {
   if (run.conclusion === "skipped") {
@@ -252,6 +258,15 @@ export function classifyRunAttachment(runId, run, after) {
         ? `WARN attaching to already-completed run ${runId} (started before watcher); pass --after ${runId} to require a fresh run`
         : undefined,
   };
+}
+
+export function classifyAttachedCiRun(run) {
+  if (run.status !== "completed") {
+    return { verdict: "PENDING" };
+  }
+  return run.conclusion === "success"
+    ? { verdict: "GREEN" }
+    : { verdict: "FAILING", conclusion: run.conclusion ?? "unknown" };
 }
 
 export function collectRollupContexts(fetchPage) {
@@ -317,7 +332,7 @@ function readRollup(pr, repo) {
     if (cursor !== null) {
       queryArgs.push("-f", `cursor=${cursor}`);
     }
-    return ghJson(...queryArgs).data?.repository?.pullRequest;
+    return execGhJson(queryArgs, GH_READ_OPTIONS).data?.repository?.pullRequest;
   });
 }
 
@@ -418,6 +433,24 @@ async function main(argv = process.argv.slice(2)) {
     interval: args.interval,
     poll: () => {
       try {
+        if (args.completion === "ci-run") {
+          const blocked = precheck(readPr(args.pr, args.repo), args.headSha, true);
+          if (blocked !== null) {
+            return blocked;
+          }
+          const run = readRun(args.repo, runId);
+          const result = classifyAttachedCiRun(run);
+          console.log(
+            `STATUS run=${String(run.status)} conclusion=${String(run.conclusion ?? "pending")}`,
+          );
+          if (result.verdict === "FAILING") {
+            return emit(`FAILING checks=CI workflow (${result.conclusion})`, 15);
+          }
+          if (result.verdict === "GREEN") {
+            return emit("GREEN", 0);
+          }
+          return undefined;
+        }
         const pr = readRollup(args.pr, args.repo);
         const blocked = precheck(pr, args.headSha, true);
         if (blocked !== null) {

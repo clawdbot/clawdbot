@@ -40,10 +40,12 @@ function createFixture() {
   const subscription = { unsubscribe, waitForPendingEvents };
   const detachBackend = vi.fn(() => order.push("detach-backend"));
   const clearTimers = vi.fn(() => order.push("clear-timers"));
-  const removeAbortSignalListener = vi.fn(() => order.push("remove-abort-listener"));
   const getBeforeAgentFinalizeRevisionReason = vi.fn(() => "revision");
   const promptActiveSession = vi.fn(async () => undefined);
-  const activeSession = { sessionId: "active-session" };
+  const activeSession = {
+    sessionId: "active-session",
+    getActiveToolNames: vi.fn(() => ["read"]),
+  };
   const sessionManager = { kind: "session-manager" };
   const hookRunner = { kind: "hook-runner" };
   const cacheTrace = { kind: "cache-trace" };
@@ -85,7 +87,6 @@ function createFixture() {
     timeout: {
       getRunAbortDeadlineAtMs: vi.fn(() => 123),
       clearTimers,
-      removeAbortSignalListener,
     },
   };
   const sessionRuntime = {
@@ -227,7 +228,6 @@ function createFixture() {
     input,
     order,
     queueHandle,
-    removeAbortSignalListener,
     result,
     sessionRuntimeState,
     state,
@@ -255,7 +255,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
       "unsubscribe",
       "detach-backend",
       "clear-active-run",
-      "remove-abort-listener",
       "result",
     ]);
     expect(fixture.state).toEqual(
@@ -280,6 +279,12 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             timestamp: 100,
             __openclaw: { senderName: "Alice" },
           }),
+        }),
+        toolPolicy: expect.objectContaining({
+          baseline: {
+            activeToolNames: ["read"],
+            catalogEntries: [],
+          },
         }),
       }),
     );
@@ -320,7 +325,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(mocks.completeResult).not.toHaveBeenCalled();
     expect(fixture.clearTimers).toHaveBeenCalledOnce();
     expect(fixture.detachBackend).toHaveBeenCalledWith(fixture.queueHandle);
-    expect(fixture.removeAbortSignalListener).toHaveBeenCalledOnce();
     expect(mocks.logError).toHaveBeenCalledWith(
       expect.stringContaining("unsubscribe failed, possible resource leak"),
     );
@@ -338,7 +342,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
 
     expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
-    expect(fixture.removeAbortSignalListener).toHaveBeenCalledOnce();
     expect(mocks.logError).toHaveBeenCalledWith(
       expect.stringContaining("backend detach failed, possible resource leak"),
     );
@@ -355,10 +358,9 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
 
     expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
-    expect(fixture.removeAbortSignalListener).toHaveBeenCalledOnce();
   });
 
-  it("reports active-run cleanup failure after releasing the abort listener", async () => {
+  it("reports active-run cleanup failure after detaching the backend", async () => {
     const fixture = createFixture();
     const failure = new Error("active run cleanup failed");
     mocks.clearActiveEmbeddedRun.mockImplementationOnce(() => {
@@ -369,7 +371,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     await expect(runEmbeddedAttemptSettledPhase(fixture.input)).rejects.toBe(failure);
 
     expect(fixture.detachBackend).toHaveBeenCalledOnce();
-    expect(fixture.removeAbortSignalListener).toHaveBeenCalledOnce();
   });
 
   it("re-arms delivered children only after a yielded requester becomes idle", async () => {

@@ -160,6 +160,13 @@
   cursor: pointer;
 }
 
+.settings-section__help-button > span {
+  /* SF's ascent+descent exceed 1em, so a centered line box parks the glyph
+     below the circle's midline; trim to cap bounds for true centering. */
+  display: block;
+  text-box: trim-both cap alphabetic;
+}
+
 .settings-section__help-button:hover,
 .settings-section__help-button:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
@@ -854,6 +861,43 @@ textarea.settings-input {
 
 .settings-status--accent .settings-status__dot {
   background: var(--accent);
+}
+
+.updates-status-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.updates-commit-list {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.updates-commit-list__row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+}
+
+.updates-commit-list__row + .updates-commit-list__row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.updates-commit-list__row code {
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.updates-commit-list__row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ── Count badge (quiet; genuine counts/alerts only, not status) ── */

@@ -15,6 +15,10 @@ import {
   type DeliveryTraceScenario,
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
+import {
+  createMessageReceiptFromOutboundResults,
+  listMessageReceiptPlatformIds,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
@@ -32,7 +36,10 @@ import {
 } from "./mattermost/draft-stream.js";
 import { resolveMattermostReplyRootId } from "./mattermost/monitor-context.js";
 import { deliverMattermostReplyWithDraftPreview } from "./mattermost/monitor-draft-delivery.js";
-import { deliverMattermostReplyPayload } from "./mattermost/reply-delivery.js";
+import {
+  deliverMattermostReplyPayload,
+  joinMattermostVisibleContent,
+} from "./mattermost/reply-delivery.js";
 
 const CHANNEL_ID = "channel-trace";
 const ROOT_ID = "root-trace";
@@ -118,38 +125,60 @@ function setupMattermostTrace(recorder: WireRecorder) {
 
   // Replicas of the monitor's inline final-text resolution glue
   // (extensions/mattermost/src/mattermost/monitor.ts deliver wiring).
-  const resolveFinalDeliveryText = (text?: string) => {
-    if (typeof text !== "string") {
-      return undefined;
-    }
-    const resolution = draftStream.resolveFinalText(text);
-    return resolution.kind === "already-delivered" ? "" : resolution.text;
-  };
   const resolvePreviewFinalText = (text?: string) => {
-    const deliveryText = resolveFinalDeliveryText(text);
-    if (typeof deliveryText !== "string") {
-      return undefined;
-    }
+    const resolution = draftStream.resolveFinalText(typeof text === "string" ? text : "");
+    const confirmedDelivery =
+      resolution.publishedParts.length > 0
+        ? (() => {
+            const receipt = createMessageReceiptFromOutboundResults({
+              results: resolution.publishedParts.map((part) => ({
+                channel: "mattermost",
+                messageId: part.messageId,
+                channelId: CHANNEL_ID,
+              })),
+              kind: "preview",
+              replyToId: ROOT_ID,
+            });
+            return {
+              outcome: "text" as const,
+              messageIds: listMessageReceiptPlatformIds(receipt),
+              receipt,
+              visibleReplySent: true,
+              content: joinMattermostVisibleContent(
+                resolution.publishedParts.map((part) => part.content),
+              ),
+            };
+          })()
+        : undefined;
+    const deliveryText = resolution.kind === "already-delivered" ? "" : resolution.text;
     const formatted = convertMarkdownTables(deliveryText, tableMode);
     const chunks = chunkMarkdownTextWithMode(formatted, textLimit, chunkMode);
     if (!chunks.length && formatted) {
       chunks.push(formatted);
     }
     if (chunks.length !== 1) {
-      return undefined;
+      return {
+        deliveryText,
+        confirmedDelivery,
+        alreadyDelivered: resolution.kind === "already-delivered",
+      };
     }
     const trimmed = chunks[0]?.trim();
     if (!trimmed) {
-      return undefined;
+      return {
+        deliveryText,
+        confirmedDelivery,
+        alreadyDelivered: resolution.kind === "already-delivered",
+      };
     }
     if (
       lastPartialText &&
       lastPartialText.startsWith(trimmed) &&
       trimmed.length < lastPartialText.length
     ) {
-      return undefined;
+      return { deliveryText, confirmedDelivery, alreadyDelivered: false };
     }
-    return trimmed;
+    return { editText: trimmed, deliveryText, confirmedDelivery, alreadyDelivered: false };
   };
 
   const deliverPayload = async (payloadToDeliver: ReplyPayload) => {
@@ -163,7 +192,7 @@ function setupMattermostTrace(recorder: WireRecorder) {
           text: finalTextResolution.kind === "already-delivered" ? "" : finalTextResolution.text,
         }
       : payloadToDeliver;
-    await deliverMattermostReplyPayload({
+    return await deliverMattermostReplyPayload({
       core,
       cfg,
       payload: resolvedPayload,
@@ -178,11 +207,21 @@ function setupMattermostTrace(recorder: WireRecorder) {
       textLimit,
       tableMode,
       sendMessage: async (_to, text, opts) => {
-        return await createMattermostPost(client, {
+        const post = await createMattermostPost(client, {
           channelId: CHANNEL_ID,
           message: text,
           rootId: opts.replyToId,
         });
+        return {
+          messageId: post.id,
+          channelId: CHANNEL_ID,
+          receipt: createMessageReceiptFromOutboundResults({
+            results: [{ channel: "mattermost", messageId: post.id, channelId: CHANNEL_ID }],
+            kind: "text",
+            ...(opts.replyToId ? { replyToId: opts.replyToId } : {}),
+          }),
+          content: post.message ?? text,
+        };
       },
     });
   };

@@ -6,7 +6,10 @@ import {
 } from "./model-selection.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import { defaultQaModelForMode } from "./run-config.js";
-import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import {
+  resolveQaScenarioRequiredProviderMode,
+  type QaSeedScenarioWithSource,
+} from "./scenario-catalog.js";
 
 function normalizeQaSuiteModelRef(input: string | undefined, fallback: string) {
   const model = input?.trim();
@@ -15,45 +18,32 @@ function normalizeQaSuiteModelRef(input: string | undefined, fallback: string) {
 
 export function resolveRequestedQaSuiteModels(params: {
   alternateModel?: string;
+  fastMode?: boolean;
   primaryModel?: string;
   providerMode?: QaProviderMode;
+  scenarioIds?: readonly string[];
+  scenarios: readonly QaSeedScenarioWithSource[];
 }) {
-  const providerMode = normalizeQaProviderMode(
-    params.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
-  );
-  return {
-    providerMode,
-    primaryModel: normalizeQaSuiteModelRef(
-      params.primaryModel,
-      defaultQaModelForMode(providerMode),
-    ),
-    alternateModel: normalizeQaSuiteModelRef(
-      params.alternateModel,
-      defaultQaModelForMode(providerMode, true),
-    ),
-  };
-}
-
-export function resolveSelectedQaSuiteModels(params: {
-  alternateModelExplicit: boolean;
-  fastMode?: boolean;
-  primaryModelExplicit: boolean;
-  requested: ReturnType<typeof resolveRequestedQaSuiteModels>;
-  scenarios: QaSeedScenarioWithSource[];
-}) {
-  const selectedProviderMode =
-    params.scenarios.length === 1 && params.scenarios[0]?.execution.kind === "flow"
-      ? params.scenarios[0].execution.providerMode
+  // A scenario supplies a single-run default; an explicit provider always owns the selected lane.
+  const selectedScenario =
+    params.providerMode === undefined && params.scenarioIds?.length === 1
+      ? params.scenarios.find((scenario) => scenario.id === params.scenarioIds?.[0])
       : undefined;
-  const providerMode = selectedProviderMode ?? params.requested.providerMode;
-  const primaryModel =
-    selectedProviderMode && !params.primaryModelExplicit
-      ? defaultQaModelForMode(providerMode)
-      : params.requested.primaryModel;
-  const alternateModel =
-    selectedProviderMode && !params.alternateModelExplicit
-      ? defaultQaModelForMode(providerMode, true)
-      : params.requested.alternateModel;
+  const selectedProviderMode =
+    selectedScenario?.execution.kind === "flow"
+      ? resolveQaScenarioRequiredProviderMode(selectedScenario)
+      : undefined;
+  const providerMode = normalizeQaProviderMode(
+    params.providerMode ?? selectedProviderMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
+  );
+  const primaryModel = normalizeQaSuiteModelRef(
+    params.primaryModel,
+    defaultQaModelForMode(providerMode),
+  );
+  const alternateModel = normalizeQaSuiteModelRef(
+    params.alternateModel,
+    defaultQaModelForMode(providerMode, true),
+  );
   return {
     alternateModel,
     fastMode: params.fastMode ?? isQaFastModeEnabled({ primaryModel, alternateModel }),

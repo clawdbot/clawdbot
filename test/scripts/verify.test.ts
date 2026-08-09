@@ -21,13 +21,15 @@ describe("scripts/verify", () => {
   });
 
   it("rejects unknown args before running verify stages", () => {
-    const result = runVerify("--bogus");
+    for (const args of [["--bogus"], ["bogus", "--help"]]) {
+      const result = runVerify(...args);
 
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("unknown argument: --bogus");
-    expect(result.stderr).toContain("Usage: node scripts/verify.mjs");
-    expect(result.stderr).not.toContain("CRABBOX_PHASE:");
-    expect(result.stderr).not.toContain("[verify]");
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`unknown argument: ${args[0]}`);
+      expect(result.stderr).toContain("Usage: node scripts/verify.mjs");
+      expect(result.stderr).not.toContain("CRABBOX_PHASE:");
+      expect(result.stderr).not.toContain("[verify]");
+    }
   });
 });

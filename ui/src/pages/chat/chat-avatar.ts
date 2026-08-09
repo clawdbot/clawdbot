@@ -12,6 +12,7 @@ import {
   identityAvatarClass,
   renderIdentityAvatarImage,
   resolveIdentityAvatarView,
+  type IdentityAvatarView,
 } from "../../components/identity-avatar-view.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import {
@@ -22,6 +23,7 @@ import {
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
+import { resolveAvatarImageUrl, resolveAvatarInitials } from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
@@ -41,29 +43,7 @@ export function renderChatAvatar(
   // Attributed multi-user messages show the author's own avatar (profile
   // upload → gateway Gravatar proxy → initials), not the local viewer's.
   if (normalized === "user" && sender) {
-    const label = formatSenderLabel(sender) ?? "";
-    const view = resolveIdentityAvatarView(sender);
-    const initialsAvatar = html`<div
-      class="chat-avatar user chat-avatar--sender-initials"
-      style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
-      aria-label="${label}"
-    >
-      ${view.fallback.initials}
-    </div>`;
-    if (!view.imageUrl) {
-      return initialsAvatar;
-    }
-    // The derived route may 404 (no upload, no Gravatar); swap to initials
-    // instead of a broken image. Lit reuses DOM parts, so a load must clear a
-    // prior sender's error state.
-    return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
-      ${renderIdentityAvatarImage({
-        view,
-        fallbackSelector: ".chat-avatar-slot",
-        className: "chat-avatar user",
-        alt: label,
-      })}${initialsAvatar}
-    </span>`;
+    return renderUserAvatarSlot(resolveIdentityAvatarView(sender), formatSenderLabel(sender) ?? "");
   }
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
@@ -119,7 +99,15 @@ export function renderChatAvatar(
           : "other";
 
   if (normalized === "user" && userAvatarUrl) {
-    return html`<img class="chat-avatar ${className}" src="${userAvatarUrl}" alt="${userName}" />`;
+    const imageUrl = resolveAvatarImageUrl(userAvatarUrl) ?? userAvatarUrl;
+    return renderUserAvatarSlot(
+      {
+        fallback: resolveAvatarInitials({ name: userName }),
+        imageUrl,
+        pending: typeof imageUrl !== "string",
+      },
+      userName,
+    );
   }
 
   if (normalized === "user" && userAvatarText) {
@@ -164,6 +152,32 @@ export function renderChatAvatar(
   }
 
   return html`<div class="chat-avatar ${className}">${initial}</div>`;
+}
+
+/**
+ * The avatar URL may 404 or be unreachable (missing upload, dead Gravatar,
+ * stale configured URL); swap to initials instead of a broken image. Lit
+ * reuses DOM parts, so a load must clear a prior identity's error state.
+ */
+function renderUserAvatarSlot(view: IdentityAvatarView, label: string) {
+  const initialsAvatar = html`<div
+    class="chat-avatar user chat-avatar--sender-initials"
+    style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
+    aria-label="${label}"
+  >
+    ${view.fallback.initials}
+  </div>`;
+  if (!view.imageUrl) {
+    return initialsAvatar;
+  }
+  return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
+    ${renderIdentityAvatarImage({
+      view,
+      fallbackSelector: ".chat-avatar-slot",
+      className: "chat-avatar user",
+      alt: label,
+    })}${initialsAvatar}
+  </span>`;
 }
 
 function isAvatarUrl(value: string): boolean {

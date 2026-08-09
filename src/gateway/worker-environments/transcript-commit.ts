@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import type {
   WorkerTranscriptCommitParams,
   WorkerTranscriptMessage,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { stableStringify } from "../../agents/stable-stringify.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import {
   loadSessionEntry,
@@ -111,6 +111,7 @@ function buildCommittedMessage(
     model: message.model,
     ...(message.responseModel ? { responseModel: message.responseModel } : {}),
     ...(message.responseId ? { responseId: message.responseId } : {}),
+    ...(message.providerReplay ? { providerReplay: structuredClone(message.providerReplay) } : {}),
     ...(message.diagnostics
       ? {
           diagnostics: message.diagnostics.map((diagnostic) => ({

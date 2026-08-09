@@ -1,4 +1,5 @@
 /** Linux systemd user service installer, parser, and lifecycle controls. */
+import { randomUUID } from "node:crypto";
 import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -11,12 +12,12 @@ import {
   readStateDirDotEnvFromStateDir,
 } from "../config/state-dir-dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import {
   parseStrictInteger,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "../infra/parse-finite-number.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -31,6 +32,8 @@ import {
   hasEnvironmentFileSource,
   hasInlineEnvironmentSource,
   isEnvironmentFileOnlySource,
+  normalizeServiceEnvKey,
+  normalizeServiceEnvKeys,
   readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "./service-managed-env.js";
@@ -48,6 +51,7 @@ import type {
   GatewayServiceRestartResult,
 } from "./service-types.js";
 import { enableSystemdUserLinger, readSystemdUserLingerStatus } from "./systemd-linger.js";
+import { assertNoSystemSystemdOwnership } from "./systemd-system.js";
 import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
@@ -55,7 +59,6 @@ import {
 } from "./systemd-unavailable.js";
 import {
   buildSystemdUnit,
-  parseSystemdEnvAssignment,
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
   renderSystemdEnvAssignment,
@@ -142,7 +145,27 @@ async function findMarkerOwnedSystemSystemdUnit(): Promise<{
   return null;
 }
 
-export async function findInstalledSystemdGatewayScope(
+/**
+ * The full installed-gateway picture across both systemd scopes.
+ *
+ * Modeled as a discriminated union so the "both a user-scope and a
+ * system-scope unit are installed" (`dueling`) state is representable and
+ * cannot be confused with the single-scope states. The old single-scope
+ * detector could never surface this, which is the root cause of the
+ * upgrade restart cascade in issue #79375: two supervisors bind the same
+ * port and SIGTERM each other forever.
+ */
+type SystemdGatewayInstallation =
+  | { kind: "none" }
+  | { kind: "user"; user: InstalledSystemdGatewayScope }
+  | { kind: "system"; system: InstalledSystemdGatewayScope }
+  | {
+      kind: "dueling";
+      user: InstalledSystemdGatewayScope;
+      system: InstalledSystemdGatewayScope;
+    };
+
+async function findUserSystemdGatewayScope(
   env: GatewayServiceEnv,
 ): Promise<InstalledSystemdGatewayScope | null> {
   const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
@@ -152,18 +175,132 @@ export async function findInstalledSystemdGatewayScope(
   } catch {
     userPath = null;
   }
-  if (userPath) {
-    try {
-      await fs.access(userPath);
-      return { scope: "user", unitName: canonicalUnitName, unitPath: userPath };
-    } catch {}
+  if (!userPath) {
+    return null;
   }
+  try {
+    await fs.access(userPath);
+    return { scope: "user", unitName: canonicalUnitName, unitPath: userPath };
+  } catch {
+    return null;
+  }
+}
+
+async function findSystemSystemdGatewayScope(
+  env: GatewayServiceEnv,
+): Promise<InstalledSystemdGatewayScope | null> {
+  const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
   const systemPath = await findSystemSystemdUnitPath(env);
   if (systemPath) {
     return { scope: "system", unitName: canonicalUnitName, unitPath: systemPath };
   }
+  // System-scope installs may use a non-canonical unit name; fall back to a
+  // marker-owned lookup before declaring no system unit exists.
   const owned = await findMarkerOwnedSystemSystemdUnit();
   return owned ? { scope: "system", unitName: owned.unitName, unitPath: owned.unitPath } : null;
+}
+
+/**
+ * Canonical detector: reports every installed scope without early-returning,
+ * so a coexisting user + system unit surfaces as `dueling`.
+ */
+export async function findSystemdGatewayInstallation(
+  env: GatewayServiceEnv,
+): Promise<SystemdGatewayInstallation> {
+  const [user, system] = await Promise.all([
+    findUserSystemdGatewayScope(env),
+    findSystemSystemdGatewayScope(env),
+  ]);
+  if (user && system) {
+    // Only the SAME canonical gateway installed in both scopes is a dueling
+    // conflict (issue #79375). A marker-owned system unit with a *different*
+    // name is an intentional separate gateway — e.g. a rescue bot on the same
+    // host (see docs: /gateway#multiple-gateways-same-host) — and must never
+    // be treated as a duplicate of the user unit, or doctor could remove a
+    // legitimate user gateway. The user unit is always canonical; the direct
+    // system path is canonical too, so the real #79375 case still matches.
+    if (user.unitName === system.unitName) {
+      return { kind: "dueling", user, system };
+    }
+    return { kind: "user", user };
+  }
+  if (user) {
+    return { kind: "user", user };
+  }
+  if (system) {
+    return { kind: "system", system };
+  }
+  return { kind: "none" };
+}
+
+/**
+ * The single scope to act on, preserving the long-standing user-first
+ * preference its four lifecycle callers (stop/restart/is-enabled/runtime)
+ * rely on. Dueling resolution (removing the redundant user unit) is handled
+ * separately by doctor via {@link findSystemdGatewayInstallation}; this
+ * function intentionally does not change lifecycle semantics.
+ */
+export async function findInstalledSystemdGatewayScope(
+  env: GatewayServiceEnv,
+): Promise<InstalledSystemdGatewayScope | null> {
+  const installation = await findSystemdGatewayInstallation(env);
+  // User-first: dueling resolves to the user scope, same as a user-only install.
+  if (installation.kind === "dueling" || installation.kind === "user") {
+    return installation.user;
+  }
+  if (installation.kind === "system") {
+    return installation.system;
+  }
+  return null;
+}
+
+/**
+ * True only when the system-scope unit is running now AND persistently enabled
+ * at boot. Doctor's dueling repair deletes the user unit behind this probe, so
+ * both halves are required: an enabled-but-failed unit would leave no gateway
+ * until the next boot, and an active-but-unenabled unit would leave none after
+ * it. Uncheckable (systemctl missing/erroring) reads as false so the repair
+ * fails closed to hints rather than removing a working user-scope gateway.
+ */
+export async function isSystemUnitActiveAndEnabled(
+  env: GatewayServiceEnv,
+  unitName: string,
+): Promise<boolean> {
+  if (!(await isSystemdUnitActive(env, unitName, "system"))) {
+    return false;
+  }
+  const res = await execSystemctl(["is-enabled", unitName], env);
+  if (res.code !== 0) {
+    return false;
+  }
+  // `is-enabled` also exits 0 for enabled-runtime, alias, static, indirect,
+  // generated, and transient (systemctl(1) Table 3). Only a plain `enabled`
+  // symlink survives a reboot, so anything else must not authorize deleting
+  // the user unit.
+  return normalizeLowercaseStringOrEmpty(res.stdout) === "enabled";
+}
+
+/**
+ * Builds the operator-facing warning for a `dueling` installation, or null for
+ * any other state. Pure (no I/O) so the startup guard's messaging is unit
+ * testable without faking the whole service-mode boot path.
+ */
+export function formatDuelingScopesWarning(
+  installation: SystemdGatewayInstallation,
+  port: number,
+): string | null {
+  if (installation.kind !== "dueling") {
+    return null;
+  }
+  const { user, system } = installation;
+  // Deliberately no copy-paste removal command: this formatter has no ownership
+  // evidence, and blindly deleting the user unit can remove the only working
+  // gateway. `doctor --fix` decides that behind the active+enabled probe.
+  return (
+    `detected BOTH a user-scope (${user.unitPath}) and a system-scope (${system.unitPath}) ` +
+    `gateway unit bound to port ${port}; they will SIGTERM each other in a restart loop. ` +
+    `Run \`openclaw doctor --fix\` to resolve which unit should own this gateway.`
+  );
 }
 
 export { enableSystemdUserLinger, readSystemdUserLingerStatus };
@@ -191,8 +328,7 @@ export async function readSystemdServiceExecStart(
         workingDirectory = line.slice("WorkingDirectory=".length).trim();
       } else if (line.startsWith("Environment=")) {
         const raw = line.slice("Environment=".length).trim();
-        const parsed = parseSystemdEnvAssignment(raw);
-        if (parsed) {
+        for (const parsed of parseSystemdEnvAssignments(raw)) {
           inlineEnvironment[parsed.key] = parsed.value;
         }
       } else if (line.startsWith("EnvironmentFile=")) {
@@ -251,10 +387,6 @@ function mergeEnvironmentValueSources(
   return sources;
 }
 
-function normalizeSystemdEnvironmentKey(key: string): string | null {
-  return normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
-}
-
 function collectSystemdInlineManagedKeys(params: {
   environment?: GatewayServiceEnv;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
@@ -269,7 +401,7 @@ function collectSystemdInlineManagedKeys(params: {
     if (typeof value !== "string" || !value.trim()) {
       continue;
     }
-    const key = normalizeSystemdEnvironmentKey(rawKey);
+    const key = normalizeServiceEnvKey(rawKey);
     if (!key) {
       continue;
     }
@@ -286,7 +418,7 @@ function collectSystemdFileManagedKeys(params: {
 }): Set<string> {
   const keys = new Set<string>();
   for (const [rawKey, source] of Object.entries(params.environmentValueSources ?? {})) {
-    const key = normalizeSystemdEnvironmentKey(rawKey);
+    const key = normalizeServiceEnvKey(rawKey);
     if (key && isEnvironmentFileOnlySource(source)) {
       keys.add(key);
     }
@@ -306,7 +438,7 @@ function collectSystemdFileBackedEnvironment(params: {
     if (typeof rawValue !== "string" || !rawValue.trim()) {
       continue;
     }
-    const key = normalizeSystemdEnvironmentKey(rawKey);
+    const key = normalizeServiceEnvKey(rawKey);
     if (key && params.fileManagedKeys.has(key) && !isUnresolvedShellReference(rawValue)) {
       environment[rawKey] = rawValue;
     }
@@ -336,7 +468,7 @@ function sanitizeSystemdUnitBackupContent(params: {
       continue;
     }
     const keptAssignments = assignments.filter(({ key }) => {
-      const normalizedKey = normalizeSystemdEnvironmentKey(key);
+      const normalizedKey = normalizeServiceEnvKey(key);
       return !normalizedKey || !params.fileManagedKeys.has(normalizedKey);
     });
     if (keptAssignments.length === assignments.length) {
@@ -380,6 +512,13 @@ function resolveLegacyNodeSystemdEnvironmentFilePath(params: {
 
 function isNodeSystemdEnvironment(env: GatewayServiceEnv): boolean {
   return env.OPENCLAW_SERVICE_KIND?.trim() === "node";
+}
+
+async function assertNoSystemGatewayOwnership(env: GatewayServiceEnv): Promise<void> {
+  if (isNodeSystemdEnvironment(env)) {
+    return;
+  }
+  await assertNoSystemSystemdOwnership(`${resolveSystemdServiceName(env)}.service`);
 }
 
 function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
@@ -724,6 +863,17 @@ function isSystemdUnitMissingDetail(detail: string): boolean {
   );
 }
 
+function isSystemdUnitAlreadyMissingOrInactive(detail: string, unitName: string): boolean {
+  const escapedUnitName = escapeRegExp(normalizeLowercaseStringOrEmpty(unitName));
+  return new RegExp(
+    `^(?:failed to (?:disable unit|stop\\s+${escapedUnitName}):\\s*)?` +
+      `(?:unit file\\s+${escapedUnitName}\\s+does not exist|` +
+      `unit\\s+${escapedUnitName}(?:\\s+is)?\\s+` +
+      `(?:inactive|not\\s+active|not\\s+loaded|not-found|could not be found))[.!]?$`,
+    "u",
+  ).test(normalizeLowercaseStringOrEmpty(detail));
+}
+
 const isSystemctlBusUnavailable = isSystemdUserBusUnavailableDetail;
 
 function isSystemdUserScopeUnavailable(detail: string): boolean {
@@ -850,6 +1000,16 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
   };
 }
 
+/**
+ * Resolves the account whose user manager owns the service operation.
+ * Keep linger diagnostics on this identity so sudo never checks root while
+ * systemctl targets the invoking user's manager.
+ */
+export function resolveSystemdUserServiceAccount(env: GatewayServiceEnv): string | null {
+  const { machineUser } = resolveSystemctlUserScope(env);
+  return machineUser ?? readSystemctlEffectiveUser() ?? readSystemctlEnvUser(env);
+}
+
 function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
   const trimmedUser = user.trim();
   if (!trimmedUser) {
@@ -903,6 +1063,30 @@ async function execSystemctlUser(
     return directResult;
   }
   return await execSystemctl([...machineScopeArgs, ...args], env, timeoutMs);
+}
+
+async function disableSystemdUserUnitForRemoval(
+  env: GatewayServiceEnv,
+  unitName: string,
+): Promise<void> {
+  const result = await execSystemctlUser(env, ["disable", "--now", unitName]);
+  if (result.code === 0) {
+    return;
+  }
+  const detail = readSystemctlDetail(result);
+  if (isSystemdUnitAlreadyMissingOrInactive(detail, unitName)) {
+    return;
+  }
+  throw new Error(`systemctl disable failed: ${detail || "unknown error"}`);
+}
+
+async function reloadSystemdUserManager(env: GatewayServiceEnv): Promise<void> {
+  const result = await execSystemctlUser(env, ["daemon-reload"]);
+  if (result.code !== 0) {
+    throw new Error(
+      `systemctl daemon-reload failed: ${readSystemctlDetail(result) || "unknown error"}`,
+    );
+  }
 }
 
 export async function isSystemdUserServiceAvailable(
@@ -963,9 +1147,14 @@ async function writeSystemdUnit({
   description,
 }: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ unitPath: string; backedUp: boolean }> {
   await assertSystemdAvailable(env);
+  await assertNoSystemGatewayOwnership(env);
 
   const unitPath = resolveSystemdUnitPath(env);
+  const priorManagedKeys = readManagedServiceEnvKeysFromEnvironment(
+    (await readSystemdServiceExecStart(env))?.environment,
+  );
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  await assertSystemdManagedPathIsNotSymlink(unitPath);
   const fileManagedKeys = collectSystemdFileManagedKeys({
     environmentValueSources,
   });
@@ -988,7 +1177,7 @@ async function writeSystemdUnit({
     // File does not exist yet — nothing to back up.
   }
 
-  const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const serviceDescription = resolveGatewayServiceDescription({ env, description });
   const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
   const { entries: stateDirDotEnvEntries, skippedShellReferenceKeys } =
     readStateDirDotEnvFromStateDir(stateDir);
@@ -1005,56 +1194,174 @@ async function writeSystemdUnit({
     environment,
     environmentValueSources,
   });
-  const environmentFileResult = await writeSystemdGatewayEnvironmentFile({
+  const environmentFilePath = resolveSystemdEnvironmentFilePath({
     stateDir,
-    dotenvVars: stateDirDotEnvVars,
-    inlineManagedKeys,
-    fileManagedKeys,
-    skippedManagedKeys: skippedShellReferenceKeys,
-    fileBackedEnvironment: collectSystemdFileBackedEnvironment({
-      environment,
-      fileManagedKeys,
-    }),
     environment,
   });
-  const environmentSansDotEnvEntries = Object.fromEntries(
-    Object.entries(environment ?? {}).filter(([key, value]) => {
-      if (typeof value !== "string") {
-        return false;
+  const environmentFileSnapshot = isNodeSystemdEnvironment(env)
+    ? undefined
+    : await readSystemdFileSnapshot(environmentFilePath);
+  try {
+    const environmentFileResult = await writeSystemdGatewayEnvironmentFile({
+      stateDir,
+      stateDirDotEnvKeys: Object.keys(stateDirDotEnvVars),
+      priorManagedKeys,
+      inlineManagedKeys,
+      fileManagedKeys,
+      skippedManagedKeys: skippedShellReferenceKeys,
+      fileBackedEnvironment: collectSystemdFileBackedEnvironment({
+        environment,
+        fileManagedKeys,
+      }),
+      environment,
+    });
+    const environmentSansDotEnvEntries = Object.fromEntries(
+      Object.entries(environment ?? {}).filter(([key, value]) => {
+        if (typeof value !== "string") {
+          return false;
+        }
+        const source = readEnvironmentValueSource(environmentValueSources, key);
+        if (hasEnvironmentFileSource(source) && isUnresolvedShellReference(value)) {
+          return false;
+        }
+        const normalizedKey = normalizeServiceEnvKey(key);
+        if (
+          normalizedKey &&
+          environmentFileResult.environmentKeys.has(normalizedKey) &&
+          !inlineManagedKeys.has(normalizedKey)
+        ) {
+          return false;
+        }
+        const stateDirValue = stateDirDotEnvVars[key];
+        if (typeof stateDirValue !== "string") {
+          return true;
+        }
+        return value.trim() !== stateDirValue.trim();
+      }),
+    );
+    const unit = buildSystemdUnit({
+      description: serviceDescription,
+      programArguments,
+      workingDirectory,
+      environment: environmentSansDotEnvEntries,
+      environmentFiles: environmentFileResult.environmentFiles,
+    });
+    await publishSystemdUnit({ env, unitPath, contents: unit });
+  } catch (error) {
+    if (environmentFileSnapshot !== undefined) {
+      try {
+        await restoreSystemdFileSnapshot(environmentFilePath, environmentFileSnapshot);
+      } catch (rollbackError) {
+        const failureDetail = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `${failureDetail}\nThe previous systemd environment file at ${environmentFilePath} could not be restored.`,
+          { cause: rollbackError },
+        );
       }
-      const source = readEnvironmentValueSource(environmentValueSources, key);
-      if (hasEnvironmentFileSource(source) && isUnresolvedShellReference(value)) {
-        return false;
-      }
-      const normalizedKey = normalizeSystemdEnvironmentKey(key);
-      if (
-        normalizedKey &&
-        environmentFileResult.environmentKeys.has(normalizedKey) &&
-        !inlineManagedKeys.has(normalizedKey)
-      ) {
-        return false;
-      }
-      const stateDirValue = stateDirDotEnvVars[key];
-      if (typeof stateDirValue !== "string") {
-        return true;
-      }
-      return value.trim() !== stateDirValue.trim();
-    }),
-  );
-  const unit = buildSystemdUnit({
-    description: serviceDescription,
-    programArguments,
-    workingDirectory,
-    environment: environmentSansDotEnvEntries,
-    environmentFiles: environmentFileResult.environmentFiles,
-  });
-  await fs.writeFile(unitPath, unit, "utf8");
+    }
+    throw error;
+  }
   return { unitPath, backedUp };
+}
+
+type SystemdFileSnapshot = { contents: Buffer; mode: number } | null;
+
+async function assertSystemdManagedPathIsNotSymlink(filePath: string): Promise<void> {
+  try {
+    const stat = await fs.lstat(filePath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to rewrite symlinked managed systemd file: ${filePath}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function readSystemdFileSnapshot(filePath: string): Promise<SystemdFileSnapshot> {
+  try {
+    const stat = await fs.lstat(filePath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to rewrite symlinked managed systemd file: ${filePath}`);
+    }
+    const contents = await fs.readFile(filePath);
+    return { contents, mode: stat.mode & 0o777 };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function restoreSystemdFileSnapshot(
+  filePath: string,
+  snapshot: SystemdFileSnapshot,
+): Promise<void> {
+  if (snapshot === null) {
+    await fs.rm(filePath, { force: true });
+    return;
+  }
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const rollbackPath = `${filePath}.openclaw-${randomUUID()}.rollback`;
+  try {
+    await fs.writeFile(rollbackPath, snapshot.contents, {
+      flag: "wx",
+      mode: snapshot.mode,
+    });
+    await fs.rename(rollbackPath, filePath);
+  } finally {
+    await fs.unlink(rollbackPath).catch(() => undefined);
+  }
+}
+
+async function publishSystemdUnit(params: {
+  env: GatewayServiceEnv;
+  unitPath: string;
+  contents: string;
+}): Promise<void> {
+  const previous = await readSystemdFileSnapshot(params.unitPath);
+  const temporaryPath = `${params.unitPath}.openclaw-${randomUUID()}.tmp`;
+  await fs.writeFile(temporaryPath, params.contents, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: previous?.mode ?? 0o644,
+  });
+  try {
+    // systemd ignores the temporary suffix, so this is the last ownership check
+    // before the canonical user unit becomes discoverable.
+    await assertNoSystemGatewayOwnership(params.env);
+    await fs.rename(temporaryPath, params.unitPath);
+    try {
+      await assertNoSystemGatewayOwnership(params.env);
+    } catch (ownershipError) {
+      try {
+        await restoreSystemdFileSnapshot(params.unitPath, previous);
+      } catch (rollbackError) {
+        const ownershipDetail =
+          ownershipError instanceof Error ? ownershipError.message : String(ownershipError);
+        throw new Error(
+          `${ownershipDetail}\nThe previous user systemd unit at ${params.unitPath} could not be restored.`,
+          { cause: rollbackError },
+        );
+      }
+      throw ownershipError;
+    }
+  } finally {
+    await fs.unlink(temporaryPath).catch(() => undefined);
+  }
 }
 
 async function writeSystemdGatewayEnvironmentFile(params: {
   stateDir: string;
-  dotenvVars: Record<string, string>;
+  /** Keys loaded by the Gateway directly from the state-dir .env. They must be removed from
+   *  generated files so a supervisor restart cannot shadow a later .env edit. */
+  stateDirDotEnvKeys?: Iterable<string>;
+  /** Keys owned by the previously installed service. Preserve the prior ownership record so
+   *  deleting a managed dotenv key cannot reclassify its stale file value as operator-owned. */
+  priorManagedKeys?: Iterable<string>;
   /** OpenClaw-managed keys that must not be preserved from an old env file; stale file values
    *  would override fresh inline Environment= entries because EnvironmentFile takes precedence. */
   inlineManagedKeys?: ReadonlySet<string>;
@@ -1067,7 +1374,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   fileBackedEnvironment?: Record<string, string>;
   environment?: GatewayServiceEnv;
 }): Promise<{ environmentFiles: string[]; environmentKeys: Set<string> }> {
-  const incoming = { ...params.dotenvVars, ...params.fileBackedEnvironment };
+  const incoming = { ...params.fileBackedEnvironment };
   for (const [key, value] of Object.entries(incoming)) {
     if (/[\r\n]/.test(value)) {
       throw new Error(
@@ -1110,17 +1417,16 @@ async function writeSystemdGatewayEnvironmentFile(params: {
       // File does not exist yet — nothing to preserve.
     }
   }
-  const managedKeysToDrop = new Set([
+  const managedKeysToDrop = normalizeServiceEnvKeys([
     ...(params.inlineManagedKeys ?? []),
     ...(params.fileManagedKeys ?? []),
-    ...[...(params.skippedManagedKeys ?? [])].flatMap((key) => {
-      const normalized = normalizeSystemdEnvironmentKey(key);
-      return normalized ? [normalized] : [];
-    }),
+    ...(params.priorManagedKeys ?? []),
+    ...(params.stateDirDotEnvKeys ?? []),
+    ...(params.skippedManagedKeys ?? []),
   ]);
   const operatorOnly = Object.fromEntries(
     Object.entries(existing).filter(([key, value]) => {
-      const normalized = normalizeSystemdEnvironmentKey(key);
+      const normalized = normalizeServiceEnvKey(key);
       if (normalized && managedKeysToDrop.has(normalized)) {
         return false;
       }
@@ -1130,12 +1436,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
     }),
   );
   const merged = { ...operatorOnly, ...incoming };
-  const environmentKeys = new Set(
-    Object.keys(merged).flatMap((key) => {
-      const normalized = normalizeSystemdEnvironmentKey(key);
-      return normalized ? [normalized] : [];
-    }),
-  );
+  const environmentKeys = normalizeServiceEnvKeys(Object.keys(merged));
 
   // If the merged result is empty there is nothing to write and no file needed.
   if (Object.keys(merged).length === 0) {
@@ -1168,7 +1469,7 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
   const managedKeys = new Set(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
   const remaining = Object.fromEntries(
     Object.entries(existingFile.environment).filter(([key, value]) => {
-      const normalized = normalizeSystemdEnvironmentKey(key);
+      const normalized = normalizeServiceEnvKey(key);
       if (normalized && managedKeys.has(normalized)) {
         return false;
       }
@@ -1213,6 +1514,9 @@ export async function stageSystemdService({
 async function activateSystemdService(params: { env: GatewayServiceEnv }) {
   const serviceName = resolveSystemdServiceName(params.env);
   const unitName = `${serviceName}.service`;
+  // A system unit may appear after publication. Refuse before the user manager
+  // can load a second supervisor for the same gateway name.
+  await assertNoSystemGatewayOwnership(params.env);
   const reloadSystemd = async () => await execSystemctlUser(params.env, ["daemon-reload"]);
   const throwActivationFailure = (
     action: "daemon-reload" | "enable" | "restart",
@@ -1285,7 +1589,7 @@ export async function uninstallSystemdService({
   await assertSystemdAvailable(env);
   const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
-  await execSystemctlUser(env, ["disable", "--now", unitName]);
+  await disableSystemdUserUnitForRemoval(env, unitName);
 
   const unitPath = resolveSystemdUnitPath(env);
   let removed = false;
@@ -1327,34 +1631,27 @@ async function runSystemdServiceAction(params: {
   const env = params.env ?? process.env;
   const installed = await findInstalledSystemdGatewayScope(env);
   const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
+  let runSystemctl: (args: string[]) => ReturnType<typeof execSystemctl>;
   if (installed?.scope === "system") {
     if (!isRunningAsRoot()) {
       throw new Error(
         `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
       );
     }
-    if (params.action === "restart") {
-      // systemd latches a unit into failed/start-limit-hit after it crashes faster
-      // than StartLimitBurst allows and then stops auto-restarting it. Clear the
-      // latch first so an operator restart can recover a crash-looped gateway;
-      // reset-failed is idempotent and a no-op on a healthy unit.
-      await execSystemctl(["reset-failed", unitName], env);
+    runSystemctl = (args) => execSystemctl(args, env);
+  } else {
+    await assertSystemdAvailable(env);
+    if (params.action !== "stop") {
+      await assertNoSystemGatewayOwnership(env);
     }
-    const res = await execSystemctl([params.action, unitName], env);
-    if (res.code !== 0) {
-      throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
-    }
-    params.onMutation?.();
-    params.stdout.write(`${formatLine(params.label, unitName)}\n`);
-    return;
+    runSystemctl = (args) => execSystemctlUser(env, args);
   }
-  await assertSystemdAvailable(env);
-  if (params.action === "restart") {
-    // Clear any failed/start-limit-hit latch before restart so a crash-looped
-    // gateway recovers (see system-scope branch above). Idempotent on healthy units.
-    await execSystemctlUser(env, ["reset-failed", unitName]);
+  if (params.action !== "stop") {
+    // Clear crash-loop start-limit latches only after scope ownership is proven;
+    // otherwise resetting a conflicting manager could mutate the wrong service.
+    await runSystemctl(["reset-failed", unitName]);
   }
-  const res = await execSystemctlUser(env, [params.action, unitName]);
+  const res = await runSystemctl([params.action, unitName]);
   if (res.code !== 0) {
     throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
   }
@@ -1535,21 +1832,81 @@ export async function uninstallLegacySystemdUnits({
   }
 
   const systemctlAvailable = await isSystemctlAvailable(env);
+  let removedAny = false;
   for (const unit of units) {
     if (systemctlAvailable) {
-      await execSystemctlUser(env, ["disable", "--now", `${unit.name}.service`]);
+      await disableSystemdUserUnitForRemoval(env, `${unit.name}.service`);
     } else {
       stdout.write(`systemctl unavailable; removed legacy unit file only: ${unit.name}.service\n`);
     }
 
     try {
       await fs.unlink(unit.unitPath);
+      removedAny = true;
       stdout.write(`${formatLine("Removed legacy systemd service", unit.unitPath)}\n`);
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
       stdout.write(`Legacy systemd unit not found at ${unit.unitPath}\n`);
     }
   }
+  if (systemctlAvailable && removedAny) {
+    await reloadSystemdUserManager(env);
+  }
 
   return units;
+}
+
+type UninstallUserSystemdGatewayUnitResult = {
+  unitName: string;
+  unitPath: string;
+  removed: boolean;
+  /**
+   * False when systemctl could not disable/stop the unit. Deleting the unit
+   * file alone does not evict an already-loaded unit, so callers must not
+   * claim the conflict is resolved on a file-only removal.
+   */
+  disabled: boolean;
+};
+
+/**
+ * Removes the canonical *user-scope* gateway unit, leaving any system-scope
+ * unit untouched. Used by doctor to resolve a `dueling` installation by
+ * dropping the redundant user-scope leftover (issue #79375). Removing a unit
+ * under `$HOME` needs no root, unlike the system-scope unit.
+ */
+export async function uninstallUserSystemdGatewayUnit({
+  env,
+  stdout,
+}: GatewayServiceManageArgs): Promise<UninstallUserSystemdGatewayUnitResult> {
+  const unitName = `${resolveSystemdServiceName(env)}.service`;
+  const unitPath = resolveSystemdUnitPath(env);
+  let disabled = false;
+  if (await isSystemctlAvailable(env)) {
+    await disableSystemdUserUnitForRemoval(env, unitName);
+    disabled = true;
+  } else {
+    stdout.write(
+      `systemctl unavailable; removing unit file only: ${unitName}. A loaded unit keeps running until systemd reloads.\n`,
+    );
+  }
+  let removed = false;
+  try {
+    await fs.unlink(unitPath);
+    removed = true;
+    stdout.write(`${formatLine("Removed user-scope systemd service", unitPath)}\n`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    stdout.write(`User-scope systemd unit not found at ${unitPath}\n`);
+  }
+  // The manager keeps a deleted unit's definition loaded until it reloads, so
+  // without this the unit stays startable while the detector reports it gone.
+  if (removed && disabled) {
+    await reloadSystemdUserManager(env);
+  }
+  return { unitName, unitPath, removed, disabled };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

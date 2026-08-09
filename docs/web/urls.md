@@ -103,9 +103,12 @@ slug matching.
 If one short id matches more than one session and the slug does not settle it,
 the UI does not guess. It shows a small disambiguation view with the matching
 display names, agents, and longer id prefixes. Use a longer prefix to make the
-URL unique. Resolution examines at
-most five pages of search results; if more remain, the view says that the search
-was incomplete instead of guessing.
+URL unique. Current Gateways return at most ten recent candidates; when that
+bound is reached, the view treats the result as incomplete instead of guessing.
+Against an older Gateway that predates short-id resolve support, the UI falls
+back to the prior bounded list search, scanning at most five pages of results.
+It likewise reports an incomplete search instead of guessing when that fallback
+cannot prove uniqueness.
 
 Canonical links do not use `?session=` or `?face=`. Released links such as
 `/chat?session=<sessionKey>` are accepted only at the application boundary as a
@@ -134,7 +137,7 @@ no route-specific URL parameters.
 | Agents              | `/settings/agents`          | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`           |
 | Channels            | `/settings/channels`        | `/channels`               | Shared settings parameters below                 |
 | Connection          | `/settings/connection`      | -                         | Shared settings parameters below                 |
-| General settings    | `/settings/general`         | `/config`                 | Shared settings parameters below                 |
+| Legacy General      | `/settings/general`         | `/config`                 | Redirects to Appearance → Language               |
 | Profile             | `/settings/profile`         | `/profile`                | Shared settings parameters below                 |
 | Communications      | `/settings/communications`  | `/communications`         | Shared settings parameters below                 |
 | Appearance          | `/settings/appearance`      | `/appearance`             | Shared settings parameters below                 |
@@ -169,6 +172,10 @@ no route-specific URL parameters.
 Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;
 they do not change the route identity.
+
+The retired General route and its `/config` alias are replaced once with
+`/settings/appearance?section=__appearance__#settings-language`. The historical
+`#settings-general-model` target instead lands on the Models behavior section.
 
 Memory tabs use the paths in the table instead of `?tab=`. Older Memory links
 with `?tab=memories|dreams|settings`, `?tab=dreaming`, `?tab=search`, or

@@ -7,7 +7,6 @@ import {
   type PluginActivationStateLike,
 } from "./config-activation-shared.js";
 import {
-  hasExplicitPluginConfig as hasExplicitPluginConfigShared,
   identityNormalizePluginId,
   isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
   normalizePluginsConfigWithResolver as normalizePluginsConfigWithResolverShared,
@@ -49,7 +48,6 @@ function resolvePluginActivationState(params: {
     }),
   );
 }
-export const hasExplicitPluginConfig = hasExplicitPluginConfigShared;
 
 const isBundledChannelEnabledByChannelConfig = isBundledChannelEnabledByChannelConfigShared;
 

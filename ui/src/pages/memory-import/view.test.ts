@@ -199,7 +199,7 @@ describe("renderMemoryImport", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Tracked session cursors stay in place");
+    expect(container.textContent).toContain("Session backfill cursors are rewound");
     container
       .querySelector<HTMLButtonElement>("[data-test-id='memory-backfill-rollback-confirm']")
       ?.click();

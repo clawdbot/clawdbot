@@ -6,7 +6,7 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
-  NODE_BROWSER_PROXY_COMMAND,
+  NODE_BROWSER_PROXY_COMMANDS,
   NODE_DEVICE_APPS_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_FILE_COMMANDS,
@@ -20,8 +20,9 @@ import { MOBILE_NODE_COMMANDS } from "./node-command-policy-mobile.js";
 import type { NodeSession } from "./node-registry.js";
 
 const CAMERA_COMMANDS = ["camera.list"];
+const MAC_CAMERA_COMMANDS = ["camera.ptz.status"];
 
-const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
+const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip", "camera.ptz.control"];
 
 const SCREEN_COMMANDS = ["screen.snapshot"];
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
@@ -79,7 +80,7 @@ const SYSTEM_COMMANDS = [
   ...NODE_EXEC_APPROVALS_COMMANDS,
   ...NODE_FILE_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
-  NODE_BROWSER_PROXY_COMMAND,
+  ...NODE_BROWSER_PROXY_COMMANDS,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
 ];
@@ -87,7 +88,7 @@ const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
   ...NODE_FILE_COMMANDS,
-  NODE_BROWSER_PROXY_COMMAND,
+  ...NODE_BROWSER_PROXY_COMMANDS,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
   ...SCREEN_COMMANDS,
@@ -139,6 +140,7 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
   ],
   macos: [
     ...CAMERA_COMMANDS,
+    ...MAC_CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
     ...MOBILE_NODE_COMMANDS.device,
     NODE_DEVICE_APPS_COMMAND,

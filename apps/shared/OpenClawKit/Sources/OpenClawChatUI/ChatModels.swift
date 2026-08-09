@@ -109,6 +109,11 @@ public struct OpenClawChatUsage: Codable, Hashable, Sendable {
     }
 }
 
+public enum OpenClawChatPlaybackMode: String, Codable, Hashable, Sendable {
+    case native
+    case transcode
+}
+
 public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let type: String?
     public let text: String?
@@ -124,6 +129,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let height: Int?
     public let sizeBytes: Int?
     public let durationSeconds: Double?
+    public let playback: OpenClawChatPlaybackMode?
     public let content: AnyCodable?
     public let preview: OpenClawChatCanvasPreview?
 
@@ -137,11 +143,26 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     /// Gateway media and historical file attachments must stay visible in both chat and exports.
     var isInlineAttachment: Bool {
         switch self.type?.lowercased() {
-        case "file", "attachment", "image", "audio":
+        case "file", "attachment", "image", "audio", "video":
             true
         default:
             false
         }
+    }
+
+    var mediaKind: OpenClawChatMediaKind? {
+        let normalizedType = self.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalizedType {
+        case "image": return .image
+        case "audio": return .audio
+        case "video": return .video
+        default: break
+        }
+        let normalizedMIME = self.mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedMIME?.hasPrefix("image/") == true { return .image }
+        if normalizedMIME?.hasPrefix("audio/") == true { return .audio }
+        if normalizedMIME?.hasPrefix("video/") == true { return .video }
+        return nil
     }
 
     public init(
@@ -159,6 +180,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         height: Int? = nil,
         sizeBytes: Int? = nil,
         durationSeconds: Double? = nil,
+        playback: OpenClawChatPlaybackMode? = nil,
         content: AnyCodable?,
         preview: OpenClawChatCanvasPreview? = nil,
         id: String? = nil,
@@ -181,6 +203,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.height = height
         self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds
+        self.playback = playback
         self.content = content
         self.preview = preview
         self.id = id
@@ -205,6 +228,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case height
         case sizeBytes
         case durationSeconds
+        case durationMs
+        case playback
         case content
         case preview
         case id
@@ -227,12 +252,17 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.url = decodedURL
         self.openUrl = try container.decodeIfPresent(String.self, forKey: .openUrl)
         self.artifactId = try container.decodeIfPresent(String.self, forKey: .artifactId)
-            ?? Self.managedImageArtifactId(from: decodedURL)
+            ?? Self.managedArtifactId(
+                from: decodedURL,
+                type: self.type,
+                mimeType: self.mimeType)
         self.alt = try container.decodeIfPresent(String.self, forKey: .alt)
         self.width = try container.decodeIfPresent(Int.self, forKey: .width)
         self.height = try container.decodeIfPresent(Int.self, forKey: .height)
         self.sizeBytes = try container.decodeIfPresent(Int.self, forKey: .sizeBytes)
         self.durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds)
+            ?? container.decodeIfPresent(Double.self, forKey: .durationMs).map { $0 / 1000 }
+        self.playback = try container.decodeIfPresent(OpenClawChatPlaybackMode.self, forKey: .playback)
         self.id = try container.decodeIfPresent(String.self, forKey: .id)
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         self.arguments = try container.decodeIfPresent(AnyCodable.self, forKey: .arguments)
@@ -266,6 +296,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         try container.encodeIfPresent(self.height, forKey: .height)
         try container.encodeIfPresent(self.sizeBytes, forKey: .sizeBytes)
         try container.encodeIfPresent(self.durationSeconds, forKey: .durationSeconds)
+        try container.encodeIfPresent(self.playback, forKey: .playback)
         try container.encodeIfPresent(self.content, forKey: .content)
         try container.encodeIfPresent(self.preview, forKey: .preview)
         try container.encodeIfPresent(self.id, forKey: .id)
@@ -275,7 +306,11 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         try container.encodeIfPresent(self.isError, forKey: .isError)
     }
 
-    private static func managedImageArtifactId(from rawURL: String?) -> String? {
+    private static func managedArtifactId(
+        from rawURL: String?,
+        type: String?,
+        mimeType: String?) -> String?
+    {
         guard let rawURL,
               let components = URLComponents(string: rawURL),
               components.scheme == nil,
@@ -287,7 +322,17 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
               segments[6] == "full",
               let attachmentId = UUID(uuidString: String(segments[5]))?.uuidString.lowercased()
         else { return nil }
-        return "artifact_managed_image_\(attachmentId)"
+        let normalizedType = type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedMIME = mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let prefix = if normalizedType == "audio" || normalizedType == "video" ||
+            normalizedMIME?.hasPrefix("audio/") == true ||
+            normalizedMIME?.hasPrefix("video/") == true
+        {
+            "artifact_managed_media_"
+        } else {
+            "artifact_managed_image_"
+        }
+        return prefix + attachmentId
     }
 }
 

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   PluginHookSkillEvaluationFinding,
   PluginHookSkillProposalEvaluateResult,
@@ -57,6 +58,7 @@ export async function evaluateSkillProposal(
         input.workspaceDir,
         input.env,
         input.agentId,
+        { reconcile: false },
       );
       if (read.record.status !== "pending") {
         throw new Error(
@@ -154,6 +156,7 @@ export async function evaluateSkillProposal(
         input.workspaceDir,
         input.env,
         input.agentId,
+        { reconcile: false },
       );
       if (
         current.record.status !== "pending" ||
@@ -344,18 +347,19 @@ function normalizeMetrics(
     ) {
       return undefined;
     }
-    normalized[key] = typeof value === "string" ? value.slice(0, 4_000) : value;
+    normalized[key] = typeof value === "string" ? truncateUtf16Safe(value, 4_000) : value;
   }
   return normalized;
 }
 
 function boundedRequired(value: string, maxLength: number, fallback: string): string {
   const normalized = normalizeOptionalString(value) ?? fallback;
-  return normalized.slice(0, maxLength);
+  return truncateUtf16Safe(normalized, maxLength);
 }
 
 function boundedOptional(value: string | undefined, maxLength: number): string | undefined {
-  return normalizeOptionalString(value)?.slice(0, maxLength);
+  const normalized = normalizeOptionalString(value);
+  return normalized === undefined ? undefined : truncateUtf16Safe(normalized, maxLength);
 }
 
 function storeOptions(env?: NodeJS.ProcessEnv) {

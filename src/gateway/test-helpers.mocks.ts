@@ -241,10 +241,10 @@ vi.mock("/src/agents/embedded-agent-runner/runs.js", async () => {
   >("../agents/embedded-agent-runner/runs.js", { includeActiveCount: true });
 });
 
-vi.mock("../commands/health.js", () => ({
-  getHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
+vi.mock("./health/collector.js", () => ({
+  collectGatewayHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
 }));
-vi.mock("../commands/status.js", () => ({
+vi.mock("../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 vi.mock("../commands/agent.js", () => ({
@@ -284,10 +284,12 @@ vi.mock("/src/auto-reply/reply.js", () => ({
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),
+  prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
 }));
 vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),
+  prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
 }));
 vi.mock("../cli/deps.js", async () => {
   const actual = await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");

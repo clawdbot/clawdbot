@@ -27,6 +27,7 @@ import {
 } from "./native-hook-relay-command.js";
 import {
   nativeHookRelayEventHasLocalWork,
+  nativeHookRelayEventToolMatcher,
   processNativeHookRelayInvocation,
 } from "./native-hook-relay-events.js";
 import {
@@ -41,7 +42,10 @@ import {
   setNativeHookRelayPermissionApprovalRequesterForTests as setNativeHookRelayPermissionApprovalRequesterForTestsImpl,
 } from "./native-hook-relay-permissions.js";
 import type { NativeHookRelayDeferredToolApprovalRequester } from "./native-hook-relay-permissions.js";
-import { nativeHookRelayState } from "./native-hook-relay-state.js";
+import {
+  MAX_NATIVE_HOOK_RELAY_INVOCATIONS,
+  nativeHookRelayState,
+} from "./native-hook-relay-state.js";
 import type {
   ActiveNativeHookRelayRegistration,
   ActiveNativeHookRelayRegistrationHandle,
@@ -74,7 +78,6 @@ export type {
 } from "./native-hook-relay-types.js";
 
 const DEFAULT_RELAY_TTL_MS = 30 * 60 * 1000;
-const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 const { relays, relayBridges, invocations } = nativeHookRelayState;
@@ -115,6 +118,7 @@ export function registerNativeHookRelay(
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.requester ? { requester: params.requester } : {}),
+    ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents,
     preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
     expiresAtMs,
@@ -127,6 +131,7 @@ export function registerNativeHookRelay(
   const handle: ActiveNativeHookRelayRegistrationHandle = {
     ...registration,
     shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
+    toolMatcherForEvent: (event) => nativeHookRelayEventToolMatcher(registration, event),
     commandForEvent: (event, options) =>
       buildNativeHookRelayCommandWithStateDatabase({
         provider: params.provider,

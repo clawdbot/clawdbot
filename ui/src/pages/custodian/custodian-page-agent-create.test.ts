@@ -61,8 +61,19 @@ function createContext(request: ReturnType<typeof vi.fn>) {
   const context = {
     gateway,
     agents: {
-      state: { agentsList: { mainKey: "main" } },
+      state: {
+        agentsList: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "global",
+          agents: [
+            { id: "main", model: { primary: "openai/gpt-5.5" } },
+            { id: "researcher", model: { primary: "openai/gpt-5.5" } },
+          ],
+        },
+      },
       refreshList,
+      subscribe: () => () => undefined,
     },
     agentSelection: { state: { selectedId: "main" }, set: setAgent },
     basePath: "",
@@ -104,6 +115,20 @@ describe("custodian new-agent flow", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "new-agent" });
+  });
+
+  it("does not start new-agent chat with read-only operator access", async () => {
+    const request = vi.fn();
+    const { context } = createContext(request);
+    context.gateway.snapshot.hello = {
+      ...context.gateway.snapshot.hello!,
+      auth: { role: "operator", scopes: ["operator.read"] },
+    };
+
+    await mountPage(context);
+    await Promise.resolve();
+
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("refreshes the roster and opens the created agent hatch session", async () => {

@@ -5,7 +5,16 @@
  * error handling and priority ordering.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
+import {
+  attachToolAllowlistIntersection,
+  expandToolGroups,
+  normalizeToolList,
+  normalizeToolName,
+  readToolAllowlistIntersection,
+} from "../agents/tool-policy.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -21,6 +30,7 @@ import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
+  PluginHookAgentTrigger,
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
@@ -99,6 +109,15 @@ import type {
   PluginHookSkillProposalEvaluateResult,
   PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
+import {
+  type PluginSubagentRequesterContext,
+  withPluginSubagentRequesterContext,
+} from "./runtime/subagent-requester-context.js";
+import {
+  createPluginToolMatcherScope,
+  pluginToolMatcherCoversTool,
+  type PluginToolMatcherScope,
+} from "./tool-hook-matcher.js";
 
 // Re-export types for consumers
 
@@ -156,9 +175,16 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
   after_compaction: 30_000,
   skill_changed: 30_000,
   skill_proposal_changed: 30_000,
+  // Shutdown hooks share the Gateway's five-second teardown budget. They fail
+  // open after logging so one plugin cannot consume the process watchdog.
+  gateway_stop: 5_000,
 };
 const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   before_agent_run: 15_000,
+  // Policy hooks fail closed in the global runner. A bounded timeout turns a
+  // stalled policy process into a denial instead of freezing the operation.
+  before_install: 15_000,
+  before_tool_call: 15_000,
   // Terminal finalization hooks sit on the runner's completion path. A hung
   // handler must not freeze final delivery or keep compaction retry recovery
   // unresolved; timeout fail-opens with the original final answer.
@@ -231,10 +257,37 @@ type SyncHookResult<K extends SyncHookName> = ReturnType<SyncHookHandler<K>>;
 function getHooksForName<K extends PluginHookName>(
   registry: HookRunnerRegistry,
   hookName: K,
+  ctx?: unknown,
+  toolName?: string,
 ): PluginHookRegistration<K>[] {
   return (registry.typedHooks as PluginHookRegistration<K>[])
-    .filter((h) => h.hookName === hookName)
+    .filter((hook) => {
+      if (hook.hookName !== hookName) {
+        return false;
+      }
+      if (hookName !== "before_agent_reply" || hook.eligibleTriggers === undefined) {
+        return true;
+      }
+      const trigger =
+        typeof ctx === "object" && ctx !== null && "trigger" in ctx
+          ? (ctx as { trigger?: unknown }).trigger
+          : undefined;
+      return (
+        typeof trigger === "string" &&
+        hook.eligibleTriggers.includes(trigger as PluginHookAgentTrigger)
+      );
+    })
+    .filter((hook) => toolName === undefined || pluginToolMatcherCoversTool(hook.matcher, toolName))
     .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+}
+
+export function getToolHookMatcherScope(
+  registry: HookRunnerRegistry,
+  hookName: "before_tool_call" | "after_tool_call",
+): PluginToolMatcherScope | undefined {
+  return createPluginToolMatcherScope(
+    getHooksForName(registry, hookName).map((registration) => registration.matcher),
+  );
 }
 
 function getHooksForNameAndPlugin<K extends PluginHookName>(
@@ -266,6 +319,9 @@ export function createHookRunner(
     ...DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK,
     ...options.modifyingHookTimeoutMsByHook,
   };
+  // Prompt-build hooks may start nested agent runs through any caller. The
+  // mutable token lets detached descendants dispatch after the outer run settles.
+  const beforePromptBuildDispatch = new AsyncLocalStorage<{ active: boolean }>();
 
   const shouldCatchHookErrors = (hookName: PluginHookName): boolean =>
     catchErrors && (failurePolicyByHook[hookName] ?? "fail-open") === "fail-open";
@@ -320,29 +376,96 @@ export function createHookRunner(
     providerOverride: firstDefined(acc?.providerOverride, next.providerOverride),
   });
 
+  const normalizeHookToolsAllow = (value: unknown): string[] | undefined => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    if (value.some((entry) => typeof entry !== "string")) {
+      return [];
+    }
+    return value as string[];
+  };
+
+  const readHookToolsAllowRestrictions = (value: unknown): string[][] => {
+    const normalized = normalizeHookToolsAllow(value);
+    if (normalized === undefined) {
+      return [];
+    }
+    const attached = Array.isArray(value) ? readToolAllowlistIntersection(value) : undefined;
+    return attached
+      ? attached.map((restriction) => normalizeHookToolsAllow(restriction) ?? [])
+      : [normalized];
+  };
+
+  const intersectToolsAllow = (left: string[] | undefined, right: string[]): string[] => {
+    if (left === undefined) {
+      return right;
+    }
+    if (left.length === 0 || right.length === 0) {
+      return [];
+    }
+    const normalizedLeft = normalizeToolList(expandToolGroups(left));
+    const normalizedRight = normalizeToolList(expandToolGroups(right));
+    if (normalizedLeft.includes("*")) {
+      return normalizedRight;
+    }
+    if (normalizedRight.includes("*")) {
+      return normalizedLeft;
+    }
+    return [...new Set(normalizeToolList([...normalizedLeft, ...normalizedRight]))].filter(
+      (name) => {
+        const normalized = normalizeToolName(name);
+        return (
+          isToolAllowedByPolicyName(normalized, { allow: normalizedLeft }) &&
+          isToolAllowedByPolicyName(normalized, { allow: normalizedRight })
+        );
+      },
+    );
+  };
+
   const mergeBeforePromptBuild = (
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
-  ): PluginHookBeforePromptBuildResult => ({
-    // Keep the first defined system prompt so higher-priority hooks win.
-    systemPrompt: firstDefined(acc?.systemPrompt, next.systemPrompt),
-    prependContext: concatOptionalTextSegments({
-      left: acc?.prependContext,
-      right: next.prependContext,
-    }),
-    appendContext: concatOptionalTextSegments({
-      left: acc?.appendContext,
-      right: next.appendContext,
-    }),
-    prependSystemContext: concatOptionalTextSegments({
-      left: acc?.prependSystemContext,
-      right: next.prependSystemContext,
-    }),
-    appendSystemContext: concatOptionalTextSegments({
-      left: acc?.appendSystemContext,
-      right: next.appendSystemContext,
-    }),
-  });
+  ): PluginHookBeforePromptBuildResult => {
+    const toolRestrictions = [
+      ...readHookToolsAllowRestrictions(acc?.toolsAllow),
+      ...readHookToolsAllowRestrictions(next.toolsAllow),
+    ];
+    const toolsAllow =
+      toolRestrictions.length === 0
+        ? undefined
+        : attachToolAllowlistIntersection(
+            [
+              ...(toolRestrictions.reduce<string[] | undefined>(intersectToolsAllow, undefined) ??
+                []),
+            ],
+            toolRestrictions,
+          );
+    return {
+      // Keep the first defined system prompt so higher-priority hooks win.
+      systemPrompt: firstDefined(acc?.systemPrompt, next.systemPrompt),
+      prependContext: concatOptionalTextSegments({
+        left: acc?.prependContext,
+        right: next.prependContext,
+      }),
+      appendContext: concatOptionalTextSegments({
+        left: acc?.appendContext,
+        right: next.appendContext,
+      }),
+      ...(toolsAllow !== undefined ? { toolsAllow } : {}),
+      prependSystemContext: concatOptionalTextSegments({
+        left: acc?.prependSystemContext,
+        right: next.prependSystemContext,
+      }),
+      appendSystemContext: concatOptionalTextSegments({
+        left: acc?.appendSystemContext,
+        right: next.appendSystemContext,
+      }),
+    };
+  };
 
   const mergeAgentTurnPrepare = <
     TResult extends { prependContext?: string; appendContext?: string },
@@ -517,12 +640,8 @@ export function createHookRunner(
     normalizePositiveTimeoutMs(hook.timeoutMs) ??
     normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
 
-  const getClaimingHookTimeoutMs = (
-    hookName: PluginHookName,
-    hook: PluginHookRegistration,
-  ): number | undefined =>
-    normalizePositiveTimeoutMs(hook.timeoutMs) ??
-    normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
+  const getClaimingHookTimeoutMs = (hook: PluginHookRegistration): number | undefined =>
+    normalizePositiveTimeoutMs(hook.timeoutMs);
 
   const withHookTimeout = async <T>(
     promise: Promise<T>,
@@ -552,9 +671,23 @@ export function createHookRunner(
     hook: PluginHookRegistration<K>,
     event: SyncHookEvent<K>,
     ctx: SyncHookContext<K>,
-  ): SyncHookResult<K> | PromiseLike<unknown> => {
+  ): SyncHookResult<K> | undefined => {
     const handler = hook.handler as SyncHookHandler<K>;
-    return handler(event, ctx) as SyncHookResult<K> | PromiseLike<unknown>;
+    const out = handler(event, ctx) as SyncHookResult<K> | PromiseLike<unknown>;
+    if (!isPromiseLike(out)) {
+      return out;
+    }
+
+    // Sync-only hooks ignore async results; observe rejections so the global fatal handler cannot crash.
+    void Promise.resolve(out).catch(() => undefined);
+    const msg =
+      `[hooks] ${hook.hookName} handler from ${hook.pluginId} returned a Promise; ` +
+      `this hook is synchronous and the result was ignored.`;
+    if (shouldCatchHookErrors(hook.hookName)) {
+      logger?.warn?.(msg);
+      return undefined;
+    }
+    throw new Error(msg);
   };
 
   /**
@@ -566,8 +699,9 @@ export function createHookRunner(
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
     optionsValue: VoidHookRunOptions = {},
+    matcherToolName?: string,
   ): Promise<void> {
-    const hooks = getHooksForName(registry, hookName);
+    const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
     if (hooks.length === 0) {
       return;
     }
@@ -602,8 +736,9 @@ export function createHookRunner(
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
     policy: ModifyingHookPolicy<K, TResult> = {},
+    matcherToolName?: string,
   ): Promise<TResult | undefined> {
-    const hooks = getHooksForName(registry, hookName);
+    const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
     if (hooks.length === 0) {
       return undefined;
     }
@@ -658,15 +793,16 @@ export function createHookRunner(
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
   ): Promise<TResult | undefined> {
-    const hooks = getHooksForName(registry, hookName);
+    const hooks = getHooksForName(registry, hookName, ctx);
     if (hooks.length === 0) {
       return undefined;
     }
 
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, first-claim wins)`);
 
-    return await runClaimingHooksList(hooks, hookName, event, ctx);
+    return await runClaimingHooksList(hooks, hookName, event, ctx, runHandler);
   }
 
   async function runClaimingHookForPlugin<
@@ -698,14 +834,18 @@ export function createHookRunner(
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
   ): Promise<TResult | undefined> {
     for (const hook of hooks) {
       try {
-        const promise = Promise.resolve(
-          (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
-        );
-        const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
-        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        const invokeHandler = async (): Promise<TResult | void> => {
+          const promise = Promise.resolve(
+            (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
+          );
+          const timeoutMs = getClaimingHookTimeoutMs(hook);
+          return timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+        };
+        const handlerResult = runHandler ? await runHandler(invokeHandler) : await invokeHandler();
         if (handlerResult?.handled) {
           return handlerResult;
         }
@@ -755,7 +895,7 @@ export function createHookRunner(
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
         );
-        const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
+        const timeoutMs = getClaimingHookTimeoutMs(hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
         if (handlerResult?.handled) {
           return { status: "handled", result: handlerResult };
@@ -810,12 +950,22 @@ export function createHookRunner(
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
-    return runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
-      "before_prompt_build",
-      event,
-      ctx,
-      { mergeResults: mergeBeforePromptBuild },
-    );
+    if (beforePromptBuildDispatch.getStore()?.active) {
+      return undefined;
+    }
+    const token = { active: true };
+    return await beforePromptBuildDispatch.run(token, async () => {
+      try {
+        return await runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
+          "before_prompt_build",
+          event,
+          ctx,
+          { mergeResults: mergeBeforePromptBuild },
+        );
+      } finally {
+        token.active = false;
+      }
+    });
   }
 
   async function runAgentTurnPrepare(
@@ -847,30 +997,6 @@ export function createHookRunner(
   }
 
   /**
-   * Run model_call_started hook.
-   * Allows plugins to observe sanitized model-call metadata.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runModelCallStarted(
-    event: PluginHookModelCallStartedEvent,
-    ctx: PluginHookAgentContext,
-  ): Promise<void> {
-    return runVoidHook("model_call_started", event, ctx);
-  }
-
-  /**
-   * Run model_call_ended hook.
-   * Allows plugins to observe sanitized terminal model-call metadata.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runModelCallEnded(
-    event: PluginHookModelCallEndedEvent,
-    ctx: PluginHookAgentContext,
-  ): Promise<void> {
-    return runVoidHook("model_call_ended", event, ctx);
-  }
-
-  /**
    * Run agent_end hook.
    * Allows plugins to analyze completed conversations.
    * Runs handlers in parallel.
@@ -881,24 +1007,6 @@ export function createHookRunner(
     optionsLocal?: VoidHookRunOptions,
   ): Promise<void> {
     return runVoidHook("agent_end", withAgentRunId(event, ctx), ctx, optionsLocal);
-  }
-
-  /**
-   * Run llm_input hook.
-   * Allows plugins to observe the exact input payload sent to the LLM.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_input", event, ctx);
-  }
-
-  /**
-   * Run llm_output hook.
-   * Allows plugins to observe the exact output payload returned by the LLM.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runLlmOutput(event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_output", event, ctx);
   }
 
   /**
@@ -936,18 +1044,6 @@ export function createHookRunner(
     ctx: PluginHookAgentContext,
   ): Promise<void> {
     return runVoidHook("after_compaction", event, ctx);
-  }
-
-  /**
-   * Run before_reset hook.
-   * Fired when /new or /reset clears a session, before messages are lost.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runBeforeReset(
-    event: PluginHookBeforeResetEvent,
-    ctx: PluginHookAgentContext,
-  ): Promise<void> {
-    return runVoidHook("before_reset", event, ctx);
   }
 
   // =========================================================================
@@ -996,28 +1092,6 @@ export function createHookRunner(
   }
 
   /**
-   * Run message_received hook.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runMessageReceived(
-    event: PluginHookMessageReceivedEvent,
-    ctx: PluginHookMessageContext,
-  ): Promise<void> {
-    return runVoidHook("message_received", event, ctx);
-  }
-
-  /**
-   * Run channel_pairing_requested hook.
-   * Observation-only; slow/failing handlers must not block pairing flow.
-   */
-  async function runChannelPairingRequested(
-    event: Parameters<PluginHookHandlerMap["channel_pairing_requested"]>[0],
-    ctx: Parameters<PluginHookHandlerMap["channel_pairing_requested"]>[1],
-  ): Promise<void> {
-    return runVoidHook("channel_pairing_requested", event, ctx);
-  }
-
-  /**
    * Run before_dispatch hook.
    * Allows plugins to inspect or handle a message before model dispatch.
    * First handler returning { handled: true } wins.
@@ -1025,11 +1099,17 @@ export function createHookRunner(
   async function runBeforeDispatch(
     event: PluginHookBeforeDispatchEvent,
     ctx: PluginHookBeforeDispatchContext,
+    requester?: PluginSubagentRequesterContext,
   ): Promise<PluginHookBeforeDispatchResult | undefined> {
+    const runHandler = requester
+      ? (run: () => Promise<PluginHookBeforeDispatchResult | void>) =>
+          withPluginSubagentRequesterContext(requester, run)
+      : undefined;
     return runClaimingHook<"before_dispatch", PluginHookBeforeDispatchResult>(
       "before_dispatch",
       event,
       ctx,
+      runHandler,
     );
   }
 
@@ -1141,17 +1221,6 @@ export function createHookRunner(
   }
 
   /**
-   * Run message_sent hook.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runMessageSent(
-    event: PluginHookMessageSentEvent,
-    ctx: PluginHookMessageContext,
-  ): Promise<void> {
-    return runVoidHook("message_sent", event, ctx);
-  }
-
-  /**
    * Run before_agent_run gate hook.
    * Fires after session resolution and workspace preparation, before model inference.
    * Returns the most-restrictive pass/block decision from all handlers.
@@ -1249,6 +1318,7 @@ export function createHookRunner(
         shouldStop: (result) => result.block === true,
         terminalLabel: "block=true",
       },
+      event.toolName,
     );
   }
 
@@ -1260,7 +1330,7 @@ export function createHookRunner(
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ): Promise<void> {
-    return runVoidHook("after_tool_call", event, ctx);
+    return runVoidHook("after_tool_call", event, ctx, {}, event.toolName);
   }
 
   /**
@@ -1287,19 +1357,6 @@ export function createHookRunner(
     for (const hook of hooks) {
       try {
         const out = runSyncHookHandler(hook, { ...event, message: current }, ctx);
-
-        // Guard against accidental async handlers (this hook is sync-only).
-        if (isPromiseLike(out)) {
-          const msg =
-            `[hooks] tool_result_persist handler from ${hook.pluginId} returned a Promise; ` +
-            `this hook is synchronous and the result was ignored.`;
-          if (shouldCatchHookErrors("tool_result_persist")) {
-            logger?.warn?.(msg);
-            continue;
-          }
-          throw new Error(msg);
-        }
-
         const next = (out as PluginHookToolResultPersistResult | undefined)?.message;
         if (next) {
           current = next;
@@ -1347,19 +1404,6 @@ export function createHookRunner(
     for (const hook of hooks) {
       try {
         const out = runSyncHookHandler(hook, { ...event, message: current }, ctx);
-
-        // Guard against accidental async handlers (this hook is sync-only).
-        if (isPromiseLike(out)) {
-          const msg =
-            `[hooks] before_message_write handler from ${hook.pluginId} returned a Promise; ` +
-            `this hook is synchronous and the result was ignored.`;
-          if (shouldCatchHookErrors("before_message_write")) {
-            logger?.warn?.(msg);
-            continue;
-          }
-          throw new Error(msg);
-        }
-
         const result = out as PluginHookBeforeMessageWriteResult | undefined;
 
         // If any handler blocks, return immediately.
@@ -1394,28 +1438,6 @@ export function createHookRunner(
   // =========================================================================
 
   /**
-   * Run session_start hook.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runSessionStart(
-    event: PluginHookSessionStartEvent,
-    ctx: PluginHookSessionContext,
-  ): Promise<void> {
-    return runVoidHook("session_start", event, ctx);
-  }
-
-  /**
-   * Run session_end hook.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runSessionEnd(
-    event: PluginHookSessionEndEvent,
-    ctx: PluginHookSessionContext,
-  ): Promise<void> {
-    return runVoidHook("session_end", event, ctx);
-  }
-
-  /**
    * @deprecated Core prepares thread-bound subagent bindings through channel
    * session-binding adapters before subagent_spawned fires. This remains only
    * for older plugins that call the hook runner directly.
@@ -1448,61 +1470,9 @@ export function createHookRunner(
     );
   }
 
-  /**
-   * Run subagent_spawned hook.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runSubagentSpawned(
-    event: PluginHookSubagentSpawnedEvent,
-    ctx: PluginHookSubagentContext,
-  ): Promise<void> {
-    return runVoidHook("subagent_spawned", event, ctx);
-  }
-
-  /** Run portable subagent progress presentation hooks. */
-  async function runSubagentProgress(
-    event: PluginHookSubagentProgressEvent,
-    ctx: PluginHookSubagentContext,
-  ): Promise<void> {
-    return runVoidHook("subagent_progress", event, ctx);
-  }
-
-  /**
-   * Run subagent_ended hook.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runSubagentEnded(
-    event: PluginHookSubagentEndedEvent,
-    ctx: PluginHookSubagentContext,
-  ): Promise<void> {
-    return runVoidHook("subagent_ended", event, ctx);
-  }
-
   // =========================================================================
   // Gateway Hooks
   // =========================================================================
-
-  /**
-   * Run gateway_start hook.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runGatewayStart(
-    event: PluginHookGatewayStartEvent,
-    ctx: PluginHookGatewayContext,
-  ): Promise<void> {
-    return runVoidHook("gateway_start", event, ctx);
-  }
-
-  /**
-   * Run gateway_stop hook.
-   * Runs in parallel (fire-and-forget).
-   */
-  async function runGatewayStop(
-    event: PluginHookGatewayStopEvent,
-    ctx: PluginHookGatewayContext,
-  ): Promise<void> {
-    return runVoidHook("gateway_stop", event, ctx);
-  }
 
   async function runHeartbeatPromptContribution(
     event: PluginHeartbeatPromptContributionEvent,
@@ -1512,26 +1482,6 @@ export function createHookRunner(
       "heartbeat_prompt_contribution",
       PluginHeartbeatPromptContributionResult
     >("heartbeat_prompt_contribution", event, ctx, { mergeResults: mergeAgentTurnPrepare });
-  }
-
-  /**
-   * Run cron_reconciled after the Gateway scheduler reaches a complete state.
-   */
-  async function runCronReconciled(
-    event: PluginHookCronReconciledEvent,
-    ctx: PluginHookCronReconciledContext,
-  ): Promise<void> {
-    return runVoidHook("cron_reconciled", event, ctx);
-  }
-
-  /**
-   * Run cron_changed hook for gateway-owned cron lifecycle changes.
-   */
-  async function runCronChanged(
-    event: PluginHookCronChangedEvent,
-    ctx: PluginHookGatewayContext,
-  ): Promise<void> {
-    return runVoidHook("cron_changed", event, ctx);
   }
 
   // =========================================================================
@@ -1656,8 +1606,14 @@ export function createHookRunner(
   // Utility
   // =========================================================================
 
-  function hasHooks(hookName: PluginHookName): boolean {
-    return registry.typedHooks.some((h) => h.hookName === hookName);
+  function hasHooks<K extends PluginHookName>(
+    hookName: K,
+    ctx?: Parameters<PluginHookHandlerMap[K]>[1],
+  ): boolean {
+    if (ctx === undefined) {
+      return registry.typedHooks.some((hook) => hook.hookName === hookName);
+    }
+    return getHooksForName(registry, hookName, ctx).length > 0;
   }
 
   /**
@@ -1673,28 +1629,52 @@ export function createHookRunner(
     runAgentTurnPrepare,
     runBeforePromptBuild,
     runBeforeAgentReply,
-    runModelCallStarted,
-    runModelCallEnded,
-    runLlmInput,
-    runLlmOutput,
+    runModelCallStarted: async (
+      event: PluginHookModelCallStartedEvent,
+      ctx: PluginHookAgentContext,
+    ): Promise<void> => runVoidHook("model_call_started", event, ctx),
+    runModelCallEnded: async (
+      event: PluginHookModelCallEndedEvent,
+      ctx: PluginHookAgentContext,
+    ): Promise<void> => runVoidHook("model_call_ended", event, ctx),
+    runLlmInput: async (
+      event: PluginHookLlmInputEvent,
+      ctx: PluginHookAgentContext,
+    ): Promise<void> => runVoidHook("llm_input", event, ctx),
+    runLlmOutput: async (
+      event: PluginHookLlmOutputEvent,
+      ctx: PluginHookAgentContext,
+    ): Promise<void> => runVoidHook("llm_output", event, ctx),
     runBeforeAgentFinalize,
     runAgentEnd,
     runBeforeCompaction,
     runAfterCompaction,
-    runBeforeReset,
+    runBeforeReset: async (
+      event: PluginHookBeforeResetEvent,
+      ctx: PluginHookAgentContext,
+    ): Promise<void> => runVoidHook("before_reset", event, ctx),
     // Lifecycle gate hooks
     runBeforeAgentRun,
     // Message hooks
     runInboundClaim,
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
-    runChannelPairingRequested,
-    runMessageReceived,
+    runChannelPairingRequested: async (
+      event: Parameters<PluginHookHandlerMap["channel_pairing_requested"]>[0],
+      ctx: Parameters<PluginHookHandlerMap["channel_pairing_requested"]>[1],
+    ): Promise<void> => runVoidHook("channel_pairing_requested", event, ctx),
+    runMessageReceived: async (
+      event: PluginHookMessageReceivedEvent,
+      ctx: PluginHookMessageContext,
+    ): Promise<void> => runVoidHook("message_received", event, ctx),
     runBeforeDispatch,
     runReplyDispatch,
     runReplyPayloadSending,
     runMessageSending,
-    runMessageSent,
+    runMessageSent: async (
+      event: PluginHookMessageSentEvent,
+      ctx: PluginHookMessageContext,
+    ): Promise<void> => runVoidHook("message_sent", event, ctx),
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
@@ -1702,19 +1682,46 @@ export function createHookRunner(
     // Message write hooks
     runBeforeMessageWrite,
     // Session hooks
-    runSessionStart,
-    runSessionEnd,
+    runSessionStart: async (
+      event: PluginHookSessionStartEvent,
+      ctx: PluginHookSessionContext,
+    ): Promise<void> => runVoidHook("session_start", event, ctx),
+    runSessionEnd: async (
+      event: PluginHookSessionEndEvent,
+      ctx: PluginHookSessionContext,
+    ): Promise<void> => runVoidHook("session_end", event, ctx),
     runSubagentSpawning,
     runSubagentDeliveryTarget,
-    runSubagentSpawned,
-    runSubagentProgress,
-    runSubagentEnded,
+    runSubagentSpawned: async (
+      event: PluginHookSubagentSpawnedEvent,
+      ctx: PluginHookSubagentContext,
+    ): Promise<void> => runVoidHook("subagent_spawned", event, ctx),
+    runSubagentProgress: async (
+      event: PluginHookSubagentProgressEvent,
+      ctx: PluginHookSubagentContext,
+    ): Promise<void> => runVoidHook("subagent_progress", event, ctx),
+    runSubagentEnded: async (
+      event: PluginHookSubagentEndedEvent,
+      ctx: PluginHookSubagentContext,
+    ): Promise<void> => runVoidHook("subagent_ended", event, ctx),
     // Gateway hooks
-    runGatewayStart,
-    runGatewayStop,
+    runGatewayStart: async (
+      event: PluginHookGatewayStartEvent,
+      ctx: PluginHookGatewayContext,
+    ): Promise<void> => runVoidHook("gateway_start", event, ctx),
+    runGatewayStop: async (
+      event: PluginHookGatewayStopEvent,
+      ctx: PluginHookGatewayContext,
+    ): Promise<void> => runVoidHook("gateway_stop", event, ctx),
     runHeartbeatPromptContribution,
-    runCronReconciled,
-    runCronChanged,
+    runCronReconciled: async (
+      event: PluginHookCronReconciledEvent,
+      ctx: PluginHookCronReconciledContext,
+    ): Promise<void> => runVoidHook("cron_reconciled", event, ctx),
+    runCronChanged: async (
+      event: PluginHookCronChangedEvent,
+      ctx: PluginHookGatewayContext,
+    ): Promise<void> => runVoidHook("cron_changed", event, ctx),
     // Skill hooks
     runSkillProposalEvaluate,
     runSkillProposalChanged,

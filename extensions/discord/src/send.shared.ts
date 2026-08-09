@@ -48,6 +48,7 @@ export {
   buildDiscordMessageRequest,
   createDiscordMessageNonce,
   resolveDiscordMessageFlags,
+  resolveDiscordSuppressEmbeds,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
   stripUndefinedFields,
@@ -465,6 +466,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       {
         data: media.buffer,
         name: resolvedFileName,
+        contentType: media.contentType,
       },
     ],
   });

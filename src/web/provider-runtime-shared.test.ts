@@ -105,6 +105,22 @@ describe("hasWebProviderEntryCredential", () => {
     ).toBe(false);
   });
 
+  it.each([
+    { raw: "secretref-env:CUSTOM_API_KEY", fallback: undefined },
+    { raw: undefined, fallback: "__env__:CUSTOM_API_KEY" },
+  ])("rejects retired secret markers instead of treating them as literals", ({ raw, fallback }) => {
+    expect(
+      hasWebProviderEntryCredential({
+        provider,
+        config: {},
+        toolConfig: undefined,
+        resolveRawValue: () => raw,
+        resolveFallbackRawValue: () => fallback,
+        resolveEnvValue: () => undefined,
+      }),
+    ).toBe(false);
+  });
+
   it("keeps non-reference config strings as literal credentials", () => {
     expect(
       hasWebProviderEntryCredential({

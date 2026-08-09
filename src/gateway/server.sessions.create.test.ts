@@ -5,8 +5,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
 import {
   findLiveRegistryWorktreeByOwner,
   listRegistryWorktrees,
@@ -56,10 +57,49 @@ import {
   seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
+type EnsureSessionDiffBaseline =
+  (typeof import("../sessions/session-diff-baseline.js"))["ensureSessionDiffBaseline"];
+
+const sessionDiffBaselineMocks = vi.hoisted(() => ({
+  ensure: vi.fn<EnsureSessionDiffBaseline>(),
+  useReal: false,
+}));
+
+vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../sessions/session-diff-baseline.js")>();
+  sessionDiffBaselineMocks.ensure.mockImplementation(async (params) =>
+    sessionDiffBaselineMocks.useReal
+      ? await actual.ensureSessionDiffBaseline(params)
+      : params.entry,
+  );
+  return { ...actual, ensureSessionDiffBaseline: sessionDiffBaselineMocks.ensure };
+});
+
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeEach(() => {
+  sessionDiffBaselineMocks.ensure.mockClear();
+  // Baseline capture has dedicated owner coverage and one authenticated integration below.
+  sessionDiffBaselineMocks.useReal = false;
+});
+
+async function makeNonGitTempDir(prefix: string): Promise<string> {
+  let root = await fs.realpath(os.tmpdir());
+  for (;;) {
+    const checkoutRoot = findGitCheckoutRoot(root);
+    if (!checkoutRoot) {
+      return tempDirs.make(prefix, root);
+    }
+    const parent = path.dirname(checkoutRoot);
+    if (parent === checkoutRoot) {
+      throw new Error("could not find a temp root outside a git checkout");
+    }
+    root = parent;
+  }
+}
 
 test("sessions.create and sessions.delete preserve every concurrent session lifecycle", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -125,6 +165,50 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   expect(loadSessionEntry({ sessionKey: key, storePath })?.sessionId).toBe(
     created[0]?.payload?.sessionId,
   );
+});
+
+test("keyed sessions remain recoverable across overlapping create and delete waves", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:concurrent-lifecycle-waves";
+
+  for (let wave = 0; wave < 6; wave += 1) {
+    const operations = await Promise.all(
+      Array.from({ length: 12 }, (_, index) =>
+        index % 3 === 0
+          ? directSessionReq<{ deleted: boolean }>("sessions.delete", {
+              key,
+              deleteTranscript: false,
+            })
+          : directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+              agentId: "main",
+              key,
+            }),
+      ),
+    );
+
+    expect(
+      operations.every((result) => result.ok),
+      `lifecycle wave ${wave}`,
+    ).toBe(true);
+
+    const recovered = await directSessionReq<{ key: string; sessionId: string }>(
+      "sessions.create",
+      { agentId: "main", key },
+    );
+    expect(recovered.ok, `creation after lifecycle wave ${wave}`).toBe(true);
+    expect(recovered.payload?.key).toBe(key);
+    expect(loadSessionEntry({ sessionKey: key, storePath })?.sessionId).toBe(
+      recovered.payload?.sessionId,
+    );
+
+    const deleted = await directSessionReq<{ deleted: boolean }>("sessions.delete", {
+      key,
+      deleteTranscript: false,
+    });
+    expect(deleted.ok, `deletion after lifecycle wave ${wave}`).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+  }
 });
 
 test("sessions.create keeps incognito rows process-local through list, spawn, reset, and delete", async () => {
@@ -635,6 +719,51 @@ async function initializeGitWorkspace(root: string): Promise<string> {
   return await fs.realpath(workspace);
 }
 
+test("sessions.create captures and persists the initial workspace diff baseline", async () => {
+  const root = tempDirs.make("openclaw-session-diff-baseline-");
+  const workspace = await initializeGitWorkspace(root);
+  await fs.appendFile(path.join(workspace, "README.md"), "dirty at session start\n");
+  const { storePath } = await createSessionStoreDir();
+  sessionDiffBaselineMocks.useReal = true;
+  const { ws } = await openClient({
+    browserOrigin: "http://127.0.0.1",
+    client: {
+      id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+      version: "dev",
+      platform: "web",
+      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+    },
+  });
+  try {
+    const created = await rpcReq<{ key?: string; sessionId?: string }>(ws, "sessions.create", {
+      agentId: "main",
+      cwd: workspace,
+    });
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(sessionDiffBaselineMocks.ensure).toHaveBeenCalledTimes(1);
+    const sessionKey = requireNonEmptyString(created.payload?.key, "baseline session key");
+    const sessionId = requireNonEmptyString(created.payload?.sessionId, "baseline session id");
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId,
+      spawnedCwd: workspace,
+      sessionDiffBaseline: {
+        version: 1,
+        sessionId,
+        root: workspace,
+        files: [
+          {
+            path: "README.md",
+            fingerprint: expect.any(String),
+          },
+        ],
+      },
+    });
+  } finally {
+    sessionDiffBaselineMocks.useReal = false;
+    ws.close();
+  }
+});
+
 function requireNonEmptyString(value: string | undefined, label: string): string {
   if (!value) {
     throw new Error(`expected ${label}`);
@@ -1103,7 +1232,7 @@ test("sessions.create persists a Gateway cwd without a managed worktree", async 
 });
 
 test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
-  const cwd = tempDirs.make("openclaw-session-direct-cwd-", await fs.realpath(os.tmpdir()));
+  const cwd = await makeNonGitTempDir("openclaw-session-direct-cwd-");
   const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
   const direct = await directSessionReq("sessions.create", { cwd }, client);
   expect(direct.ok).toBe(true);
@@ -1325,9 +1454,7 @@ test("sessions.create reset-in-place persists the returned worktree cwd", async 
 });
 
 test("sessions.create rejects worktrees for non-git agent workspaces", async () => {
-  const workspace = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-session-plain-workspace-"),
-  );
+  const workspace = await makeNonGitTempDir("openclaw-session-plain-workspace-");
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
   try {
@@ -1344,7 +1471,28 @@ test("sessions.create rejects worktrees for non-git agent workspaces", async () 
     });
   } finally {
     testState.agentConfig = undefined;
-    await fs.rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("sessions.create rejects worktrees for agent workspaces without a commit", async () => {
+  const workspace = await makeNonGitTempDir("openclaw-session-unborn-workspace-");
+  await execFileAsync("git", ["init", workspace]);
+  testState.agentConfig = { workspace };
+  await createSessionStoreDir();
+  try {
+    const created = await directSessionReq(
+      "sessions.create",
+      { agentId: "main", worktree: true },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "agent workspace is not a git checkout",
+    });
+  } finally {
+    testState.agentConfig = undefined;
   }
 });
 
@@ -1485,6 +1633,175 @@ test("sessions.create persists declared spawn lineage for spawn-owned creations"
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
   expect(created.payload?.entry?.spawnDepth).toBe(2);
+});
+
+test("sessions.create atomically persists trusted visible-spawn tool policy", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const parentSessionKey = "agent:main:main";
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: sessionStoreEntry("sess-visible-spawn-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      label?: string;
+      spawnedBy?: string;
+      completionOwnerSessionKey?: string;
+      parentSessionKey?: string;
+      spawnDepth?: number;
+      inheritedToolPolicyVersion?: number;
+      inheritedToolAllow?: string[];
+      inheritedToolDeny?: string[];
+    };
+  }>(
+    "sessions.create",
+    {
+      agentId: "main",
+      label: "Restricted visible child",
+      parentSessionKey,
+      spawnDepth: 1,
+    },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          syntheticClient: true,
+          sessionCreation: {
+            via: "spawn",
+            actor: { type: "agent", id: parentSessionKey },
+            completionOwnerSessionKey: "agent:main:discord:direct:alice",
+            inheritedToolPolicy: {
+              version: 1,
+              allow: ["read", "sessions_spawn"],
+              deny: ["exec"],
+            },
+          },
+        },
+      } as never,
+    },
+  );
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+  expect(created.payload?.entry).toMatchObject({
+    label: "Restricted visible child",
+    spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:alice",
+    parentSessionKey,
+    spawnDepth: 1,
+    inheritedToolPolicyVersion: 1,
+    inheritedToolAllow: ["read", "sessions_spawn"],
+    inheritedToolDeny: ["exec"],
+  });
+  const key = requireNonEmptyString(created.payload?.key, "visible child key");
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+    spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:alice",
+    inheritedToolPolicyVersion: 1,
+    inheritedToolAllow: ["read", "sessions_spawn"],
+    inheritedToolDeny: ["exec"],
+  });
+});
+
+test("sessions.create accepts a signed agent-runtime visible-spawn policy", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const parentSessionKey = "agent:main:main";
+  await writeSessionStore({
+    entries: {
+      [parentSessionKey]: sessionStoreEntry("sess-runtime-spawn-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      createdVia?: string;
+      createdActor?: unknown;
+      spawnedBy?: string;
+      completionOwnerSessionKey?: string;
+      inheritedToolAllow?: string[];
+      inheritedToolDeny?: string[];
+    };
+  }>(
+    "sessions.create",
+    {
+      agentId: "main",
+      label: "Runtime visible child",
+      parentSessionKey,
+      spawnDepth: 1,
+    },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: parentSessionKey,
+            sessionSpawnContext: {
+              completionOwnerSessionKey: "agent:main:discord:direct:bob",
+              inheritedToolPolicy: {
+                version: 1,
+                allow: ["read", "sessions_spawn"],
+                deny: ["exec"],
+              },
+            },
+          },
+        },
+      } as never,
+    },
+  );
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+  expect(created.payload?.entry).toMatchObject({
+    createdVia: "spawn",
+    createdActor: { type: "agent", id: parentSessionKey },
+    spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:bob",
+    inheritedToolAllow: ["read", "sessions_spawn"],
+    inheritedToolDeny: ["exec"],
+  });
+  const key = requireNonEmptyString(created.payload?.key, "runtime visible child key");
+  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+    spawnedBy: parentSessionKey,
+    completionOwnerSessionKey: "agent:main:discord:direct:bob",
+    inheritedToolPolicyVersion: 1,
+  });
+});
+
+test("sessions.create rejects a trusted spawn whose parent differs from its agent caller", async () => {
+  await createSessionStoreDir();
+
+  const created = await directSessionReq(
+    "sessions.create",
+    {
+      agentId: "main",
+      parentSessionKey: "agent:main:other",
+      spawnDepth: 1,
+    },
+    {
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            sessionSpawnContext: {
+              inheritedToolPolicy: { version: 1, allow: ["read"], deny: ["exec"] },
+            },
+          },
+        },
+      } as never,
+    },
+  );
+
+  expect(created.ok).toBe(false);
+  expect(created.error?.message).toContain("spawn parent must match the trusted agent caller");
 });
 
 test("sessions.create rejects spawnDepth without parentSessionKey", async () => {
@@ -2774,6 +3091,7 @@ test("sessions.create forks the parent transcript into the new session", async (
         sessionFile: parent.sessionFile,
         totalTokens: 123,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       }),
     },
   });
@@ -3011,6 +3329,7 @@ test("sessions.create rejects fork when the parent exceeds the fork size cap", a
         // Fresh persisted usage above DEFAULT_PARENT_FORK_MAX_TOKENS (100K).
         totalTokens: 200_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       }),
     },
   });
@@ -3335,7 +3654,7 @@ test("sessions.create rejects unusable attachment-only input before creating a s
   });
 
   expect(created.ok).toBe(false);
-  expect(created.error?.message).toContain("attachments require usable content");
+  expect(created.error?.message).toContain("must be object");
   const listed = await directSessionReq<{ sessions?: unknown[] }>("sessions.list", {});
   expect(listed.payload?.sessions).toEqual([]);
 });

@@ -3,27 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "./home-dir.js";
+import { pruneMapToMaxSize } from "./map-size.js";
+import { resolveEnvironmentValue } from "./process-env.js";
 
 function isDriveLessWindowsRootedPath(value: string): boolean {
   return process.platform === "win32" && /^:[\\/]/.test(value);
-}
-
-function resolveEnvironmentValue(
-  env: NodeJS.ProcessEnv | undefined,
-  name: string,
-): string | undefined {
-  if (!env) {
-    return undefined;
-  }
-  const exactValue = env[name] ?? (name === "PATH" ? env.Path : undefined);
-  if (exactValue !== undefined) {
-    return exactValue;
-  }
-  if (process.platform !== "win32") {
-    return undefined;
-  }
-  const normalizedName = name.toLowerCase();
-  return Object.entries(env).find(([key]) => key.toLowerCase() === normalizedName)?.[1];
 }
 
 export function resolveExecutablePathCandidate(
@@ -127,13 +111,7 @@ function cacheExecutablePath(key: string, resolved: string | undefined): void {
     expiresAt: Date.now() + EXECUTABLE_PATH_CACHE_TTL_MS,
     resolved: resolved ?? null,
   });
-  while (executablePathCache.size > EXECUTABLE_PATH_CACHE_MAX_ENTRIES) {
-    const oldest = executablePathCache.keys().next();
-    if (oldest.done) {
-      break;
-    }
-    executablePathCache.delete(oldest.value);
-  }
+  pruneMapToMaxSize(executablePathCache, EXECUTABLE_PATH_CACHE_MAX_ENTRIES);
 }
 
 function executablePathCacheKey(

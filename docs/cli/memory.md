@@ -27,13 +27,13 @@ openclaw memory status [--agent <id>] [--deep] [--index] [--fix] [--json] [--ver
 Without `--agent`, runs for every agent in `agents.entries`; if no agent list is
 configured, falls back to the default agent.
 
-| Flag        | Effect                                                                                                                                                                                                                                                                                                    |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--deep`    | Probe vector-store, embedding-provider, and semantic-search readiness (implies extra provider calls). Plain `memory status` stays fast and skips this; unknown vector/semantic state means it was not probed. QMD lexical `searchMode: "search"` always skips semantic vector probes, even with `--deep`. |
-| `--index`   | Reindex if the store is dirty. Implies `--deep`.                                                                                                                                                                                                                                                          |
-| `--fix`     | Repair stale recall locks and normalize promotion metadata.                                                                                                                                                                                                                                               |
-| `--json`    | Print JSON.                                                                                                                                                                                                                                                                                               |
-| `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                                             |
+| Flag        | Effect                                                                                                                                                                                                                                                                           |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--deep`    | Probe vector-store, embedding-provider, and semantic-search readiness (implies extra provider calls). Plain `memory status` stays fast and skips this; a complete persisted index is shown as `indexed (unprobed)`, while unknown vector/semantic state means it was not probed. |
+| `--index`   | Reindex if the store is dirty. Implies `--deep`.                                                                                                                                                                                                                                 |
+| `--fix`     | Repair stale recall locks and normalize promotion metadata.                                                                                                                                                                                                                      |
+| `--json`    | Print JSON.                                                                                                                                                                                                                                                                      |
+| `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                    |
 
 If the `Dreaming` line stays `off` even with `dreaming.enabled: true`, or
 scheduled sweeps never seem to run, the managed dreaming cron depends on the
@@ -63,6 +63,12 @@ openclaw memory search [query] [--query <text>] [--agent <id>] [--max-results <n
 - `--agent <id>`: defaults to the default agent (not the full agent list).
 - `--max-results <n>`: cap result count (positive integer).
 - `--min-score <n>`: filter out matches below this score.
+
+If the index remains dirty after the bounded search-time refresh, human output
+warns that matches may be incomplete. With `--json`, the response adds
+`stale: true`, plus `warning` and `action` fields describing how to rebuild the
+index. Treat an empty `results` array as authoritative only when `stale` is
+absent.
 
 ## `memory promote`
 
@@ -157,7 +163,7 @@ openclaw memory session-backfill --agent <id> --rollback [--json]
 | `--limit-days <n>`          | `92`         | Process at most this many hash-untracked days, oldest first.                                                  |
 | `--archive-files <path...>` |              | Also inspect foreign transcript files as untrusted input; embedded owner metadata is not accepted.            |
 | `--rem`                     |              | Write deterministic grounded per-day previews to `DREAMS.md` only.                                            |
-| `--apply`                   | preview only | Stage trusted candidates and write reversible `DREAMS.md` diary blocks.                                       |
+| `--apply`                   | preview only | Drain all bounded batches, stage trusted candidates, and write reversible `DREAMS.md` diary blocks.           |
 | `--rollback`                |              | Remove all grounded backfill candidates and shared backfill diary blocks, including `rem-backfill` artifacts. |
 | `--json`                    |              | Print machine-readable per-day counts and top candidates.                                                     |
 
@@ -170,7 +176,11 @@ without trustworthy owner provenance are excluded. Foreign archive files have
 no authenticated owner-provenance contract, so their embedded ownership fields
 remain untrusted and cannot be staged.
 
-`--apply` writes only the session corpus under `memory/.dreams/`, short-term
+`--apply` drains the selected history to completion in one invocation while
+keeping each bounded batch in its own transaction. Human and JSON output report
+per-batch progress plus total batches, candidates, and staged entries. A
+successful apply followed immediately by preview therefore reports zero new
+candidates. It writes only the session corpus under `memory/.dreams/`, short-term
 staging state, and reversible diary entries in `DREAMS.md`. It never writes
 `MEMORY.md` or `USER.md`; durable promotion remains a separate `memory promote`
 or dreaming decision. `--rem` and `--apply` are mutually exclusive.
@@ -178,9 +188,9 @@ or dreaming decision. `--rem` and `--apply` are mutually exclusive.
 Backfill rollback is intentionally shared with `memory rem-backfill`: both
 commands use the same grounded-only staging class and diary markers. Run
 `session-backfill --rollback` only when you intend to clear both commands'
-grounded backfill artifacts from that workspace. Rollback preserves transcript
-ingestion cursors and tracked message hashes, so removed messages are not
-automatically re-ingested.
+grounded backfill artifacts from that workspace. Rollback also removes the
+tracked hashes added by session backfill and rewinds the affected transcript
+cursors, so the same candidates can be previewed and applied again.
 
 ## Dreaming
 

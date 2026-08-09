@@ -6,13 +6,29 @@ import {
   callGatewayTool,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { isApprovalNotFoundError, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
 
 const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_PLUGIN_APPROVAL_TITLE_LENGTH = 80;
 const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 256;
+const ANSI_OSC_SEQUENCE_RE = new RegExp(
+  String.raw`(?:\u001b]|\u009d)[^\u001b\u009c\u0007]*(?:\u0007|\u001b\\|\u009c)`,
+  "g",
+);
+const ANSI_CONTROL_SEQUENCE_RE = new RegExp(
+  String.raw`(?:\u001b\[[0-?]*[ -/]*[@-~]|\u009b[0-?]*[ -/]*[@-~]|\u001b[@-Z\\-_])`,
+  "g",
+);
+const CONTROL_CHARACTER_RE = new RegExp(String.raw`[\u0000-\u001f\u007f-\u009f]+`, "g");
+const INVISIBLE_FORMATTING_CONTROL_RE = new RegExp(
+  String.raw`[\u00ad\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufe00-\ufe0f\u{e0100}-\u{e01ef}]`,
+  "gu",
+);
+const DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE = new RegExp(
+  String.raw`(?:\u001b\][^\u001b\u009c\u0007]*|\u009d[^\u001b\u009c\u0007]*|\u001b\[[0-?]*[ -/]*|\u009b[0-?]*[ -/]*|\u001b)$`,
+);
 
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
@@ -25,11 +41,6 @@ export type AppServerApprovalOutcome =
   | "cancelled";
 
 type ApprovalRequestResult = {
-  id?: string;
-  decision?: ExecApprovalDecision | null;
-};
-
-type ApprovalWaitResult = {
   id?: string;
   decision?: ExecApprovalDecision | null;
 };
@@ -50,8 +61,11 @@ export async function requestPluginApproval(params: {
     { timeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs) },
     {
       pluginId: "openclaw-codex-app-server",
-      title: truncateForGateway(params.title, MAX_PLUGIN_APPROVAL_TITLE_LENGTH),
-      description: truncateForGateway(params.description, MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH),
+      title: truncateCodexApprovalDisplayText(params.title, MAX_PLUGIN_APPROVAL_TITLE_LENGTH),
+      description: truncateCodexApprovalDisplayText(
+        params.description,
+        MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH,
+      ),
       severity: params.severity,
       toolName: params.toolName,
       toolCallId: params.toolCallId,
@@ -89,7 +103,7 @@ export async function waitForPluginApprovalDecision(params: {
   signal?: AbortSignal;
 }): Promise<ExecApprovalDecision | null | undefined> {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
-  const waitPromise: Promise<ApprovalWaitResult | null | undefined> = callGatewayTool(
+  const waitPromise: Promise<ApprovalRequestResult | null | undefined> = callGatewayTool(
     "plugin.approval.waitDecision",
     { timeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs) },
     { id: params.approvalId },
@@ -102,7 +116,7 @@ export async function waitForPluginApprovalDecision(params: {
   // Bind the verdict to the approval that parked this prompt. A stale or
   // misrouted reply maps to "unavailable" instead of releasing another gate.
   const bindDecision = (
-    result: ApprovalWaitResult | null | undefined,
+    result: ApprovalRequestResult | null | undefined,
   ): ExecApprovalDecision | null | undefined =>
     result === null ? null : result?.id === params.approvalId ? result.decision : undefined;
   if (!params.signal) {
@@ -111,10 +125,10 @@ export async function waitForPluginApprovalDecision(params: {
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     if (params.signal!.aborted) {
-      reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+      reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
       return;
     }
-    onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+    onAbort = () => reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
@@ -142,20 +156,27 @@ export function mapExecDecisionToOutcome(
   return "denied";
 }
 
-function truncateForGateway(value: string, maxLength: number): string {
+export function truncateCodexApprovalDisplayText(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${truncateUtf16Safe(value, maxLength - 3)}...`;
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
+export function stripDanglingCodexApprovalTerminalSequence(value: string): string {
+  return value.replace(DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE, "");
+}
+
+export function sanitizeCodexApprovalVisibleText(
+  value: string,
+  options: { stripDanglingTerminalSequence?: boolean } = {},
+): string {
+  const terminalSafe = value
+    .replace(ANSI_OSC_SEQUENCE_RE, "")
+    .replace(ANSI_CONTROL_SEQUENCE_RE, "");
+  const visible = options.stripDanglingTerminalSequence
+    ? stripDanglingCodexApprovalTerminalSequence(terminalSafe)
+    : terminalSafe;
+  return visible
+    .replace(INVISIBLE_FORMATTING_CONTROL_RE, " ")
+    .replace(CONTROL_CHARACTER_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }

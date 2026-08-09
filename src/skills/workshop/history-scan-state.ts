@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -88,12 +89,7 @@ export function emptyHistoryScanResult(): SkillHistoryScanResult {
 }
 
 export function isStoredHistoryScanState(value: unknown): value is StoredSkillHistoryScanState {
-  return Boolean(
-    value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    (value as { schema?: unknown }).schema === HISTORY_SCAN_SCHEMA,
-  );
+  return isRecord(value) && value.schema === HISTORY_SCAN_SCHEMA;
 }
 
 function loadHistoryScanState(params: Omit<SkillHistoryScanScope, "direction">) {

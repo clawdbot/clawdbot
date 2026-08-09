@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOpenAIQuicksilverSession,
@@ -183,6 +184,70 @@ describe("GPT-Live call creation", () => {
   });
 
   it.each([
+    {
+      name: "GPT-Live",
+      model: "gpt-live-1-codex",
+      expectedMessage: "GPT-Live call creation failed (429): provider diagnostic:",
+    },
+    {
+      name: "GA realtime",
+      model: "gpt-realtime-2.1",
+      expectedMessage: "OpenAI Realtime call creation failed (429): provider diagnostic:",
+    },
+  ])("bounds and cancels an oversized streaming $name error response", async (testCase) => {
+    const detailPrefix = "provider diagnostic: ";
+    let resolveResponseClosed: (() => void) | undefined;
+    const responseClosed = new Promise<void>((resolve) => {
+      resolveResponseClosed = resolve;
+    });
+    const server = createServer((_request, response) => {
+      response.once("close", () => resolveResponseClosed?.());
+      response.writeHead(429, { "Content-Type": "text/plain" });
+      response.write(detailPrefix + "x".repeat(32 * 1024));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("test HTTP server did not bind a TCP port");
+    }
+
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), 2_000);
+    const fetchImpl = ((_url: string | URL | Request, init?: RequestInit) =>
+      fetch(`http://127.0.0.1:${address.port}/realtime-call`, {
+        ...init,
+        signal: controller.signal,
+      })) as typeof fetch;
+
+    try {
+      const promise = createOpenAIQuicksilverCall({
+        auth: { type: "api-key", token: "platform-key" },
+        requestIds: createRequestIds(`streaming-error-${testCase.name}`),
+        sdp: "v=offer\r\n",
+        session: buildOpenAIQuicksilverSession({ model: testCase.model }),
+        signal: controller.signal,
+        fetchImpl,
+      });
+      await expect(promise).rejects.toMatchObject({
+        name: "OpenAIQuicksilverCallError",
+        status: 429,
+        message: expect.stringContaining(testCase.expectedMessage),
+      });
+      await responseClosed;
+      expect(controller.signal.aborted).toBe(false);
+    } finally {
+      clearTimeout(abortTimer);
+      controller.abort();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it.each([
     { location: null, callId: "rtc_header_fallback" },
     { location: null, callId: "019eb97d-8e9a-7ff3-94b0-ea019babd5d7" },
     { location: "http://[invalid", callId: "rtc_malformed_location_fallback" },
@@ -249,5 +314,38 @@ describe("GPT-Live call creation", () => {
       status: 201,
       message: "GPT-Live call creation returned an empty SDP answer",
     });
+  });
+
+  it.each([
+    {
+      label: "GPT-Live",
+      auth: { type: "oauth" as const, token: "oauth-token", accountId: "acct-1" },
+      model: "gpt-live-1-codex",
+      location: "/v1/live/rtc_oversized_answer",
+    },
+    {
+      label: "OpenAI Realtime",
+      auth: { type: "api-key" as const, token: "platform-key" },
+      model: "gpt-realtime-2.1",
+      location: undefined,
+    },
+  ])("rejects an oversized streaming $label SDP answer", async (testCase) => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(`v=answer\r\n${"x".repeat(256 * 1024)}`, {
+          status: 201,
+          headers: testCase.location ? { Location: testCase.location } : undefined,
+        }),
+    );
+
+    await expect(
+      createOpenAIQuicksilverCall({
+        auth: testCase.auth,
+        requestIds: createRequestIds(`oversized-answer-${testCase.label}`),
+        sdp: "v=offer\r\n",
+        session: buildOpenAIQuicksilverSession({ model: testCase.model }),
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow(`${testCase.label} SDP answer: text response exceeds 262144 bytes`);
   });
 });

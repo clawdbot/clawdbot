@@ -113,6 +113,7 @@ jobs:
       run_openclawkit_tests: ${{ steps.manifest.outputs.run_openclawkit_tests }}
       run_ios_build: ${{ steps.manifest.outputs.run_ios_build }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
+      use_compatible_android_ci: ${{ steps.manifest.outputs.use_compatible_android_ci }}
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
@@ -251,7 +252,9 @@ jobs:
       - name: Resolve exact diff base
         id: diff_base
         env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || '' }}
+          GH_TOKEN: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && github.token || '' }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
           RELEASE_GATE: ${{ inputs.release_gate }}
         run: |
@@ -263,6 +266,18 @@ jobs:
             # commit's first parent is the exact target tree for this run.
             base_sha="$(node scripts/lib/merge-head-diff-base.mjs \
               --base "$base_sha" --head HEAD --prefer-first-parent)"
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$RELEASE_GATE" != "true" ]; then
+            default_sha="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1}')"
+            if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Could not resolve the default branch head for the manual target." >&2
+              exit 1
+            fi
+            base_sha="$(
+              gh api --method GET \
+                "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${head_sha}" \
+                --jq '.merge_base_commit.sha'
+            )"
           fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$RELEASE_GATE" = "true" ]; then
             merge_ref="refs/remotes/origin/release-gate-merge"
@@ -277,6 +292,10 @@ jobs:
             fi
             base_sha="$(git rev-parse "${merge_ref}^1")"
             head_sha="$(git rev-parse "$merge_ref")"
+          fi
+          if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve an exact diff base for ${GITHUB_EVENT_NAME}." >&2
+            exit 1
           fi
           echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
@@ -708,6 +727,7 @@ jobs:
             run_openclawkit_tests: runMacos && supportsOpenClawKitTests,
             run_ios_build: runIosBuild,
             run_android_job: runAndroid,
+            use_compatible_android_ci: useCompatibleAndroidCi,
             run_protocol_event_coverage: runProtocolEventCoverage,
             android_matrix: createMatrix(
               runAndroid
@@ -806,11 +826,20 @@ jobs:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
     steps:
       - name: Checkout
+        if: github.event_name != 'workflow_dispatch' || inputs.target_ref == ''
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      # Manual target validation has a distinct fallback contract: a missing branch/tag
+      # falls back to the workflow SHA, while transport timeouts still fail closed.
+      - name: Checkout manual target
+        if: github.event_name == 'workflow_dispatch' && inputs.target_ref != ''
         env:
           CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_REF: ${{ inputs.target_ref || github.sha }}
+          CHECKOUT_REF: ${{ inputs.target_ref }}
           CHECKOUT_FALLBACK_REF: ${{ github.sha }}
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           git init "$GITHUB_WORKSPACE"
@@ -843,7 +872,7 @@ jobs:
               echo "::error::checkout fetch for '$CHECKOUT_REF' timed out"
               exit "$fetch_status"
             fi
-            if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$CHECKOUT_REF" = "$CHECKOUT_FALLBACK_REF" ]; then
+            if [ "$CHECKOUT_REF" = "$CHECKOUT_FALLBACK_REF" ]; then
               exit "$fetch_status"
             fi
             echo "::warning::workflow_dispatch target_ref '$CHECKOUT_REF' is unavailable; falling back to head SHA '$CHECKOUT_FALLBACK_REF'"
@@ -1019,10 +1048,15 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
+            fetch_refs=("+${CHECKOUT_SHA}:refs/remotes/origin/ci-target")
+            if [ -n "${CHECKOUT_BASE_SHA:-}" ]; then
+              fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-max-lines-base")
+            fi
+
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
+              "${fetch_refs[@]}" || return 1
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
@@ -1058,11 +1092,12 @@ jobs:
     # check-lint/check-dependencies; tsdown parallelizes across the extra
     # cores for roughly the same billed core-minutes.
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 20
+    timeout-minutes: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 35 || 20 }}
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
       core-support-boundary-result: ${{ steps.built_artifact_checks.outputs['core-support-boundary-result'] }}
       gateway-watch-result: ${{ steps.built_artifact_checks.outputs['gateway-watch-result'] }}
+      tui-pty-result: ${{ steps.built_artifact_checks.outputs['tui-pty-result'] }}
     steps:
       - *linux_node_checkout_step
       - name: Ensure secrets base commit (PR fast path)
@@ -1089,7 +1124,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .artifacts/build-all-cache
-          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
+          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mjs', 'scripts/runtime-postbuild.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
           restore-keys: |
             ${{ runner.os }}-build-all-v4-
 
@@ -1158,6 +1193,18 @@ jobs:
       - name: Smoke test CLI launcher status json
         run: node openclaw.mjs status --json --timeout 1
 
+      - name: Verify built Doctor plugin index persistence
+        run: |
+          if [[ -f test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts ]]; then
+            # Cold hosted runners can spend over five minutes in E2E setup before
+            # this proof's own bounded test can report a result.
+            env OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run \
+              --config test/vitest/vitest.e2e.config.ts \
+              test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts
+          else
+            echo "Selected target predates the built Doctor plugin index persistence proof."
+          fi
+
       - name: Smoke test built bundled plugin singleton
         run: pnpm test:build:singleton
 
@@ -1193,6 +1240,7 @@ jobs:
           RUN_CHANNELS: ${{ needs.preflight.outputs.run_checks }}
           RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
           RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_check_additional }}
+          RUN_TUI_PTY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
         shell: bash
         run: |
           set -uo pipefail
@@ -1204,6 +1252,7 @@ jobs:
             ["channels"]="skipped"
             ["core-support-boundary"]="skipped"
             ["gateway-watch"]="skipped"
+            ["tui-pty"]="skipped"
           )
 
           start_check() {
@@ -1269,12 +1318,27 @@ jobs:
             wait_checks
           fi
 
-          for name in channels core-support-boundary gateway-watch; do
+          # The dedicated Node shard owns the full built-CLI PTY suite. Keep
+          # only the local roundtrip and Gateway-connect artifact canaries here.
+          if [ "$RUN_TUI_PTY" = "true" ]; then
+            start_check "tui-pty" env \
+              NODE_OPTIONS=--max-old-space-size=8192 \
+              OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1 \
+              OPENCLAW_TUI_PTY_USE_BUILT_CLI=1 \
+              OPENCLAW_VITEST_MAX_WORKERS=2 \
+              node scripts/run-vitest.mjs run \
+                --config test/vitest/vitest.tui-pty.config.ts \
+                src/tui/tui-pty-local.e2e.test.ts \
+                --testNamePattern "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY"
+            wait_checks
+          fi
+
+          for name in channels core-support-boundary gateway-watch tui-pty; do
             echo "${name}-result=${results[$name]}" >> "$GITHUB_OUTPUT"
           done
 
           failures=0
-          for name in channels core-support-boundary gateway-watch; do
+          for name in channels core-support-boundary gateway-watch tui-pty; do
             if [ "${results[$name]}" = "failure" ]; then
               echo "::error title=${name} failed::${name} failed"
               failures=1
@@ -1405,10 +1469,9 @@ jobs:
     # Compatibility targets pin a frozen Control UI whose e2e expectations track
     # that release, not current main.
     if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
-    # Chromium, Vite, and the Vitest coordinator share this runner even though
-    # files are serial. Four-vCPU runners let host-side CDP polling starve while
-    # the browser kept making progress, producing rotating timeout failures.
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # First-attempt same-repo runs use Blacksmith; manual dispatches, forks, and
+    # same-repo PR retries use GitHub-hosted capacity as an independent fallback.
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     # Keep Chromium ownership serial within each independently required shard.
     timeout-minutes: 25
     strategy:
@@ -1423,9 +1486,9 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
-          # Fork PRs must never read or write repository-global sticky snapshots.
-          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          # Hosted paths use Actions cache and never touch repository-global sticky snapshots.
+          sticky-disk: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+          use-actions-cache: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
       - name: Install Playwright Chromium
         run: node scripts/ensure-playwright-chromium.mjs
@@ -1436,6 +1499,10 @@ jobs:
           --config test/vitest/vitest.ui-e2e.config.ts
           --configLoader runner
           --shard ${{ matrix.shard }}/4
+
+      - name: Test browser copilot end-to-end
+        if: matrix.shard == 1
+        run: pnpm test:e2e:browser-copilot
 
   control-ui-i18n:
     permissions:
@@ -1490,6 +1557,8 @@ jobs:
       fail-fast: false
       max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
+    env:
+      CHECKOUT_BASE_SHA: ${{ matrix.task == 'max-lines-ratchet' && needs.preflight.outputs.diff_base_revision || '' }}
     steps:
       - *linux_node_checkout_step
       - name: Prepare release-gate max-lines merge tree
@@ -1534,7 +1603,7 @@ jobs:
             exit 1
           fi
           git checkout --detach "$merge_sha"
-          echo "RATCHET_RELEASE_BASE_SHA=${frozen_base_sha}" >> "$GITHUB_ENV"
+          echo "RATCHET_BASE_REF=${frozen_base_sha}" >> "$GITHUB_ENV"
           echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
@@ -1547,41 +1616,10 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
-      - name: Resolve manual protocol base
-        id: protocol_manual_base
-        if: matrix.task == 'bundled-protocol' && github.event_name == 'workflow_dispatch' && !inputs.release_gate
-        env:
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: ${{ needs.preflight.outputs.checkout_revision }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          default_sha="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1 }')"
-          if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Could not resolve the default branch head for the manual protocol target." >&2
-            exit 1
-          fi
-          merge_base_sha="$(
-            gh api --method GET \
-              "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${TARGET_SHA}" \
-              --jq '.merge_base_commit.sha'
-          )"
-          if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Could not resolve the manual protocol target merge base." >&2
-            exit 1
-          fi
-          echo "sha=${merge_base_sha}" >> "$GITHUB_OUTPUT"
-
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
-          GH_TOKEN: ${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
-          PROTOCOL_MANUAL_BASE_SHA: ${{ steps.protocol_manual_base.outputs.sha }}
           PROTOCOL_SINCE_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
-          RATCHET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          RATCHET_EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
-          RATCHET_MANUAL_TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}
           RATCHET_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           TASK: ${{ matrix.task }}
         shell: bash
@@ -1593,86 +1631,42 @@ jobs:
               process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
             ' "$1"
           }
-          resolve_manual_merge_base() {
-            local default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
-            local default_sha
-            local merge_base_sha
-            default_sha="$(git ls-remote origin "refs/heads/${default_branch}" | awk 'NR == 1 { print $1 }')"
-            if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "Could not resolve the default branch head for the manual target." >&2
-              return 1
-            fi
-            merge_base_sha="$(
-              gh api --method GET \
-                "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}" \
-                --jq '.merge_base_commit.sha'
-            )"
-            if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "Could not resolve the manual target merge base." >&2
-              return 1
-            fi
-            printf '%s\n' "$merge_base_sha"
-          }
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
-              if [[ -n "${PROTOCOL_SINCE_BASE_SHA:-}" ]]; then
-                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
-                  "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
-              elif [[ -n "${PROTOCOL_MANUAL_BASE_SHA:-}" ]]; then
-                PROTOCOL_SINCE_BASE_SHA="$PROTOCOL_MANUAL_BASE_SHA"
-                export PROTOCOL_SINCE_BASE_SHA
-                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
-                  "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
-              else
-                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
-                  "+refs/heads/main:refs/remotes/origin/main"
-              fi
+              git fetch --no-tags --no-recurse-submodules --depth=1 origin \
+                "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
               pnpm protocol:check
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             ci-routing)
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             max-lines-ratchet)
               if ! has_package_script "check:max-lines-ratchet"; then
                 echo "Current CI targets must provide check:max-lines-ratchet." >&2
                 exit 1
               fi
-              base_sha="${RATCHET_EVENT_BASE_SHA:-${RATCHET_RELEASE_BASE_SHA:-}}"
-              if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]; then
-                base_sha=""
+              base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-max-lines-base}"
+              if ! git cat-file -e "${base_ref}^{commit}" 2>/dev/null; then
+                echo "Prepared max-lines base ${base_ref} is unavailable." >&2
+                exit 1
               fi
-              base_ref=""
               if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
                 mapfile -t merge_parents < <(git cat-file -p HEAD | sed -n 's/^parent //p')
                 if [[ "${#merge_parents[@]}" != "2" || "${merge_parents[1]:-}" != "$RATCHET_PR_HEAD_SHA" ]]; then
                   echo "Pull request checkout is not the expected two-parent merge tree." >&2
                   exit 1
                 fi
-                merge_base="${merge_parents[0]}"
-                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
-                  "+${merge_base}:refs/remotes/origin/ci-max-lines-base"
-                base_ref="refs/remotes/origin/ci-max-lines-base"
-              elif [[ -n "$base_sha" ]]; then
-                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
-                  "+${base_sha}:refs/remotes/origin/ci-max-lines-base"
-                base_ref="refs/remotes/origin/ci-max-lines-base"
-              elif [[ -n "${RATCHET_MANUAL_TARGET_SHA:-}" ]]; then
-                merge_base_sha="$(resolve_manual_merge_base)"
-                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
-                  "+${merge_base_sha}:refs/remotes/origin/ci-max-lines-base"
-                base_ref="refs/remotes/origin/ci-max-lines-base"
-              else
-                default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
-                timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
-                  "+refs/heads/${default_branch}:refs/remotes/origin/ci-max-lines-base"
-                base_ref="refs/remotes/origin/ci-max-lines-base"
+                prepared_base="$(git rev-parse "$base_ref")"
+                if [[ "${merge_parents[0]}" != "$prepared_base" ]]; then
+                  echo "Pull request merge base does not match the prepared preflight base." >&2
+                  exit 1
+                fi
               fi
-              unset GH_TOKEN
               pnpm check:max-lines-ratchet --base "$base_ref"
               if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
                 node scripts/run-oxlint.mjs src ui/src packages extensions
@@ -1733,10 +1727,14 @@ jobs:
 
       - name: Build QA smoke runtime
         env:
-          OPENCLAW_BUILD_PRIVATE_QA: "1"
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
+          # Pack the public runtime before overlaying private QA artifacts so they cannot leak.
+          unset OPENCLAW_BUILD_PRIVATE_QA
+          node scripts/build-all.mjs qaRuntime
+          pnpm ui:build
           package_args=(
+            --skip-build
             --output-dir .artifacts/qa-e2e/smoke-ci-package
             --output-name openclaw-current.tgz
           )
@@ -1744,8 +1742,7 @@ jobs:
             package_args=(--allow-unreleased-changelog "${package_args[@]}")
           fi
           node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
-          node scripts/build-all.mjs qaRuntime
-          pnpm ui:build
+          OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs qaRuntime
 
       - name: Run smoke profile part
         env:
@@ -2060,11 +2057,24 @@ jobs:
           echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} -> workers=$workers"
           echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 
+      - name: Checkout trusted Node shard runner
+        # Frozen release targets can predate the workflow-owned shard runner.
+        # Keep its implementation pinned to this workflow revision, while tests
+        # continue to run against the checked-out candidate.
+        if: ${{ hashFiles('scripts/ci-run-node-test-shard.mjs') == '' }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-workflow
+          sparse-checkout: |
+            scripts/ci-run-node-test-shard.mjs
+            scripts/lib/direct-run.mjs
+            scripts/lib/local-heavy-check-runtime.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Run Node test shard
-        # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the
-        # non-secret job context, then validate the defining workflow identity below.
         env:
-          JOB_CONTEXT_JSON: ${{ toJSON(job) }}
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
@@ -2084,30 +2094,8 @@ jobs:
           set -euo pipefail
           runner="scripts/ci-run-node-test-shard.mjs"
           if [[ ! -f "$runner" ]]; then
-            # Frozen release targets can predate the workflow-owned shard runner.
-            # Load only that runner from the exact trusted workflow commit while
-            # keeping its child tests rooted in the checked-out candidate.
-            job_workflow_repository=$(jq -r '.workflow_repository // empty' <<<"$JOB_CONTEXT_JSON")
-            job_workflow_sha=$(jq -r '.workflow_sha // empty' <<<"$JOB_CONTEXT_JSON")
-            if [[ ! "$job_workflow_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-              echo "invalid job workflow repository: $job_workflow_repository" >&2
-              exit 1
-            fi
-            if [[ ! "$job_workflow_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "invalid job workflow SHA: $job_workflow_sha" >&2
-              exit 1
-            fi
-            harness_root="${RUNNER_TEMP}/openclaw-ci-shard-runner"
-            workflow_remote="https://github.com/${job_workflow_repository}.git"
-            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 "$workflow_remote" "$job_workflow_sha"
-            for file in \
-              scripts/ci-run-node-test-shard.mjs \
-              scripts/lib/direct-run.mjs \
-              scripts/lib/local-heavy-check-runtime.mjs; do
-              mkdir -p "${harness_root}/$(dirname "$file")"
-              git show "${job_workflow_sha}:${file}" > "${harness_root}/${file}"
-            done
-            runner="${harness_root}/${runner}"
+            runner=".ci-workflow/${runner}"
+            [[ -f "$runner" ]]
           fi
           node "$runner"
 
@@ -2238,6 +2226,14 @@ jobs:
               else
                 echo "[skip] historical target predates the script declaration contract"
               fi
+              if [[ "$HISTORICAL_TARGET" == "true" ]]; then
+                echo "[skip] historical target skips the wall-clock doctor deprecation registry guard"
+              elif has_package_script "check:doctor-deprecation-registry"; then
+                pnpm check:doctor-deprecation-registry
+              else
+                echo "Current CI targets must provide the check:doctor-deprecation-registry package script." >&2
+                exit 1
+              fi
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
@@ -2271,11 +2267,18 @@ jobs:
               # The i18n verify covers keys extracted from every ui/ source,
               # not just ui/src/i18n; any ui-touching diff (run_ui_tests) or
               # i18n-tooling diff must run it. oxlint always runs.
+              lint_args=(--threads=8)
+              if [ "$(nproc)" -lt 8 ]; then
+                # Fork PRs run on 4-core hosted runners with 16GB. Bound both
+                # the core process size and its threads so type-aware oxlint
+                # does not intermittently lose the runner under memory pressure.
+                lint_args=(--split-core --threads=1)
+              fi
               if [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
-                pnpm lint --threads=8
+                pnpm lint "${lint_args[@]}"
               else
                 echo "[skip] changed scope cannot affect control-UI i18n catalogs"
-                node scripts/run-oxlint-shards.mjs --threads=8
+                node scripts/run-oxlint-shards.mjs "${lint_args[@]}"
               fi
               if [ "$FORMAT_CHECK" = "true" ]; then
                 pnpm format:check
@@ -2617,7 +2620,9 @@ jobs:
               if [ ! -f test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts ]; then
                 echo "[skip] SQLite sessions/transcripts flip proof is not present in this checkout"
               else
-                run_check "sqlite sessions/transcripts flip proof" node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts
+                # This lane owns a 420-second E2E case plus cold hosted-runner setup;
+                # keep the global watchdog strict and scope compatibility headroom here.
+                run_check "sqlite sessions/transcripts flip proof" env OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts
               fi
               ;;
             extension-package-boundary)
@@ -2984,6 +2989,7 @@ jobs:
     timeout-minutes: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 30 || 20 }}
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+      SWIFT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
     steps:
       - *platform_checkout_step
 
@@ -3173,8 +3179,16 @@ jobs:
       - name: Swift test
         run: |
           set -euo pipefail
+          swift_test_args=(--package-path apps/macos --enable-code-coverage)
+          # Hosted release and retry runs have shown test-process contention;
+          # keep the faster first-attempt Blacksmith path parallel.
+          if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]; then
+            swift_test_args+=(--parallel)
+          else
+            swift_test_args+=(--no-parallel)
+          fi
           for attempt in 1 2 3; do
-            if swift test --package-path apps/macos --parallel --enable-code-coverage; then
+            if swift test "${swift_test_args[@]}"; then
               exit 0
             fi
             echo "swift test failed (attempt $attempt/3). Retrying…"
@@ -3285,6 +3299,19 @@ jobs:
 
       - name: Build iOS app
         run: pnpm ios:build
+
+      # Debug's incremental compilation can miss actor-isolation diagnostics
+      # that Swift's optimized whole-module Release build enforces.
+      - name: Build iOS app (Release)
+        if: env.HISTORICAL_TARGET != 'true'
+        run: |
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
 
       # App compilation and screenshots do not execute approval or notification
       # lifecycles. Exercise both owners on the already provisioned simulator.
@@ -3417,6 +3444,12 @@ jobs:
         # Frozen targets keep their Gradle task contract, but CI toolchain pins remain
         # workflow-owned as before. Load them from the workflow revision so old targets work.
         uses: ./.ci-workflow/.github/actions/setup-android-toolchain
+
+      - name: Setup Node environment for native resources
+        if: needs.preflight.outputs.use_compatible_android_ci != 'true'
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
 
       # Same-repo runs carry the Gradle user home (dependency, wrapper, and
       # build caches) on a Blacksmith sticky disk: the setup-java gradle cache

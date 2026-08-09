@@ -46,6 +46,17 @@ let tempRoots: string[] = [];
 const mockedChannelMigrationPlans = vi.hoisted(() => ({
   plans: [] as Array<Record<string, unknown>>,
 }));
+const mockedLegacyMigrationDetectors = vi.hoisted(() => ({
+  entries: [] as Array<{
+    pluginId: string;
+    detector: (params: {
+      cfg: OpenClawConfig;
+      env: NodeJS.ProcessEnv;
+      stateDir: string;
+      oauthDir: string;
+    }) => Array<Record<string, unknown>>;
+  }>,
+}));
 
 vi.mock("../channels/plugins/bundled.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
@@ -83,6 +94,17 @@ vi.mock("../channels/plugins/bundled.js", async () => {
     });
   }
 
+  mockedLegacyMigrationDetectors.entries = [
+    {
+      pluginId: "whatsapp",
+      detector: ({ oauthDir }: { oauthDir: string }) =>
+        detectWhatsAppLegacyStateMigrations({ oauthDir }),
+    },
+    {
+      pluginId: "test-channel",
+      detector: () => mockedChannelMigrationPlans.plans,
+    },
+  ];
   return {
     ...actual,
     listBundledChannelLegacySessionSurfaces: vi.fn(() => [
@@ -93,10 +115,6 @@ vi.mock("../channels/plugins/bundled.js", async () => {
             ? `agent:${agentId}:whatsapp:${key.trim().toLowerCase()}`
             : null,
       },
-    ]),
-    listBundledChannelLegacyStateMigrationDetectors: vi.fn(() => [
-      ({ oauthDir }: { oauthDir: string }) => detectWhatsAppLegacyStateMigrations({ oauthDir }),
-      () => mockedChannelMigrationPlans.plans,
     ]),
   };
 });
@@ -132,11 +150,27 @@ vi.mock("../infra/json-files.js", async () => {
   };
 });
 
-vi.mock("../plugins/doctor-contract-registry.js", () => ({
-  collectRelevantDoctorPluginIds: vi.fn(() => []),
-  listPluginDoctorSessionStoreAgentIds: vi.fn(() => []),
-  listPluginDoctorStateMigrationEntries: vi.fn(() => []),
-}));
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
+  const { definePluginDoctorMigrationFromPlans } = await vi.importActual<
+    typeof import("../plugin-sdk/runtime-doctor-migrations.js")
+  >("../plugin-sdk/runtime-doctor-migrations.js");
+  return {
+    ...actual,
+    collectRelevantDoctorPluginIds: vi.fn(() => []),
+    listPluginDoctorSessionStoreAgentIds: vi.fn(() => []),
+    listPluginDoctorStateMigrationEntries: vi.fn(() =>
+      mockedLegacyMigrationDetectors.entries.map(({ pluginId, detector }) => ({
+        pluginId,
+        migration: definePluginDoctorMigrationFromPlans({
+          id: `${pluginId}-legacy-channel-state`,
+          label: `${pluginId} legacy channel state`,
+          resolvePlans: detector as never,
+        }),
+      })),
+    ),
+  };
+});
 
 async function makeTempRoot() {
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-"));
@@ -847,21 +881,39 @@ describe("doctor legacy state migrations", () => {
       },
     });
 
-    const detected = await detectLegacyStateMigrations({
-      cfg: {},
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    expect(detected.preview).toContain(
-      `- Sessions: repair migrated transcript paths in ${path.join(targetDir, "sessions.json")}`,
-    );
+    const realReadSync = fs.readSync.bind(fs);
+    let shortReadCalls = 0;
+    const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+      fd: number,
+      buffer: NodeJS.ArrayBufferView,
+      offset: number,
+      length: number,
+      position: fs.ReadPosition | null,
+    ) => {
+      shortReadCalls += 1;
+      return realReadSync(fd, buffer, offset, Math.min(length, 16), position);
+    }) as typeof fs.readSync);
 
-    const result = await runLegacyStateMigrations({ detected });
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain("Repaired migrated session transcript paths");
-    const store = JSON.parse(
-      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf8"),
-    ) as Record<string, object>;
-    expect(store["agent:main:main"]).not.toHaveProperty("sessionFile");
+    try {
+      const detected = await detectLegacyStateMigrations({
+        cfg: {},
+        env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      });
+      expect(detected.preview).toContain(
+        `- Sessions: repair migrated transcript paths in ${path.join(targetDir, "sessions.json")}`,
+      );
+
+      const result = await runLegacyStateMigrations({ detected });
+      expect(result.warnings).toStrictEqual([]);
+      expect(result.changes).toContain("Repaired migrated session transcript paths");
+      const store = JSON.parse(
+        fs.readFileSync(path.join(targetDir, "sessions.json"), "utf8"),
+      ) as Record<string, object>;
+      expect(store["agent:main:main"]).not.toHaveProperty("sessionFile");
+      expect(shortReadCalls).toBeGreaterThan(1);
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it("does not bind stale session metadata to a colliding target transcript", async () => {
@@ -1417,6 +1469,32 @@ describe("doctor legacy state migrations", () => {
       alerts: ["123456"],
     });
     expect(fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json"))).toBe(false);
+  });
+
+  it("migrates a case-preserved Telegram account filename through Doctor", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: {
+            HY_RIN_Bot: {},
+          },
+        },
+      },
+    };
+    const oauthDir = ensureCredentialsDir(root);
+    const sourcePath = path.join(oauthDir, "telegram-HY_RIN_Bot-allowFrom.json");
+    fs.writeFileSync(sourcePath, '["1008"]\n', "utf8");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
+
+    const detected = await detectLegacyStateMigrations({ cfg, env });
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env, now: () => 123 });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
+      hy_rin_bot: ["1008"],
+    });
+    expect(fs.existsSync(sourcePath)).toBe(false);
   });
 
   it("no-ops when nothing detected", async () => {

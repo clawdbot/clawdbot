@@ -306,6 +306,81 @@ describe("SessionManager.open", () => {
     expect(() => SessionManager.open(scope, dir)).not.toThrow();
   });
 
+  it("persists a fresh SQLite session header and first message", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-fresh-session",
+      sessionKey: "agent:main:sqlite-fresh-session",
+      storePath: path.join(dir, "sessions.json"),
+    };
+
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    const manager = SessionManager.open(scope, dir);
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    const messageId = manager.appendMessage({
+      role: "user",
+      content: "first message",
+      timestamp: 1,
+    });
+
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      expect.objectContaining({
+        id: scope.sessionId,
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+      }),
+      expect.objectContaining({
+        id: messageId,
+        message: expect.objectContaining({ content: "first message", role: "user" }),
+        type: "message",
+      }),
+    ]);
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
+  });
+
+  it("does not rewrite an existing session row when opening an empty transcript", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-empty-existing-row-target",
+      sessionKey: "agent:main:sqlite-empty-existing-row",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: "sqlite-existing-row",
+      updatedAt: 123,
+      label: "preserved",
+    });
+    const before = loadSessionEntry(scope);
+
+    SessionManager.open(scope, dir);
+
+    expect(loadSessionEntry(scope)).toEqual(before);
+  });
+
+  it("does not overwrite a rebound session row when the first append seeds its header", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-stale-appender",
+      sessionKey: "agent:main:sqlite-rebound-before-header",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: "sqlite-current-owner",
+      updatedAt: 456,
+      label: "preserved",
+    });
+    const before = loadSessionEntry(scope);
+    const manager = SessionManager.open(scope, dir);
+
+    expect(() =>
+      manager.appendMessage({ role: "user", content: "stale message", timestamp: 1 }),
+    ).toThrow("Session transcript header was not persisted");
+    expect(loadSessionEntry(scope)).toEqual(before);
+  });
+
   it("rejects invalid entries before mutating in-memory state", () => {
     const manager = SessionManager.inMemory("/tmp");
     const entriesBefore = manager.getEntries();
@@ -688,75 +763,7 @@ describe("SessionManager.open", () => {
     expect(loaded.getCwd()).toBe(dir);
   });
 
-  it("persists prompt-released leaf controls through SQLite markers", async () => {
-    const dir = await makeTempDir();
-    const storePath = path.join(dir, "sessions.json");
-    const sessionId = "sqlite-prompt-release";
-    const sessionKey = "agent:main:dashboard:sqlite-prompt-release";
-    const marker = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId,
-      storePath,
-    });
-    const scope = { agentId: "main", sessionId, sessionKey, storePath };
-    await upsertSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      {
-        sessionFile: marker,
-        sessionId,
-        updatedAt: 10,
-      },
-    );
-    const user = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "user-message",
-      message: { role: "user", content: "question" },
-    });
-    const assistant = await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: "base-answer",
-      message: buildAssistantMessage("base answer"),
-      parentId: user.messageId,
-    });
-    const sessionManager = openMarker(marker, sessionKey, dir);
-    const sideEntry = {
-      type: "message" as const,
-      id: "side-delivery",
-      parentId: assistant.messageId,
-      timestamp: "2026-06-15T00:00:03.000Z",
-      message: buildAssistantMessage("side delivery"),
-    };
-    await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: sideEntry.id,
-      message: sideEntry.message,
-      parentId: sideEntry.parentId,
-    });
-
-    const mergeResult = sessionManager.mergePromptReleasedSessionEntries([sideEntry], {
-      persistLeaf: true,
-    });
-
-    expect(mergeResult?.publishedEntries).toEqual([{ kind: "id", id: expect.any(String) }]);
-    const records = await loadTranscriptEvents(scope);
-    expect(records.at(-1)).toMatchObject({
-      type: "leaf",
-      parentId: sideEntry.id,
-      targetId: assistant.messageId,
-      appendParentId: sideEntry.id,
-      appendMode: "side",
-    });
-    expect(sessionManager.getAppendParentId()).toBe(sideEntry.id);
-    expect(sessionManager.getAppendMode()).toBe("side");
-    const reopened = openMarker(marker, sessionKey, dir);
-    expect(reopened.getAppendParentId()).toBe(sideEntry.id);
-    expect(reopened.getAppendMode()).toBe("side");
-    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
-  it("rejects a prompt-released leaf control after the session target rebounds", async () => {
+  it("rejects persistence after the session target rebounds", async () => {
     const dir = await makeTempDir();
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "sqlite-prompt-release-rebound";
@@ -776,27 +783,25 @@ describe("SessionManager.open", () => {
       parentId: user.messageId,
     });
     const sessionManager = openMarker(marker, sessionKey, dir);
-    const sideEntry = {
-      type: "message" as const,
-      id: "rebound-side-delivery",
-      parentId: assistant.messageId,
-      timestamp: "2026-07-26T00:00:00.000Z",
-      message: buildAssistantMessage("side delivery"),
-    };
-    await appendTranscriptMessage(scope, {
-      cwd: dir,
-      eventId: sideEntry.id,
-      message: sideEntry.message,
-      parentId: sideEntry.parentId,
-    });
     await upsertSessionEntry(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "replacement-session", updatedAt: 20 },
     );
 
-    expect(() =>
-      sessionManager.mergePromptReleasedSessionEntries([sideEntry], { persistLeaf: true }),
-    ).toThrow("leaf control was not persisted");
+    try {
+      sessionManager.appendCompaction("late summary", assistant.messageId, 42);
+      throw new Error("expected rebound compaction persistence to fail");
+    } catch (error) {
+      expect(error).toMatchObject({
+        cause: {
+          actualSessionId: "replacement-session",
+          code: "session-rebound",
+          expectedSessionId: sessionId,
+          sessionKey,
+        },
+      });
+    }
+
     const entriesBeforeRejectedAppends = sessionManager.getEntries();
     const leafBeforeRejectedAppends = sessionManager.getLeafId();
     const appendParentBeforeRejectedAppends = sessionManager.getAppendParentId();

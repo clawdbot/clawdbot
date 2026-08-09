@@ -1,12 +1,14 @@
 // Dedicated sidebar for the full-page settings takeover (see app-host.ts).
 import { html, nothing } from "lit";
-import type { UpdateAvailable } from "../api/types.ts";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
   cancelRoutePreload,
   navigationIconForRoute,
   scheduleRoutePreload,
   SETTINGS_NAVIGATION_GROUPS,
+  SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
   settingsNavigationLabelForRoute,
+  settingsNavigationOwnerRoute,
   settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
@@ -15,12 +17,14 @@ import {
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
 import "./settings-save-indicator.ts";
+import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 
 type SettingsSidebarProps = {
@@ -32,10 +36,17 @@ type SettingsSidebarProps = {
   offline: boolean;
   queuedOutboxCount?: number;
   lastError: string | null;
-  version: string;
+  gatewayVersion: string;
   updateAvailable: UpdateAvailable | null;
+  updateSchedule?: UpdateScheduleState | null;
+  heldUpdateCampaignId?: string | null;
   updateRunning: boolean;
+  canUpdate?: boolean;
+  canHoldUpdate?: boolean;
   onUpdate: () => void;
+  refreshRequired: boolean;
+  onRefresh: () => void;
+  onHoldUpdate?: () => Promise<boolean>;
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
   onExit: () => void;
@@ -78,8 +89,15 @@ function filterSettingsNavigationGroups(
       items: group.routes.map((routeId) => ({ routeId, blocks: [] })),
     }));
   }
-  const allRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
-  const directRoutes = allRoutes.filter((routeId) =>
+  const sidebarRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+  const searchableRoutes = [
+    ...new Set([
+      ...sidebarRoutes,
+      ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
+      ...blockMatches.map((block) => block.routeId),
+    ]),
+  ];
+  const directRoutes = searchableRoutes.filter((routeId) =>
     [
       settingsNavigationLabelForRoute(routeId),
       titleForRoute(routeId),
@@ -127,7 +145,7 @@ function filterSettingsNavigationGroups(
           },
         ]
       : []),
-    ...allRoutes
+    ...searchableRoutes
       .filter((routeId) => !includedRoutes.has(routeId) && blocksByRoute.has(routeId))
       .map((routeId) => ({
         labelKey: null,
@@ -137,7 +155,8 @@ function filterSettingsNavigationGroups(
 }
 
 function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: string) {
-  const active = !props.searchQuery && props.activeRouteId === routeId;
+  const active =
+    !props.searchQuery && settingsNavigationOwnerRoute(props.activeRouteId) === routeId;
   return html`
     <a
       href=${pathForRoute(routeId, props.basePath)}
@@ -152,14 +171,7 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
       @touchstart=${(event: TouchEvent) =>
         scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true)}
       @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
+        if (!shouldHandleNavigationClick(event)) {
           return;
         }
         event.preventDefault();
@@ -190,14 +202,7 @@ function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock
       class="settings-sidebar__subitem ${active ? "settings-sidebar__subitem--active" : ""}"
       aria-current=${active ? "location" : nothing}
       @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
+        if (!shouldHandleNavigationClick(event)) {
           return;
         }
         event.preventDefault();
@@ -305,8 +310,15 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       </nav>
       <openclaw-sidebar-update-card
         .updateAvailable=${props.updateAvailable}
+        .updateSchedule=${props.updateSchedule ?? null}
+        .heldUpdateCampaignId=${props.heldUpdateCampaignId ?? null}
         .updateRunning=${props.updateRunning}
+        .canUpdate=${props.canUpdate ?? false}
+        .canHoldUpdate=${props.canHoldUpdate ?? false}
         .onUpdate=${props.onUpdate}
+        .refreshRequired=${props.refreshRequired}
+        .onRefresh=${props.onRefresh}
+        .onHoldUpdate=${props.onHoldUpdate ?? (async () => false)}
       ></openclaw-sidebar-update-card>
       <footer class="settings-sidebar__footer">
         ${props.offline
@@ -319,9 +331,12 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           : html`<openclaw-settings-save-indicator
               .props=${props.saveIndicator}
             ></openclaw-settings-save-indicator>`}
-        ${props.version
-          ? html`<span class="settings-sidebar__footer-version">${props.version}</span>`
-          : nothing}
+        <openclaw-sidebar-build-chip
+          .basePath=${props.basePath}
+          .gatewayVersion=${props.gatewayVersion || null}
+          .variant=${"settings"}
+          .onNavigate=${() => props.onNavigate("about")}
+        ></openclaw-sidebar-build-chip>
       </footer>
     </aside>
   `;

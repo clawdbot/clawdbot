@@ -705,41 +705,16 @@ export function insertOperatorApproval(params: {
 
 export function getOperatorApprovalDetailed(params: {
   id: string;
+  allowTransportRef?: boolean;
   nowMs?: number;
   databaseOptions?: OpenClawStateDatabaseOptions;
 }): GetOperatorApprovalResult {
-  const id = requireApprovalId(params.id);
+  const locator = requireApprovalId(params.id);
   return runOpenClawStateWriteTransaction((database) => {
     const nowMs = params.nowMs ?? Date.now();
-    let row = selectOperatorApprovalRow(database, id);
-    if (!row) {
-      return { outcome: "not-found" };
-    }
-    if (row.status === "pending" && row.expires_at_ms <= nowMs) {
-      row = expirePendingRow({ database, id, nowMs, createdAtMs: row.created_at_ms });
-      if (!row) {
-        return { outcome: "not-found" };
-      }
-    }
-    const record = decodeOperatorApprovalRow(row);
-    if (record) {
-      return { outcome: "found", record };
-    }
-    denyCorruptPendingRow({ database, id, nowMs, createdAtMs: row.created_at_ms });
-    return { outcome: "corrupt" };
-  }, params.databaseOptions);
-}
-
-/** Resolve either the canonical id or its fixed-size transport reference. */
-export function getOperatorApprovalDetailedByLocator(params: {
-  locator: string;
-  nowMs?: number;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-}): GetOperatorApprovalResult {
-  const locator = requireApprovalId(params.locator);
-  return runOpenClawStateWriteTransaction((database) => {
-    const nowMs = params.nowMs ?? Date.now();
-    let row = selectOperatorApprovalRowByLocator(database, locator);
+    let row = params.allowTransportRef
+      ? selectOperatorApprovalRowByLocator(database, locator)
+      : selectOperatorApprovalRow(database, locator);
     if (!row) {
       return { outcome: "not-found" };
     }
@@ -755,7 +730,7 @@ export function getOperatorApprovalDetailedByLocator(params: {
       return { outcome: "found", record };
     }
     denyCorruptPendingRow({ database, id, nowMs, createdAtMs: row.created_at_ms });
-    return { outcome: "corrupt", id };
+    return params.allowTransportRef ? { outcome: "corrupt", id } : { outcome: "corrupt" };
   }, params.databaseOptions);
 }
 

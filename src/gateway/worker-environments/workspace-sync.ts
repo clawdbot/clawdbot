@@ -1,8 +1,9 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
-import { type PreparedWorkerSsh, workerSshCommandOptions } from "./ssh.js";
+import { type PreparedWorkerSsh, runWorkerSshCandidates, workerSshCommandOptions } from "./ssh.js";
 import {
   WorkerTunnelOwnerDisconnectedError,
   type WorkerTunnelHandle,
@@ -17,6 +18,11 @@ import {
   recoverAcceptedWorkspacePublication,
 } from "./workspace-accepted-sync.js";
 import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
+import {
+  REMOTE_WORKSPACE_QUIESCE_JS,
+  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+  REMOTE_WORKSPACE_RESUME_JS,
+} from "./workspace-quiescence-scripts.js";
 import {
   applyStagedWorkerWorkspace,
   assertWorkspaceMatchesManifest,
@@ -33,42 +39,40 @@ import {
   workerWorkspaceTransferPaths,
 } from "./workspace-result-staging.js";
 import {
+  createWorkerWorkspaceRsyncReceiverPathFactory,
   parseManifestRef,
-  parseRemoteWorkspaceDirectory,
+  parseRemoteWorkspaceSetup,
   probeWorkspaceGitMode,
   readTransferredManifest,
   resolveRemoteWorkspaceManifest,
-  runBoundedInboundRsync as runBoundedInboundRsyncTransfer,
   stableWorkerPathComponent,
   validateWorkspaceSyncRequest,
   verifyRemoteWorkspaceManifest,
   waitForQuiescenceRenewal,
+  WORKER_WORKSPACE_RSYNC_DESTINATION,
   workerWorkspaceCommandSucceeded as success,
   workerWorkspaceRsyncRemoteCommand,
+  workerWorkspaceRsyncReceiverEntryPath,
   workerWorkspaceSshArgv,
   workspaceSyncError,
   type WorkerWorkspaceActionsOptions,
 } from "./workspace-sync-helpers.js";
-import { runLocalCommandToFile, writeEligibleGitFiles } from "./workspace-sync-local.js";
-export { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
+import { createGitTransferList, runLocalCommandToFile } from "./workspace-sync-local.js";
 import {
-  REMOTE_WORKSPACE_QUIESCE_JS,
-  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-  REMOTE_WORKSPACE_RESUME_JS,
-} from "./workspace-quiescence-scripts.js";
-import {
+  REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
   REMOTE_GIT_WORKSPACE_SETUP_SCRIPT,
   REMOTE_WORKSPACE_MANIFEST_JS,
   REMOTE_WORKSPACE_SETUP_SCRIPT,
 } from "./workspace-sync-scripts.js";
+import { createWorkerWorkspaceRsyncTransport } from "./workspace-sync-transport.js";
 
 const REMOTE_SETUP_TIMEOUT_MS = 20_000;
 const WORKSPACE_TIMEOUT_MS = 10 * 60_000;
 const WORKSPACE_QUIESCENCE_TIMEOUT_MS = 12 * 60_000;
 const WORKSPACE_QUIESCENCE_RENEW_INTERVAL_MS = 4 * 60_000;
-// Relative to the $HOME/.openclaw-worker root owned by REMOTE_WORKSPACE_SETUP_SCRIPT;
+// Relative to the canonical worker $HOME owned by REMOTE_WORKSPACE_SETUP_SCRIPT;
 // rsync targets must use the returned absolute directory, never this relative path.
-const REMOTE_WORKSPACE_ROOT = "workspaces";
+const REMOTE_WORKSPACE_ROOT = ".openclaw-worker/workspaces";
 const REMOTE_GIT_PACK_NAME = ".openclaw-base.pack";
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 const INBOUND_RSYNC_BW_LIMIT_KIB = 65_536;
@@ -100,31 +104,39 @@ export function createWorkerWorkspaceActions(
   const runTask = (argv: string[], commandOptions: CommandOptions): Promise<SpawnResult> =>
     track(options.runner.run(argv, commandOptions));
 
-  const runBoundedInboundRsync = async (params: {
-    argv: string[];
-    destinationRoot: string;
-    entryLimit: number;
-    totalByteLimit: number;
-  }): Promise<SpawnResult> => {
-    return await runBoundedInboundRsyncTransfer({
-      ...params,
-      ownerSignal: options.ownerSignal,
-      runTask,
-      timeoutMs: WORKSPACE_TIMEOUT_MS,
-    });
-  };
+  const { runBoundedInboundRsync, runRsync } = createWorkerWorkspaceRsyncTransport({
+    ownerSignal: options.ownerSignal,
+    runTask,
+    timeoutMs: WORKSPACE_TIMEOUT_MS,
+  });
+  const receiverEntryPath = workerWorkspaceRsyncReceiverEntryPath(options.bundleHash);
 
   const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
     const prepared = requirePrepared();
-    return await runTask(
-      workerWorkspaceSshArgv(prepared, command.argv),
-      workerSshCommandOptions({
-        input: command.input,
-        timeoutMs: command.timeoutMs ?? WORKSPACE_TIMEOUT_MS,
-        signal: command.signal
-          ? AbortSignal.any([options.ownerSignal, command.signal])
-          : options.ownerSignal,
-      }),
+    const timeoutMs = command.timeoutMs ?? WORKSPACE_TIMEOUT_MS;
+    const signal = command.signal
+      ? AbortSignal.any([options.ownerSignal, command.signal])
+      : options.ownerSignal;
+    // Exit 255 does not prove whether the remote command was accepted, so stateful
+    // commands must stay pinned to one transport attempt.
+    if (command.transportRetry === "never") {
+      return await runTask(
+        workerWorkspaceSshArgv(prepared, command.argv),
+        workerSshCommandOptions({ input: command.input, timeoutMs, signal }),
+      );
+    }
+    return await runWorkerSshCandidates(
+      prepared,
+      timeoutMs,
+      async (port, remainingTimeoutMs) =>
+        await runTask(
+          workerWorkspaceSshArgv(prepared, command.argv, port),
+          workerSshCommandOptions({
+            input: command.input,
+            timeoutMs: remainingTimeoutMs,
+            signal,
+          }),
+        ),
     );
   };
 
@@ -133,12 +145,14 @@ export function createWorkerWorkspaceActions(
       throw new Error("Worker workspace quiescence path must be absolute");
     }
     const result = await runWorkspaceCommand({
+      transportRetry: "never",
       argv: [
         "node",
         "-e",
         REMOTE_WORKSPACE_QUIESCE_JS,
         remoteWorkspaceDir,
         String(WORKSPACE_QUIESCENCE_TIMEOUT_MS),
+        options.sharedHost === true ? "shared-host" : "dedicated",
       ],
     });
     if (!success(result)) {
@@ -158,6 +172,7 @@ export function createWorkerWorkspaceActions(
     const renew = (validationMode: "heartbeat" | "final") => {
       const operation = renewalQueue.then(async () => {
         const renewedResult = await runWorkspaceCommand({
+          transportRetry: "never",
           argv: [
             "node",
             "-e",
@@ -166,6 +181,7 @@ export function createWorkerWorkspaceActions(
             nonce,
             String(WORKSPACE_QUIESCENCE_TIMEOUT_MS),
             validationMode,
+            options.sharedHost === true ? "shared-host" : "dedicated",
           ],
         });
         if (!success(renewedResult)) {
@@ -218,6 +234,7 @@ export function createWorkerWorkspaceActions(
         renewalAbort.abort();
         await renewalLoop;
         const resumedResult = await runWorkspaceCommand({
+          transportRetry: "never",
           argv: ["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nonce],
         });
         if (!success(resumedResult)) {
@@ -233,22 +250,24 @@ export function createWorkerWorkspaceActions(
   ): Promise<WorkerWorkspaceSyncResult> => {
     validateWorkspaceSyncRequest(request);
     const prepared = requirePrepared();
-    const environmentKey = stableWorkerPathComponent(options.environmentId, 16);
-    const sessionKey = stableWorkerPathComponent(request.sessionId, 32);
     const remoteRelative = [
       REMOTE_WORKSPACE_ROOT,
-      environmentKey,
-      sessionKey,
+      stableWorkerPathComponent(options.environmentId, 16),
+      stableWorkerPathComponent(request.sessionId, 32),
       String(request.generation),
     ].join("/");
     const setup = await runWorkspaceCommand({
+      transportRetry: "never",
       argv: ["sh", "-s", "--", remoteRelative],
       input: REMOTE_WORKSPACE_SETUP_SCRIPT,
     });
     if (!success(setup)) {
       throw workspaceSyncError(setup);
     }
-    const remoteWorkspaceDir = parseRemoteWorkspaceDirectory(setup.stdout.trim());
+    const { canonicalHome, remoteWorkspaceDir } = parseRemoteWorkspaceSetup(
+      setup.stdout.trim(),
+      remoteRelative,
+    );
     // Result refs can make plain workspaces unborn repos; only committed repos use Git sync.
     const { mode, gitRoot, baseCommit } = await probeWorkspaceGitMode({
       localPath: request.localPath,
@@ -261,9 +280,15 @@ export function createWorkerWorkspaceActions(
     const temporaryDirectory = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-worker-workspace-sync-"),
     );
-    const rsyncSsh = workerWorkspaceRsyncRemoteCommand(prepared);
     try {
-      let fileListPath: string | undefined;
+      const receiverContext = {
+        receiverEntryPath,
+        remoteWorkspaceDir,
+        canonicalHome,
+        remoteRelative,
+      };
+      const mutationReceiverPath = createWorkerWorkspaceRsyncReceiverPathFactory(receiverContext);
+      let prepareGitTransferList: (() => Promise<string>) | undefined;
       if (mode === "git") {
         const [canonicalRequestPath, canonicalGitRoot] = await Promise.all([
           fs.realpath(request.localPath),
@@ -276,74 +301,14 @@ export function createWorkerWorkspaceActions(
           throw new Error("Worker workspace git base is not a commit id");
         }
 
-        const eligiblePath = path.join(temporaryDirectory, "eligible");
-        const ignoredPath = path.join(temporaryDirectory, "ignored");
-        const selectedPath = path.join(temporaryDirectory, "selected");
-        fileListPath = path.join(temporaryDirectory, "transfer-list");
-        await runLocalCommandToFile({
-          argv: [
-            "git",
-            "-C",
+        let transferAttempt = 0;
+        prepareGitTransferList = async () =>
+          await createGitTransferList({
             gitRoot,
-            "ls-files",
-            "--full-name",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-          ],
-          outputPath: eligiblePath,
-          signal: options.ownerSignal,
-          timeoutMs: WORKSPACE_TIMEOUT_MS,
-        });
-        const worktreeIncludePath = path.join(gitRoot, ".worktreeinclude");
-        const worktreeInclude = await fs.lstat(worktreeIncludePath).catch(() => undefined);
-        if (worktreeInclude?.isFile()) {
-          await runLocalCommandToFile({
-            argv: [
-              "git",
-              "-C",
-              gitRoot,
-              "ls-files",
-              "--full-name",
-              "--others",
-              "--ignored",
-              "--exclude-standard",
-              "-z",
-            ],
-            outputPath: ignoredPath,
+            temporaryDirectory: path.join(temporaryDirectory, `transfer-${transferAttempt++}`),
             signal: options.ownerSignal,
             timeoutMs: WORKSPACE_TIMEOUT_MS,
           });
-          await runLocalCommandToFile({
-            argv: [
-              "git",
-              "-C",
-              gitRoot,
-              "ls-files",
-              "--full-name",
-              "--others",
-              "--ignored",
-              `--exclude-from=${worktreeIncludePath}`,
-              "-z",
-            ],
-            outputPath: selectedPath,
-            signal: options.ownerSignal,
-            timeoutMs: WORKSPACE_TIMEOUT_MS,
-          });
-        } else {
-          await Promise.all([
-            fs.writeFile(ignoredPath, "", { mode: 0o600 }),
-            fs.writeFile(selectedPath, "", { mode: 0o600 }),
-          ]);
-        }
-        await writeEligibleGitFiles({
-          gitRoot,
-          eligiblePath,
-          ignoredPath,
-          selectedPath,
-          outputPath: fileListPath,
-        });
 
         const objectListPath = path.join(temporaryDirectory, "base-objects");
         const packPath = path.join(temporaryDirectory, "base.pack");
@@ -369,22 +334,17 @@ export function createWorkerWorkspaceActions(
           signal: options.ownerSignal,
           timeoutMs: WORKSPACE_TIMEOUT_MS,
         });
-        const packTransfer = await runTask(
-          [
-            "rsync",
-            "--archive",
-            "--checksum",
-            "-e",
-            rsyncSsh,
-            "--",
-            packPath,
-            `${prepared.scpTarget}:${remoteWorkspaceDir}/${REMOTE_GIT_PACK_NAME}`,
-          ],
-          workerSshCommandOptions({
-            timeoutMs: WORKSPACE_TIMEOUT_MS,
-            signal: options.ownerSignal,
-          }),
-        );
+        const packTransfer = await runRsync(prepared, (rsyncSsh) => [
+          "rsync",
+          "--archive",
+          "--checksum",
+          `--rsync-path=${mutationReceiverPath("git-pack")}`,
+          "-e",
+          rsyncSsh,
+          "--",
+          packPath,
+          `${prepared.scpTarget}:${WORKER_WORKSPACE_RSYNC_DESTINATION}`,
+        ]);
         if (!success(packTransfer)) {
           throw workspaceSyncError(packTransfer);
         }
@@ -401,6 +361,7 @@ export function createWorkerWorkspaceActions(
           }),
         );
         const seeded = await runWorkspaceCommand({
+          transportRetry: "never",
           argv: [
             "sh",
             "-s",
@@ -419,30 +380,77 @@ export function createWorkerWorkspaceActions(
       }
 
       const localSource = gitRoot.endsWith(path.sep) ? gitRoot : `${gitRoot}${path.sep}`;
-      const transfer = await runTask(
-        [
-          "rsync",
-          "--archive",
-          "--checksum",
-          "--exclude=.git",
-          ...DERIVED_WORKSPACE_RSYNC_EXCLUDES.map((pattern) => `--exclude=${pattern}`),
-          ...(fileListPath ? ["--recursive", "--from0", `--files-from=${fileListPath}`] : []),
-          "-e",
-          rsyncSsh,
-          "--",
-          localSource,
-          `${prepared.scpTarget}:${remoteWorkspaceDir}/`,
-        ],
-        workerSshCommandOptions({
-          timeoutMs: WORKSPACE_TIMEOUT_MS,
-          signal: options.ownerSignal,
-        }),
-      );
+      const transferArgv = (rsyncSsh: string, fileListPath?: string) => [
+        "rsync",
+        "--archive",
+        "--checksum",
+        "--delete-delay",
+        "--exclude=.git",
+        ...DERIVED_WORKSPACE_RSYNC_EXCLUDES.map((pattern) => `--exclude=${pattern}`),
+        ...(fileListPath ? ["--recursive", "--from0", `--files-from=${fileListPath}`] : []),
+        `--rsync-path=${mutationReceiverPath("workspace-root")}`,
+        "-e",
+        rsyncSsh,
+        "--",
+        localSource,
+        `${prepared.scpTarget}:${WORKER_WORKSPACE_RSYNC_DESTINATION}`,
+      ];
+      let retryingGitTransfer = false;
+      const transfer = prepareGitTransferList
+        ? await runWorkerSshCandidates(
+            prepared,
+            WORKSPACE_TIMEOUT_MS,
+            async (port, remainingTimeoutMs) => {
+              const deadlineMs = Date.now() + remainingTimeoutMs;
+              const commandOptions = () =>
+                workerSshCommandOptions({
+                  timeoutMs: Math.max(0, deadlineMs - Date.now()),
+                  signal: options.ownerSignal,
+                });
+              if (retryingGitTransfer) {
+                const resetNonce = randomBytes(16).toString("hex");
+                const reset = await runTask(
+                  workerWorkspaceSshArgv(
+                    prepared,
+                    [
+                      "node",
+                      "-e",
+                      REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
+                      remoteWorkspaceDir,
+                      canonicalHome,
+                      remoteRelative,
+                      resetNonce,
+                    ],
+                    port,
+                  ),
+                  commandOptions(),
+                );
+                if (!success(reset)) {
+                  // Reset changes remote state, so an ambiguous result must fail closed.
+                  throw workspaceSyncError(reset);
+                }
+                if (reset.stdout !== `reset ${resetNonce}\n`) {
+                  throw new Error(
+                    "Worker workspace retry reset returned an invalid acknowledgement",
+                  );
+                }
+              }
+              const fileListPath = await prepareGitTransferList();
+              const result = await runTask(
+                transferArgv(workerWorkspaceRsyncRemoteCommand(prepared, port), fileListPath),
+                commandOptions(),
+              );
+              retryingGitTransfer = result.termination === "exit" && result.code === 255;
+              return result;
+            },
+          )
+        : await runRsync(prepared, (rsyncSsh) => transferArgv(rsyncSsh));
       if (!success(transfer)) {
         throw workspaceSyncError(transfer);
       }
 
       const manifest = await runWorkspaceCommand({
+        transportRetry: "idempotent",
         argv: [
           "node",
           "-e",
@@ -489,13 +497,11 @@ export function createWorkerWorkspaceActions(
     const manifestRoot = path.join(temporaryDirectory, "manifests");
     const baseManifestPath = path.join(manifestRoot, `${baseDigest}.json`);
     const transferListPath = path.join(temporaryDirectory, "transfer-list");
-    const rsyncSsh = workerWorkspaceRsyncRemoteCommand(prepared);
     const acceptedWorkspacePublisher = createAcceptedWorkspacePublisherFactory({
       runWorkspaceCommand,
-      runTask,
-      ownerSignal: options.ownerSignal,
-      rsyncSsh,
+      runRsync: async (argv) => await runRsync(prepared, argv),
       scpTarget: prepared.scpTarget,
+      receiverEntryPath,
       localPath: request.localPath,
       remoteWorkspaceDir: request.remoteWorkspaceDir,
     });
@@ -503,7 +509,8 @@ export function createWorkerWorkspaceActions(
       await fs.mkdir(stagingRoot, { mode: 0o700 });
       await fs.mkdir(manifestRoot, { mode: 0o700 });
       const baseManifestTransfer = await runBoundedInboundRsync({
-        argv: [
+        prepared,
+        argv: (rsyncSsh) => [
           "rsync",
           "--archive",
           "--no-recursive",
@@ -541,6 +548,7 @@ export function createWorkerWorkspaceActions(
           expectedRef,
         });
       const currentResult = await runWorkspaceCommand({
+        transportRetry: "idempotent",
         argv: [
           "node",
           "-e",
@@ -600,7 +608,8 @@ export function createWorkerWorkspaceActions(
       const currentDigest = currentRef.slice("sha256:".length);
       const currentManifestPath = path.join(manifestRoot, `${currentDigest}.json`);
       const currentManifestTransfer = await runBoundedInboundRsync({
-        argv: [
+        prepared,
+        argv: (rsyncSsh) => [
           "rsync",
           "--archive",
           "--no-recursive",
@@ -633,7 +642,8 @@ export function createWorkerWorkspaceActions(
           mode: 0o600,
         });
         const resultTransfer = await runBoundedInboundRsync({
-          argv: [
+          prepared,
+          argv: (rsyncSsh) => [
             "rsync",
             "--archive",
             "--checksum",
@@ -709,13 +719,9 @@ export function createWorkerWorkspaceActions(
 
   return {
     quiesceWorkspace,
-    reconcileWorkspace(request) {
-      return track(reconcileWorkspaceImpl(request));
-    },
+    reconcileWorkspace: (request) => track(reconcileWorkspaceImpl(request)),
     runWorkspaceCommand,
-    syncWorkspace(request) {
-      // Keep the outer task registered across local-file phases so tunnel stop drains all owner work.
-      return track(syncWorkspaceImpl(request));
-    },
+    // Keep the outer task registered across local-file phases so tunnel stop drains all owner work.
+    syncWorkspace: (request) => track(syncWorkspaceImpl(request)),
   };
 }

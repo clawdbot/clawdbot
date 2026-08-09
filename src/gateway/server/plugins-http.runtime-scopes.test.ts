@@ -5,11 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import {
-  pinActivePluginHttpRouteRegistry,
-  releasePinnedPluginHttpRouteRegistry,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
@@ -141,7 +137,6 @@ function expectMissingWriteScopeFailure(params: {
 
 describe("plugin HTTP route runtime scopes", () => {
   afterEach(() => {
-    releasePinnedPluginHttpRouteRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
@@ -280,7 +275,6 @@ describe("plugin HTTP route runtime scopes", () => {
     });
 
     setActivePluginRegistry(serverBRegistry);
-    pinActivePluginHttpRouteRegistry(serverBRegistry);
 
     const handlerA = createGatewayPluginRequestHandler({
       registry: serverARegistry,

@@ -16,7 +16,7 @@ import {
 } from "../../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
-import { attachManagedOutgoingImagesToMessage } from "../managed-image-attachments.js";
+import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
@@ -186,13 +186,10 @@ export function createChatSendReplyDispatch(params: {
       sessionKey,
       agentId,
       payloads: [transcriptPayload],
-      managedImageLocalRoots: mediaLocalRoots,
+      managedMediaLocalRoots: mediaLocalRoots,
       includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
-      onLocalAudioAccessDenied: (message) => {
-        logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-      },
-      onManagedImagePrepareError: (message) => {
-        logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+      onManagedMediaPrepareError: (message) => {
+        logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
       },
     });
     const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads([transcriptPayload], {
@@ -245,7 +242,7 @@ export function createChatSendReplyDispatch(params: {
           rewritten: [rewritten],
         });
         if (assistantContent?.length) {
-          await attachManagedOutgoingImagesToMessage({
+          await attachManagedOutgoingMediaToMessage({
             messageId: rewritten.messageId,
             blocks: assistantContent,
           });
@@ -295,7 +292,7 @@ export function createChatSendReplyDispatch(params: {
           rewritten: [rewritten],
         });
         if (assistantContent?.length) {
-          await attachManagedOutgoingImagesToMessage({
+          await attachManagedOutgoingMediaToMessage({
             messageId: rewritten.messageId,
             blocks: assistantContent,
           });
@@ -322,7 +319,7 @@ export function createChatSendReplyDispatch(params: {
     });
     if (appended.ok) {
       if (appended.messageId && assistantContent?.length) {
-        await attachManagedOutgoingImagesToMessage({
+        await attachManagedOutgoingMediaToMessage({
           messageId: appended.messageId,
           blocks: assistantContent,
         });

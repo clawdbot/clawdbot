@@ -6,9 +6,9 @@
  */
 
 import { createTypingKeepaliveLoop } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { claimMessageReply } from "../messaging/outbound-reply.js";
 import type { ReplyLimitResult } from "../messaging/reply-limiter.js";
-import { formatErrorMessage } from "../utils/format.js";
 
 /** Function that sends a typing indicator to one user. */
 type SendInputNotifyFn = (

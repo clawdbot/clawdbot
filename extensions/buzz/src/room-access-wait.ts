@@ -1,10 +1,11 @@
-import { Relay, type Event } from "nostr-tools";
-import { authenticateBuzzRelay, createBuzzAuthSigner, parseBuzzAuthTag } from "./relay-auth.js";
+import type { Event, Relay } from "nostr-tools";
+import { connectAuthenticatedBuzzRelaySession, parseBuzzAuthTag } from "./relay-auth.js";
+import { openBuzzRelaySubscription } from "./relay-subscription.js";
 import { discoverBuzzRoomsOnRelay, type BuzzDiscoveredRoom } from "./room-discovery.js";
+import { BUZZ_MEMBER_ADDED_NOTIFICATION_KIND } from "./room-membership-notification.js";
 import { BUZZ_CHANNEL_ID_PATTERN } from "./target.js";
 import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
 
-const MEMBER_ADDED_KIND = 44100;
 const DEFAULT_WAIT_TIMEOUT_MS = 90_000;
 const DISCOVERY_RETRY_DELAYS_MS = [0, 500, 1_500] as const;
 const DISCOVERY_POLL_INTERVAL_MS = 2_000;
@@ -60,22 +61,19 @@ export async function waitForBuzzRoomAccess(params: {
   const publicKey = resolveBuzzPublicKey(params.privateKey);
   const timeoutSignal = AbortSignal.timeout(params.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS);
   const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
-  const relay = new Relay(params.relayUrl, { enableReconnect: false });
-  const signAuth = createBuzzAuthSigner({
+  const { relay, relayPublicKey } = await connectAuthenticatedBuzzRelaySession({
+    relayUrl: params.relayUrl,
     secretKey,
     authTag: parseBuzzAuthTag(params.authTag ?? ""),
+    signal,
   });
 
   try {
-    await relay.connect({ abort: signal });
-    await authenticateBuzzRelay({ relay, signAuth, signal });
-    relay.onauth = signAuth;
-
     return await new Promise<BuzzDiscoveredRoom[]>((resolve, reject) => {
       let settled = false;
       let checking = false;
       let queuedRetry = false;
-      const subscriptionRef: { current?: ReturnType<Relay["subscribe"]> } = {};
+      const subscriptionRef: { current?: ReturnType<Relay["prepareSubscription"]> } = {};
       let pollTimer: ReturnType<typeof setInterval> | undefined;
       const seenEvents = new Set<string>();
 
@@ -88,7 +86,6 @@ export async function waitForBuzzRoomAccess(params: {
         if (pollTimer) {
           clearInterval(pollTimer);
         }
-        subscriptionRef.current?.close("room access found");
         if (error !== undefined) {
           reject(
             error instanceof Error
@@ -119,6 +116,7 @@ export async function waitForBuzzRoomAccess(params: {
             try {
               const rooms = await discoverBuzzRoomsOnRelay({
                 relay,
+                relayPublicKey,
                 publicKey,
                 timeoutMs: 10_000,
                 signal,
@@ -145,10 +143,11 @@ export async function waitForBuzzRoomAccess(params: {
       };
 
       signal.addEventListener("abort", onAbort, { once: true });
-      subscriptionRef.current = relay.subscribe(
+      subscriptionRef.current = openBuzzRelaySubscription(
+        relay,
         [
           {
-            kinds: [MEMBER_ADDED_KIND],
+            kinds: [BUZZ_MEMBER_ADDED_NOTIFICATION_KIND],
             "#p": [publicKey],
             since: Math.floor(Date.now() / 1000) - 30,
           },
@@ -156,7 +155,7 @@ export async function waitForBuzzRoomAccess(params: {
         {
           onevent: (event) => {
             if (
-              event.kind !== MEMBER_ADDED_KIND ||
+              event.kind !== BUZZ_MEMBER_ADDED_NOTIFICATION_KIND ||
               seenEvents.has(event.id) ||
               !hasTag(event, "p", publicKey) ||
               !hasValidRoomTag(event)
@@ -182,9 +181,6 @@ export async function waitForBuzzRoomAccess(params: {
           },
         },
       );
-      if (settled) {
-        subscriptionRef.current.close("room access found");
-      }
     });
   } finally {
     relay.close();

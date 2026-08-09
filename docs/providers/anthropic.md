@@ -91,10 +91,21 @@ OpenClaw release:
 
     <Steps>
       <Step title="Ensure Claude CLI is installed and logged in">
-        Verify with:
+        OpenClaw's streamed session correlation requires the
+        `msg_lifecycle_v1` capability. Claude Code 2.1.206 is the first
+        published build known to advertise it. Verify the installed version:
 
         ```bash
         claude --version
+        ```
+
+        A lower-version compatible backport or wrapper remains selectable;
+        OpenClaw verifies the capability at runtime. If the runtime rejects the
+        installed build, update Claude Code and restart OpenClaw so the gateway
+        launches the new binary:
+
+        ```bash
+        claude update
         ```
       </Step>
       <Step title="Run onboarding">
@@ -114,6 +125,8 @@ OpenClaw release:
 
     <Note>
     Setup and runtime details for the Claude CLI backend are in [CLI Backends](/gateway/cli-backends).
+    `openclaw doctor` also reports advisory guidance for an installed Claude
+    Code version below the first-known compatible release.
     </Note>
 
     <Warning>

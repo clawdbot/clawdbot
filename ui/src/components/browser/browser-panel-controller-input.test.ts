@@ -51,7 +51,7 @@ describe("BrowserPanelController capture and input ownership", () => {
 
     expect(controller.activeTargetId).toBe("active-tab");
     expect(controller.view).toBe(previousView);
-    expect(controller.errorText).toBe("Tab focus rejected");
+    expect(controller.errorText).toBe("Browser request failed: Tab focus rejected");
     expect(controller.loading).toBe(false);
   });
 

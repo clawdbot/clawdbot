@@ -1,7 +1,8 @@
-// Tests heartbeat runner behavior when defaults are unset.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Tests heartbeat runner behavior when defaults are unset.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
@@ -173,12 +174,7 @@ const createCaseDir = async (prefix: string) => {
   return dir;
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -1255,6 +1251,53 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("delivers a repeated heartbeat when the clock moves behind its previous send", async () => {
+    const tmpDir = await createCaseDir("hb-dup-clock-rollback");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.fn();
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      const nowMs = 60_000;
+      await seedWhatsAppSession(storePath, sessionKey, {
+        lastHeartbeatText: "Final alert",
+        lastHeartbeatSentAt: nowMs + 60_000,
+      });
+      replySpy.mockResolvedValue([{ text: "Final alert" }]);
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp, { nowMs, getReplyFromConfig: replySpy }),
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledOnce();
+      expectWhatsAppSendCall(sendWhatsApp, 0, {
+        to: "120363401234567890@g.us",
+        text: "Final alert",
+      });
+    } finally {
+      replySpy.mockReset();
+    }
+  });
+
   it.each(
     typedCases<{
       name: string;
@@ -1515,9 +1558,9 @@ describe("runHeartbeatOnce", () => {
     const sessionKey = resolveMainSessionKey(cfg);
     await seedWhatsAppSession(storePath, sessionKey);
     if (params.queueCronEvent) {
-      enqueueSystemEvent("Cron: QMD maintenance completed", {
+      enqueueSystemEvent("Cron: memory maintenance completed", {
         sessionKey,
-        contextKey: "cron:qmd-maintenance",
+        contextKey: "cron:memory-maintenance",
       });
     }
     if (params.queueSystemEvent) {

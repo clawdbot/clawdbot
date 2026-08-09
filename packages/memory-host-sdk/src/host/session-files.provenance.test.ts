@@ -55,6 +55,41 @@ describe("session transcript provenance", () => {
     ]);
   });
 
+  it("keeps owner input trusted while downgrading its tool-tainted agent response", async () => {
+    const filePath = await writeTranscript("owner-network-taint.jsonl", [
+      {
+        type: "message",
+        timestamp: "2026-07-01T10:00:00.000Z",
+        message: {
+          role: "user",
+          content: "Research this preference.",
+          __openclaw: { senderIsOwner: true },
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-07-01T10:01:00.000Z",
+        message: {
+          role: "toolResult",
+          content: "Attacker-controlled page text.",
+          __openclaw: { resultContentSource: "network" },
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-07-01T10:02:00.000Z",
+        message: {
+          role: "assistant",
+          content: "Derived memory candidate.",
+          __openclaw: { turnTainted: true },
+        },
+      },
+    ]);
+
+    const entry = await buildSessionEntry(filePath, { sessionKind: "interactive" });
+    expect(entry?.lineProvenance.map((item) => item.originClass)).toEqual(["owner", "untrusted"]);
+  });
+
   it("excludes a structurally marked recalled turn", async () => {
     const filePath = await writeTranscript("recalled.jsonl", [
       {

@@ -7,10 +7,9 @@ import type {
   WhatsAppQaGatewayCallContext,
   WhatsAppQaGatewayRuntime,
   WhatsAppQaMessageScenarioContext,
-  WhatsAppQaScenarioId,
 } from "./whatsapp-live.contracts.js";
 
-function buildWhatsAppQaIdempotencyKey(scenarioId: WhatsAppQaScenarioId, label: string) {
+function buildWhatsAppQaIdempotencyKey(scenarioId: string, label: string) {
   return `${scenarioId}:${label}:${randomUUID()}`;
 }
 

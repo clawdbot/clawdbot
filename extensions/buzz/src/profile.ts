@@ -1,10 +1,11 @@
 import { finalizeEvent, type Event, type Relay } from "nostr-tools";
+import { openBuzzRelaySubscription } from "./relay-subscription.js";
 
 const PROFILE_KIND = 0;
 const AGENT_PROFILE_KIND = 10_100;
-const PROFILE_QUERY_TIMEOUT_MS = 5_000;
 const DEFAULT_CHANNEL_ADD_POLICY = "anyone";
 const CHANNEL_ADD_POLICIES = new Set(["anyone", "owner_only", "nobody"]);
+const PROFILE_QUERY_TIMEOUT_MS = 10_000;
 
 type BuzzProfileSyncResult = { status: "unchanged" } | { status: "published"; eventId: string };
 
@@ -49,6 +50,7 @@ function readNonEmptyString(content: Record<string, unknown>, key: string): stri
 async function queryCurrentProfiles(params: {
   relay: Relay;
   publicKey: string;
+  onTimeout?: (error: Error) => void;
   signal?: AbortSignal;
 }): Promise<Map<number, Event>> {
   params.signal?.throwIfAborted();
@@ -56,19 +58,25 @@ async function queryCurrentProfiles(params: {
     const latestByKind = new Map<number, Event>();
     const state: {
       settled: boolean;
-      timeout?: ReturnType<typeof setTimeout>;
-      subscription?: ReturnType<Relay["subscribe"]>;
-    } = { settled: false };
+      receivedEose: boolean;
+      subscription?: ReturnType<Relay["prepareSubscription"]>;
+    } = { settled: false, receivedEose: false };
+    const timeout = setTimeout(() => {
+      const error = new Error("Timed out loading current Buzz profile");
+      finish(error);
+      params.onTimeout?.(error);
+      params.relay.close();
+    }, PROFILE_QUERY_TIMEOUT_MS);
     const finish = (error?: unknown) => {
       if (state.settled) {
         return;
       }
       state.settled = true;
-      if (state.timeout) {
-        clearTimeout(state.timeout);
-      }
+      clearTimeout(timeout);
       params.signal?.removeEventListener("abort", onAbort);
-      state.subscription?.close("profile query complete");
+      if (state.receivedEose) {
+        state.subscription?.close("profile query complete");
+      }
       if (error !== undefined) {
         reject(
           error instanceof Error ? error : new Error("Buzz profile query failed", { cause: error }),
@@ -79,11 +87,8 @@ async function queryCurrentProfiles(params: {
     };
     const onAbort = () => finish(params.signal?.reason ?? new Error("Buzz profile query aborted"));
     params.signal?.addEventListener("abort", onAbort, { once: true });
-    state.timeout = setTimeout(
-      () => finish(new Error("Timed out querying the Buzz bot profile")),
-      PROFILE_QUERY_TIMEOUT_MS,
-    );
-    state.subscription = params.relay.subscribe(
+    state.subscription = openBuzzRelaySubscription(
+      params.relay,
       [
         { kinds: [PROFILE_KIND], authors: [params.publicKey], limit: 1 },
         { kinds: [AGENT_PROFILE_KIND], authors: [params.publicKey], limit: 1 },
@@ -95,7 +100,14 @@ async function queryCurrentProfiles(params: {
             latestByKind.set(event.kind, event);
           }
         },
-        oneose: () => finish(),
+        oneose: () => {
+          state.receivedEose = true;
+          if (state.settled) {
+            state.subscription?.close("profile query complete");
+          } else {
+            finish();
+          }
+        },
         onclose: (reason) => {
           if (reason !== "profile query complete") {
             finish(new Error(`Buzz profile query closed: ${reason}`));
@@ -103,7 +115,7 @@ async function queryCurrentProfiles(params: {
         },
       },
     );
-    if (state.settled) {
+    if (state.settled && state.receivedEose) {
       state.subscription.close("profile query complete");
     }
   });
@@ -134,6 +146,7 @@ export async function syncBuzzProfile(params: {
   publicKey: string;
   displayName: string;
   authTag?: string[];
+  onFatalError?: (error: Error) => void;
   signal?: AbortSignal;
 }): Promise<BuzzProfileSyncResult> {
   const displayName = params.displayName.trim();
@@ -141,7 +154,10 @@ export async function syncBuzzProfile(params: {
     return { status: "unchanged" };
   }
 
-  const currentProfiles = await queryCurrentProfiles(params);
+  const currentProfiles = await queryCurrentProfiles({
+    ...params,
+    onTimeout: params.onFatalError,
+  });
   const currentMetadata = currentProfiles.get(PROFILE_KIND);
   const currentAgentProfile = currentProfiles.get(AGENT_PROFILE_KIND);
   const metadataContent = parseProfileContent(currentMetadata);

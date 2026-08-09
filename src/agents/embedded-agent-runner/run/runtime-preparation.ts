@@ -175,7 +175,6 @@ export async function prepareEmbeddedRunRuntime(input: {
     markStage: (stage) => authStages?.mark(stage),
   });
   const {
-    usesOpenAIAuthRouting,
     attemptAuthProfileStore,
     lockedProfileId,
     preferredProfileId,
@@ -233,7 +232,6 @@ export async function prepareEmbeddedRunRuntime(input: {
   );
   const pluginHarnessNeedsOpenClawAuthBootstrap =
     pluginHarnessOwnsTransport &&
-    usesOpenAIAuthRouting &&
     (preparedApiKeyRoute ||
       (!pluginHarnessOwnsAuthBootstrap &&
         profileCandidates.some((profileId) => Boolean(profileId))));

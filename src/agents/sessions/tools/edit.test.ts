@@ -34,6 +34,22 @@ describe("edit tool", () => {
     return filePath;
   }
 
+  async function statEditFile(absolutePath: string) {
+    try {
+      const stat = await fs.stat(absolutePath);
+      return {
+        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      } as const;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    }
+  }
+
   it("preserves a valid UTF-8 BOM when editing a real file", async () => {
     const filePath = await createTempFile(Buffer.from("\uFEFFheading\nprice: 5\n", "utf-8"));
     const tool = createEditTool(tmpDir);
@@ -50,6 +66,36 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath)).resolves.toEqual(
       Buffer.from("\uFEFFheading\nprice: 7\n", "utf-8"),
     );
+  });
+
+  it("writes and reports only the requested fuzzy Unicode replacement", async () => {
+    const original =
+      "export const RETRY\u00A0MAX = 3; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A\n";
+    const expected =
+      "export const RETRY_MAX = 5; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A\n";
+    const filePath = await createTempFile(original);
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-fuzzy-unicode",
+      {
+        path: filePath,
+        edits: [{ oldText: "export const RETRY MAX = 3;", newText: "export const RETRY_MAX = 5;" }],
+      },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
+    const details = result.details as EditToolDetails;
+    expect(details.changed).toBe(true);
+    if (!details.changed) {
+      throw new Error("Expected the edit to change the file.");
+    }
+    expect(details.diff).toContain(
+      "+1 export const RETRY_MAX = 5; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A",
+    );
+    expect(details.diff).not.toContain("// \u518D\u8A66\u884C(\u6700\u59273\u56DE)");
+    expect(applyPatch(original, details.patch)).toBe(expected);
   });
 
   it("rejects invalid UTF-8 without changing a real file", async () => {
@@ -77,6 +123,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile: async () => Buffer.from(original),
+      statFile: async () => null,
       writeFile,
     };
     const tool = createEditTool("/remote/workspace", { operations });
@@ -137,6 +184,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async (absolutePath, content) => {
         await fs.writeFile(absolutePath, content, "utf-8");
         throw new Error("Simulated post-write failure");
@@ -172,6 +220,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async () => {
         throw new Error("Simulated write failure");
       },
@@ -190,6 +239,31 @@ describe("edit tool", () => {
     ).rejects.toThrow("Simulated write failure");
   });
 
+  it("rejects false success when a delegated write resolves without persisting", async () => {
+    const filePath = await createTempFile("old\n");
+    const operations: EditOperations = {
+      access: async (absolutePath) => {
+        await fs.access(absolutePath);
+      },
+      readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditTool(tmpDir, { operations });
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "old", newText: "new" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow("Edit verification failed");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("old\n");
+  });
+
   it("recovers multi-edit post-write failures", async () => {
     const filePath = await createTempFile("alpha beta gamma delta\n");
     const operations: EditOperations = {
@@ -197,6 +271,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async (absolutePath, content) => {
         await fs.writeFile(absolutePath, content, "utf-8");
         throw new Error("Simulated post-write failure");
@@ -322,6 +397,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -353,11 +429,56 @@ describe("edit tool", () => {
     );
   });
 
+  it("renders fuzzy Unicode previews from the original source bytes", async () => {
+    const readFile = vi.fn(async () =>
+      Buffer.from(
+        "const label\u00A0= \u201Chello\u201D; // keep \uFF08\uFF13\uFF09 \u2014 unchanged\n",
+      ),
+    );
+    const operations: EditOperations = {
+      access: async () => {},
+      readFile,
+      statFile: async () => null,
+      writeFile: async () => {},
+    };
+    const tool = createEditToolDefinition("/workspace", { operations });
+    const args = {
+      path: "remote.txt",
+      edits: [{ oldText: 'const label = "hello";', newText: "const label = 'hi';" }],
+    };
+    const context = {
+      args,
+      argsComplete: true,
+      cwd: "/workspace",
+      executionStarted: false,
+      expanded: false,
+      invalidate: vi.fn(),
+      isError: false,
+      isPartial: false,
+      lastComponent: undefined,
+      showImages: false,
+      state: {},
+      toolCallId: "call-preview-fuzzy-unicode",
+    };
+
+    const component = tool.renderCall?.(args, testTheme, context);
+    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+
+    const preview = (component as { preview?: { error?: string; diff?: string } } | undefined)
+      ?.preview;
+    expect(preview?.error).toBeUndefined();
+    expect(preview?.diff).toContain(
+      "+1 const label = 'hi'; // keep \uFF08\uFF13\uFF09 \u2014 unchanged",
+    );
+    expect(preview?.diff).not.toContain("// keep (3) - unchanged");
+  });
+
   it("filters fuzzy no-op edits from mixed previews", async () => {
     const readFile = vi.fn(async () => Buffer.from("foo\u00a0bar\n"));
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -399,6 +520,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -456,6 +578,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -491,6 +614,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -544,6 +668,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async () => {
         throw new Error("No changes made to the disk because it is full");
       },
@@ -693,5 +818,160 @@ describe("edit tool", () => {
     const tc1 = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tc1 ? tc1.text : "").toContain("Successfully replaced");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new content\n");
+  });
+
+  const lineEndingCases = [
+    {
+      name: "keeps a lone carriage return that carries data",
+      original: "start\n10%\r50%\r100%\ndone\n",
+      edits: [{ oldText: "done", newText: "finished" }],
+      expected: "start\n10%\r50%\r100%\nfinished\n",
+    },
+    {
+      name: "keeps a lone carriage return that terminates the edited line",
+      original: "prefix\rprogress\n",
+      edits: [{ oldText: "prefix", newText: "PREFIX" }],
+      expected: "PREFIX\rprogress\n",
+    },
+    {
+      name: "keeps carriage return separators when a middle record is rewritten",
+      original: "id=1\rid=2\rid=3\nfooter\n",
+      edits: [{ oldText: "id=2", newText: "id=two" }],
+      expected: "id=1\rid=two\rid=3\nfooter\n",
+    },
+    {
+      name: "expands a carriage return terminated line into carriage return terminated lines",
+      original: "id=1\rid=2\nfooter\n",
+      edits: [{ oldText: "id=1", newText: "id=1a\nid=1b" }],
+      expected: "id=1a\rid=1b\rid=2\nfooter\n",
+    },
+    {
+      name: "keeps a lone carriage return at end of file on the edited line",
+      original: "only\r",
+      edits: [{ oldText: "only", newText: "ONLY" }],
+      expected: "ONLY\r",
+    },
+    {
+      name: "uses the first carriage return for a leading inserted line",
+      original: "alpha\rbeta\r",
+      edits: [{ oldText: "alpha", newText: "prefix\nalpha" }],
+      expected: "prefix\ralpha\rbeta\r",
+    },
+    {
+      name: "uses the retained target terminator for a prefixed line",
+      original: "alpha\r\nbeta\ngamma\n",
+      edits: [{ oldText: "beta", newText: "prefix\nbeta" }],
+      expected: "alpha\r\nprefix\nbeta\ngamma\n",
+    },
+    {
+      name: "uses the edited target terminator for an appended line",
+      original: "alpha\r\nbeta\n",
+      edits: [{ oldText: "alpha", newText: "alpha\nsuffix" }],
+      expected: "alpha\r\nsuffix\r\nbeta\n",
+    },
+    {
+      name: "keeps neighboring duplicate line terminators unchanged",
+      original: "A\r\nB\nC\r",
+      edits: [{ oldText: "A", newText: "B" }],
+      expected: "B\r\nB\nC\r",
+    },
+    {
+      name: "preserves mixed terminators during a fuzzy multi-line edit",
+      original: "keep\r\ntarget   \nafter\r\n",
+      edits: [{ oldText: "target\nafter", newText: "TARGET\nAFTER" }],
+      expected: "keep\r\nTARGET\nAFTER\r\n",
+    },
+    {
+      name: "keeps the trailing boundary when replacement collapses mixed lines",
+      original: "alpha\r\nbeta\ngamma\n",
+      edits: [{ oldText: "alpha\nbeta", newText: "merged" }],
+      expected: "merged\ngamma\n",
+    },
+    {
+      name: "uses the last consumed terminator when collapsing complete lines",
+      original: "alpha\r\nbeta\ngamma\n",
+      edits: [{ oldText: "alpha\nbeta\n", newText: "combined\n" }],
+      expected: "combined\ngamma\n",
+    },
+    {
+      name: "aligns an unterminated replacement at end of file",
+      original: "h1\r\nh2\r\none\ntwo",
+      edits: [{ oldText: "one\ntwo", newText: "x\ny" }],
+      expected: "h1\r\nh2\r\nx\ny",
+    },
+    {
+      name: "keeps trailing CRLF lines when the first line ends with LF",
+      original: "alpha\nbeta\r\ngamma\r\n",
+      edits: [{ oldText: "alpha", newText: "ALPHA" }],
+      expected: "ALPHA\nbeta\r\ngamma\r\n",
+    },
+    {
+      name: "keeps trailing LF lines when the first line ends with CRLF",
+      original: "alpha\r\nbeta\ngamma\n",
+      edits: [{ oldText: "gamma", newText: "GAMMA" }],
+      expected: "alpha\r\nbeta\nGAMMA\n",
+    },
+    {
+      name: "keeps untouched lines between two separate edits",
+      original: "one\r\ntwo\nthree\r75%\rfour\nfive\r\n",
+      edits: [
+        { oldText: "one", newText: "ONE" },
+        { oldText: "five", newText: "FIVE" },
+      ],
+      expected: "ONE\r\ntwo\nthree\r75%\rfour\nFIVE\r\n",
+    },
+    {
+      name: "writes inserted lines with the terminator of the replaced line",
+      original: "alpha\r\nbeta\r\ngamma\r\n",
+      edits: [{ oldText: "beta", newText: "beta1\nbeta2" }],
+      expected: "alpha\r\nbeta1\r\nbeta2\r\ngamma\r\n",
+    },
+    {
+      name: "leaves a uniform CRLF file uniform",
+      original: "alpha\r\nbeta\r\ngamma\r\n",
+      edits: [{ oldText: "beta", newText: "BETA" }],
+      expected: "alpha\r\nBETA\r\ngamma\r\n",
+    },
+    {
+      name: "leaves a uniform LF file uniform",
+      original: "alpha\nbeta\ngamma\n",
+      edits: [{ oldText: "beta", newText: "BETA" }],
+      expected: "alpha\nBETA\ngamma\n",
+    },
+  ];
+
+  for (const testCase of lineEndingCases) {
+    it(testCase.name, async () => {
+      const filePath = await createTempFile(testCase.original);
+      const tool = createEditTool(tmpDir);
+
+      const result = await tool.execute(
+        "call-line-endings",
+        { path: filePath, edits: testCase.edits },
+        undefined,
+      );
+
+      const first = expectDefined(result.content[0], "result.content[0] test invariant");
+      expect("text" in first ? first.text : "").toContain("Successfully replaced");
+      await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(testCase.expected);
+    });
+  }
+
+  it("preserves a lone carriage return on an edited line", async () => {
+    const filePath = await createTempFile("start\nprogress 10%\rprogress 50%\ndone\n");
+    const tool = createEditTool(tmpDir);
+
+    await tool.execute(
+      "call-cr-line",
+      {
+        path: filePath,
+        edits: [{ oldText: "progress 50%", newText: "progress 90%" }],
+      },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(
+      "start\nprogress 10%\rprogress 90%\ndone\n",
+    );
   });
 });

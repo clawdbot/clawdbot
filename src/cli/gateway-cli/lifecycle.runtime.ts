@@ -1,4 +1,7 @@
 // Lazy lifecycle runtime export hub used by gateway run-loop restart paths.
+// run-loop.ts primes this hub before the HTTP listener binds, so each re-export
+// must target the module that defines the symbol rather than a re-export facade;
+// a facade also evaluates its siblings and drags their graphs onto cold start.
 export {
   abortEmbeddedAgentRun,
   getActiveEmbeddedRunCount,
@@ -6,7 +9,7 @@ export {
   listActiveEmbeddedRunSessionKeys,
   waitForActiveEmbeddedRuns,
 } from "../../agents/embedded-agent-runner/runs.js";
-export { markRestartAbortedMainSessions } from "../../agents/main-session-restart-recovery.js";
+export { markRestartAbortedMainSessions } from "../../agents/main-session-restart-recovery-marking.js";
 export { getRuntimeConfig } from "../../config/config.js";
 export {
   respawnGatewayProcessForUpdate,
@@ -56,4 +59,4 @@ export {
 export { waitForActiveGatewayRootWork } from "../../process/gateway-work-admission.js";
 export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 export { reloadTaskRuntimeStateFromStore } from "../../tasks/runtime-internal.js";
-export { abortPendingChannelReloads } from "../../gateway/server-reload-handlers.js";
+export { abortPendingChannelReloads } from "../../gateway/server-reload-contracts.js";

@@ -3,7 +3,7 @@ import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 // Handles session reset requests produced during agent runner execution.
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -79,12 +79,14 @@ export async function resetReplyRunSession(params: {
     lastInteractionAt: now,
     systemSent: false,
     abortedLastRun: false,
+    lifecycleRunId: undefined,
     modelProvider: undefined,
     model: undefined,
     inputTokens: undefined,
     outputTokens: undefined,
     totalTokens: undefined,
     totalTokensFresh: false,
+    totalTokensVersion: undefined,
     estimatedCostUsd: undefined,
     cacheRead: undefined,
     cacheWrite: undefined,

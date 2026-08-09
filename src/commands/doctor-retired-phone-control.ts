@@ -1,8 +1,10 @@
 // Doctor migration for config and state left by the retired Phone Control lease model.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
 
@@ -54,13 +56,6 @@ type StatePathInspection =
   | { status: "missing" }
   | { status: "unsafe"; warning: string };
 
-function isMissingPathError(error: unknown): boolean {
-  if (!error || typeof error !== "object" || !("code" in error)) {
-    return false;
-  }
-  return error.code === "ENOENT" || error.code === "ENOTDIR";
-}
-
 async function inspectStatePath(filePath: string, label: string): Promise<StatePathInspection> {
   try {
     return (await fs.stat(filePath)).isFile()
@@ -75,10 +70,6 @@ async function inspectStatePath(filePath: string, label: string): Promise<StateP
       warning: `Could not inspect ${label} at ${filePath}: ${String(error)}`,
     };
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isStringArray(value: unknown): boolean {

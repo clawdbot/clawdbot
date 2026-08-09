@@ -123,8 +123,9 @@ There is also a grounded historical backfill lane for review and recovery work:
 Session backfill uses canonical retained transcript identities, including
 sessions preserved across rotation. Messages are bucketed in the configured
 dreaming timezone and share live ingestion's tracked message hashes and signal
-caps, so bounded reruns continue forward without re-ingesting prior messages.
-Rollback removes generated artifacts but retains those ingestion checkpoints.
+caps. Apply drains bounded batches to completion in one command. Rollback
+removes generated artifacts plus the hashes and cursor progress owned by those
+batches, allowing the same candidates to be staged again.
 Foreign files supplied with `--archive-files` are treated conservatively. Their
 embedded ownership fields are caller-controlled and therefore remain untrusted;
 without an authenticated provenance contract, they cannot enter short-term
@@ -281,6 +282,19 @@ When enabled, the Gateway **Dreams** tab shows:
 - next scheduled run timing
 - a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
+
+When the bundled [`memory-wiki`](/plugins/memory-wiki) plugin is enabled, the
+Diary view gains two more sub-tabs next to Dreams:
+
+- **Imported Insights**: clustered insights surfaced by external-history
+  imports (for example `openclaw wiki chatgpt import`), for review before any
+  of it graduates into durable memory
+- **Memory Wiki**: the compiled wiki the memory system can search and reason
+  over — synthesis, entity, and concept pages (plus sources and reports that
+  carry claims, open questions, or contradictions) with per-page counts, a
+  full-vault breakdown, and inline page previews
+
+Both sub-tabs show an enable hint instead when `memory-wiki` is off.
 
 ## Related
 

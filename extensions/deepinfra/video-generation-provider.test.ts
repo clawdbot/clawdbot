@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
+  requireFirstPostJsonRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -28,14 +29,6 @@ function mockSubmit(job: unknown, release = vi.fn(async () => {})): typeof relea
     release,
   });
   return release;
-}
-
-function requireFirstPostJsonRequest(): unknown {
-  const [call] = postJsonRequestMock.mock.calls;
-  if (!call) {
-    throw new Error("expected DeepInfra video submit request");
-  }
-  return call[0];
 }
 
 describe("deepinfra video generation provider", () => {
@@ -101,7 +94,10 @@ describe("deepinfra video generation provider", () => {
     ]);
 
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const postRequest = requireFirstPostJsonRequest();
+    const postRequest = requireFirstPostJsonRequest(
+      postJsonRequestMock,
+      "DeepInfra video submit request",
+    );
     const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
     expect(postRequestHeaders).toBeInstanceOf(Headers);
     expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({
@@ -196,9 +192,12 @@ describe("deepinfra video generation provider", () => {
       } as unknown as OpenClawConfig,
     });
 
-    expect(Reflect.get(requireFirstPostJsonRequest() ?? {}, "url")).toBe(
-      "https://video.example.com/v1/openai/videos",
-    );
+    expect(
+      Reflect.get(
+        requireFirstPostJsonRequest(postJsonRequestMock, "DeepInfra video submit request") ?? {},
+        "url",
+      ),
+    ).toBe("https://video.example.com/v1/openai/videos");
     expect(result.videos).toEqual([
       {
         url: "https://video.example.com/generated/custom.mp4",
@@ -287,7 +286,10 @@ describe("deepinfra video generation provider", () => {
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
-    const postRequest = requireFirstPostJsonRequest();
+    const postRequest = requireFirstPostJsonRequest(
+      postJsonRequestMock,
+      "DeepInfra video submit request",
+    );
     expect(Reflect.get(Reflect.get(postRequest ?? {}, "body") ?? {}, "seed")).toBeUndefined();
   });
 

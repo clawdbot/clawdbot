@@ -8,7 +8,7 @@ import {
   terminalHealthFor,
 } from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
-import { getAgentRunContext } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
 import { createSessionObserverCompletion } from "./session-observer-completion.js";

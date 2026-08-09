@@ -111,7 +111,7 @@ function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefin
       const record = block as { type?: unknown; textSignature?: unknown };
       return (
         isAssistantTextContentBlockType(record.type) &&
-        Boolean(parseAssistantTextSignature(record.textSignature)?.phase)
+        Boolean(parseAssistantTextSignature(record)?.phase)
       );
     });
     if (!hasExplicitPhasedTextBlock) {
@@ -121,7 +121,7 @@ function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefin
             return null;
           }
           const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
-          const signature = parseAssistantTextSignature(record.textSignature);
+          const signature = parseAssistantTextSignature(record);
           if (
             !isAssistantTextContentBlockType(record.type) ||
             typeof record.text !== "string" ||
@@ -185,6 +185,25 @@ function formatToolErrorWarningText(params: {
   includeDetails: boolean;
   useMarkdown: boolean;
 }): string {
+  const terminalDiagnostic = params.lastToolError.terminalDiagnostic;
+  if (terminalDiagnostic?.kind === "process") {
+    const toolLabel = formatToolAggregate("process", [terminalDiagnostic.sessionId], {
+      markdown: params.useMarkdown,
+    });
+    const reason =
+      terminalDiagnostic.reason.kind === "exit"
+        ? `exit ${terminalDiagnostic.reason.exitCode}`
+        : terminalDiagnostic.reason.kind === "signal"
+          ? `signal ${terminalDiagnostic.reason.signal}`
+          : terminalDiagnostic.reason.timeoutKind === "no-output-timeout"
+            ? "timed out waiting for output"
+            : "timed out";
+    const errorSuffix =
+      params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+    const recoveryHint = params.includeDetails ? "" : ". Use /verbose full for complete output";
+    return `⚠️ ${toolLabel} failed (${reason})${errorSuffix}${recoveryHint}.`;
+  }
+
   if (isExecLikeToolName(params.lastToolError.toolName)) {
     const toolLabel = formatToolAggregate(params.lastToolError.toolName, undefined, {
       markdown: params.useMarkdown,
@@ -475,6 +494,9 @@ function resolveToolErrorWarningPolicy(params: {
   if (isExecLikeToolName(params.lastToolError.toolName)) {
     // No recoverable-keyword suppression here: with no reply at all, the exec
     // warning may be the run's only failure signal.
+    return { showWarning: !params.hasUserFacingReply, includeDetails };
+  }
+  if (params.lastToolError.terminalDiagnostic?.kind === "process") {
     return { showWarning: !params.hasUserFacingReply, includeDetails };
   }
   const isMutatingToolError =

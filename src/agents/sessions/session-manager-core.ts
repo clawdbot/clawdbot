@@ -39,7 +39,7 @@ export class SessionManagerCore {
   protected leafId: string | null = null;
   protected appendParentId: string | null = null;
   protected appendMode: "side" | undefined;
-  protected promptReleasedSideBranchParentId: string | null | undefined;
+  protected pendingDeliberateAppend = false;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
 
@@ -137,7 +137,7 @@ export class SessionManagerCore {
     this.leafId = null;
     this.appendParentId = null;
     this.appendMode = undefined;
-    this.promptReleasedSideBranchParentId = undefined;
+    this.pendingDeliberateAppend = false;
     return this.persistenceTarget ? this.sessionId : undefined;
   }
 
@@ -192,7 +192,7 @@ export class SessionManagerCore {
     this.leafId = null;
     this.appendParentId = null;
     this.appendMode = undefined;
-    this.promptReleasedSideBranchParentId = undefined;
+    this.pendingDeliberateAppend = false;
     let opaqueIndex = 0;
     let latestResetId: string | undefined;
     const resetDescendantIds = new Set<string>();
@@ -228,10 +228,6 @@ export class SessionManagerCore {
           this.leafId = effectiveLeafState.leafId;
           this.appendParentId = effectiveLeafState.appendParentId;
           this.appendMode = effectiveLeafState.appendMode;
-          this.promptReleasedSideBranchParentId =
-            effectiveLeafState.appendMode === "side"
-              ? effectiveLeafState.appendParentId
-              : undefined;
           opaqueIndex += 1;
           continue;
         }
@@ -246,9 +242,6 @@ export class SessionManagerCore {
             resetDescendantIds.add(link.id);
           }
           this.appendParentId = link.id;
-          if (this.promptReleasedSideBranchParentId !== undefined) {
-            this.promptReleasedSideBranchParentId = link.id;
-          }
         }
         opaqueIndex += 1;
       }
@@ -293,11 +286,9 @@ export class SessionManagerCore {
       this.appendParentId = entry.id;
       if (isSessionTranscriptSideAppendEntry(entry)) {
         this.appendMode = "side";
-        this.promptReleasedSideBranchParentId = entry.id;
       } else {
         this.leafId = entry.id;
         this.appendMode = undefined;
-        this.promptReleasedSideBranchParentId = undefined;
       }
       if (entry.type === "label") {
         if (entry.label) {
@@ -517,7 +508,7 @@ export class SessionManagerCore {
     this.invalidLeafControlIds.clear();
     this.appendParentId = null;
     this.appendMode = undefined;
-    this.promptReleasedSideBranchParentId = undefined;
+    this.pendingDeliberateAppend = false;
   }
 
   protected replacePersistedTranscript(options?: {

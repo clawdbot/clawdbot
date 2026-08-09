@@ -1,3 +1,4 @@
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 /** Shared session MCP runtime constants and create-runtime factory type. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -43,6 +44,7 @@ export type CreateSessionMcpRuntime = (params: {
   redactConnectionServerNames?: ReadonlySet<string>;
   requesterScope?: SessionMcpRequesterScope;
   configFingerprint?: string;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }) => SessionMcpRuntime;
 
 export function resolveSessionMcpRuntimeIdleTtlMs(): number {

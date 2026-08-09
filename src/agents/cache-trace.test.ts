@@ -221,6 +221,14 @@ describe("createCacheTrace", () => {
             },
           ],
         },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "visible" }],
+          providerReplay: {
+            type: "openai-responses-compaction",
+            data: "opaque-cache-trace-compaction",
+          },
+        },
       ] as unknown as [],
     });
 
@@ -293,6 +301,8 @@ describe("createCacheTrace", () => {
     expect(source.bytes).toBe(6);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("U0VDUkVU").digest("hex"));
     const serialized = JSON.stringify(event);
+    expect(serialized).not.toContain("providerReplay");
+    expect(serialized).not.toContain("opaque-cache-trace-compaction");
     expect(serialized).not.toContain(bareAwsKey);
     expect(serialized).not.toContain(bareGoogleKey);
     expect(serialized).not.toContain(bareGithubKey);

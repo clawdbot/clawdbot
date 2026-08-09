@@ -37,7 +37,7 @@ export class FakeSocket extends EventEmitter {
     this.closeCode = code;
     this.closeReason = reason;
     this.readyState = 3;
-    this.emit("close");
+    this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
   }
 }
 

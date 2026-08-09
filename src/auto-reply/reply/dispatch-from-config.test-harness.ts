@@ -11,7 +11,7 @@ import type {
   AcpRuntimeTurnInput,
 } from "../../plugin-sdk/acp-runtime.js";
 import { clearPluginCommands } from "../../plugins/commands.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -310,6 +310,25 @@ export function installThreadingTestPlugin(params: { defaultAccountId?: string; 
   );
 }
 
+export function installCaptionedVoiceTestPlugin(id: string) {
+  const plugin = createChannelTestPluginBase({
+    id,
+    capabilities: {
+      chatTypes: ["direct"],
+      tts: { voice: { synthesisTarget: "voice-note", captionedFinalText: true } },
+    },
+  });
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: id,
+        source: "test",
+        plugin,
+      },
+    ]),
+  );
+}
+
 export function requireToolResultHandler(
   handler: GetReplyOptions["onToolResult"] | undefined,
 ): NonNullable<GetReplyOptions["onToolResult"]> {
@@ -353,8 +372,6 @@ export const globalBeforeAll0 = async () => {
   ({ testing: dispatchFromConfigTesting } = await import("./dispatch-from-config.test-support.js"));
   await import("./dispatch-acp.js");
   await import("./dispatch-acp-command-bypass.js");
-  await import("./dispatch-acp-tts.runtime.js");
-  await import("./dispatch-acp-session.runtime.js");
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
   ({ createReplyOperation, replyRunRegistry } = await import("./reply-run-registry.js"));
@@ -562,7 +579,10 @@ export const describe0BeforeEach0 = () => {
   transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
   stageSandboxMediaMocks.stageSandboxMedia.mockReset();
   stageSandboxMediaMocks.stageSandboxMedia.mockResolvedValue({ staged: new Map() });
-  runtimePluginMocks.ensureRuntimePluginsLoaded.mockClear();
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReset();
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
+    () => getActivePluginRegistry() ?? runtimePluginMocks.pluginRegistry,
+  );
 };
 
 export const createHookCtx = (overrides: Partial<MsgContext> = {}) =>

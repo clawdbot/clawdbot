@@ -2,7 +2,6 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./memory-memories.ts";
 
@@ -12,7 +11,6 @@ type MemoryMemoriesTestElement = HTMLElement & {
   connected: boolean;
   methodAdvertised: boolean;
   agentId: string | null;
-  agents: readonly AgentSelectOption[];
   updateComplete: Promise<unknown>;
 };
 
@@ -32,7 +30,6 @@ function createElement(request: Request, advertised = true) {
   element.connected = true;
   element.methodAdvertised = advertised;
   element.agentId = "main";
-  element.agents = [];
   document.body.append(element);
   return element;
 }
@@ -216,11 +213,10 @@ describe("MemoryMemoriesElement", () => {
     }
   });
 
-  it("keeps session, QMD, absolute, and escaping paths non-expandable", async () => {
+  it("keeps session, absolute, and escaping paths non-expandable", async () => {
     const nonExpandable = [
       { ...result, path: "sessions/main/session-1.jsonl", source: "sessions" as const },
       { ...result, path: "sessions/main/mislabeled.jsonl" },
-      { ...result, path: "qmd/workspace-main/memory/notes.md" },
       { ...result, path: "/external/MEMORY.md" },
       { ...result, path: "C:\\external\\MEMORY.md" },
       { ...result, path: "memory/../outside.md" },
@@ -237,10 +233,10 @@ describe("MemoryMemoriesElement", () => {
     try {
       await typeQuery(element, "memory");
       submit(element);
-      await waitForFast(() => expect(element.querySelectorAll("article")).toHaveLength(7));
+      await waitForFast(() => expect(element.querySelectorAll("article")).toHaveLength(6));
 
       expect(element.querySelectorAll("article > button")).toHaveLength(1);
-      expect(element.querySelectorAll("article > div.settings-row")).toHaveLength(6);
+      expect(element.querySelectorAll("article > div.settings-row")).toHaveLength(5);
       expect(
         request.mock.calls.filter(([method]) => method === "agents.workspace.get"),
       ).toHaveLength(0);

@@ -262,9 +262,10 @@ describe("executeFollowupTurn", () => {
     expect(onNarrationUpdate).not.toHaveBeenCalled();
   });
 
-  it("honors channel-forced tool progress when verbosity is off", async () => {
+  it("routes channel-forced tool progress through the channel when verbosity is off", async () => {
     const onToolStart = vi.fn(async () => {});
-    const onToolResult = vi.fn(async () => {});
+    const onChannelToolResult = vi.fn(async () => {});
+    const onDurableToolResult = vi.fn(async () => {});
     const turn = createTurn({
       session: {
         kind: "session",
@@ -276,7 +277,7 @@ describe("executeFollowupTurn", () => {
     });
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
       await params.opts?.onToolStart?.({ name: "read", phase: "start" });
-      await params.opts?.onToolResult?.({ text: "working" });
+      await params.opts?.onToolResult?.({ text: "📄 Web Fetch: working" });
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
 
@@ -286,15 +287,86 @@ describe("executeFollowupTurn", () => {
         typing: createTypingController(),
         typingMode: "never",
         defaultModel: "claude",
-        opts: { forceToolResultProgress: true, onToolStart },
+        opts: {
+          forceToolResultProgress: true,
+          onToolStart,
+          onToolResult: onChannelToolResult,
+        },
       },
-      onToolResult,
+      onToolResult: onDurableToolResult,
       onCompactionNoticePayload: vi.fn(async () => {}),
     });
     await result.progress.drain();
 
     expect(onToolStart).toHaveBeenCalledOnce();
-    expect(onToolResult).toHaveBeenCalledWith({ text: "working" }, { runId: "run-1" });
+    expect(onChannelToolResult).toHaveBeenCalledWith({ text: "📄 Web Fetch: working" });
+    expect(onDurableToolResult).not.toHaveBeenCalled();
+  });
+
+  it("keeps verbose tool results durable when channel progress is available", async () => {
+    const onChannelToolResult = vi.fn(async () => {});
+    const onDurableToolResult = vi.fn(async () => {});
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onToolResult?.({ text: "📄 Web Fetch: working" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn: createTurn(),
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: {
+          forceToolResultProgress: true,
+          onToolResult: onChannelToolResult,
+        },
+      },
+      onToolResult: onDurableToolResult,
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(onChannelToolResult).not.toHaveBeenCalled();
+    expect(onDurableToolResult).toHaveBeenCalledWith(
+      { text: "📄 Web Fetch: working" },
+      { runId: "run-1" },
+    );
+  });
+
+  it("keeps forced tool results durable when channel progress is unavailable", async () => {
+    const onDurableToolResult = vi.fn(async () => {});
+    const turn = createTurn({
+      session: {
+        kind: "session",
+        key: "main",
+        current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "off" }),
+        publish: () => undefined,
+        adopt: () => undefined,
+      },
+    });
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      await params.opts?.onToolResult?.({ text: "📄 Web Fetch: working" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn,
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { forceToolResultProgress: true },
+      },
+      onToolResult: onDurableToolResult,
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(onDurableToolResult).toHaveBeenCalledWith(
+      { text: "📄 Web Fetch: working" },
+      { runId: "run-1" },
+    );
   });
 
   it("allows explicitly opted-in tool lifecycle while ordinary progress is hidden", async () => {
@@ -358,6 +430,34 @@ describe("executeFollowupTurn", () => {
     await result.progress.drain();
 
     expect(onPlanUpdate).toHaveBeenCalledWith({ title: "quiet plan" });
+  });
+
+  it.each([
+    { label: "sync void", callback: () => undefined, expected: true },
+    { label: "async void", callback: async () => undefined, expected: true },
+    { label: "explicit true", callback: () => true, expected: true },
+    { label: "explicit false", callback: () => false, expected: false },
+  ])("classifies $label followup progress", async ({ callback, expected }) => {
+    let observed: boolean | void = undefined;
+    state.execute.mockImplementation(async (params: AgentTurnParams) => {
+      observed = await params.opts?.onPlanUpdate?.({ title: "queued plan" });
+      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
+    });
+
+    const result = await executeFollowupTurn({
+      turn: createTurn(),
+      defaults: {
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: { onPlanUpdate: callback },
+      },
+      onToolResult: vi.fn(async () => {}),
+      onCompactionNoticePayload: vi.fn(async () => {}),
+    });
+    await result.progress.drain();
+
+    expect(observed).toBe(expected);
   });
 
   it("tracks a visible failed item before suppressing duplicate default warnings", async () => {
@@ -551,7 +651,7 @@ describe("executeFollowupTurn", () => {
       onCompactionNoticePayload: vi.fn(async () => {}),
     });
 
-    await expect(detachedProgress).resolves.toBeUndefined();
+    await expect(detachedProgress).resolves.toBe(false);
     await expect(result.progress.drain()).rejects.toBe(failure);
   });
 

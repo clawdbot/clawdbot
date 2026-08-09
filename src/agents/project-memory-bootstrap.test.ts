@@ -66,6 +66,14 @@ describe("project memory bootstrap", () => {
     expect(rendered.length).toBeLessThanOrEqual(2_000);
   });
 
+  it("includes entries from every project retained in the session active set", async () => {
+    const rendered = (
+      await prepareEntries(entries, ["github.com/example/other", "github.com/OpenClaw/OpenClaw"])
+    ).join("\n");
+    expect(rendered).toContain("Use the release helper.");
+    expect(rendered).toContain("Foreign fact.");
+  });
+
   it("never emits a partial entry or exceeds the hard budget", async () => {
     const crowded = Array.from({ length: 10 }, (_, index) => ({
       ...entries[0]!,

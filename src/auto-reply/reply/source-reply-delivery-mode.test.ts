@@ -522,6 +522,44 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     );
   });
 
+  it.each([
+    {
+      name: "inter-session handoff",
+      ctx: {
+        ChatType: "direct",
+        InputProvenance: { kind: "inter_session" as const, sourceTool: "sessions_send" },
+      },
+    },
+    {
+      name: "internal lifecycle handoff",
+      ctx: {
+        ChatType: "direct",
+        InputProvenance: { kind: "internal_system" as const, sourceTool: "restart-sentinel" },
+      },
+    },
+    {
+      name: "heartbeat handoff",
+      ctx: { ChatType: "direct" },
+      isHeartbeat: true,
+    },
+  ])("keeps $name overrides out of session-stable policy", ({ ctx, isHeartbeat }) => {
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx,
+        requested: "message_tool_only",
+        isHeartbeat,
+        sendPolicy: "allow",
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        sessionStableSourceReplyDeliveryMode: "automatic",
+        suppressAutomaticSourceDelivery: true,
+        suppressDelivery: true,
+      },
+    );
+  });
+
   it("lets sendPolicy deny suppress delivery and typing", () => {
     expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({

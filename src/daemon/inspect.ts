@@ -9,6 +9,9 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
+import { resolveLaunchAgentLabel } from "./launchd-label.js";
+import { parseLaunchdPlistLabel } from "./launchd-plist.js";
+import { readLaunchDaemonPlistLabel } from "./launchd-system.js";
 import { resolveHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
@@ -245,14 +248,6 @@ function isOpenClawGatewayTaskName(name: string): boolean {
   return stripped === defaultName || /^openclaw gateway \(.+\)$/.test(stripped);
 }
 
-function tryExtractPlistLabel(contents: string): string | null {
-  const match = contents.match(/<key>Label<\/key>\s*<string>([\s\S]*?)<\/string>/i);
-  if (!match) {
-    return null;
-  }
-  return match[1]?.trim() || null;
-}
-
 function isIgnoredLaunchdLabel(label: string): boolean {
   return label === resolveGatewayLaunchAgentLabel();
 }
@@ -317,20 +312,30 @@ async function collectServiceFiles(params: {
 async function scanLaunchdDir(params: {
   dir: string;
   scope: "user" | "system";
+  includeManagedOpenClaw?: boolean;
+  managedLabel?: string;
 }): Promise<ExtraGatewayService[]> {
   const results: ExtraGatewayService[] = [];
   const candidates = await collectServiceFiles({
     dir: params.dir,
     extension: ".plist",
-    isIgnoredName: isIgnoredLaunchdLabel,
+    isIgnoredName: params.includeManagedOpenClaw ? () => false : isIgnoredLaunchdLabel,
   });
 
   for (const { name: labelFromName, fullPath, contents } of candidates) {
-    const label = tryExtractPlistLabel(contents) ?? labelFromName;
+    const nativeLabel = params.includeManagedOpenClaw
+      ? await readLaunchDaemonPlistLabel(fullPath)
+      : null;
+    const label =
+      nativeLabel?.status === "ok"
+        ? nativeLabel.label
+        : (parseLaunchdPlistLabel(contents) ?? labelFromName);
     const legacyLabel = isLegacyLabel(labelFromName) || isLegacyLabel(label);
     const executionMarker = detectLaunchdGatewayExecutionMarker(contents);
     const marker =
-      hasGatewayServiceMarker(contents) || executionMarker === "openclaw"
+      label === params.managedLabel ||
+      hasGatewayServiceMarker(contents) ||
+      executionMarker === "openclaw"
         ? "openclaw"
         : executionMarker === "clawdbot" || legacyLabel
           ? "clawdbot"
@@ -340,10 +345,14 @@ async function scanLaunchdDir(params: {
     }
     // Managed current services are expected; this scan reports extra jobs that
     // can compete for ports or survive old installs.
-    if (isIgnoredLaunchdLabel(label)) {
+    if (!params.includeManagedOpenClaw && isIgnoredLaunchdLabel(label)) {
       continue;
     }
-    if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents)) {
+    if (
+      !params.includeManagedOpenClaw &&
+      marker === "openclaw" &&
+      isOpenClawGatewayLaunchdService(label, contents)
+    ) {
       continue;
     }
     results.push({
@@ -504,6 +513,8 @@ export async function findExtraGatewayServices(
         for (const svc of await scanLaunchdDir({
           dir: path.join(path.sep, "Library", "LaunchDaemons"),
           scope: "system",
+          includeManagedOpenClaw: true,
+          managedLabel: resolveLaunchAgentLabel(env),
         })) {
           push(svc);
         }

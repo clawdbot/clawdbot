@@ -13,6 +13,7 @@ import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { runWorkerProviderReplayRoundTrip } from "../../test/helpers/worker-provider-replay-roundtrip.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   resolveSessionTranscriptRuntimeTarget,
@@ -41,13 +42,12 @@ import {
 } from "../gateway/worker-environments/store.js";
 import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-store.js";
 import { createWorkerTranscriptCommitter } from "../gateway/worker-environments/transcript-commit.js";
+import { getAgentEventLifecycleGeneration, onAgentRuntimeEvent } from "../infra/agent-events.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
-  getAgentEventLifecycleGeneration,
   getAgentRunContext,
-  onAgentRuntimeEvent,
-} from "../infra/agent-events.js";
+} from "../infra/agent-run-registry.js";
 import { rawDataToString } from "../infra/ws.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import {
@@ -181,7 +181,7 @@ type TranscriptGate = {
 };
 
 type ProviderPlan =
-  | { kind: "immediate"; text: string }
+  | { kind: "immediate"; text: string; outcome?: WorkerInferenceTerminalOutcome }
   | {
       kind: "partitioned";
       firstRelease: Deferred<void>;
@@ -196,6 +196,15 @@ type WorkerClients = {
   transcript: WorkerTranscriptCommitClient;
   live: WorkerLiveEventClient;
   inference: WorkerInferenceProxyClient;
+};
+
+type WorkerClientOptions = {
+  admissionProof?: string;
+  epoch?: number;
+  baseLeafId?: string | null;
+  initialSeq?: number;
+  initialAckedSeq?: number;
+  runId?: string;
 };
 
 class ComposedGatewayHarness {
@@ -317,19 +326,10 @@ class ComposedGatewayHarness {
     this.faults.push(rule);
   }
 
-  createClients(
-    params: {
-      admissionProof?: string;
-      epoch?: number;
-      baseLeafId?: string | null;
-      initialSeq?: number;
-      initialAckedSeq?: number;
-      runId?: string;
-    } = {},
-  ): WorkerClients {
+  createDescriptor(params: WorkerClientOptions = {}): WorkerLaunchDescriptor {
     const epoch = params.epoch ?? this.epoch;
     const credential = params.admissionProof ?? CREDENTIAL;
-    const descriptor: WorkerLaunchDescriptor = {
+    return {
       version: 2,
       socketPath: this.socketPath,
       admission: {
@@ -359,6 +359,11 @@ class ComposedGatewayHarness {
         },
       },
     };
+  }
+
+  createClients(params: WorkerClientOptions = {}): WorkerClients {
+    const descriptor = this.createDescriptor(params);
+    const epoch = descriptor.admission.ownerEpoch;
     const connection = createWorkerConnection({
       socketPath: this.socketPath,
       connectParams: buildWorkerConnectParams(descriptor),
@@ -560,7 +565,7 @@ class ComposedGatewayHarness {
       }
       const plan = this.providerPlan;
       if (plan.kind === "immediate") {
-        return doneOutcome(plan.text);
+        return structuredClone(plan.outcome ?? doneOutcome(plan.text));
       }
       if (plan.kind === "pending") {
         plan.started.resolve();
@@ -714,6 +719,17 @@ describe("cloud worker milestone 2 fault injection", () => {
       await stopClients(current);
     }
     await harness.close();
+  });
+
+  it("replays captured compaction exactly after worker commit and canonical reopen", async () => {
+    await runWorkerProviderReplayRoundTrip({
+      createDescriptor: (options) => harness.createDescriptor(options),
+      requestParams: (method) => harness.requestParams(method),
+      sessionTarget: harness.sessionTarget,
+      setOutcome: (outcome) => {
+        harness.providerPlan = { kind: "immediate", text: "roundtrip", outcome };
+      },
+    });
   });
 
   it("survives repeated tunnel partitions without transcript duplication, live replay, or rebilling", async () => {

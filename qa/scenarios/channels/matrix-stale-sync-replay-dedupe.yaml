@@ -10,6 +10,7 @@ scenario:
     channel: matrix
     timeoutMs: 90000
     retryCount: 0
+    suiteIsolation: isolated
     config:
       matrixTopology:
         defaultRoomKey: main

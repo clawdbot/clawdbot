@@ -579,6 +579,7 @@ type ManagedServiceUpdateHandoffParams = {
   timeoutMs?: number;
   restartDrainTimeoutMs: number | undefined;
   channel?: UpdateChannel;
+  tag?: string;
   restartDelayMs?: number;
   meta: UpdateRestartSentinelMeta;
   handoffId?: string;
@@ -617,12 +618,16 @@ function isNodeLikeRuntime(execPath: string | undefined): boolean {
 function resolveUpdateCliArgv(params: {
   timeoutMs?: number;
   channel?: UpdateChannel;
+  tag?: string;
   execPath?: string;
   argv1?: string;
 }): string[] {
   const updateArgs = ["update", "--yes", "--json"];
   if (params.channel) {
     updateArgs.push("--channel", params.channel);
+  }
+  if (params.tag) {
+    updateArgs.push("--tag", params.tag);
   }
   if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
     updateArgs.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
@@ -642,10 +647,14 @@ function resolveUpdateCliArgv(params: {
 export function formatManagedServiceUpdateCommand(params?: {
   timeoutMs?: number;
   channel?: UpdateChannel;
+  tag?: string;
 }): string {
   const args = ["openclaw", "update", "--yes"];
   if (params?.channel) {
     args.push("--channel", params.channel);
+  }
+  if (params?.tag) {
+    args.push("--tag", params.tag);
   }
   if (typeof params?.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
     args.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
@@ -877,12 +886,14 @@ async function spawnManagedServiceUpdateHandoff(
   const commandArgv = resolveUpdateCliArgv({
     timeoutMs: params.timeoutMs,
     channel: params.channel,
+    tag: params.tag,
     execPath: params.execPath ?? process.execPath,
     argv1: params.argv1 ?? process.argv[1],
   });
   const commandLabel = formatManagedServiceUpdateCommand({
     timeoutMs: params.timeoutMs,
     channel: params.channel,
+    tag: params.tag,
   });
   const handoffCwd = await resolveManagedServiceHandoffCwd(params.root);
   const metaFile: ControlPlaneUpdateSentinelMetaFile = {

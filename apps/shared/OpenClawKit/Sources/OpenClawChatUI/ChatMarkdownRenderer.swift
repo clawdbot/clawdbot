@@ -287,10 +287,12 @@ struct ChatMarkdownRenderSnapshot {
                     preparesReveal: false),
                 isExpanded: disclosure.isExpanded,
                 blocks: disclosure.blocks.map {
+                    // Reveal locations address only top-level blocks. Disclosure content
+                    // uses a nested renderer without reveal state, so render it directly.
                     Self.renderedBlock(
                         $0,
                         isComplete: isComplete,
-                        preparesReveal: preparesReveal)
+                        preparesReveal: false)
                 }))
         case .thematicBreak:
             .thematicBreak

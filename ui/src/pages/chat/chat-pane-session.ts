@@ -12,6 +12,12 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import {
+  scopedSessionPullRequestKey,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  sessionPullRequestsForGateway,
+} from "../../lib/session-pull-requests.ts";
 import {
   buildCatalogSessionKey,
   lookupCatalogSession,
@@ -103,12 +109,17 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
   }
 
   protected async refreshSessionPullRequests(options: { refresh?: boolean } = {}): Promise<void> {
-    const requestVersion = ++this.sessionPullRequestsRequestVersion;
     const scope = this.captureConnectionScope();
     if (
       !scope ||
-      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "controlUi.sessionPullRequests")
+      !isGatewayMethodAdvertised(
+        scope.context.gateway.snapshot,
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      )
     ) {
+      if (scope) {
+        sessionPullRequestsForGateway(scope.context.gateway).unwatch(this);
+      }
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
       this.sessionPullRequestsRateLimited = false;
@@ -117,6 +128,7 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
     }
     const sessionKey = scope.state.sessionKey;
     if (!sessionKey.trim() || parseCatalogSessionKey(sessionKey)) {
+      sessionPullRequestsForGateway(scope.context.gateway).unwatch(this);
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
       this.sessionPullRequestsRateLimited = false;
@@ -124,42 +136,41 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
       return;
     }
     const pullRequestEpoch = scope.context.sessions.capturePullRequestEpoch(sessionKey);
-    try {
-      const result = await scope.client.requestSessionPullRequests({
-        sessionKey,
-        ...scopedAgentParamsForSession(scope.state, sessionKey),
-        ...(options.refresh ? { refresh: true } : {}),
-      });
-      if (!result) {
-        return;
-      }
-      if (
-        requestVersion !== this.sessionPullRequestsRequestVersion ||
-        !this.isConnectionScopeCurrent(scope) ||
-        sessionKey !== scope.state.sessionKey
-      ) {
-        return;
-      }
-      this.sessionPullRequests = result.pullRequests;
-      if (!result.rateLimited || result.pullRequests.length > 0) {
-        scope.context.sessions.setPullRequestSummary(
-          sessionKey,
-          summarizeSessionPullRequests(result.pullRequests),
-          pullRequestEpoch,
-        );
-      }
-      this.sessionPullRequestsBranch = result.branch;
-      this.sessionPullRequestsRateLimited = result.rateLimited;
-      this.dismissedSessionPullRequestIds = listDismissedChatPullRequests(sessionKey);
-      this.requestUpdate();
-    } catch {
-      // PR chips are an optional affordance; keep the last snapshot so a
-      // transient gateway or GitHub failure does not clear the row.
+    const store = sessionPullRequestsForGateway(scope.context.gateway);
+    const pullRequestKey = scopedSessionPullRequestKey(
+      sessionKey,
+      scopedAgentParamsForSession(scope.state, sessionKey).agentId ??
+        resolveChatAgentId(scope.state),
+    );
+    store.watch(this, [pullRequestKey], { foreground: true });
+    if (options.refresh) {
+      store.refresh(pullRequestKey);
     }
+    const result = store.get(pullRequestKey);
+    if (
+      !result ||
+      result.status === "unavailable" ||
+      !this.isConnectionScopeCurrent(scope) ||
+      sessionKey !== scope.state.sessionKey
+    ) {
+      return;
+    }
+    this.sessionPullRequests = result.pullRequests;
+    if (!result.rateLimited || result.pullRequests.length > 0) {
+      scope.context.sessions.setPullRequestSummary(
+        sessionKey,
+        summarizeSessionPullRequests(result.pullRequests),
+        pullRequestEpoch,
+      );
+    }
+    this.sessionPullRequestsBranch = result.branch;
+    this.sessionPullRequestsRateLimited = result.rateLimited;
+    this.dismissedSessionPullRequestIds = listDismissedChatPullRequests(sessionKey);
+    this.requestUpdate();
   }
 
   protected resetSessionPullRequests(): void {
-    this.sessionPullRequestsRequestVersion += 1;
+    sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.sessionPullRequests = [];
     this.sessionPullRequestsBranch = undefined;
     this.sessionPullRequestsRateLimited = false;
@@ -300,15 +311,21 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
       (row.status === "failed" || row.status === "timeout") &&
       (row.lastReadAt == null || failureAt > row.lastReadAt);
     const agentStatusActive = Boolean(row.agentStatus && row.agentStatus.expiresAt > Date.now());
-    if (
-      !this.unreadPatchGuard.shouldPatch(
-        state.sessionKey,
-        row.unread === true || unreadFailure || agentStatusActive,
-      )
-    ) {
+    const unread = row.unread === true || unreadFailure || agentStatusActive;
+    if (!unread) {
+      this.unreadPatchGuard.shouldPatch(state.sessionKey, false);
       return;
     }
     const agentId = parseAgentSessionKey(row.key)?.agentId ?? resolveChatAgentId(state);
+    const access = readSessionMethodAccess(this.context.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key: row.key, unread: false, agentId },
+    });
+    // Read-only navigation must remain silent: absence of mutation access is
+    // not an operation failure and should not latch the unread retry guard.
+    if (!access.allowed || !this.unreadPatchGuard.shouldPatch(state.sessionKey, true)) {
+      return;
+    }
     const guardKey = state.sessionKey;
     void this.context.sessions.patch(row.key, { unread: false }, { agentId }).catch(() => {
       // Unlatch so later unread snapshots retry; the session capability
@@ -320,6 +337,16 @@ export abstract class ChatPaneSession extends ChatPaneSharing {
   protected async restoreArchivedSession(sessionKey: string) {
     const scope = this.captureConnectionScope();
     if (!scope || scope.state.sessionKey !== sessionKey) {
+      return;
+    }
+    const access = readSessionMethodAccess(scope.context.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key: sessionKey, archived: false },
+    });
+    if (!access.allowed) {
+      scope.state.lastError = access.reason;
+      scope.state.chatError = access.reason;
+      scope.state.requestUpdate?.();
       return;
     }
     const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? resolveChatAgentId(scope.state);

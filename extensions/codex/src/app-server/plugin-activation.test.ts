@@ -104,7 +104,7 @@ describe("Codex plugin activation", () => {
         calls.push({ method, params });
         if (method === "plugin/list") {
           pluginListCalls += 1;
-          expect(params).toEqual({});
+          expect(params).toEqual(pluginListCalls === 1 ? {} : { forceRefetch: true });
           return pluginList([
             pluginSummary("google-calendar", {
               installed: pluginListCalls > 1,
@@ -297,6 +297,44 @@ describe("Codex plugin activation", () => {
       "hooks/list",
       "config/mcpServer/reload",
     ]);
+  });
+
+  it("does not install a remote curated plugin without its opaque remote id", async () => {
+    const calls: string[] = [];
+    const result = await ensureCodexPluginActivation({
+      identity: identity("google-calendar"),
+      request: async (method) => {
+        calls.push(method);
+        if (method === "plugin/list") {
+          return {
+            ...pluginList([]),
+            marketplaces: [
+              {
+                name: "openai-curated-remote",
+                path: null,
+                interface: null,
+                plugins: [
+                  pluginSummary("google-calendar@openai-curated-remote", {
+                    name: "google-calendar",
+                    installed: false,
+                    enabled: false,
+                  }),
+                ],
+              },
+            ],
+          } satisfies v2.PluginListResponse;
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expectActivationResult(result, {
+      ok: false,
+      reason: "plugin_missing",
+      installAttempted: false,
+    });
+    expect(calls).toEqual(["plugin/list"]);
+    expect(result.diagnostics[0]?.message).toContain("did not return a remote plugin id");
   });
 
   it("settles a missing plugin from the remote curated marketplace snapshot", async () => {

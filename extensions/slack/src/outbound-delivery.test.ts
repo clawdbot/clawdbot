@@ -6,7 +6,7 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
   initializeGlobalHookRunner,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   resetGlobalHookRunner,
   setActivePluginRegistry,
   type PluginHookRegistration,
@@ -54,7 +54,7 @@ describe("slack outbound shared hook wiring", () => {
 
   afterEach(() => {
     resetGlobalHookRunner();
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
   });
 
   it("fires message_sending once with shared routing fields", async () => {

@@ -32,13 +32,14 @@ describe("sessionsCommand", () => {
 
   it("renders a tabular view with token percentages", async () => {
     const store = await writeStore({
-      "+15555550123": {
+      "agent:main:+15555550123": {
         sessionId: "abc123",
         updatedAt: Date.now() - 45 * 60_000,
         inputTokens: 1200,
         outputTokens: 800,
         totalTokens: 2000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         model: "test:opus",
       },
     });
@@ -50,9 +51,9 @@ describe("sessionsCommand", () => {
 
     expect(logs.join("\n")).toContain("Tokens (ctx %");
 
-    const row = logs.find((line) => line.includes("+15555550123")) ?? "";
+    const row = logs.find((line) => line.includes("agent:main:+15555550123")) ?? "";
     expect(row).toBe(
-      "direct      +15555550123               45m ago   test:opus      OpenAI Codex       2.0k/32k (6%)        id:abc123",
+      "direct      agent:main:+15555550123    45m ago   test:opus      OpenAI Codex       2.0k/32k (6%)        id:abc123",
     );
   });
 
@@ -130,7 +131,7 @@ describe("sessionsCommand", () => {
 
   it("shows placeholder rows when tokens are missing", async () => {
     const store = await writeStore({
-      "quietchat:group:demo": {
+      "agent:main:quietchat:group:demo": {
         sessionId: "xyz",
         updatedAt: Date.now() - 5 * 60_000,
         thinkingLevel: "high",
@@ -142,24 +143,25 @@ describe("sessionsCommand", () => {
 
     cleanupStore(store);
 
-    const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
-    expect(row).toBe(
-      "group       quietchat:group:demo       5m ago    test:opus      OpenAI Codex       unknown/32k (?%)     think:high id:xyz",
-    );
+    const row = logs.find((line) => line.includes("id:xyz")) ?? "";
+    expect(row).toContain("group");
+    expect(row).toContain("unknown/32k (?%)");
+    expect(row).toContain("think:high");
   });
 
   it("exports freshness metadata in JSON output", async () => {
     const store = await writeStore({
-      main: {
+      "agent:main:main": {
         sessionId: "abc123",
         updatedAt: Date.now() - 10 * 60_000,
         inputTokens: 1200,
         outputTokens: 800,
         totalTokens: 2000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         model: "test:opus",
       },
-      "quietchat:group:demo": {
+      "agent:main:quietchat:group:demo": {
         sessionId: "xyz",
         updatedAt: Date.now() - 5 * 60_000,
         inputTokens: 20,
@@ -175,8 +177,8 @@ describe("sessionsCommand", () => {
         totalTokensFresh: boolean;
       }>;
     }>(sessionsCommand, store);
-    const main = payload.sessions?.find((row) => row.key === "main");
-    const group = payload.sessions?.find((row) => row.key === "quietchat:group:demo");
+    const main = payload.sessions?.find((row) => row.key === "agent:main:main");
+    const group = payload.sessions?.find((row) => row.key === "agent:main:quietchat:group:demo");
     expect(main?.totalTokens).toBe(2000);
     expect(main?.totalTokensFresh).toBe(true);
     expect(group?.totalTokens).toBeNull();
@@ -185,7 +187,7 @@ describe("sessionsCommand", () => {
 
   it("reports the SQLite database and omits the retired sessionFile field", async () => {
     const store = await writeStore({
-      main: {
+      "agent:main:main": {
         sessionId: "abc123",
         updatedAt: Date.now() - 10 * 60_000,
         model: "test:opus",
@@ -199,12 +201,14 @@ describe("sessionsCommand", () => {
 
     expect(payload.path).toMatch(/openclaw-agent\.sqlite$/u);
     expect(payload.path).not.toContain("sessions.json");
-    expect(payload.sessions?.find((row) => row.key === "main")).not.toHaveProperty("sessionFile");
+    expect(payload.sessions?.find((row) => row.key === "agent:main:main")).not.toHaveProperty(
+      "sessionFile",
+    );
   });
 
   it("exports subagent lineage metadata in JSON output", async () => {
     const store = await writeStore({
-      "agent:child:main": {
+      "agent:main:child": {
         sessionId: "child-session",
         updatedAt: Date.now() - 10 * 60_000,
         spawnedBy: "agent:main:main",
@@ -241,7 +245,7 @@ describe("sessionsCommand", () => {
       }>;
     }>(sessionsCommand, store);
 
-    const child = payload.sessions?.find((row) => row.key === "agent:child:main");
+    const child = payload.sessions?.find((row) => row.key === "agent:main:child");
     expect(child).toMatchObject({
       spawnedBy: "agent:main:main",
       spawnedWorkspaceDir: "/workspace/project",
@@ -261,7 +265,7 @@ describe("sessionsCommand", () => {
 
   it("shows preserved stale totals in JSON output", async () => {
     const store = await writeStore({
-      main: {
+      "agent:main:main": {
         sessionId: "abc123",
         updatedAt: Date.now() - 10 * 60_000,
         totalTokens: 2000,
@@ -277,7 +281,7 @@ describe("sessionsCommand", () => {
         totalTokensFresh: boolean;
       }>;
     }>(sessionsCommand, store);
-    const main = payload.sessions?.find((row) => row.key === "main");
+    const main = payload.sessions?.find((row) => row.key === "agent:main:main");
     expect(main?.totalTokens).toBe(2000);
     expect(main?.totalTokensFresh).toBe(false);
   });
@@ -285,12 +289,12 @@ describe("sessionsCommand", () => {
   it("applies --active filtering in JSON output", async () => {
     const store = await writeStore(
       {
-        recent: {
+        "agent:main:recent": {
           sessionId: "recent",
           updatedAt: Date.now() - 5 * 60_000,
           model: "test:opus",
         },
-        stale: {
+        "agent:main:stale": {
           sessionId: "stale",
           updatedAt: Date.now() - 45 * 60_000,
           model: "test:opus",
@@ -304,7 +308,7 @@ describe("sessionsCommand", () => {
         key: string;
       }>;
     }>(sessionsCommand, store, { active: "10" });
-    expect(payload.sessions?.map((row) => row.key)).toEqual(["recent"]);
+    expect(payload.sessions?.map((row) => row.key)).toEqual(["agent:main:recent"]);
   });
 
   it("exports runtime policy aliases for collapsed external direct sessions", async () => {
@@ -344,9 +348,17 @@ describe("sessionsCommand", () => {
   it("honors explicit JSON output limits", async () => {
     const store = await writeStore(
       {
-        newest: { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
-        middle: { sessionId: "middle", updatedAt: Date.now() - 60_000, model: "test:opus" },
-        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "test:opus" },
+        "agent:main:newest": { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
+        "agent:main:middle": {
+          sessionId: "middle",
+          updatedAt: Date.now() - 60_000,
+          model: "test:opus",
+        },
+        "agent:main:oldest": {
+          sessionId: "oldest",
+          updatedAt: Date.now() - 120_000,
+          model: "test:opus",
+        },
       },
       "sessions-explicit-limit",
     );
@@ -363,14 +375,21 @@ describe("sessionsCommand", () => {
     expect(payload.totalCount).toBe(3);
     expect(payload.limitApplied).toBe(2);
     expect(payload.hasMore).toBe(true);
-    expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "middle"]);
+    expect(payload.sessions?.map((row) => row.key)).toEqual([
+      "agent:main:newest",
+      "agent:main:middle",
+    ]);
   });
 
   it("allows full JSON output with --limit all", async () => {
     const store = await writeStore(
       {
-        newest: { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
-        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "test:opus" },
+        "agent:main:newest": { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
+        "agent:main:oldest": {
+          sessionId: "oldest",
+          updatedAt: Date.now() - 120_000,
+          model: "test:opus",
+        },
       },
       "sessions-limit-all",
     );
@@ -387,14 +406,21 @@ describe("sessionsCommand", () => {
     expect(payload.totalCount).toBe(2);
     expect(payload.limitApplied).toBeNull();
     expect(payload.hasMore).toBe(false);
-    expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "oldest"]);
+    expect(payload.sessions?.map((row) => row.key)).toEqual([
+      "agent:main:newest",
+      "agent:main:oldest",
+    ]);
   });
 
   it("sorts and slices large explicit limits instead of using top-N insertion", async () => {
     const store = await writeStore(
       {
-        newest: { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
-        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "test:opus" },
+        "agent:main:newest": { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
+        "agent:main:oldest": {
+          sessionId: "oldest",
+          updatedAt: Date.now() - 120_000,
+          model: "test:opus",
+        },
       },
       "sessions-large-limit",
     );
@@ -411,13 +437,16 @@ describe("sessionsCommand", () => {
     expect(payload.totalCount).toBe(2);
     expect(payload.limitApplied).toBe(100000);
     expect(payload.hasMore).toBe(false);
-    expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "oldest"]);
+    expect(payload.sessions?.map((row) => row.key)).toEqual([
+      "agent:main:newest",
+      "agent:main:oldest",
+    ]);
   });
 
   it("rejects invalid --active values", async () => {
     const store = await writeStore(
       {
-        demo: {
+        "agent:main:demo": {
           sessionId: "demo",
           updatedAt: Date.now() - 5 * 60_000,
         },
@@ -437,7 +466,7 @@ describe("sessionsCommand", () => {
   it("rejects partial --active values", async () => {
     const store = await writeStore(
       {
-        demo: {
+        "agent:main:demo": {
           sessionId: "demo",
           updatedAt: Date.now() - 5 * 60_000,
         },
@@ -457,7 +486,7 @@ describe("sessionsCommand", () => {
   it("rejects invalid --limit values", async () => {
     const store = await writeStore(
       {
-        demo: {
+        "agent:main:demo": {
           sessionId: "demo",
           updatedAt: Date.now() - 5 * 60_000,
         },

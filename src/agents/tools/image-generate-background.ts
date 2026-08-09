@@ -26,21 +26,13 @@ export const imageGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
 });
 
 /** Creates an image generation task ledger run. */
-export const createImageGenerationTaskRun = (
-  ...params: Parameters<typeof imageGenerationTaskLifecycle.createTaskRun>
-) => imageGenerationTaskLifecycle.createTaskRun(...params);
+export const createImageGenerationTaskRun = imageGenerationTaskLifecycle.createTaskRun;
 
 /** Records progress for an image generation task. */
-export const recordImageGenerationTaskProgress = (
-  ...params: Parameters<typeof imageGenerationTaskLifecycle.recordTaskProgress>
-) => imageGenerationTaskLifecycle.recordTaskProgress(...params);
+export const recordImageGenerationTaskProgress = imageGenerationTaskLifecycle.recordTaskProgress;
 
 /** Completes an image generation task ledger run. */
-export const completeImageGenerationTaskRun = (
-  ...params: Parameters<typeof imageGenerationTaskLifecycle.completeTaskRun>
-) => imageGenerationTaskLifecycle.completeTaskRun(...params);
+export const completeImageGenerationTaskRun = imageGenerationTaskLifecycle.completeTaskRun;
 
 /** Marks an image generation task ledger run as failed. */
-export const failImageGenerationTaskRun = (
-  ...params: Parameters<typeof imageGenerationTaskLifecycle.failTaskRun>
-) => imageGenerationTaskLifecycle.failTaskRun(...params);
+export const failImageGenerationTaskRun = imageGenerationTaskLifecycle.failTaskRun;

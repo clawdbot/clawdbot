@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
+import {
+  buildSandboxContainerName,
+  resolveSandboxWorkspaceLayoutPaths,
+  slugifySessionKey,
+} from "./shared.js";
 
 describe("buildSandboxContainerName", () => {
   it("preserves scope identity when a custom prefix exceeds the Docker name limit", () => {
@@ -29,5 +33,50 @@ describe("buildSandboxContainerName", () => {
     expect(first).toMatch(/-[0-9a-f]{12}$/);
     expect(second).toMatch(/-[0-9a-f]{12}$/);
     expect(oversizedSlug).toMatch(/-[0-9a-f]{12}$/);
+  });
+
+  it("preserves workspace identity when a custom prefix exceeds the Docker name limit", () => {
+    const slug = slugifySessionKey(`agent:main:workspace:${"a".repeat(32)}`);
+    const first = buildSandboxContainerName("custom-prefix-one-that-is-far-too-long-", slug);
+    const second = buildSandboxContainerName("custom-prefix-two-that-is-far-too-long-", slug);
+
+    expect(slug).toMatch(/^workspace-[a-f0-9]{32}$/);
+    expect(first).toHaveLength(63);
+    expect(second).toHaveLength(63);
+    expect(first).not.toBe(second);
+    expect(first).toContain(slug);
+    expect(second).toContain(slug);
+    expect(first).toMatch(/-[a-f0-9]{12}$/);
+    expect(second).toMatch(/-[a-f0-9]{12}$/);
+  });
+});
+
+describe("resolveSandboxWorkspaceLayoutPaths", () => {
+  const sessionKey = "agent:poly:msteams:channel-1";
+  const workspaceA = "/tmp/openclaw-customers/atica/agents/poly/workspace";
+  const workspaceB = "/tmp/openclaw-customers/polytopic/agents/poly/workspace";
+  const createLayout = (scope: "session" | "agent" | "shared", workspaceDir: string) =>
+    resolveSandboxWorkspaceLayoutPaths({
+      cfg: {
+        scope,
+        workspaceAccess: "rw",
+        workspaceRoot: "/tmp/openclaw-sandboxes",
+      },
+      rawSessionKey: sessionKey,
+      workspaceDir,
+    });
+
+  it.each(["session", "agent"] as const)("qualifies %s scope by resolved workspace", (scope) => {
+    const first = createLayout(scope, workspaceA).scopeKey;
+    const second = createLayout(scope, workspaceB).scopeKey;
+
+    expect(first).toMatch(/:workspace:[a-f0-9]{32}$/);
+    expect(second).toMatch(/:workspace:[a-f0-9]{32}$/);
+    expect(first).not.toBe(second);
+  });
+
+  it("keeps shared scope independent of workspace", () => {
+    expect(createLayout("shared", workspaceA).scopeKey).toBe("shared");
+    expect(createLayout("shared", workspaceB).scopeKey).toBe("shared");
   });
 });

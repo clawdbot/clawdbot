@@ -722,7 +722,102 @@ describe("active-memory plugin", () => {
     expect(typeof handler).toBe("function");
     expect(options).toEqual({ timeoutMs: 153_000 });
     expect(hookOptions.before_prompt_build?.timeoutMs).toBe(153_000);
+    expect(typeof hooks.before_model_resolve).toBe("function");
     expect(typeof hooks.agent_end).toBe("function");
+  });
+
+  it("prewarms a cold lane-1 lookup before the first QA-channel turn budget starts", async () => {
+    registerPluginConfig({ mode: "off" });
+    let cold = true;
+    const simulatedBudgetMs = 500;
+    const coldDelayMs = 650;
+    const runtimePreparationMs = 500;
+    const runId = "run-cold-qa-channel";
+    const triggerEntry = {
+      path: "MEMORY.md",
+      startLine: 1,
+      endLine: 1,
+      score: 1,
+      snippet: "Prefer aisle seats.",
+      source: "memory" as const,
+      originClass: "agent" as const,
+      triggers: "booking a flight",
+    };
+    const warmLookup = async () => {
+      if (cold) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, coldDelayMs);
+        });
+        cold = false;
+      }
+    };
+    const search = vi.fn(async () => {
+      await warmLookup();
+      return [];
+    });
+    const listTriggerCandidates = vi.fn(async () => {
+      await warmLookup();
+      return [triggerEntry];
+    });
+    hoisted.getActiveMemorySearchManager.mockResolvedValue({
+      manager: { search, listTriggerCandidates },
+    } as never);
+
+    const prewarmResult = await requireHook("before_model_resolve")(
+      { prompt: "Help when booking a flight" },
+      {
+        agentId: "main",
+        runId,
+        trigger: "user",
+        sessionKey: "agent:main:qa-channel:direct:owner",
+        messageProvider: "qa-channel",
+        channelId: "owner",
+      },
+    );
+    expect(prewarmResult).toBeUndefined();
+    expect(coldDelayMs).toBeGreaterThan(simulatedBudgetMs);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, runtimePreparationMs);
+    });
+
+    const startedAt = performance.now();
+    const result = await runPromptBuild(
+      { prompt: "Help when booking a flight" },
+      {
+        sessionKey: "agent:main:qa-channel:direct:owner",
+        messageProvider: "qa-channel",
+        channelId: "owner",
+        runId,
+      },
+    );
+    const firstTurnMs = performance.now() - startedAt;
+
+    expectPrependContextContains(result, "Prefer aisle seats.");
+    expect(cold).toBe(false);
+    expect(firstTurnMs).toBeLessThan(simulatedBudgetMs);
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(listTriggerCandidates).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not prewarm a session disabled with /active-memory off", async () => {
+    const sessionKey = "agent:main:qa-channel:direct:paused";
+    seedSession(sessionKey, "s-paused");
+    await runActiveMemoryCommand({ sessionKey, args: "off" });
+
+    await requireHook("before_model_resolve")(
+      { prompt: "Help when booking a flight" },
+      {
+        agentId: "main",
+        runId: "run-paused-qa-channel",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "qa-channel",
+        channelId: "paused",
+      },
+    );
+
+    expect(hoisted.getActiveMemorySearchManager).not.toHaveBeenCalled();
   });
 
   it("does not synthesize a main agent when every configured agent opts out", () => {
@@ -1581,6 +1676,33 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it.each(["你还记得我们上次讨论的数据库配置吗？", "你还记得我们上周决定明天部署的方案吗？"])(
+    "escalates only retrospective Chinese %j when recall mode is unset",
+    async (prompt) => {
+      registerPluginConfig({ mode: undefined });
+      expect(currentActiveMemoryConfig().mode).toBeUndefined();
+
+      const context = {
+        sessionKey: "agent:main:telegram:direct:owner",
+        messageProvider: "telegram",
+        channelId: "owner",
+      };
+
+      const ordinary = await runPromptBuild({ prompt: "部署之前先整理聊天记录" }, context);
+      expect(ordinary).toBeUndefined();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+
+      const future = await runPromptBuild({ prompt: "你记得明天发送报告吗？" }, context);
+      expect(future).toBeUndefined();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+
+      const recall = await runPromptBuild({ prompt }, context);
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expectPrependContextContains(recall, "lemon pepper wings");
+      expectEmbeddedChannel("telegram");
+    },
+  );
+
   it("fails closed when the live active-memory plugin entry is removed", async () => {
     configFile = {
       plugins: {
@@ -1987,7 +2109,6 @@ describe("active-memory plugin", () => {
     expect(params.model).toBe("gpt-5.4-mini");
     expect(params.messageProvider).toBe("webchat");
     expect(params.sessionKey).toMatch(/^agent:main:main:active-memory:[a-f0-9]{12}$/);
-    expect(activeMemoryConfigFrom(embeddedRunConfig()).qmd).toEqual({ searchMode: "search" });
     expect(params.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
@@ -2061,42 +2182,6 @@ describe("active-memory plugin", () => {
       true,
     );
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-  });
-
-  it("lets active memory inherit the main QMD search mode when configured", async () => {
-    api.config = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "github-copilot/gpt-5.4-mini",
-          },
-        },
-      },
-      memory: {
-        backend: "qmd",
-        qmd: {
-          searchMode: "query",
-        },
-      },
-    };
-    registerPluginConfig({
-      qmd: {
-        searchMode: "inherit",
-      },
-    });
-
-    await runPromptBuild({
-      prompt: "what wings should i order? inherit-qmd-mode-check",
-    });
-
-    const config = embeddedRunConfig();
-    expect(config.memory).toEqual({
-      backend: "qmd",
-      qmd: {
-        searchMode: "query",
-      },
-    });
-    expect(activeMemoryConfigFrom(config).qmd).toEqual({ searchMode: "inherit" });
   });
 
   it("frames the blocking memory subagent as a memory search agent for another model", async () => {
@@ -2548,7 +2633,7 @@ describe("active-memory plugin", () => {
       return {
         meta: {
           activeMemorySearchDebug: {
-            backend: "qmd",
+            backend: "builtin",
             configuredMode: "search",
             effectiveMode: "query",
             fallback: "unsupported-search-flags",
@@ -2584,7 +2669,7 @@ describe("active-memory plugin", () => {
     expectLinesToContain(entries?.[0]?.lines ?? [], "🧩 Active Memory: status=ok");
     expectLinesToContain(
       entries?.[0]?.lines ?? [],
-      "🔎 Active Memory Debug: backend=qmd configuredMode=search effectiveMode=query fallback=unsupported-search-flags searchMs=2590 hits=3 | User prefers lemon pepper wings, and blue cheese still wins.",
+      "🔎 Active Memory Debug: backend=builtin configuredMode=search effectiveMode=query fallback=unsupported-search-flags searchMs=2590 hits=3 | User prefers lemon pepper wings, and blue cheese still wins.",
     );
   });
 
@@ -2599,7 +2684,7 @@ describe("active-memory plugin", () => {
             message: {
               role: "toolResult",
               toolName: "memory_search",
-              details: { debug: { backend: "qmd", hits: 3 } },
+              details: { debug: { backend: "builtin", hits: 3 } },
             },
           }),
           JSON.stringify({
@@ -2629,7 +2714,7 @@ describe("active-memory plugin", () => {
       line.startsWith("🔎 Active Memory Debug:"),
     );
     const line = requireNonEmptyString(debugLine, "active memory debug line missing");
-    expect(line).toContain("backend=qmd");
+    expect(line).toContain("backend=builtin");
     expect(line).toContain("hits=3");
   });
 
@@ -3437,7 +3522,7 @@ describe("active-memory plugin", () => {
           role: "toolResult",
           toolName: "memory_search",
           details: {
-            debug: { backend: "qmd", effectiveMode: "search", hits: 1 },
+            debug: { backend: "builtin", effectiveMode: "search", hits: 1 },
           },
         },
       },
@@ -3457,7 +3542,7 @@ describe("active-memory plugin", () => {
     const debug = await testing.readActiveMemorySearchDebug(sessionFile, {
       maxLines: 4,
     });
-    expect(debug?.backend).toBe("qmd");
+    expect(debug?.backend).toBe("builtin");
     expect(debug?.hits).toBe(1);
   });
 
@@ -3795,7 +3880,7 @@ describe("active-memory plugin", () => {
             message: {
               role: "toolResult",
               toolName: "memory_search",
-              details: { results: [], debug: { backend: "qmd", hits: 0, searchMs: 8 } },
+              details: { results: [], debug: { backend: "builtin", hits: 0, searchMs: 8 } },
             },
           },
         ]);
@@ -3817,7 +3902,7 @@ describe("active-memory plugin", () => {
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toHaveLength(2);
     expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
-    expectLinesToContain(lines, "🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0");
+    expectLinesToContain(lines, "🔎 Active Memory Debug: backend=builtin searchMs=8 hits=0");
   });
 
   it("does not fast-fail memory_search results solely because debug hits is zero", async () => {
@@ -3834,7 +3919,7 @@ describe("active-memory plugin", () => {
             toolName: "memory_search",
             details: {
               results: [{ path: "memory/food.md", text: "User usually orders ramen." }],
-              debug: { backend: "qmd", hits: 0, searchMs: 8 },
+              debug: { backend: "builtin", hits: 0, searchMs: 8 },
             },
           },
         },
@@ -3854,7 +3939,7 @@ describe("active-memory plugin", () => {
     const lines = getActiveMemoryLines(sessionKey);
     expect(lines).toHaveLength(2);
     expectLinesToContain(lines, "🧩 Active Memory: status=ok");
-    expectLinesToContain(lines, "🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0");
+    expectLinesToContain(lines, "🔎 Active Memory Debug: backend=builtin searchMs=8 hits=0");
   });
 
   it("uses a late verbose summary after a successful result and later unavailable trace", async () => {
@@ -3890,7 +3975,7 @@ describe("active-memory plugin", () => {
                     results: [
                       { path: "memory/food.md", text: "User usually orders tonkotsu ramen." },
                     ],
-                    debug: { backend: "qmd", hits: 1, searchMs: 8 },
+                    debug: { backend: "builtin", hits: 1, searchMs: 8 },
                   },
                   null,
                   2,

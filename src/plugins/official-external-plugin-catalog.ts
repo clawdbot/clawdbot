@@ -4,13 +4,15 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { isRecord } from "../utils.js";
 import type {
   PluginManifestCatalog,
   PluginManifestChannelConfig,
   PluginManifestContracts,
   PluginManifestProviderEndpoint,
+  PluginPackageChannel,
   PluginPackageInstall,
 } from "./manifest.js";
 import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOGS } from "./official-external-plugin-bundled-catalogs.js";
@@ -70,18 +72,20 @@ export type OfficialExternalWebSearchProvider = {
   autoDetectOrder?: number;
 };
 
+type OfficialExternalCatalogChannel = PluginPackageChannel & {
+  /** Older hosted catalogs used a flat env list before configuredState became canonical. */
+  envVars?: readonly string[];
+};
+
 /** Manifest-like metadata stored in official external catalog entries. */
 type OfficialExternalPluginCatalogManifest = {
+  legacyPluginIds?: readonly string[];
   plugin?: {
     id?: string;
     label?: string;
   };
   catalog?: PluginManifestCatalog;
-  channel?: {
-    id?: string;
-    label?: string;
-    envVars?: readonly string[];
-  };
+  channel?: OfficialExternalCatalogChannel;
   providers?: readonly OfficialExternalProviderCatalogProvider[];
   /**
    * Mirrors the plugin manifest's providerEndpoints so endpoint classification
@@ -652,7 +656,7 @@ async function readHostedCatalogResponseText(params: {
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`hosted catalog feed read timed out after ${chunkTimeoutMs}ms`),
   });
-  return new TextDecoder().decode(buffer);
+  return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
 }
 
 function bundledOfficialExternalPluginCatalogEntries(): OfficialExternalPluginCatalogEntry[] {
@@ -694,10 +698,6 @@ function resolveOfficialExternalPluginCatalogEntryKey(
   return undefined;
 }
 
-function formatHostedCatalogError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function bundledFallbackResult(
   error: unknown,
   metadata?: HostedOfficialExternalPluginCatalogLoadResult["metadata"],
@@ -705,7 +705,7 @@ function bundledFallbackResult(
   return {
     source: "bundled-fallback",
     entries: listOfficialExternalPluginCatalogEntries(),
-    error: formatHostedCatalogError(error),
+    error: formatErrorMessage(error),
     ...(metadata ? { metadata } : {}),
   };
 }
@@ -714,7 +714,7 @@ function emptyBundledFallbackResult(error: unknown): HostedOfficialExternalPlugi
   return {
     source: "bundled-fallback",
     entries: [],
-    error: formatHostedCatalogError(error),
+    error: formatErrorMessage(error),
   };
 }
 
@@ -912,8 +912,8 @@ async function loadHostedCatalogSnapshotResult(params: {
     snapshot: params.snapshot,
     ...(parsed.trust ? { trust: parsed.trust } : {}),
     error: parsed.expired
-      ? `${formatHostedCatalogError(params.error)}; ${parsed.feed.expiresAt ? `hosted catalog signed feed expired at ${parsed.feed.expiresAt}` : "hosted catalog signed feed has no expiresAt"}`
-      : formatHostedCatalogError(params.error),
+      ? `${formatErrorMessage(params.error)}; ${parsed.feed.expiresAt ? `hosted catalog signed feed expired at ${parsed.feed.expiresAt}` : "hosted catalog signed feed has no expiresAt"}`
+      : formatErrorMessage(params.error),
   };
 }
 
@@ -999,11 +999,11 @@ async function snapshotOrBundledFallbackResult(params: {
     } catch (snapshotErr) {
       if (params.verification?.mode === "signed") {
         return emptyBundledFallbackResult(
-          `${formatHostedCatalogError(params.error)}; snapshot fallback failed: ${formatHostedCatalogError(snapshotErr)}`,
+          `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`,
         );
       }
       return bundledFallbackResult(
-        `${formatHostedCatalogError(params.error)}; snapshot fallback failed: ${formatHostedCatalogError(snapshotErr)}`,
+        `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`,
         params.metadata,
       );
     }
@@ -1329,9 +1329,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       now: currentTime(),
     });
   } finally {
-    if (response?.bodyUsed !== true) {
-      await response?.body?.cancel().catch(() => undefined);
-    }
+    await cancelUnreadResponseBody(response);
     await release?.().catch(() => undefined);
   }
 }
@@ -1451,6 +1449,17 @@ export function resolveOfficialExternalPluginId(
     normalizeOptionalString(manifest?.channel?.id) ??
     normalizeOptionalString(manifest?.providers?.[0]?.id) ??
     normalizeOptionalString(entry.id)
+  );
+}
+
+/** Returns legacy plugin ids used only for trusted update migrations. */
+export function resolveOfficialExternalPluginLegacyIds(
+  entry: OfficialExternalPluginCatalogEntry,
+): string[] {
+  return uniqueStrings(
+    (getOfficialExternalPluginCatalogManifest(entry)?.legacyPluginIds ?? [])
+      .map((pluginId) => normalizeOptionalString(pluginId))
+      .filter((pluginId): pluginId is string => Boolean(pluginId)),
   );
 }
 
@@ -1683,7 +1692,11 @@ export function listOfficialExternalChannelEnvVars(): Array<{
     const channel = getOfficialExternalPluginCatalogManifest(entry)?.channel;
     const channelId = normalizeOptionalString(channel?.id)?.toLowerCase();
     const envVars = uniqueStrings(
-      (channel?.envVars ?? [])
+      [
+        ...(channel?.envVars ?? []),
+        ...(channel?.configuredState?.env?.allOf ?? []),
+        ...(channel?.configuredState?.env?.anyOf ?? []),
+      ]
         .map((envVar) => normalizeOptionalString(envVar))
         .filter((envVar): envVar is string => Boolean(envVar)),
     );

@@ -9,6 +9,7 @@ export const deprecatedPublicPluginSdkEntrypoints: string[];
 export const deprecatedBarrelPluginSdkEntrypoints: string[];
 
 export function buildPluginSdkEntrySources(entries?: readonly string[]): Record<string, string>;
+export function listPluginSdkDeclarationOutputs(entries?: readonly string[]): string[];
 export function buildPluginSdkPackageExports(): Record<
   string,
   {

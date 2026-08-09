@@ -78,7 +78,8 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
       id: rawId,
     },
     chatType: kind,
-    from: isUser ? `mattermost:${rawId}` : `mattermost:channel:${rawId}`,
+    // Origin identity must match inbound; only `to` uses the channel wire address.
+    from: isUser ? `mattermost:${rawId}` : `mattermost:${kind}:${rawId}`,
     // Wire target stays `channel:<id>` for non-DMs: Mattermost posts to the channel
     // id regardless of private/public, and `parseMattermostTarget` only accepts
     // `channel:`/`user:`. The `group` distinction lives in the session key (peer.kind).

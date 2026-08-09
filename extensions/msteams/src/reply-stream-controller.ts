@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
+import { extractMessageId } from "./media-helpers.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
@@ -29,6 +30,19 @@ type TeamsStreamChunkEvents = {
   on(event: "chunk", handler: (activity: TeamsStreamChunkActivity) => void): number;
   off(subscriptionId: number): void;
 };
+
+type MSTeamsNativeDeliveryFinalization = {
+  visibleReplySent: boolean;
+  content?: string;
+  logicalContent?: string;
+  messageId?: string;
+  fallbackPayload?: ReplyPayload;
+  postNativePayloads?: ReplyPayload[];
+};
+
+type DeferredReplacementEntry =
+  | { kind: "payload"; payload: ReplyPayload }
+  | { kind: "replacement"; payload: ReplyPayload };
 
 // The SDK throws StreamCancelledError synchronously from stream.emit/update
 // when the user pressed Stop in Teams (Teams replies 403 to the next chunk
@@ -76,11 +90,14 @@ export function createTeamsReplyStreamController(params: {
     isPersonal &&
     (streamMode === "partial" || streamMode === "progress");
   const shouldStreamPreviewToolProgress =
-    streamMode === "progress" && resolveChannelStreamingPreviewToolProgress(params.msteamsConfig);
+    streamMode === "progress" &&
+    resolveChannelStreamingPreviewToolProgress(params.msteamsConfig, true, streamMode);
 
   const stream = shouldUseNativeStream ? params.context.stream : undefined;
 
   let tokensEmitted = false;
+  let nativeDispatchStarted = false;
+  let nativeDeliveryClaimed = false;
   let streamFinalizationPending = false;
   let canceledLocally = false;
   // Set when `stream.emit/close` fails for a non-cancel reason after we've
@@ -104,6 +121,13 @@ export function createTeamsReplyStreamController(params: {
   let emittedText = "";
   let acknowledgedText = "";
   let acknowledgedStreamId: string | undefined;
+  let replacementFinalPending = false;
+  let replacementEmitFailed = false;
+  let replacementSettlementPending = false;
+  let replacementTextAwaitingAcknowledgement: string | undefined;
+  let deferredReplacementEntries: DeferredReplacementEntry[] = [];
+  let finalMetadataQueued = false;
+  let failedSegmentFallbackPrepared = false;
   const streamEvents = (stream as { events?: TeamsStreamChunkEvents } | undefined)?.events;
   let streamChunkSubscription: number | undefined;
 
@@ -111,19 +135,30 @@ export function createTeamsReplyStreamController(params: {
   // activity. Never infer delivered text from emit(), queued bytes, or errors.
   if (typeof streamEvents?.on === "function" && typeof streamEvents.off === "function") {
     streamChunkSubscription = streamEvents.on("chunk", (activity) => {
+      const replacementAcknowledgementPending =
+        replacementTextAwaitingAcknowledgement !== undefined;
+      const replacementAcknowledgement =
+        typeof activity.text === "string" &&
+        replacementAcknowledgementPending &&
+        activity.text === replacementTextAwaitingAcknowledgement;
       if (
         activity.type !== "typing" ||
         activity.channelData?.streamType !== "streaming" ||
         !activity.id ||
         !activity.text ||
         (acknowledgedStreamId !== undefined && activity.id !== acknowledgedStreamId) ||
-        !activity.text.startsWith(acknowledgedText) ||
+        (replacementAcknowledgementPending
+          ? !replacementAcknowledgement
+          : !activity.text.startsWith(acknowledgedText)) ||
         !emittedText.startsWith(activity.text)
       ) {
         return;
       }
       acknowledgedStreamId = activity.id;
       acknowledgedText = activity.text;
+      if (activity.text === replacementTextAwaitingAcknowledgement) {
+        replacementTextAwaitingAcknowledgement = undefined;
+      }
     });
   }
 
@@ -135,6 +170,17 @@ export function createTeamsReplyStreamController(params: {
     }
     streamEvents?.off(streamChunkSubscription);
     streamChunkSubscription = undefined;
+  };
+
+  const acknowledgedNativeDelivery = (): MSTeamsNativeDeliveryFinalization => {
+    if (!acknowledgedStreamId || !acknowledgedText) {
+      return { visibleReplySent: false };
+    }
+    return {
+      visibleReplySent: true,
+      content: acknowledgedText,
+      messageId: acknowledgedStreamId,
+    };
   };
 
   const fallbackPayloadAfterAcknowledgedText = (payload: ReplyPayload): Maybe<ReplyPayload> => {
@@ -156,6 +202,47 @@ export function createTeamsReplyStreamController(params: {
   const fallbackPayloadForSuppressedFinal = (payload: ReplyPayload): ReplyPayload => {
     const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
     return hasMedia ? { ...payload, mediaUrl: undefined, mediaUrls: undefined } : payload;
+  };
+
+  const finalStreamActivity = (text?: string) => ({
+    type: "message" as const,
+    ...(text ? { text } : {}),
+    entities: [
+      {
+        type: "https://schema.org/Message",
+        "@type": "Message",
+        "@context": "https://schema.org",
+        "@id": "",
+        additionalType: ["AIGeneratedContent"],
+      },
+    ],
+    channelData: params.feedbackLoopEnabled ? { feedbackLoopEnabled: true } : {},
+  });
+
+  const deferredReplacementLogicalContent = (): string | undefined => {
+    const content = deferredReplacementEntries
+      .map((entry) => entry.payload.text)
+      .filter((text): text is string => Boolean(text))
+      .join("\n");
+    return content || undefined;
+  };
+
+  const takeDeferredReplacementPayloads = (
+    replacementFallback: Maybe<ReplyPayload>,
+  ): ReplyPayload[] => {
+    const payloads = deferredReplacementEntries.flatMap((entry) => {
+      if (entry.kind === "payload") {
+        return [entry.payload];
+      }
+      const hasMedia = Boolean(entry.payload.mediaUrl || entry.payload.mediaUrls?.length);
+      const text = replacementFallback?.text;
+      if (!text && !hasMedia) {
+        return [];
+      }
+      return [{ ...entry.payload, text: text || undefined }];
+    });
+    deferredReplacementEntries = [];
+    return payloads;
   };
 
   /**
@@ -218,13 +305,17 @@ export function createTeamsReplyStreamController(params: {
       // Partial-token streaming only fires in "partial" mode. In "progress"
       // mode, openclaw's pipeline doesn't deliver tokens — the model output
       // arrives as a single payload at preparePayload time.
-      if (
-        !stream ||
-        !payload.text ||
-        wasCanceled() ||
-        streamMode !== "partial" ||
-        streamFinalizationPending
-      ) {
+      if (!stream || !payload.text || wasCanceled() || streamMode !== "partial") {
+        return;
+      }
+      if (replacementSettlementPending && replacementFinalPending) {
+        // Keep the newest partial as the replacement candidate until the
+        // authoritative final payload arrives. Never append it into the SDK
+        // accumulator that clearText() reset.
+        pendingFinalPayload = { text: payload.text };
+        return;
+      }
+      if (streamFinalizationPending) {
         return;
       }
       // Convert cumulative-text from the pipeline into deltas for the SDK's
@@ -245,12 +336,24 @@ export function createTeamsReplyStreamController(params: {
       if (!delta) {
         return;
       }
-      // Non-whitespace rewrites are not safe to append into Teams. Let block
-      // delivery carry the final payload, but clear the SDK's accumulated text
-      // before closing so stale prefixes are not finalized as another message.
+      // Non-whitespace rewrites are not safe to append into Teams. Clear the
+      // SDK's local accumulator, then replace the same streamed activity with
+      // the authoritative final so a late provider Stop is still observed.
       if (previousRemainder.trim()) {
         stream.clearText();
-        streamFailed = true;
+        if (streamFailed) {
+          // A prior provider failure already transferred this and later
+          // segments to block delivery. Preserve the pending close cleanup,
+          // but do not retry final text through a failed native stream.
+          streamFinalizationPending = true;
+          return;
+        }
+        // The SDK can replace the same streamed activity after clearText().
+        // Defer the authoritative final to preparePayload so this provider
+        // round-trip also discovers a Stop before any fallback can escape.
+        replacementFinalPending = true;
+        replacementSettlementPending = true;
+        pendingFinalPayload = { text: fullText };
         streamFinalizationPending = true;
         return;
       }
@@ -258,6 +361,7 @@ export function createTeamsReplyStreamController(params: {
         stream.emit(delta);
         emittedText = fullText;
         tokensEmitted = true;
+        nativeDispatchStarted = true;
       } catch (err) {
         if (isStreamCancelledError(err)) {
           canceledLocally = true;
@@ -360,6 +464,49 @@ export function createTeamsReplyStreamController(params: {
       if (wasCanceled()) {
         return undefined;
       }
+      if (replacementSettlementPending) {
+        if (!replacementFinalPending) {
+          deferredReplacementEntries.push({ kind: "payload", payload });
+          return undefined;
+        }
+        if (!payload.text) {
+          // The native stream activity was created before final payloads and
+          // remains the provider-visible root. Preserve deferred block order
+          // after that root; sending early would leak content after Stop.
+          deferredReplacementEntries.push({ kind: "payload", payload });
+          return undefined;
+        }
+        replacementFinalPending = false;
+        deferredReplacementEntries.push({ kind: "replacement", payload });
+        pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
+        try {
+          replacementTextAwaitingAcknowledgement = payload.text;
+          stream.emit(finalStreamActivity(payload.text));
+          finalMetadataQueued = true;
+          emittedText = payload.text;
+          tokensEmitted = false;
+          // Replacement delivery owns all later payloads until close() proves
+          // that Teams accepted the replacement or did not receive a Stop.
+          return undefined;
+        } catch (err) {
+          replacementTextAwaitingAcknowledgement = undefined;
+          tokensEmitted = false;
+          if (isStreamCancelledError(err)) {
+            canceledLocally = true;
+            pendingFinalPayload = undefined;
+            deferredReplacementEntries = [];
+            return undefined;
+          }
+          streamFailed = true;
+          replacementEmitFailed = true;
+          params.log?.warn?.(
+            `msteams stream replacement failed, falling back to block delivery: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          // Retain ownership until finalize so payloads held before this
+          // failed replacement cannot be overtaken by this or later blocks.
+          return undefined;
+        }
+      }
       // Partial mode with tokens already streamed: stream carries the text;
       // strip text from the payload (keep media if any) so block delivery
       // doesn't duplicate. Exception: if a non-cancel stream failure was
@@ -373,13 +520,13 @@ export function createTeamsReplyStreamController(params: {
         return hasMedia ? { ...payload, text: undefined } : undefined;
       }
       if (streamFailed) {
-        const fallback = fallbackPayloadAfterAcknowledgedText(payload);
-        // An acknowledged prefix belongs to this failed segment only;
-        // later tool-round payloads must never inherit its trimming state.
+        // Trim the provider-acknowledged prefix only from the failed segment.
+        // Retain its ID/text for final settlement while later tool rounds fall through whole.
+        const fallback = failedSegmentFallbackPrepared
+          ? payload
+          : fallbackPayloadAfterAcknowledgedText(payload);
+        failedSegmentFallbackPrepared = true;
         pendingFinalPayload = undefined;
-        acknowledgedText = "";
-        acknowledgedStreamId = undefined;
-        releaseStreamChunkSubscription();
         return fallback;
       }
       // Progress mode (or partial mode that received no tokens — e.g. a
@@ -390,6 +537,7 @@ export function createTeamsReplyStreamController(params: {
       if (streamMode === "progress" && payload.text) {
         try {
           stream.emit(payload.text);
+          nativeDispatchStarted = true;
           pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
           streamFinalizationPending = true;
           const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
@@ -409,57 +557,113 @@ export function createTeamsReplyStreamController(params: {
       return payload;
     },
 
-    async finalize(): Promise<Maybe<ReplyPayload>> {
+    claimNativeDelivery(): boolean {
+      if (!nativeDispatchStarted || nativeDeliveryClaimed) {
+        return false;
+      }
+      nativeDeliveryClaimed = true;
+      return true;
+    },
+
+    async finalize(): Promise<MSTeamsNativeDeliveryFinalization> {
       // The delay gate may still hold a pending start timer for fast turns;
       // stop it before closing so it cannot fire against the closed stream.
       progressDraftGate.cancel();
-      if (!stream || !streamFinalizationPending || wasCanceled()) {
+      if (!stream || !nativeDispatchStarted) {
         releaseStreamChunkSubscription();
-        return undefined;
+        return { visibleReplySent: false };
       }
-      // Emit a final MessageActivity carrying the AI-generated marker and (if
-      // enabled) the feedback channelData. The SDK's HttpStream merges this
-      // into the closing activity it sends to Teams, so streamed replies still
-      // get the AI-generated label and thumbs up/down.
-      const finalEntities: Array<Record<string, unknown>> = [
-        {
-          type: "https://schema.org/Message",
-          "@type": "Message",
-          "@context": "https://schema.org",
-          "@id": "",
-          additionalType: ["AIGeneratedContent"],
-        },
-      ];
-      const finalChannelData: Record<string, unknown> = params.feedbackLoopEnabled
-        ? { feedbackLoopEnabled: true }
-        : {};
+      let logicalContent: string | undefined;
       try {
-        stream.emit({
-          type: "message",
-          entities: finalEntities,
-          channelData: finalChannelData,
-        });
+        if (wasCanceled()) {
+          pendingFinalPayload = undefined;
+          deferredReplacementEntries = [];
+          streamFinalizationPending = false;
+          return acknowledgedNativeDelivery();
+        }
+        if (!streamFinalizationPending) {
+          return acknowledgedNativeDelivery();
+        }
+        // A media-only replacement payload may arrive before its text payload.
+        // If no authoritative text followed, re-emit the latest divergent
+        // partial so close() still performs the Stop-discovering round-trip.
+        if (replacementSettlementPending && replacementFinalPending && pendingFinalPayload?.text) {
+          replacementFinalPending = false;
+          deferredReplacementEntries.push({
+            kind: "replacement",
+            payload: pendingFinalPayload,
+          });
+          replacementTextAwaitingAcknowledgement = pendingFinalPayload.text;
+          logicalContent = deferredReplacementLogicalContent();
+          stream.emit(finalStreamActivity(pendingFinalPayload.text));
+          finalMetadataQueued = true;
+          emittedText = pendingFinalPayload.text;
+        }
+        logicalContent ??= replacementSettlementPending
+          ? deferredReplacementLogicalContent()
+          : undefined;
+        const content = pendingFinalPayload?.text ?? (emittedText || undefined);
+        // The replacement path already queued text and final metadata as one
+        // activity. Other paths add metadata here so the SDK can merge it into
+        // the closing activity without duplicating the replacement chunk.
+        if (!finalMetadataQueued) {
+          stream.emit(finalStreamActivity());
+        }
         const result = await stream.close();
         streamFinalizationPending = false;
         if (!result) {
           const fallback = pendingFinalPayload;
           pendingFinalPayload = undefined;
-          return fallback && !wasCanceled()
-            ? fallbackPayloadAfterAcknowledgedText(fallback)
-            : undefined;
+          const canceled = wasCanceled();
+          const replacementFallback =
+            replacementSettlementPending && fallback && !canceled
+              ? fallbackPayloadAfterAcknowledgedText(fallback)
+              : undefined;
+          const fallbackPayload =
+            !replacementSettlementPending && fallback && !canceled
+              ? fallbackPayloadAfterAcknowledgedText(fallback)
+              : undefined;
+          const postNativePayloads =
+            replacementSettlementPending && !canceled
+              ? takeDeferredReplacementPayloads(replacementFallback)
+              : [];
+          if (canceled) {
+            deferredReplacementEntries = [];
+          }
+          return {
+            ...acknowledgedNativeDelivery(),
+            ...(!canceled && logicalContent ? { logicalContent } : {}),
+            ...(fallbackPayload ? { fallbackPayload } : {}),
+            ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
+          };
         }
+        const replacementFallback =
+          replacementSettlementPending && replacementEmitFailed && pendingFinalPayload
+            ? fallbackPayloadAfterAcknowledgedText(pendingFinalPayload)
+            : undefined;
         pendingFinalPayload = undefined;
-        return undefined;
+        const messageId = extractMessageId(result) ?? acknowledgedStreamId;
+        const postNativePayloads = replacementSettlementPending
+          ? takeDeferredReplacementPayloads(replacementFallback)
+          : [];
+        const nativeContent = replacementEmitFailed ? acknowledgedText || undefined : content;
+        return {
+          visibleReplySent: replacementEmitFailed ? Boolean(nativeContent) : true,
+          ...(nativeContent === undefined ? {} : { content: nativeContent }),
+          ...(logicalContent ? { logicalContent } : {}),
+          ...(messageId && (!replacementEmitFailed || nativeContent) ? { messageId } : {}),
+          ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
+        };
       } catch (err) {
         if (isStreamCancelledError(err)) {
           canceledLocally = true;
           pendingFinalPayload = undefined;
+          deferredReplacementEntries = [];
           streamFinalizationPending = false;
-          return undefined;
+          return acknowledgedNativeDelivery();
         }
-        // Non-cancel failure during the closing emit/close. The streamed
-        // prefix is already visible to the user; the only loss is the
-        // closing activity (AI-Generated marker, feedback channelData).
+        // Non-cancel failure during the closing emit/close. Preserve only a
+        // prefix acknowledged by Teams; queued bytes alone do not prove visibility.
         // Latch streamFailed for parity with the mid-stream path and
         // swallow the error — a thrown finalize would otherwise blow up
         // the reply pipeline after the user already saw the response.
@@ -470,8 +674,30 @@ export function createTeamsReplyStreamController(params: {
         );
         const fallback = pendingFinalPayload;
         pendingFinalPayload = undefined;
-        return fallback ? fallbackPayloadAfterAcknowledgedText(fallback) : undefined;
+        const replacementFallback =
+          replacementSettlementPending && fallback
+            ? fallbackPayloadAfterAcknowledgedText(fallback)
+            : undefined;
+        const fallbackPayload =
+          !replacementSettlementPending && fallback
+            ? fallbackPayloadAfterAcknowledgedText(fallback)
+            : undefined;
+        const postNativePayloads = replacementSettlementPending
+          ? takeDeferredReplacementPayloads(replacementFallback)
+          : [];
+        return {
+          ...acknowledgedNativeDelivery(),
+          ...(logicalContent ? { logicalContent } : {}),
+          ...(fallbackPayload ? { fallbackPayload } : {}),
+          ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
+        };
       } finally {
+        finalMetadataQueued = false;
+        replacementEmitFailed = false;
+        replacementFinalPending = false;
+        replacementSettlementPending = false;
+        replacementTextAwaitingAcknowledgement = undefined;
+        deferredReplacementEntries = [];
         releaseStreamChunkSubscription();
       }
     },

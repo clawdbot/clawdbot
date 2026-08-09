@@ -14,12 +14,16 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { isBrowserMachineOutput } from "./cli-output-mode.js";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
 } from "./src/browser-gateway-contract.js";
+import {
+  BROWSER_PROXY_COMMAND,
+  BROWSER_PROXY_UPLOAD_COMMAND,
+} from "./src/browser-node-commands.js";
 import { parseBrowserTabToolBinding } from "./src/browser-tool-binding.js";
 import { describeBrowserTool } from "./src/browser-tool-description.js";
 import { BrowserToolOutputSchema, BrowserToolSchema } from "./src/browser-tool.schema.js";
@@ -30,6 +34,7 @@ import {
 } from "./src/browser/system-profile-import-state.js";
 
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
+const logger = createSubsystemLogger("browser");
 
 const loadBrowserRegistrationRuntimeModule = createLazyRuntimeModule(
   () => import("./register.runtime.js"),
@@ -62,7 +67,6 @@ function createLazyBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
-  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -89,6 +93,7 @@ function createLazyBrowserTool(opts?: {
   return {
     label: "Browser",
     name: "browser",
+    resultContentSource: "network",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
     outputSchema: BrowserToolOutputSchema,
@@ -106,7 +111,6 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
-  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -128,7 +132,6 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
       ? { allowHostControl: ctx.browser.allowHostControl }
       : {}),
     ...(ctx.sessionKey ? { agentSessionKey: ctx.sessionKey } : {}),
-    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
     ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
     ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
     ...(ctx.activeModel?.provider || ctx.activeModel?.modelId
@@ -161,17 +164,33 @@ export const browserPluginReload = {
 };
 
 /** Node-host command descriptors exposed by the Browser plugin. */
-export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
-  {
-    command: "browser.proxy",
+function createBrowserProxyNodeHostCommand(command: string): OpenClawPluginNodeHostCommand {
+  return {
+    command,
     cap: "browser",
     isAvailable: ({ config }) =>
       config.browser?.enabled !== false && config.nodeHost?.browserProxy?.enabled !== false,
-    handle: async (paramsJSON) => {
+    handle: async (paramsJSON, _io, context) => {
       const { runBrowserProxyCommand } = await loadBrowserRegistrationRuntimeModule();
-      return await runBrowserProxyCommand(paramsJSON);
+      return await runBrowserProxyCommand(paramsJSON, command, context?.signal);
     },
-  },
+    ...(command === BROWSER_PROXY_UPLOAD_COMMAND
+      ? {
+          watchAvailability: () => {
+            void loadBrowserRegistrationRuntimeModule()
+              .then(({ ensureBrowserProxyUploadCleanup }) => ensureBrowserProxyUploadCleanup())
+              .catch((error: unknown) => {
+                logger.warn(`browser proxy upload cleanup startup failed: ${String(error)}`);
+              });
+          },
+        }
+      : {}),
+  };
+}
+
+export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
+  createBrowserProxyNodeHostCommand(BROWSER_PROXY_COMMAND),
+  createBrowserProxyNodeHostCommand(BROWSER_PROXY_UPLOAD_COMMAND),
 ];
 
 /** Security audit collectors contributed by the Browser plugin. */

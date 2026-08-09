@@ -11,6 +11,7 @@ import {
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import prettyMilliseconds from "pretty-ms";
 import {
   die,
@@ -566,10 +567,6 @@ function parseOpenClawPackageSpecVersion(spec: string): string {
 
 function readString(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function parseRegistryPackageMetadata(raw: string): {

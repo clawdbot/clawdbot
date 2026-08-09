@@ -8,6 +8,7 @@ import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
@@ -33,6 +34,11 @@ type NativeCommandEffectiveRoute = {
   sessionKey: string;
 };
 
+type DispatchDiscordNativeAgentReplyResult = {
+  dispatched: boolean;
+  hiddenFinalReply?: ReplyPayload;
+};
+
 export async function dispatchDiscordNativeAgentReply(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
@@ -46,11 +52,12 @@ export async function dispatchDiscordNativeAgentReply(params: {
   responseEphemeral?: boolean;
   suppressReplies?: boolean;
   log: ReturnType<typeof createSubsystemLogger>;
-}): Promise<void> {
+}): Promise<DispatchDiscordNativeAgentReplyResult> {
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.discordConfig);
 
   let didReply = false;
-  let settledWithoutVisibleReply = false;
+  let finalReplyOutcome: "accepted" | "failed" | "suppressed" | undefined;
+  let hiddenFinalReply: ReplyPayload | undefined;
   const turnResult = await nativeCommandRuntime.dispatchChannelInboundTurn({
     cfg: params.cfg,
     channel: "discord",
@@ -92,17 +99,35 @@ export async function dispatchDiscordNativeAgentReply(params: {
               suppression: { reason: "no_visible_result" as const },
             };
       },
-      onDelivered: (_payload, _info, result) => {
-        if (result?.visibleReplySent === false) {
-          settledWithoutVisibleReply = true;
+      onDelivered: (payload, info, result) => {
+        // Hidden picker dispatch reuses only a real core final suppressed by this adapter.
+        if (
+          params.suppressReplies &&
+          info.kind === "final" &&
+          result?.suppression?.reason === "no_visible_result" &&
+          payload.text?.trim()
+        ) {
+          hiddenFinalReply = payload;
+        }
+        // A failed final outweighs later suppression until Discord accepts a final.
+        if (
+          info.kind === "final" &&
+          result?.visibleReplySent !== undefined &&
+          (result.visibleReplySent || finalReplyOutcome !== "failed")
+        ) {
+          finalReplyOutcome = result.visibleReplySent ? "accepted" : "suppressed";
         }
       },
       onError: (err, info) => {
-        if (isChannelPartialDeliveryError(err)) {
+        const partialDelivery = isChannelPartialDeliveryError(err);
+        if (partialDelivery) {
           // Preserve failed delivery accounting while preventing an empty fallback from
           // obscuring the prefix that Discord already accepted for this payload.
           didReply = true;
           logVerbose("discord: interaction reply partially delivered before expiry");
+        }
+        if (info.kind === "final") {
+          finalReplyOutcome = partialDelivery ? "accepted" : "failed";
         }
         const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
         params.log.error(`discord slash ${info.kind} reply failed: ${message}`);
@@ -118,18 +143,25 @@ export async function dispatchDiscordNativeAgentReply(params: {
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
     },
   });
+  const deliberateSilentTerminalReply =
+    turnResult.dispatched && turnResult.dispatchResult.deliberateSilentTerminalReply === true;
+  const dispatchResult = {
+    dispatched: turnResult.dispatched,
+    ...(hiddenFinalReply ? { hiddenFinalReply } : {}),
+  };
 
-  if (!didReply && (params.suppressReplies || settledWithoutVisibleReply)) {
+  if (
+    !didReply &&
+    (params.suppressReplies || finalReplyOutcome === "suppressed" || deliberateSilentTerminalReply)
+  ) {
     await settleDiscordInteractionWithoutVisibleReply(params.interaction);
-    return;
+    return dispatchResult;
   }
   if (
-    params.suppressReplies ||
     didReply ||
-    settledWithoutVisibleReply ||
     (turnResult.dispatched && hasVisibleInboundReplyDispatch(turnResult.dispatchResult))
   ) {
-    return;
+    return dispatchResult;
   }
 
   await safeDiscordInteractionCall("interaction empty fallback", async () => {
@@ -143,4 +175,5 @@ export async function dispatchDiscordNativeAgentReply(params: {
     }
     await params.interaction.reply(payload);
   });
+  return dispatchResult;
 }

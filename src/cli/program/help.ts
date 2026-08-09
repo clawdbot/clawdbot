@@ -9,6 +9,7 @@ import { isRootVersionInvocation } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
+import { getCommanderErrorCommandPath } from "./commander-parse-facts.js";
 import type { ProgramContext } from "./context.js";
 import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
 import { formatCliParseErrorOutput } from "./error-output.js";
@@ -118,7 +119,13 @@ export function configureProgramHelp(
       const message = formatProgramHelpOutput(str);
       process.stderr.write(formatConsoleDiagnosticBlock({ level: "error", message }));
     },
-    outputError: (str, write) => write(formatCliParseErrorOutput(str, { argv: process.argv })),
+    outputError: (str, write) =>
+      write(
+        formatCliParseErrorOutput(str, {
+          argv: process.argv,
+          commandPath: getCommanderErrorCommandPath(program),
+        }),
+      ),
   });
 
   if (isRootVersionInvocation(process.argv)) {

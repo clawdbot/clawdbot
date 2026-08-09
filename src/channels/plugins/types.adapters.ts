@@ -214,6 +214,8 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   log?: ChannelLogSink;
   getStatus: () => ChannelAccountSnapshot;
   setStatus: (next: ChannelAccountSnapshot) => void;
+  /** Clear cached outbound directory lookups after the channel accepts newer directory data. */
+  invalidateDirectoryCache?: () => void;
   /**
    * Optional channel runtime helpers for external channel plugins.
    *
@@ -530,6 +532,10 @@ export type ChannelLifecycleAdapter = {
     trigger?: string;
     logPrefix?: string;
   }) => Promise<void> | void;
+  /**
+   * @deprecated Export stateMigrations from the plugin doctor contract instead.
+   * Removal plan: remove the lifecycle adapter after the 2027.1 external-plugin migration window.
+   */
   detectLegacyStateMigrations?: (params: {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;

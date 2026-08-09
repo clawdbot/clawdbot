@@ -11,24 +11,33 @@ import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { AgentRouteBinding } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
+import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
+import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
+  buildAgentMainSessionKey,
   isSubagentSessionKey,
+  normalizeAccountId,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
+import {
+  isCronRunSessionKey,
+  parseAgentSessionKey,
+  parseSessionDeliveryRoute,
+} from "../../sessions/session-key-utils.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
-import {
-  type GatewayMessageChannel,
-  INTERNAL_MESSAGE_CHANNEL,
-} from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { listAgentIds } from "../agent-scope.js";
 import {
@@ -75,6 +84,8 @@ const SessionsSendToolSchema = Type.Object({
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
   watch: Type.Optional(Type.Boolean()),
 });
+
+const log = createSubsystemLogger("agents/sessions-send");
 
 const SessionsSendDeliverySchema = Type.Object(
   {
@@ -425,7 +436,7 @@ async function startAgentRun(params: {
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
@@ -593,7 +604,101 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
-      const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
+      const rawRequesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
+      const parsedRequesterSessionKey = parseAgentSessionKey(rawRequesterSessionKey);
+      const requesterRouteBindings = cfg.bindings?.filter(
+        (binding): binding is AgentRouteBinding => binding.type !== "acp",
+      );
+      const requesterDeliveryRoute = requesterRouteBindings?.length
+        ? parseSessionDeliveryRoute(rawRequesterSessionKey)
+        : null;
+      const bareRequesterPeerId = parsedRequesterSessionKey?.rest.startsWith("direct:")
+        ? parsedRequesterSessionKey.rest.slice("direct:".length)
+        : parsedRequesterSessionKey?.rest.startsWith("dm:")
+          ? parsedRequesterSessionKey.rest.slice("dm:".length)
+          : undefined;
+      const requesterRouteChannel = requesterDeliveryRoute?.channel ?? opts?.agentChannel;
+      const requesterRoutePeerId = requesterDeliveryRoute?.peerId ?? bareRequesterPeerId;
+      const requesterRoute =
+        requesterRouteBindings?.length && requesterRouteChannel && requesterRoutePeerId
+          ? resolveAgentRoute({
+              cfg,
+              channel: requesterRouteChannel,
+              accountId: requesterDeliveryRoute?.accountId,
+              peer: { kind: "direct", id: requesterRoutePeerId },
+            })
+          : undefined;
+      // Any configured route can transfer this peer to another agent. A key
+      // without enough route facts must never be reassigned to guessed ownership.
+      const hasUnresolvedRequesterRoute = Boolean(
+        requesterRouteBindings?.length &&
+        (!requesterRoute || requesterRoute.agentId !== parsedRequesterSessionKey?.agentId),
+      );
+      // Session keys can discard account, peer casing, team, guild, and roles.
+      // Preserve the authenticated caller whenever any possible binding would
+      // choose another agent or an isolated DM scope using those missing facts.
+      const hasUnsafeRequesterDmBinding = Boolean(
+        requesterRouteBindings?.some((binding) => {
+          const effectiveDmScope = binding.session?.dmScope ?? cfg.session?.dmScope ?? "main";
+          const isForeignAgent =
+            normalizeAgentId(binding.agentId) !== parsedRequesterSessionKey?.agentId;
+          if (!isForeignAgent && effectiveDmScope === "main") {
+            return false;
+          }
+          if (
+            requesterRouteChannel &&
+            normalizeRouteBindingChannelId(binding.match.channel) !==
+              normalizeRouteBindingChannelId(requesterRouteChannel)
+          ) {
+            return false;
+          }
+          const bindingAccountId = binding.match.accountId?.trim();
+          if (
+            requesterDeliveryRoute?.accountId &&
+            bindingAccountId !== "*" &&
+            normalizeAccountId(bindingAccountId) !==
+              normalizeAccountId(requesterDeliveryRoute.accountId)
+          ) {
+            return false;
+          }
+          const peer = binding.match.peer;
+          if (peer) {
+            const peerId = peer.id.trim();
+            if (
+              peer.kind !== "direct" ||
+              (peerId !== "*" &&
+                peerId.toLowerCase() !== requesterRoutePeerId?.trim().toLowerCase())
+            ) {
+              return false;
+            }
+          }
+          return true;
+        }),
+      );
+      const requesterDmScope =
+        requesterRoute && requesterRoute.agentId === parsedRequesterSessionKey?.agentId
+          ? (requesterRoute.dmScope ?? cfg.session?.dmScope ?? "main")
+          : (cfg.session?.dmScope ?? "main");
+      // Normalize legacy DM reply addresses only after exact-key visibility
+      // checks; global/binding-isolated DMs and non-DM owners stay private.
+      const requesterSessionKey = rawRequesterSessionKey;
+      const replyRequesterSessionKey =
+        rawRequesterSessionKey &&
+        parsedRequesterSessionKey &&
+        rawRequesterSessionKey !== resolvedKey &&
+        requesterDmScope === "main" &&
+        !hasUnresolvedRequesterRoute &&
+        !hasUnsafeRequesterDmBinding &&
+        !parsedRequesterSessionKey.rest.startsWith("cron:") &&
+        !parsedRequesterSessionKey.rest.startsWith("hook:") &&
+        !isSubagentSessionKey(rawRequesterSessionKey) &&
+        !parseSessionThreadInfo(rawRequesterSessionKey).threadId &&
+        deriveSessionChatTypeFromKey(rawRequesterSessionKey) === "direct"
+          ? buildAgentMainSessionKey({
+              agentId: parsedRequesterSessionKey.agentId,
+              mainKey,
+            })
+          : rawRequesterSessionKey;
       const timeoutMs =
         finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, {
           floorSeconds: true,
@@ -670,10 +775,10 @@ export function createSessionsSendTool(opts?: {
             const watched =
               watchRequested &&
               !access.expectedSessionId &&
-              requesterSessionKey &&
-              requesterSessionKey !== targetSessionKey
+              replyRequesterSessionKey &&
+              replyRequesterSessionKey !== targetSessionKey
                 ? registerSessionStateWatch({
-                    watcherSessionKey: requesterSessionKey,
+                    watcherSessionKey: replyRequesterSessionKey,
                     targetSessionKey,
                   })
                 : false;
@@ -717,13 +822,13 @@ export function createSessionsSendTool(opts?: {
               : undefined;
 
           const agentMessageContext = buildAgentToAgentMessageContext({
-            requesterSessionKey,
+            requesterSessionKey: replyRequesterSessionKey,
             requesterChannel,
             targetSessionKey: displayKey,
           });
           const inputProvenance = {
             kind: "inter_session" as const,
-            sourceSessionKey: requesterSessionKey,
+            sourceSessionKey: replyRequesterSessionKey,
             sourceChannel: requesterChannel,
             sourceTool: "sessions_send",
           };
@@ -800,20 +905,29 @@ export function createSessionsSendTool(opts?: {
               flowTargetSessionKey === fallbackA2ASessionKey
                 ? fallbackBaselineReply
                 : baselineReply;
-            void runSessionsSendA2AFlow({
-              targetSessionKey: flowTargetSessionKey,
-              displayKey: flowDisplayKey,
-              message,
-              announceTimeoutMs,
-              // Cron runs are isolated jobs; target replies must not become new
-              // requester turns, but the target-side announce still runs.
-              maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
-              requesterSessionKey,
-              requesterChannel,
-              baseline: flowBaseline,
-              roundOneReply,
-              waitRunId,
-              notifyRequesterOnWaitFailure,
+            // This detached flow can outlive the tool request that launched it.
+            // Own a fresh root so parent release cannot retire later nested turns.
+            void runWithGatewayIndependentRootWorkContinuation(() =>
+              runSessionsSendA2AFlow({
+                targetSessionKey: flowTargetSessionKey,
+                displayKey: flowDisplayKey,
+                message,
+                announceTimeoutMs,
+                // Cron runs are isolated jobs; target replies must not become new
+                // requester turns, but the target-side announce still runs.
+                maxPingPongTurns: isIsolatedCronRequester ? 0 : maxPingPongTurns,
+                requesterSessionKey: replyRequesterSessionKey,
+                requesterChannel,
+                baseline: flowBaseline,
+                roundOneReply,
+                waitRunId,
+                notifyRequesterOnWaitFailure,
+              }),
+            ).catch((err: unknown) => {
+              log.warn("sessions_send announce flow admission failed", {
+                runId: waitRunId ?? "unknown",
+                error: formatErrorMessage(err),
+              });
             });
           };
 

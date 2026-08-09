@@ -20,6 +20,7 @@ export type BuildAllStep = {
     env?: string[];
     inputs: BuildCacheEntry[];
     outputs: BuildCacheEntry[];
+    requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
     restore?: "always";
     runOnHit?: {
       env?: NodeJS.ProcessEnv;
@@ -81,7 +82,7 @@ export function resolveBuildAllStepCacheState(
 export function writeBuildAllStepCacheStamp(
   step: BuildAllStep,
   cacheState: BuildAllCacheState,
-  params?: { rootDir?: string; fs?: typeof fs },
+  params?: { rootDir?: string; fs?: typeof fs; env?: NodeJS.ProcessEnv },
 ): void;
 export function resolveBuildAllStepCacheStampState(
   step: BuildAllStep,

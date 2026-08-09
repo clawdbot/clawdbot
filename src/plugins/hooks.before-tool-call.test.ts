@@ -504,3 +504,65 @@ describe("before_tool_call hook merger — requireApproval", () => {
     expect(lowerPriorityHook).not.toHaveBeenCalled();
   });
 });
+
+describe("before_tool_call matcher scoping", () => {
+  it("skips uncovered tools and executes a canonical matcher once", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(() => ({ block: true, blockReason: "covered" }));
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [
+        {
+          pluginId: "shell-policy",
+          matcher: ["exec"],
+          result: { block: true, blockReason: "covered" },
+          handler,
+        },
+      ],
+    });
+    const runner = createHookRunner(registry);
+
+    await expect(
+      runner.runBeforeToolCall(
+        { toolName: "web_search", params: {} },
+        { ...stubCtx, toolName: "web_search" },
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      runner.runBeforeToolCall({ toolName: "exec", params: {} }, { ...stubCtx, toolName: "exec" }),
+    ).resolves.toMatchObject({ block: true, blockReason: "covered" });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects Codex matcher aliases instead of making them globally special", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(() => ({ block: true }));
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [{ pluginId: "codex-spelling", matcher: ["Agent"], result: { block: true }, handler }],
+    });
+
+    await expect(
+      createHookRunner(registry).runBeforeToolCall(
+        { toolName: "spawn_agent", params: {} },
+        { ...stubCtx, toolName: "spawn_agent" },
+      ),
+    ).rejects.toThrow("tool hook matcher entries must use canonical OpenClaw tool ids");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("keeps an omitted matcher as match-all", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(() => ({ block: true }));
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [{ pluginId: "legacy-policy", result: { block: true }, handler }],
+    });
+
+    await createHookRunner(registry).runBeforeToolCall(
+      { toolName: "web_search", params: {} },
+      { ...stubCtx, toolName: "web_search" },
+    );
+    expect(handler).toHaveBeenCalledOnce();
+  });
+});

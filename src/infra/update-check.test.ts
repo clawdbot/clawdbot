@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { useMockHttp } from "../test-utils/mock-http.js";
 import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
 import {
@@ -626,6 +627,35 @@ describe("formatGitInstallLabel", () => {
 });
 
 describe("checkUpdateStatus", () => {
+  it("does not treat stale remote refs as current when fetch fails", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-fetch-failure-" }, async (base) => {
+      const remoteRoot = path.join(base, "remote");
+      const localRoot = path.join(base, "local");
+      await initGitRepo(remoteRoot);
+      await commitGit(remoteRoot, "initial");
+      await runGit(base, "clone", "--quiet", remoteRoot, localRoot);
+      await runGit(localRoot, "remote", "set-url", "origin", path.join(base, "missing"));
+      const commitAtMs =
+        Number(await runGit(localRoot, "show", "-s", "--format=%ct", "HEAD")) * 1000;
+
+      const status = await checkUpdateStatus({
+        root: localRoot,
+        includeRegistry: false,
+        fetchGit: true,
+        timeoutMs: 5000,
+      });
+
+      expect(status.git).toMatchObject({
+        upstream: "origin/main",
+        upstreamSha: null,
+        commitAtMs,
+        ahead: null,
+        behind: null,
+        fetchOk: false,
+      });
+    });
+  });
+
   it("does not report divergence for unrelated histories", async () => {
     await withTempDir({ prefix: "openclaw-update-check-unrelated-" }, async (base) => {
       const localRoot = path.join(base, "local");
@@ -671,6 +701,7 @@ describe("checkUpdateStatus", () => {
       await commitGit(sourceRoot, "feature change");
       await runGit(sourceRoot, "switch", "main");
       await commitGit(sourceRoot, "main change");
+      const mainSha = await runGit(sourceRoot, "rev-parse", "main");
 
       const cloneDivergedHistory = async (name: string, depth?: number) => {
         const cloneRoot = path.join(base, name);
@@ -712,23 +743,40 @@ describe("checkUpdateStatus", () => {
           fetchGit: false,
           timeoutMs: 5000,
         });
-        return { ahead: status.git?.ahead, behind: status.git?.behind };
+        return {
+          ahead: status.git?.ahead,
+          behind: status.git?.behind,
+          upstreamSha: status.git?.upstreamSha,
+        };
       };
 
       const fullRoot = await cloneDivergedHistory("full");
-      await expect(readDivergence(fullRoot)).resolves.toEqual({ ahead: 1, behind: 1 });
+      await expect(readDivergence(fullRoot)).resolves.toEqual({
+        ahead: 1,
+        behind: 1,
+        upstreamSha: mainSha,
+      });
       await runGit(fullRoot, "remote", "rename", "--", "origin", "-dash");
       expect(await runGit(fullRoot, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe("-dash/main");
-      await expect(readDivergence(fullRoot)).resolves.toEqual({ ahead: 1, behind: 1 });
+      await expect(readDivergence(fullRoot)).resolves.toEqual({
+        ahead: 1,
+        behind: 1,
+        upstreamSha: mainSha,
+      });
 
       const truncatedRoot = await cloneDivergedHistory("shallow-depth-1", 1);
       await expect(readDivergence(truncatedRoot)).resolves.toEqual({
         ahead: null,
         behind: null,
+        upstreamSha: mainSha,
       });
 
       const comparableRoot = await cloneDivergedHistory("shallow-depth-2", 2);
-      await expect(readDivergence(comparableRoot)).resolves.toEqual({ ahead: 1, behind: 1 });
+      await expect(readDivergence(comparableRoot)).resolves.toEqual({
+        ahead: 1,
+        behind: 1,
+        upstreamSha: mainSha,
+      });
     });
   });
 
@@ -765,6 +813,31 @@ describe("checkUpdateStatus", () => {
       expect(status.git).toBeUndefined();
       expect(status.registry).toBeUndefined();
       expect(status.deps?.manager).toBe("npm");
+    });
+  });
+
+  it("resolves a status registry channel after detecting the install kind", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-registry-channel-" }, async (root) => {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ packageManager: "npm@10.0.0" }),
+        "utf8",
+      );
+      await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");
+      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+      const resolveRegistryChannel = vi.fn(() => "extended-stable" as const);
+
+      await checkUpdateStatus({
+        root,
+        includeRegistry: false,
+        fetchGit: false,
+        resolveRegistryChannel,
+      });
+
+      expect(resolveRegistryChannel).toHaveBeenCalledWith({
+        installKind: "package",
+        git: undefined,
+      });
     });
   });
 
@@ -816,33 +889,45 @@ describe("checkUpdateStatus", () => {
     });
   });
 
-  it("detects lockless OpenClaw npm installs despite packed pnpm metadata", async () => {
-    await withTempDir({ prefix: "openclaw-update-check-lockless-npm-" }, async (base) => {
-      const root = path.join(base, "prefix", "node_modules", "openclaw");
-      await fs.mkdir(root, { recursive: true });
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
-        "utf8",
-      );
+  it.each([
+    { manager: "npm", expectedLockfile: "package-lock.json" },
+    { manager: "bun", expectedLockfile: "bun.lockb" },
+  ])(
+    "detects lockless OpenClaw $manager installs despite packed pnpm metadata",
+    async ({ manager, expectedLockfile }) => {
+      await withTempDir({ prefix: `openclaw-update-check-lockless-${manager}-` }, async (base) => {
+        const bunInstall = path.join(base, "custom-bun-home");
+        const root =
+          manager === "bun"
+            ? path.join(bunInstall, "install", "global", "node_modules", "openclaw")
+            : path.join(base, "prefix", "node_modules", "openclaw");
+        await fs.mkdir(root, { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
+          "utf8",
+        );
 
-      const status = await checkUpdateStatus({
-        root,
-        includeRegistry: false,
-        fetchGit: false,
-        timeoutMs: 1000,
-      });
+        await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
+          const status = await checkUpdateStatus({
+            root,
+            includeRegistry: false,
+            fetchGit: false,
+            timeoutMs: 1000,
+          });
 
-      expect(status.installKind).toBe("package");
-      expect(status.packageManager).toBe("npm");
-      expect(status.deps).toMatchObject({
-        manager: "npm",
-        lockfilePath: path.join(root, "package-lock.json"),
-        status: "unknown",
-        reason: "lockfile missing",
+          expect(status.installKind).toBe("package");
+          expect(status.packageManager).toBe(manager);
+          expect(status.deps).toMatchObject({
+            manager,
+            lockfilePath: path.join(root, expectedLockfile),
+            status: "unknown",
+            reason: "lockfile missing",
+          });
+        });
       });
-    });
-  });
+    },
+  );
 
   it("reports missing and stale dependency markers for package installs", async () => {
     await withTempDir({ prefix: "openclaw-update-check-deps-" }, async (root) => {

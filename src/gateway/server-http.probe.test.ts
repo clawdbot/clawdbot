@@ -1,6 +1,9 @@
 // Server HTTP probe tests cover readiness, health, disabled compat routes, and
 // auth handling through the in-memory HTTP harness.
+import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import os from "node:os";
+import nodePath from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   prepareGatewaySuspend,
@@ -31,6 +34,16 @@ async function sendGatewayRequest(server: GatewayServerHarness, options: Gateway
   const { res, getBody } = createResponse();
   await dispatchRequest(server, req, res);
   return { res, getBody };
+}
+
+async function withMarkedControlUiRoot(run: (root: string) => Promise<void>): Promise<void> {
+  const root = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-http-routing-"));
+  try {
+    await fs.writeFile(nodePath.join(root, "index.html"), "<html>spa fallback</html>\n");
+    await run(root);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 }
 
 describe("gateway OpenAI-compatible disabled HTTP routes", () => {
@@ -112,7 +125,266 @@ describe("gateway OpenAI-compatible disabled HTTP routes", () => {
   });
 });
 
+describe("startup plugin HTTP routing", () => {
+  it("keeps unclaimed webhook POSTs outside the root Control UI SPA", async () => {
+    await withMarkedControlUiRoot(async (controlUiRoot) => {
+      let sidecarsReady = false;
+      const handlePluginRequest = vi.fn(async () => false);
+      await withGatewayServer({
+        prefix: "startup-plugin-post-root-control-ui",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "resolved", path: controlUiRoot },
+          handlePluginRequest,
+          shouldEnforcePluginGatewayAuth: () => false,
+          isStartupPluginRuntimeReady: () => sidecarsReady,
+        },
+        run: async (server) => {
+          const request = {
+            path: "/slack/events",
+            method: "POST",
+            headers: { accept: "text/html" },
+          };
+          const starting = createResponse();
+          await dispatchRequest(server, createRequest(request), starting.res);
+
+          expect(starting.res.statusCode).toBe(503);
+          expect(starting.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+          expect(starting.getBody()).toBe("Plugin runtime is starting");
+
+          sidecarsReady = true;
+          const ready = createResponse();
+          await dispatchRequest(server, createRequest(request), ready.res);
+
+          expect(ready.res.statusCode).toBe(404);
+          expect(ready.setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
+          expect(ready.getBody()).toBe("Not Found");
+          expect(handlePluginRequest).toHaveBeenCalledTimes(2);
+        },
+      });
+    });
+  });
+
+  it("uses Accept to route only the unclaimed Control UI SPA fallback", async () => {
+    await withMarkedControlUiRoot(async (controlUiRoot) => {
+      let sidecarsReady = false;
+      await withGatewayServer({
+        prefix: "startup-plugin-get-accept-root-control-ui",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "resolved", path: controlUiRoot },
+          handlePluginRequest: async () => false,
+          shouldEnforcePluginGatewayAuth: () => false,
+          isStartupPluginRuntimeReady: () => sidecarsReady,
+        },
+        run: async (server) => {
+          const htmlCases = [
+            {
+              name: "browser",
+              accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            { name: "bare curl", accept: "*/*" },
+            { name: "missing header", accept: undefined },
+            { name: "empty header", accept: "" },
+            { name: "rejected HTML with wildcard", accept: "text/html;q=0, */*" },
+            { name: "nonzero HTML quality", accept: "text/html;q=0.5" },
+            { name: "text wildcard", accept: "text/*" },
+          ];
+          const nonHtmlCases = [
+            { name: "JSON", accept: "application/json" },
+            { name: "event stream", accept: "text/event-stream" },
+            { name: "zero-quality HTML", accept: "text/html;q=0" },
+            { name: "zero-quality wildcard", accept: "*/*;q=0" },
+            { name: "mixed-case zero quality", accept: "text/html;Q=0" },
+            { name: "zero-quality text wildcard", accept: "text/*;q=0" },
+          ];
+          for (const ready of [false, true]) {
+            sidecarsReady = ready;
+            for (const testCase of htmlCases) {
+              const { res, getBody } = await sendGatewayRequest(server, {
+                path: "/unclaimed-spa-route",
+                method: "GET",
+                headers: testCase.accept === undefined ? undefined : { accept: testCase.accept },
+              });
+
+              expect(res.statusCode, `${testCase.name} ready=${ready}`).toBe(200);
+              expect(getBody(), `${testCase.name} ready=${ready}`).toContain("spa fallback");
+            }
+
+            for (const testCase of nonHtmlCases) {
+              const response = createResponse();
+              await dispatchRequest(
+                server,
+                createRequest({
+                  path: "/unclaimed-spa-route",
+                  method: "GET",
+                  headers: { accept: testCase.accept },
+                }),
+                response.res,
+              );
+
+              expect(response.res.statusCode, `${testCase.name} ready=${ready}`).toBe(
+                ready ? 404 : 503,
+              );
+              expect(response.setHeader).toHaveBeenCalledWith(
+                "Content-Type",
+                "text/plain; charset=utf-8",
+              );
+              expect(response.getBody()).toBe(ready ? "Not Found" : "Plugin runtime is starting");
+              if (ready) {
+                expect(response.setHeader).not.toHaveBeenCalledWith("Retry-After", "1");
+              } else {
+                expect(response.setHeader).toHaveBeenCalledWith("Retry-After", "1");
+              }
+            }
+          }
+        },
+      });
+    });
+  });
+});
+
+describe("standalone MCP App HTTP routing", () => {
+  it.each([
+    {
+      name: "disabled shell",
+      enabled: false,
+      requestPath: "/__openclaw__/mcp-app",
+    },
+    {
+      name: "disabled view",
+      enabled: false,
+      requestPath: "/__openclaw__/mcp-app/view",
+    },
+    {
+      name: "enabled malformed child",
+      enabled: true,
+      requestPath: "/__openclaw__/mcp-app/other",
+    },
+  ])(
+    "returns 404 for the $name instead of Control UI HTML",
+    async ({ name, enabled, requestPath }) => {
+      await withMarkedControlUiRoot(async (controlUiRoot) => {
+        await withGatewayServer({
+          prefix: `mcp-app-routing-${name}`,
+          resolvedAuth: AUTH_NONE,
+          overrides: {
+            controlUiEnabled: true,
+            controlUiBasePath: "",
+            controlUiRoot: { kind: "resolved", path: controlUiRoot },
+            getRuntimeConfig: () => ({
+              gateway: { trustedProxies: [] },
+              mcp: { apps: { enabled } },
+            }),
+          },
+          run: async (server) => {
+            const { res, getBody } = await sendGatewayRequest(server, {
+              path: requestPath,
+              method: "GET",
+            });
+
+            expect(res.statusCode).toBe(404);
+            expect(getBody()).toBe("Not Found");
+          },
+        });
+      });
+    },
+  );
+
+  it.each([
+    { name: "disabled endpoint", enabled: false, requestPath: "/__openclaw__/mcp-app" },
+    { name: "malformed child", enabled: true, requestPath: "/__openclaw__/mcp-app/other" },
+  ])("preserves plugin precedence for a $name", async ({ enabled, requestPath }) => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 204;
+      res.end();
+      return true;
+    });
+    await withGatewayServer({
+      prefix: "mcp-app-routing-plugin-precedence",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: () => false,
+        getRuntimeConfig: () => ({
+          gateway: { trustedProxies: [] },
+          mcp: { apps: { enabled } },
+        }),
+      },
+      run: async (server) => {
+        const { res } = await sendGatewayRequest(server, {
+          path: requestPath,
+          method: "GET",
+        });
+
+        expect(res.statusCode).toBe(204);
+        expect(handlePluginRequest).toHaveBeenCalledOnce();
+      },
+    });
+  });
+});
+
 describe("gateway probe endpoints", () => {
+  it("returns 404 for probe namespace variants instead of false-green Control UI HTML", async () => {
+    const getReadiness: ReadinessChecker = () => ({
+      ready: false,
+      failing: ["gateway-draining"],
+      uptimeMs: 1_000,
+    });
+    await withMarkedControlUiRoot(async (controlUiRoot) => {
+      await withGatewayServer({
+        prefix: "probe-namespace-root-control-ui",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: "",
+          controlUiRoot: { kind: "resolved", path: controlUiRoot },
+          getReadiness,
+        },
+        run: async (server) => {
+          const exact = await sendGatewayRequest(server, { path: "/readyz" });
+          expect(exact.res.statusCode).toBe(503);
+          expect(JSON.parse(exact.getBody())).toMatchObject({ ready: false });
+
+          for (const routePath of ["/health/", "/healthz/details", "/ready/", "/readyz/details"]) {
+            const { res, getBody } = await sendGatewayRequest(server, { path: routePath });
+            expect(res.statusCode, routePath).toBe(404);
+            expect(getBody(), routePath).toBe("Not Found");
+          }
+        },
+      });
+    });
+  });
+
+  it("preserves plugin precedence for an unclaimed probe descendant", async () => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 204;
+      res.end();
+      return true;
+    });
+    await withGatewayServer({
+      prefix: "probe-namespace-plugin-precedence",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: () => false,
+      },
+      run: async (server) => {
+        const { res } = await sendGatewayRequest(server, { path: "/readyz/details" });
+        expect(res.statusCode).toBe(204);
+        expect(handlePluginRequest).toHaveBeenCalledOnce();
+      },
+    });
+  });
+
   it("keeps liveness green while a prepared suspension lease makes readiness red", async () => {
     resetGatewayWorkAdmission();
     const channelManager = {
@@ -561,6 +833,69 @@ describe("gateway probe endpoints", () => {
 
         expect(res.statusCode).toBe(503);
         expect(getBody()).toBe("");
+      },
+    });
+  });
+
+  it("sends Content-Length on HEAD probe responses matching the GET body", async () => {
+    await withGatewayServer({
+      prefix: "probe-head-content-length",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const get = createResponse();
+        await dispatchRequest(server, createRequest({ path: "/healthz" }), get.res);
+        const head = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/healthz", method: "HEAD" }),
+          head.res,
+        );
+
+        const expectedLength = String(Buffer.byteLength(get.getBody()));
+        expect(get.res.statusCode).toBe(200);
+        expect(head.res.statusCode).toBe(200);
+        expect(head.getBody()).toBe("");
+        expect(head.setHeader).toHaveBeenCalledWith("Content-Length", expectedLength);
+      },
+    });
+  });
+
+  it("sends Content-Length on HEAD responses for unclaimed paths", async () => {
+    await withGatewayServer({
+      prefix: "catch-all-head-content-length",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const head = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/no-such-route", method: "HEAD" }),
+          head.res,
+        );
+
+        expect(head.res.statusCode).toBe(404);
+        expect(head.setHeader).toHaveBeenCalledWith("Content-Length", "9");
+      },
+    });
+  });
+
+  it("sends Content-Length on HEAD responses while the plugin runtime starts", async () => {
+    await withGatewayServer({
+      prefix: "plugin-starting-head-content-length",
+      resolvedAuth: AUTH_NONE,
+      overrides: { isStartupPluginRuntimeReady: () => false },
+      run: async (server) => {
+        const head = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/no-such-route", method: "HEAD" }),
+          head.res,
+        );
+
+        expect(head.res.statusCode).toBe(503);
+        expect(head.setHeader).toHaveBeenCalledWith(
+          "Content-Length",
+          String(Buffer.byteLength("Plugin runtime is starting")),
+        );
       },
     });
   });

@@ -1,26 +1,30 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   buildAgentRunTerminalOutcome,
+  classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import { runWithCronCreatorAuthority } from "../../agents/cron-creator-authority-context.js";
+import { isTimeoutError } from "../../agents/failover-error.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { normalizeAgentRunTimeoutPhase } from "../../agents/run-timeout-attribution.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
-import { clearAgentRunContext } from "../../infra/agent-events.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { readErrorName } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
+import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import {
-  resolveFailedTrackedAgentTaskStatus,
   tryFinalizeTrackedAgentTask,
   type GatewayAgentTaskTrackingMode,
 } from "./agent-task-tracking.js";
+import type { GatewayCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 function resolveResolvedAgentTimeoutStopReason(
@@ -67,8 +71,23 @@ function resolveGatewayAgentAbortStopReason(signal: AbortSignal): "restart" | "r
   return readErrorName(signal.reason) === "TimeoutError" ? "timeout" : "rpc";
 }
 
-function resolveAbortedAgentTaskStatus(stopReason: string | undefined): "cancelled" | "timed_out" {
-  return stopReason === "timeout" ? "timed_out" : "cancelled";
+// `agent` clients already consume cancellation as timeout; keep that wire
+// contract while task/session projections use the canonical cancellation class.
+const RESOLVED_GATEWAY_STATUS_BY_TERMINAL_CLASSIFICATION = {
+  success: "ok",
+  timeout: "timeout",
+  cancellation: "timeout",
+  failure: "error",
+} as const;
+
+function projectRejectedGatewayStatus(outcome: AgentRunTerminalOutcome): "error" | "timeout" {
+  // The shipped wire keeps raw provider/AbortError rejections as errors. Only
+  // signal-owned cancellation/timeout metadata promotes a rejection to timeout.
+  return outcome.reason === "cancelled" ||
+    outcome.reason === "superseded" ||
+    outcome.stopReason === "timeout"
+    ? "timeout"
+    : "error";
 }
 
 export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
@@ -87,6 +106,7 @@ export function deleteGatewayDedupeEntries(params: {
 export function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
   runId: string;
+  cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   dedupeKeys: readonly string[];
   /**
    * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
@@ -148,9 +168,18 @@ export function dispatchAgentRunFromGateway(params: {
       return false;
     }
   };
-  void agentCommandFromGatewayIngress(params.ingressOpts, defaultRuntime, params.context.deps, {
-    restoreAdmittedRecovery: params.restoreAdmittedRecovery,
-  })
+  const runAgent = () =>
+    agentCommandFromGatewayIngress(params.ingressOpts, defaultRuntime, params.context.deps, {
+      restoreAdmittedRecovery: params.restoreAdmittedRecovery,
+    });
+  const agentRun = params.cronCreatorAuthority
+    ? runWithCronCreatorAuthority(
+        params.cronCreatorAuthority.runId,
+        runAgent,
+        params.abortController.signal,
+      )
+    : runAgent();
+  void agentRun
     .then(async (result) => {
       const signalStopReason = resolveResolvedAgentTimeoutStopReason(
         result?.meta,
@@ -176,17 +205,14 @@ export function dispatchAgentRunFromGateway(params: {
         timeoutPhase,
         providerStarted: result?.meta?.providerStarted,
       });
-      const responseStatus = aborted ? "timeout" : terminalOutcome.status;
+      const responseStatus =
+        RESOLVED_GATEWAY_STATUS_BY_TERMINAL_CLASSIFICATION[
+          classifyAgentRunTerminalOutcome(terminalOutcome)
+        ];
       if (taskTracked) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
-          status: aborted
-            ? resolveAbortedAgentTaskStatus(stopReason)
-            : responseStatus === "timeout"
-              ? "timed_out"
-              : responseStatus === "error"
-                ? "failed"
-                : "succeeded",
+          status: mapAgentRunTerminalOutcomeToTaskStatus(terminalOutcome),
           terminalSummary:
             responseStatus === "timeout"
               ? "aborted"
@@ -250,19 +276,20 @@ export function dispatchAgentRunFromGateway(params: {
       const renderedErr = formatForLog(err);
       const stopReason = aborted
         ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
-        : undefined;
+        : isAbortError(err)
+          ? "aborted"
+          : undefined;
       const terminalOutcome = buildAgentRunTerminalOutcome({
-        status: aborted ? "timeout" : "error",
+        status: aborted || isTimeoutError(err) ? "timeout" : "error",
         error: renderedErr,
         stopReason,
         timeoutPhase: stopReason === "restart" ? "gateway_draining" : undefined,
       });
+      const responseStatus = projectRejectedGatewayStatus(terminalOutcome);
       if (taskTracked) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
-          status: aborted
-            ? resolveAbortedAgentTaskStatus(stopReason)
-            : resolveFailedTrackedAgentTaskStatus(err),
+          status: mapAgentRunTerminalOutcomeToTaskStatus(terminalOutcome),
           error: renderedErr,
           terminalSummary: renderedErr,
           log: params.context.logGateway,
@@ -271,7 +298,7 @@ export function dispatchAgentRunFromGateway(params: {
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
       const payload = {
         runId: params.runId,
-        status: aborted ? ("timeout" as const) : ("error" as const),
+        status: responseStatus,
         summary: aborted ? "aborted" : renderedErr,
         ...(aborted
           ? {

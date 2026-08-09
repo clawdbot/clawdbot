@@ -18,6 +18,7 @@ import {
   isHostScopedAgentToolActive,
   runWithAgentRingZeroTools,
 } from "../agent-tools.ring-zero-context.js";
+import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -33,6 +34,8 @@ import { expandToolGroups, mergeAlsoAllowPolicy, normalizeToolName } from "../to
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
+import { selectContextEngineForTranscriptHost } from "./context-engine-logical-turn.js";
+import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
 import { MissingAgentHarnessError } from "./errors.js";
 import {
   runAgentHarnessLifecycleAttempt,
@@ -134,6 +137,7 @@ type AgentHarnessSelectionDecision = {
 type PluginHarnessToolPolicyContext = Pick<
   EmbeddedRunAttemptParams,
   | "config"
+  | "sessionId"
   | "sessionKey"
   | "sandboxSessionKey"
   | "agentId"
@@ -497,11 +501,33 @@ export async function runAgentHarnessSettledTurnFinalization(
 async function runSelectedAgentHarnessAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
-  const internalParams = params as EmbeddedRunAttemptParams & {
+  let internalParams = params as EmbeddedRunAttemptParams & {
     systemAgentTool?: SystemAgentToolOptions;
   };
   const selection = selectPreparedAgentHarness(params);
   const harness = selection.harness;
+  if (internalParams.contextEngineLogicalTurnLease) {
+    selectContextEngineForTranscriptHost({
+      lease: internalParams.contextEngineLogicalTurnLease,
+      host: {
+        id: `agent-harness:${harness.id}`,
+        label: `agent harness "${harness.id}"`,
+        capabilities: harness.contextEngineHostCapabilities ?? [],
+      },
+      operation: "agent-run",
+      recorder: internalParams.userTurnTranscriptRecorder,
+    });
+    await drainPendingContextEngineTurnsBeforeRun({
+      admission: internalParams.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+      isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
+      lease: internalParams.contextEngineLogicalTurnLease,
+    });
+    const effective = internalParams.contextEngineLogicalTurnLease.begin();
+    internalParams = {
+      ...internalParams,
+      contextEngine: effective.engine.info.id === "legacy" ? undefined : effective.engine,
+    };
+  }
   if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
     throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
   }
@@ -519,7 +545,7 @@ async function runSelectedAgentHarnessAttempt(
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
-  return runAgentHarnessOperation(harness, params, () =>
+  const result = await runAgentHarnessOperation(harness, params, () =>
     runWithAgentRingZeroTools(ringZeroTools, () => {
       // Resolve plugin policy after entering the host scope. Ring-zero tools are
       // trusted setup authority and must survive ordinary deny-all policy.
@@ -528,6 +554,47 @@ async function runSelectedAgentHarnessAttempt(
       return runAgentHarnessLifecycleAttempt(harness, attemptParams);
     }),
   );
+  const admission = internalParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  if (
+    internalParams.onContextEngineTurnCandidate &&
+    admission &&
+    result.contextEngineTerminalAnchor
+  ) {
+    internalParams.onContextEngineTurnCandidate({
+      boundary: {
+        admission,
+        terminal: result.contextEngineTerminalAnchor,
+      },
+      sessionIdUsed: result.sessionIdUsed,
+      sessionKey: internalParams.sessionKey,
+      sessionTarget: internalParams.sessionTarget,
+      sessionFile: result.sessionFileUsed ?? internalParams.sessionFile,
+      promptError: result.terminal.kind === "failed",
+      aborted:
+        result.terminal.kind === "aborted" ||
+        (result.terminal.kind === "timeout" &&
+          "aborted" in result.terminal &&
+          result.terminal.aborted === true),
+      yieldAborted:
+        result.terminal.kind === "aborted" && result.terminal.source === "yield_cleanup",
+      isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
+      tokenBudget: internalParams.contextTokenBudget,
+      contextEngineHostSupport: {
+        id: `agent-harness:${harness.id}`,
+        label: `agent harness "${harness.id}"`,
+        capabilities: harness.contextEngineHostCapabilities ?? [],
+      },
+      harnessId: harness.id,
+      providerId: internalParams.provider,
+      requestedModelId: internalParams.requestedModelId,
+      modelId: internalParams.modelId,
+      fallbackReason: internalParams.fallbackReason,
+      degradedReason: internalParams.degradedReason,
+      config: internalParams.config,
+    });
+  }
+  const { contextEngineTerminalAnchor: _contextEngineTerminalAnchor, ...publicResult } = result;
+  return publicResult;
 }
 
 function selectPreparedAgentHarness(
@@ -584,10 +651,12 @@ function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): 
 function withoutInternalHarnessAuthority(
   params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
 ): EmbeddedRunAttemptParams {
-  if (!Object.hasOwn(params, "systemAgentTool")) {
-    return params;
-  }
-  const { systemAgentTool: _systemAgentTool, ...pluginParams } = params;
+  const {
+    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
+    systemAgentTool: _systemAgentTool,
+    ...pluginParams
+  } = params;
   return pluginParams;
 }
 
@@ -664,6 +733,7 @@ function resolvePluginHarnessToolPolicies(
   const sandboxSessionKey = params.sandboxSessionKey ?? params.sessionKey;
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: params.config,
+    sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sandboxSessionKey,
     agentId: params.agentId,

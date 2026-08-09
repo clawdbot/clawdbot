@@ -1,7 +1,8 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -30,16 +31,60 @@ type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpos
 function getMemoryCommandSecretTargetIds(): Set<string> {
   return new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]);
 }
-async function loadMemoryCommandConfig(commandName: string) {
-  const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
-    config: getRuntimeConfig(),
-    commandName,
-    targetIds: getMemoryCommandSecretTargetIds(),
-  });
-  return {
-    config: resolvedConfig,
-    diagnostics,
-  };
+function isMemorySecretOwnerFailure(error: unknown, message: string): boolean {
+  const candidate = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  if (
+    candidate.ownerKind === "capability" &&
+    typeof candidate.ownerId === "string" &&
+    candidate.ownerId.startsWith("memory-provider:")
+  ) {
+    return true;
+  }
+  if (
+    Array.isArray(candidate.paths) &&
+    candidate.paths.some(
+      (entry) => typeof entry === "string" && entry.includes("memory.search.remote.apiKey"),
+    )
+  ) {
+    return true;
+  }
+  // Gateway RPC errors preserve the typed owner's redacted message even when
+  // structured owner fields are unavailable to the CLI process.
+  return message.includes("capability:memory-provider:");
+}
+async function loadMemoryCommandConfig(
+  commandName: string,
+  mode?: "enforce_resolved" | "read_only_status",
+) {
+  const config = getRuntimeConfig({ skipPluginValidation: true });
+  try {
+    const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
+      config,
+      commandName,
+      targetIds: getMemoryCommandSecretTargetIds(),
+      ...(mode ? { mode } : {}),
+    });
+    return { config: resolvedConfig, diagnostics };
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
+    const message = formatErrorMessage(error);
+    if (
+      mode !== "read_only_status" ||
+      isMemorySecretOwnerFailure(error, message) ||
+      (code !== "SECRET_SURFACE_UNAVAILABLE" && !message.includes("SECRET_SURFACE_UNAVAILABLE"))
+    ) {
+      throw error;
+    }
+    return {
+      config,
+      diagnostics: [
+        `${commandName}: ${message}; continuing with degraded read-only config so healthy memory surfaces remain visible.`,
+      ],
+    };
+  }
 }
 function emitMemorySecretResolveDiagnostics(
   diagnostics: string[],
@@ -104,11 +149,7 @@ function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   if (trimmed) {
     return [trimmed];
   }
-  const list = cfg.agents?.list ?? [];
-  if (list.length > 0) {
-    return list.map((entry) => entry.id).filter(Boolean);
-  }
-  return [resolveDefaultAgentId(cfg)];
+  return listAgentIds(cfg);
 }
 export function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] {
   return normalizeExtraMemoryPaths(workspaceDir, extraPaths).map((entry) => shortenHomePath(entry));
@@ -155,7 +196,10 @@ export async function withMemoryCommand(params: {
   withLease?: PluginStateLeaseRunner;
   run: (context: { manager: MemoryManager; cfg: OpenClawConfig; agentId: string }) => Promise<void>;
 }): Promise<OpenClawConfig> {
-  const { config: cfg, diagnostics } = await loadMemoryCommandConfig(params.commandName);
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig(
+    params.commandName,
+    params.purpose === "status" ? "read_only_status" : undefined,
+  );
   emitMemorySecretResolveDiagnostics(diagnostics, { json: params.diagnosticsToStderr });
   const agentIds = params.allAgents
     ? resolveAgentIds(cfg, params.agent)

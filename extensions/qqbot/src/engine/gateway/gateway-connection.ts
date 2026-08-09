@@ -1,4 +1,6 @@
 // Qqbot plugin module implements gateway connection behavior.
+import { asSafeIntegerInRange, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import WebSocket from "ws";
 import type { EngineAdapters } from "../adapter/index.js";
 import {
@@ -39,6 +41,9 @@ import type {
 } from "./types.js";
 import { createQQWSClient } from "./ws-client.js";
 
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 45_000;
+const MIN_HEARTBEAT_INTERVAL_MS = 1_000;
+
 interface GatewayConnectionContext {
   account: GatewayAccount;
   abortSignal: AbortSignal;
@@ -61,6 +66,9 @@ export class GatewayConnection {
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private sessionId: string | null = null;
   private lastSeq: number | null = null;
+  // Sent heartbeats not yet cleared by an op:11 ACK. Counter-based (not wall-clock)
+  // so an event-loop stall cannot trip a false termination on a live socket.
+  private outstandingHeartbeats = 0;
   private isConnecting = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldRefreshToken = false;
@@ -317,9 +325,33 @@ export class GatewayConnection {
       });
 
       // ---- WebSocket: message ----
+      // Decode/parse once and carry the prepared frame into the serialized handler.
+      // Op 11 Heartbeat ACK resets the liveness counter here and returns, never enqueued
+      // behind socketMessageTail, so a slow ingress.receive() cannot mask an arrived ACK.
       ws.on("message", (data) => {
+        if (this.isAborted || this.currentWs !== ws || this.failedIngressSockets.has(ws)) {
+          return;
+        }
+        let payload: WSPayload;
+        let rawData: string;
+        try {
+          rawData = decodeGatewayMessageData(data);
+          payload = JSON.parse(rawData) as WSPayload;
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          log?.error(`Message parse error: ${message}`);
+          return;
+        }
+        if (payload === null || typeof payload !== "object") {
+          log?.error(`Message parse error: unexpected payload shape`);
+          return;
+        }
+        if (payload.op === GatewayOp.HEARTBEAT_ACK) {
+          this.outstandingHeartbeats = 0;
+          return;
+        }
         this.socketMessageTail = this.socketMessageTail
-          .then(() => this.handleSocketMessage(ws, data, accessToken))
+          .then(() => this.handleSocketMessage(ws, { rawData, payload }, accessToken))
           .catch((error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);
             if (error instanceof QQBotIngressAdmissionError) {
@@ -369,14 +401,13 @@ export class GatewayConnection {
 
   private async handleSocketMessage(
     ws: WebSocket,
-    data: unknown,
+    frame: { rawData: string; payload: WSPayload },
     accessToken: string,
   ): Promise<void> {
     if (this.isAborted || this.currentWs !== ws || this.failedIngressSockets.has(ws)) {
       return;
     }
-    const rawData = decodeGatewayMessageData(data);
-    const payload = JSON.parse(rawData) as WSPayload;
+    const { rawData, payload } = frame;
     const { op, d, s, t } = payload;
     let saveAfterDispatch = false;
 
@@ -408,10 +439,6 @@ export class GatewayConnection {
         }
         break;
       }
-
-      case GatewayOp.HEARTBEAT_ACK:
-        break;
-
       case GatewayOp.RECONNECT:
         this.ctx.onDisconnected?.({ reason: "server requested reconnect", fatal: false });
         this.cleanup();
@@ -448,6 +475,20 @@ export class GatewayConnection {
   // ============ Protocol handlers ============
 
   private handleHello(ws: WebSocket, d: unknown, accessToken: string): void {
+    const hello = asOptionalRecord(d) ?? {};
+    const receivedInterval = asSafeIntegerInRange(hello.heartbeat_interval, {
+      min: MIN_HEARTBEAT_INTERVAL_MS,
+      max: MAX_TIMER_TIMEOUT_MS,
+    });
+    if (receivedInterval === undefined) {
+      // Do not interpolate hostile input here: diagnostics must not throw while
+      // recovering the heartbeat schedule from a malformed gateway frame.
+      this.ctx.log?.error(
+        `Invalid QQ gateway HELLO heartbeat interval; using default ${DEFAULT_HEARTBEAT_INTERVAL_MS}ms`,
+      );
+    }
+    const interval = receivedInterval ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+
     if (this.sessionId && this.lastSeq !== null) {
       ws.send(
         JSON.stringify({
@@ -472,14 +513,26 @@ export class GatewayConnection {
       );
     }
 
-    const interval = (d as { heartbeat_interval: number }).heartbeat_interval;
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
     }
+    this.outstandingHeartbeats = 0;
+    // Terminate after this many heartbeats go unanswered. Check before sending so the
+    // threshold counts unanswered sends: tick 1 sends (1), tick 2 sends (2), tick 3 trips.
+    const missedAckThreshold = 2;
     this.heartbeatInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ op: GatewayOp.HEARTBEAT, d: this.lastSeq }));
+      if (ws.readyState !== WebSocket.OPEN) {
+        return;
       }
+      if (this.outstandingHeartbeats >= missedAckThreshold) {
+        this.ctx.log?.error(
+          `Heartbeat ACK overdue (${this.outstandingHeartbeats} unanswered); terminating gateway socket`,
+        );
+        ws.terminate();
+        return;
+      }
+      ws.send(JSON.stringify({ op: GatewayOp.HEARTBEAT, d: this.lastSeq }));
+      this.outstandingHeartbeats += 1;
     }, interval);
   }
 

@@ -1,14 +1,22 @@
-// Safe loader for package-local OpenClaw profiles referenced by Claw metadata.
+// Safe loader for the conventional package-local OpenClaw profile.
 import { isScalar, parseDocument, visit } from "yaml";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isSafeClawRelativePath } from "./schema-portability.js";
 import { parseClawOpenClawProfile } from "./schema.js";
-import type { ClawDiagnostic, ClawManifest, ClawOpenClawProfile } from "./types.js";
+import type { ClawDiagnostic, ClawOpenClawProfile } from "./types.js";
 
 const MAX_PROFILE_BYTES = 256 * 1024;
+const CLAW_PROFILE_PATH = "profiles/openclaw.yml";
+const LEGACY_PROFILE_POINTER_KEY = "openclaw.config";
+const LEGACY_PROFILE_POINTER_PATH = "$.metadata.openclaw.config";
+const CONVENTIONAL_PROFILE_PATH = "$.profiles.openclaw";
 
 function diagnostic(code: string, message: string, path = "$"): ClawDiagnostic {
   return { level: "error", code, phase: "parse", path, message };
+}
+
+function warning(code: string, message: string, path: string): ClawDiagnostic {
+  return { level: "warning", code, phase: "parse", path, message };
 }
 
 function parseProfileYaml(
@@ -82,32 +90,75 @@ async function readProfileFile(packageRoot: string, path: string): Promise<Buffe
   return read.buffer;
 }
 
+/**
+ * Resolves the OpenClaw profile for a package.
+ *
+ * `profiles/openclaw.yml` is the conventional location. The retired
+ * `metadata.openclaw.config` pointer is still read for compatibility with
+ * packages published against the released contract; it reports a deprecation
+ * warning instead of failing, and only errors when it is malformed or conflicts
+ * with a conventional profile.
+ */
 export async function readClawOpenClawProfile(params: {
   packageRoot: string;
-  manifest: ClawManifest;
+  metadata?: Record<string, string>;
 }): Promise<
-  | { ok: true; profile?: ClawOpenClawProfile; raw?: Buffer; path?: string }
+  | {
+      ok: true;
+      profile?: ClawOpenClawProfile;
+      raw?: Buffer;
+      path?: string;
+      diagnostics?: ClawDiagnostic[];
+    }
   | { ok: false; diagnostics: ClawDiagnostic[] }
 > {
-  const declaredPath = params.manifest.metadata?.["openclaw.config"];
-  if (declaredPath === undefined) {
+  const packageFiles = await fsSafeRoot(params.packageRoot);
+  const conventionalExists = await packageFiles.exists(CLAW_PROFILE_PATH);
+  const legacyPointer = params.metadata?.[LEGACY_PROFILE_POINTER_KEY];
+  const diagnostics: ClawDiagnostic[] = [];
+  let declaredPath = CLAW_PROFILE_PATH;
+  let diagnosticPath = CONVENTIONAL_PROFILE_PATH;
+
+  if (legacyPointer !== undefined) {
+    if (
+      legacyPointer.includes("\\") ||
+      !isSafeClawRelativePath(legacyPointer) ||
+      !/\.ya?ml$/i.test(legacyPointer)
+    ) {
+      return {
+        ok: false,
+        diagnostics: [
+          diagnostic(
+            "invalid_openclaw_profile_path",
+            `metadata.${LEGACY_PROFILE_POINTER_KEY} must reference a forward-slash package-relative .yml or .yaml file.`,
+            LEGACY_PROFILE_POINTER_PATH,
+          ),
+        ],
+      };
+    }
+    if (conventionalExists && legacyPointer !== CLAW_PROFILE_PATH) {
+      return {
+        ok: false,
+        diagnostics: [
+          diagnostic(
+            "conflicting_openclaw_profile_pointer",
+            `metadata.${LEGACY_PROFILE_POINTER_KEY} references ${legacyPointer} while ${CLAW_PROFILE_PATH} also exists; keep only ${CLAW_PROFILE_PATH}.`,
+            LEGACY_PROFILE_POINTER_PATH,
+          ),
+        ],
+      };
+    }
+    declaredPath = legacyPointer;
+    diagnosticPath = LEGACY_PROFILE_POINTER_PATH;
+    diagnostics.push(
+      warning(
+        "deprecated_openclaw_profile_pointer",
+        `metadata.${LEGACY_PROFILE_POINTER_KEY} is deprecated; move the profile to ${CLAW_PROFILE_PATH} and remove the metadata entry.`,
+        LEGACY_PROFILE_POINTER_PATH,
+      ),
+    );
+  } else if (!conventionalExists) {
     return { ok: true };
-  }
-  if (
-    declaredPath.includes("\\") ||
-    !isSafeClawRelativePath(declaredPath) ||
-    !/\.ya?ml$/i.test(declaredPath)
-  ) {
-    return {
-      ok: false,
-      diagnostics: [
-        diagnostic(
-          "invalid_openclaw_profile_path",
-          "metadata.openclaw.config must reference a forward-slash package-relative .yml or .yaml file.",
-          "$.metadata.openclaw.config",
-        ),
-      ],
-    };
   }
 
   let raw: Buffer;
@@ -132,7 +183,7 @@ export async function readClawOpenClawProfile(params: {
             : tooLarge
               ? `The OpenClaw profile exceeds ${MAX_PROFILE_BYTES} bytes.`
               : `Could not read ${declaredPath}: ${(error as Error).message}`,
-          "$.metadata.openclaw.config",
+          diagnosticPath,
         ),
       ],
     };
@@ -148,9 +199,15 @@ export async function readClawOpenClawProfile(params: {
       ok: false,
       diagnostics: parsed.diagnostics.map((entry) => ({
         ...entry,
-        path: `$.metadata.openclaw.config${entry.path.slice(1)}`,
+        path: `${diagnosticPath}${entry.path.slice(1)}`,
       })),
     };
   }
-  return { ok: true, profile: parsed.profile, raw, path: declaredPath };
+  return {
+    ok: true,
+    profile: parsed.profile,
+    raw,
+    path: declaredPath,
+    ...(diagnostics.length > 0 ? { diagnostics } : {}),
+  };
 }

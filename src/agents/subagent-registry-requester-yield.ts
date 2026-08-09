@@ -7,7 +7,7 @@ export function markRequesterTurnYieldedInRuns(params: {
   requesterSessionKey: string;
   requesterTurnRunId: string;
   runs: Map<string, SubagentRunRecord>;
-  persistOrThrow(): void;
+  persistOrThrow(...runIds: string[]): void;
 }): number {
   const requesterSessionKey = params.requesterSessionKey.trim();
   const requesterTurnRunId = params.requesterTurnRunId.trim();
@@ -17,7 +17,8 @@ export function markRequesterTurnYieldedInRuns(params: {
   const entries = [...params.runs.values()].filter(
     (entry) =>
       entry.requesterSessionKey === requesterSessionKey &&
-      entry.requesterTurnRunId === requesterTurnRunId,
+      entry.requesterTurnRunId === requesterTurnRunId &&
+      entry.expectsCompletionMessage === true,
   );
   if (entries.every((entry) => entry.requesterTurnYielded === true)) {
     return entries.length;
@@ -27,7 +28,7 @@ export function markRequesterTurnYieldedInRuns(params: {
     entry.requesterTurnYielded = true;
   }
   try {
-    params.persistOrThrow();
+    params.persistOrThrow(...entries.map((entry) => entry.runId));
   } catch (error) {
     entries.forEach((entry, index) => {
       entry.requesterTurnYielded = previous[index];
@@ -43,7 +44,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   requesterYielded: boolean;
   acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
   runs: Map<string, SubagentRunRecord>;
-  persistOrThrow(): void;
+  persistOrThrow(...runIds: string[]): void;
   schedule(runId: string, entry: SubagentRunRecord): void;
 }): boolean {
   const requesterSessionKey = params.requesterSessionKey.trim();
@@ -55,18 +56,18 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     return false;
   }
 
-  // Registry markers select completion-producing children. Accepted inline or
-  // otherwise non-completion spawns are intentionally outside this batch.
+  // Completion rows keep their original task owner across steer; inline or
+  // non-completion spawns are intentionally outside this batch.
   const entries = [...params.runs.values()].filter(
     (entry) =>
       entry.requesterSessionKey === requesterSessionKey &&
-      entry.requesterTurnRunId === requesterTurnRunId,
+      entry.requesterTurnRunId === requesterTurnRunId &&
+      entry.expectsCompletionMessage === true,
   );
   for (const entry of entries) {
-    const spawn = spawnsByRunId.get(entry.runId);
+    const spawn = spawnsByRunId.get(entry.taskRunId ?? entry.runId);
     if (
       !spawn ||
-      entry.expectsCompletionMessage !== true ||
       entry.childSessionKey !== spawn.childSessionKey ||
       (params.requesterYielded && entry.requesterTurnYielded !== true)
     ) {
@@ -80,6 +81,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   }
   const batchRunIds = entries.map((entry) => entry.runId).toSorted();
   const previousStates = entries.map((entry) => ({
+    delivery: structuredClone(entry.delivery),
     requesterSettleWake: structuredClone(entry.requesterSettleWake),
     requesterTurnRunId: entry.requesterTurnRunId,
     requesterTurnYielded: entry.requesterTurnYielded,
@@ -91,11 +93,18 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       Math.max(0, ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0)) + 1;
     for (const entry of entries) {
       const existing = entry.requesterSettleWake;
+      const completionEnded = typeof entry.execution.endedAt === "number";
       // An in-progress delivery may already target the requester run being aborted.
       // Re-arm it like a delivered result so that completion cannot die with that turn.
-      const completionMayBeAttachedToYieldedTurn =
-        typeof entry.endedAt === "number" &&
-        (entry.delivery?.status === "delivered" || entry.delivery?.status === "in_progress");
+      const completionMayBeAttachedToYieldedTurn = completionEnded;
+      if (completionEnded && entry.delivery?.status !== "delivered") {
+        // The persisted yielded batch now owns terminal delivery. Mark the old
+        // per-child attempt terminal so it cannot keep the batch unsettled.
+        entry.delivery = {
+          ...(entry.delivery ?? { status: "pending" }),
+          disposition: "intentional_non_delivery",
+        };
+      }
       entry.requesterSettleWake = {
         status: "pending",
         attemptCount: 0,
@@ -126,11 +135,12 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     }
   }
   try {
-    params.persistOrThrow();
+    params.persistOrThrow(...entries.map((entry) => entry.runId));
   } catch (error) {
     entries.forEach((entry, index) => {
       const previous = previousStates[index];
       params.runs.set(entry.runId, entry);
+      entry.delivery = previous?.delivery;
       entry.requesterSettleWake = previous?.requesterSettleWake;
       entry.requesterTurnRunId = previous?.requesterTurnRunId;
       entry.requesterTurnYielded = previous?.requesterTurnYielded;
@@ -141,11 +151,9 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
 
   if (
     rearmGeneration !== undefined &&
-    entries.every(
-      (entry) => typeof entry.endedAt === "number" && entry.delivery?.status === "delivered",
-    )
+    entries.every((entry) => typeof entry.execution.endedAt === "number")
   ) {
-    // Active children keep the frozen batch but let their normal cleanup owner schedule it.
+    // Active children keep the frozen batch; their normal completion owner schedules it.
     params.schedule(firstEntry.runId, firstEntry);
   }
   return true;

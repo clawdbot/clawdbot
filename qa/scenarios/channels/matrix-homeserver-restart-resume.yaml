@@ -8,6 +8,8 @@ scenario:
   execution:
     kind: flow
     channel: matrix
+    suiteIsolation: isolated
+    isolationReason: Restarts the disposable homeserver process and its active Matrix sync streams.
     timeoutMs: 75000
     retryCount: 0
     config:

@@ -11,7 +11,7 @@ describe("audit-seams cron seam classification", () => {
     const source = `
       import { runCliAgent } from "../../agents/cli-runner.js";
       import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
-      import { registerAgentRunContext } from "../../infra/agent-events.js";
+      import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
       import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
       import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 
@@ -93,6 +93,20 @@ describe("audit-seams subagent seam classification", () => {
     expect(describeSeamKinds("src/agents/subagent-registry.ts", source)).toEqual([
       "subagent-announce-delivery",
       "subagent-lifecycle-registry",
+    ]);
+  });
+
+  it("detects the shared delivery-context announce seam", () => {
+    const source = `
+      import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+
+      export function createBoundDeliveryRouter(context) {
+        return normalizeDeliveryContext(context);
+      }
+    `;
+
+    expect(describeSeamKinds("src/agents/subagent-announce-origin.ts", source)).toEqual([
+      "subagent-announce-delivery",
     ]);
   });
 

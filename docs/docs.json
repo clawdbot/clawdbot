@@ -70,11 +70,15 @@
     },
     {
       "source": "/concepts/qa-matrix",
-      "destination": "/concepts/qa-e2e-automation#matrix-smoke-lanes"
+      "destination": "/concepts/qa-e2e-automation#matrix-live-lane"
     },
     {
       "source": "/plugins/reference/qa-matrix",
       "destination": "/plugins/reference/qa-lab"
+    },
+    {
+      "source": "/plugins/reference/fish-audio",
+      "destination": "/plugins/reference/fish-audio-speech"
     },
     {
       "source": "/concepts/openclaw-sdk",
@@ -1110,6 +1114,7 @@
                 "group": "Hosting",
                 "pages": [
                   "install/azure",
+                  "install/daytona",
                   "install/digitalocean",
                   "install/docker-vm-runtime",
                   "install/exe-dev",
@@ -1153,6 +1158,7 @@
                   "channels/discord",
                   "channels/discord-activities",
                   "channels/slack",
+                  "channels/sms",
                   "channels/telegram",
                   "channels/whatsapp",
                   "channels/signal",
@@ -1169,6 +1175,8 @@
               {
                 "group": "Developer and self-hosted",
                 "pages": [
+                  "channels/buzz",
+                  "channels/clickclack",
                   "channels/irc",
                   "channels/mattermost",
                   "channels/nextcloud-talk",
@@ -1185,6 +1193,7 @@
                 "pages": [
                   "channels/line",
                   "channels/wechat",
+                  "channels/wecom",
                   "channels/qqbot",
                   "channels/feishu",
                   "channels/yuanbao",
@@ -1204,8 +1213,7 @@
                   "channels/broadcast-groups",
                   "channels/channel-routing",
                   "channels/location",
-                  "channels/troubleshooting",
-                  "channels/qa-channel"
+                  "channels/troubleshooting"
                 ]
               }
             ]
@@ -1252,7 +1260,6 @@
                       "concepts/user-model",
                       "concepts/standing-intents",
                       "concepts/memory-builtin",
-                      "concepts/memory-qmd",
                       "concepts/memory-honcho",
                       "concepts/memory-search",
                       "concepts/active-memory",
@@ -1519,6 +1526,7 @@
                   "providers/deepseek",
                   "providers/ds4",
                   "providers/elevenlabs",
+                  "providers/fish-audio",
                   "providers/fal",
                   "providers/featherless",
                   "providers/fireworks",
@@ -1580,6 +1588,7 @@
                   "platforms/linux",
                   "platforms/windows",
                   "platforms/android",
+                  "platforms/chromeos",
                   "platforms/ios",
                   "platforms/ios-healthkit",
                   "platforms/easyrunner"
@@ -1674,6 +1683,7 @@
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/restart-recovery",
+                      "gateway/cloud-workers",
                       "gateway/multiple-gateways",
                       "gateway/multi-tenant-hosting"
                     ]
@@ -1724,6 +1734,7 @@
                 "pages": [
                   "gateway/remote",
                   "gateway/remote-gateway-readme",
+                  "gateway/stable-https-url",
                   "gateway/tailscale"
                 ]
               },
@@ -1746,6 +1757,7 @@
                     "group": "Media capabilities",
                     "pages": [
                       "nodes/media-understanding",
+                      "nodes/media-playback",
                       "nodes/images",
                       "nodes/audio",
                       "nodes/camera",
@@ -1875,6 +1887,7 @@
                     "pages": [
                       "cli/attach",
                       "cli/dashboard",
+                      "cli/resume",
                       "cli/tui"
                     ]
                   },
@@ -1995,23 +2008,38 @@
                 "pages": [
                   "reference/pull-request-review-flow"
                 ]
+              }
+            ]
+          },
+          {
+            "tab": "Release & CI",
+            "groups": [
+              {
+                "group": "Release notes",
+                "pages": [
+                  "releases/index",
+                  "releases/2026.7.1",
+                  "releases/2026.6.11"
+                ]
               },
               {
-                "group": "Release and CI",
+                "group": "Maturity",
                 "pages": [
-                  {
-                    "group": "Release notes",
-                    "pages": [
-                      "releases/index",
-                      "releases/2026.7.1",
-                      "releases/2026.6.11"
-                    ]
-                  },
                   "maturity/scorecard",
-                  "maturity/taxonomy",
+                  "maturity/taxonomy"
+                ]
+              },
+              {
+                "group": "Release process",
+                "pages": [
                   "reference/RELEASING",
                   "reference/full-release-validation",
-                  "reference/release-performance-sweep",
+                  "reference/release-performance-sweep"
+                ]
+              },
+              {
+                "group": "Testing and CI",
+                "pages": [
                   "reference/test",
                   "ci",
                   "help/scripts"

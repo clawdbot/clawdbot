@@ -4,9 +4,9 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 
 const TaskIdSchema = Type.String({ minLength: 1, maxLength: 128 });
-const TaskTitleSchema = Type.String({ minLength: 1, maxLength: 60 });
-const TaskPromptSchema = Type.String({ minLength: 1, maxLength: 32_768 });
-const TaskTldrSchema = Type.String({ minLength: 1, maxLength: 1_024 });
+const TaskTitleSchema = Type.String({ minLength: 1, maxLength: 60, pattern: "\\S" });
+const TaskPromptSchema = Type.String({ minLength: 1, maxLength: 32_768, pattern: "\\S" });
+const TaskTldrSchema = Type.String({ minLength: 1, maxLength: 1_024, pattern: "\\S" });
 const TaskCwdSchema = Type.String({ minLength: 1, maxLength: 4_096 });
 const TaskSessionKeySchema = Type.String({ minLength: 1, maxLength: 512 });
 const TaskAgentIdSchema = Type.String({ minLength: 1, maxLength: 128 });

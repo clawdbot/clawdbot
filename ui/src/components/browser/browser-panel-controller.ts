@@ -127,7 +127,8 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   private reportError(error: unknown): void {
-    this.setState("errorText", error instanceof Error ? error.message : String(error));
+    const detail = error instanceof Error ? error.message : String(error);
+    this.setState("errorText", t("browser.errors.requestFailed", { error: detail }));
   }
 
   async refreshAll(): Promise<void> {
@@ -719,17 +720,24 @@ export class BrowserPanelController implements ReactiveController {
       return;
     }
     const highlight = element ? this.inspectHighlightRegion() : null;
-    let handled: boolean;
+    let result: ReturnType<typeof dispatchCompositedBrowserAnnotation>;
     try {
-      handled = dispatchCompositedBrowserAnnotation(view, tab, this.strokes, element, highlight);
+      result = dispatchCompositedBrowserAnnotation(view, tab, this.strokes, element, highlight);
     } catch (error) {
       this.reportError(error);
       return;
     }
-    if (!handled) {
+    if (result === "unhandled") {
+      this.setState("noticeText", null);
       this.setState("errorText", t("browser.noChatTarget"));
       return;
     }
+    if (result === "rejected") {
+      this.setState("noticeText", null);
+      this.setState("errorText", t("browser.annotationLimitReached"));
+      return;
+    }
+    this.setState("errorText", null);
     this.setState("noticeText", t("browser.annotationSent"));
     this.exitCaptureModes();
   }

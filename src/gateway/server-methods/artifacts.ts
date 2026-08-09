@@ -23,9 +23,9 @@ import {
 } from "../../routing/session-key.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import {
-  parseManagedOutgoingImageArtifactId,
-  resolveManagedOutgoingImageArtifactDownload,
-  resolveManagedOutgoingImageUrlDownload,
+  parseManagedOutgoingArtifactId,
+  resolveManagedOutgoingMediaArtifactDownload,
+  resolveManagedOutgoingMediaUrlDownload,
 } from "../managed-image-attachments.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -144,6 +144,9 @@ function normalizeArtifactType(value: string): string {
   }
   if (normalized === "audio" || normalized === "input_audio") {
     return "audio";
+  }
+  if (normalized === "video" || normalized === "input_video") {
+    return "video";
   }
   if (normalized === "file" || normalized === "input_file") {
     return "file";
@@ -367,9 +370,11 @@ function isArtifactBlock(block: Record<string, unknown>): boolean {
   if (
     type === "image" ||
     type === "audio" ||
+    type === "video" ||
     type === "file" ||
     type === "input_image" ||
     type === "input_audio" ||
+    type === "input_video" ||
     type === "input_file" ||
     type === "image_url"
   ) {
@@ -418,7 +423,7 @@ function collectArtifactsFromMessage(params: {
       `${type} ${params.artifacts.length + 1}`;
     const declaredArtifactId = asNonEmptyString(block.artifactId);
     const id =
-      declaredArtifactId && parseManagedOutgoingImageArtifactId(declaredArtifactId)
+      declaredArtifactId && parseManagedOutgoingArtifactId(declaredArtifactId)
         ? declaredArtifactId
         : artifactId({
             sessionKey: params.sessionKey,
@@ -652,11 +657,11 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       params.sessionKey &&
       !params.runId &&
       !params.taskId &&
-      parseManagedOutgoingImageArtifactId(params.artifactId)
+      parseManagedOutgoingArtifactId(params.artifactId)
     ) {
       const resolved = resolveQuerySession(params, context.getRuntimeConfig?.());
       const managed = resolved
-        ? await resolveManagedOutgoingImageArtifactDownload({
+        ? await resolveManagedOutgoingMediaArtifactDownload({
             sessionKey: resolved.sessionKey,
             artifactId: params.artifactId,
           })
@@ -665,7 +670,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
         respond(true, {
           artifact: {
             id: managed.artifactId,
-            type: "image",
+            type: managed.type,
             title: managed.title,
             ...(managed.mimeType ? { mimeType: managed.mimeType } : {}),
             ...(managed.sizeBytes !== undefined ? { sizeBytes: managed.sizeBytes } : {}),
@@ -704,7 +709,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     const managedUrl =
       artifact.download.mode === "url" && artifact.url && artifact.sessionKey
-        ? await resolveManagedOutgoingImageUrlDownload({
+        ? await resolveManagedOutgoingMediaUrlDownload({
             sessionKey: artifact.sessionKey,
             url: artifact.url,
           })

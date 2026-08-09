@@ -1,4 +1,5 @@
 // Discord plugin module implements rest routes behavior.
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -7,9 +8,25 @@ import {
 type QueryValue = string | number | boolean;
 
 const RATE_LIMIT_HEADER_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+const DISCORD_ROUTE_IDENTIFIER_HASH_LENGTH = 32;
+
+function redactWebhookTokenInPath(path: string): string {
+  const hasLeadingSlash = path.startsWith("/");
+  const segments = path.replace(/^\/+/, "").split("/");
+  if (segments[0] !== "webhooks" || !segments[1] || !segments[2]) {
+    return path;
+  }
+  // Webhook tokens are route identity, but they are also credentials. Keep
+  // stable grouping without retaining the raw token in scheduler diagnostics.
+  segments[2] = redactIdentifier(segments[2], {
+    len: DISCORD_ROUTE_IDENTIFIER_HASH_LENGTH,
+  });
+  return `${hasLeadingSlash ? "/" : ""}${segments.join("/")}`;
+}
 
 export function createRouteKey(method: string, path: string): string {
-  return `${method.toUpperCase()} ${path.split("?")[0] ?? path}`;
+  const pathname = path.split("?")[0] ?? path;
+  return `${method.toUpperCase()} ${redactWebhookTokenInPath(pathname)}`;
 }
 
 function readTopLevelRouteKey(path: string): string {
@@ -19,7 +36,11 @@ function readTopLevelRouteKey(path: string): string {
     return pathname;
   }
   if (first === "channels" || first === "guilds" || first === "webhooks") {
-    return first === "webhooks" && token ? `${first}/${id}/${token}` : `${first}/${id}`;
+    return first === "webhooks" && token
+      ? `${first}/${id}/${redactIdentifier(token, {
+          len: DISCORD_ROUTE_IDENTIFIER_HASH_LENGTH,
+        })}`
+      : `${first}/${id}`;
   }
   return first;
 }

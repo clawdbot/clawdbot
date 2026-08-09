@@ -5,11 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { HealthSummary } from "../commands/health.types.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
-import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
@@ -20,6 +19,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
+import type { HealthSummary } from "./health/types.js";
 
 vi.mock("../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: vi.fn(async () => ({

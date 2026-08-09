@@ -175,7 +175,7 @@ enum ChatMarkdownBlockSegmenter {
                 continue
             }
 
-            if let html = self.disclosureHTML(child, source: source, lineRange: lineRange) {
+            if let html = self.htmlBlockSource(child, source: source, lineRange: lineRange) {
                 extractions.append(Extraction(lineRange: lineRange, html: html))
                 continue
             }
@@ -259,31 +259,7 @@ enum ChatMarkdownBlockSegmenter {
             return left.lineRange.upperBound > right.lineRange.upperBound
         }
 
-        var unfolded: [UnfoldedBlock] = []
-        var disclosureTokenizer = DisclosureTokenizer()
-        var proseStart = 0
-
-        func appendProse(until end: Int) {
-            guard proseStart < end else { return }
-            unfolded.append(contentsOf: self.proseOnly(Array(source.lines[proseStart..<end])).map(UnfoldedBlock.block))
-        }
-
-        for extraction in extractions where extraction.lineRange.lowerBound >= proseStart {
-            appendProse(until: extraction.lineRange.lowerBound)
-            switch extraction.content {
-            case let .block(block):
-                unfolded.append(.block(block))
-            case let .html(html):
-                unfolded.append(contentsOf: disclosureTokenizer.tokenize(
-                    html,
-                    parseMarkdown: { markdown in
-                        self.segments(markdown: markdown, isComplete: isComplete).map(UnfoldedBlock.block)
-                    }))
-            }
-            proseStart = extraction.lineRange.upperBound
-        }
-
-        appendProse(until: source.lines.count)
+        let unfolded = self.unfold(extractions, source: source, isComplete: isComplete)
         let blocks = self.foldDisclosures(unfolded)
         let reparsesListContent = blocks.contains { block in
             if case .list = block { return true }
@@ -420,7 +396,10 @@ enum ChatMarkdownBlockSegmenter {
     private static func containsDisclosure(in document: Document, source: SourceBuffer) -> Bool {
         document.children.contains { child in
             guard let lineRange = source.lineRange(for: child.range) else { return false }
-            return self.disclosureHTML(child, source: source, lineRange: lineRange) != nil
+            guard let html = self.htmlBlockSource(child, source: source, lineRange: lineRange) else {
+                return false
+            }
+            return DisclosureTokenizer.startsWithCandidateLine(html)
         }
     }
 
@@ -456,14 +435,13 @@ enum ChatMarkdownBlockSegmenter {
         code.hasSuffix("\n") ? String(code.dropLast()) : code
     }
 
-    private static func disclosureHTML(
+    private static func htmlBlockSource(
         _ child: any Markup,
         source: SourceBuffer,
         lineRange: Range<Int>) -> String?
     {
         guard child is Markdown.HTMLBlock else { return nil }
-        let html = source.text(in: lineRange)
-        return DisclosureTokenizer.startsWithCandidateLine(html) ? html : nil
+        return source.text(in: lineRange)
     }
 
     private static func foldDisclosures(_ unfolded: [UnfoldedBlock]) -> [ChatMarkdownBlock] {
@@ -515,7 +493,7 @@ enum ChatMarkdownBlockSegmenter {
         return result
     }
 
-    private struct Extraction {
+    fileprivate struct Extraction {
         let lineRange: Range<Int>
         let content: Content
 
@@ -535,7 +513,7 @@ enum ChatMarkdownBlockSegmenter {
         }
     }
 
-    private enum UnfoldedBlock {
+    fileprivate enum UnfoldedBlock {
         case block(ChatMarkdownBlock)
         case disclosureOpen(isExpanded: Bool)
         case disclosureSummary(String)
@@ -571,6 +549,10 @@ enum ChatMarkdownBlockSegmenter {
                 .split(separator: "\n", omittingEmptySubsequences: false)
                 .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             return firstContentLine.map { Self.tags(in: String($0)) != nil } ?? false
+        }
+
+        func shouldTokenize(_ source: String) -> Bool {
+            !self.balanceStack.isEmpty || Self.startsWithCandidateLine(source)
         }
 
         mutating func tokenize(
@@ -800,7 +782,7 @@ enum ChatMarkdownBlockSegmenter {
         let protectedRanges: [Range<Int>]
     }
 
-    private struct SourceReplacement {
+    fileprivate struct SourceReplacement {
         let range: SourceRange
         let markdown: String
     }
@@ -936,7 +918,7 @@ enum ChatMarkdownBlockSegmenter {
         return ChatMarkdownList(kind: kind, items: renderedItems)
     }
 
-    private struct SourceBuffer {
+    fileprivate struct SourceBuffer {
         let markdown: String
         let lines: [String]
 
@@ -1158,5 +1140,45 @@ enum ChatMarkdownBlockSegmenter {
             }
             return (count, cursor)
         }
+    }
+}
+
+extension ChatMarkdownBlockSegmenter {
+    fileprivate static func unfold(
+        _ extractions: [Extraction],
+        source: SourceBuffer,
+        isComplete: Bool) -> [UnfoldedBlock]
+    {
+        var unfolded: [UnfoldedBlock] = []
+        var disclosureTokenizer = DisclosureTokenizer()
+        var proseStart = 0
+
+        func appendProse(until end: Int) {
+            guard proseStart < end else { return }
+            unfolded.append(contentsOf: self.proseOnly(Array(source.lines[proseStart..<end])).map(UnfoldedBlock.block))
+        }
+
+        for extraction in extractions where extraction.lineRange.lowerBound >= proseStart {
+            if case let .html(html) = extraction.content,
+               !disclosureTokenizer.shouldTokenize(html)
+            {
+                continue
+            }
+            appendProse(until: extraction.lineRange.lowerBound)
+            switch extraction.content {
+            case let .block(block):
+                unfolded.append(.block(block))
+            case let .html(html):
+                unfolded.append(contentsOf: disclosureTokenizer.tokenize(
+                    html,
+                    parseMarkdown: { markdown in
+                        self.segments(markdown: markdown, isComplete: isComplete).map(UnfoldedBlock.block)
+                    }))
+            }
+            proseStart = extraction.lineRange.upperBound
+        }
+
+        appendProse(until: source.lines.count)
+        return unfolded
     }
 }

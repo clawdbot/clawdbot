@@ -1,21 +1,22 @@
 import type { WorktreeRecord } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   ControlUiSessionPullRequest,
-  ControlUiSessionPullRequests,
+  ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 
 // Shared by the app sidebar and the Sessions page: both hosts resolve the
 // same worktree-session extras (PR link, checkout path) when opening the
 // session context menu, after the menu is already visible.
-type SessionMenuWorkClient = Pick<GatewayBrowserClient, "request" | "requestSessionPullRequests">;
+type SessionMenuWorkClient = Pick<GatewayBrowserClient, "request">;
 
 type SessionMenuWorkParams = {
   client: SessionMenuWorkClient;
-  /** controlUi.sessionPullRequests is optional gateway surface; skip when absent. */
+  /** Pushed session PR snapshots are optional; skip when the Gateway lacks them. */
   pullRequestsAvailable: boolean;
   sessionKey: string;
   agentId?: string;
+  loadPullRequests?: () => Promise<ControlUiSessionPullRequestSnapshot | undefined>;
   worktreeId?: string;
 };
 
@@ -47,7 +48,7 @@ function pickSessionMenuPullRequestUrl(
   return null;
 }
 
-function resolveSessionPullRequestIndicatorState(
+export function resolveSessionPullRequestIndicatorState(
   pullRequests: readonly ControlUiSessionPullRequest[],
 ): SessionPullRequestIndicatorState {
   if (
@@ -60,33 +61,12 @@ function resolveSessionPullRequestIndicatorState(
   return pullRequests.some((pullRequest) => pullRequest.state === "merged") ? "merged" : "none";
 }
 
-async function loadSessionPullRequests(
-  params: Omit<SessionMenuWorkParams, "worktreeId">,
-): Promise<ControlUiSessionPullRequests | null> {
-  return params.client.requestSessionPullRequests({
-    sessionKey: params.sessionKey,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-  });
-}
-
-export async function fetchSessionPullRequestIndicatorState(
-  params: Omit<SessionMenuWorkParams, "worktreeId">,
-): Promise<SessionPullRequestIndicatorState | null> {
-  if (!params.pullRequestsAvailable) {
-    return "none";
-  }
-  const result = await loadSessionPullRequests(params);
-  return !result || result.rateLimited
-    ? null
-    : resolveSessionPullRequestIndicatorState(result.pullRequests);
-}
-
 async function loadPullRequestUrl(params: SessionMenuWorkParams): Promise<string | null> {
-  if (!params.pullRequestsAvailable) {
+  if (!params.pullRequestsAvailable || !params.loadPullRequests) {
     return null;
   }
   try {
-    const result = await loadSessionPullRequests(params);
+    const result = await params.loadPullRequests();
     return result ? pickSessionMenuPullRequestUrl(result.pullRequests) : null;
   } catch {
     // Optional affordance: a GitHub or gateway hiccup just leaves Open PR disabled.

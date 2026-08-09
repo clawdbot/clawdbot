@@ -1,15 +1,16 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { TaskSummary } from "../../../lib/tasks/data.ts";
+import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import { CHAT_HISTORY_REQUEST_LIMIT } from "../chat-history.ts";
+import { renderBackgroundTasksRail } from "./chat-background-tasks-render.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import {
   createBackgroundTasksProps,
   handleBackgroundTasksEvent,
-  renderBackgroundTasksRail,
   type BackgroundTasksHost,
-  type BackgroundTasksProps,
 } from "./chat-background-tasks.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 
 function flushAsync() {
   return new Promise((resolve) => {
@@ -66,7 +67,56 @@ function createHost(options?: {
   return { host, request, requestUpdate };
 }
 
-const openSession = { onOpenSession: () => {} };
+function makeProps(overrides: Partial<BackgroundTasksProps> = {}): BackgroundTasksProps {
+  return {
+    sessionKey: "agent:main:current",
+    statusRowId: "chat-tasks-status-test",
+    collapsed: true,
+    narrowLayout: false,
+    connected: true,
+    canCancel: false,
+    loading: false,
+    error: null,
+    tasks: null,
+    view: { kind: "list" },
+    cancellingTaskIds: new Set(),
+    finishedCollapsed: false,
+    taskDetails: new Map(),
+    taskDetailErrors: new Map(),
+    taskDetailLoadingIds: new Set(),
+    onToggleCollapsed: () => {},
+    onToggleFinished: () => {},
+    onRefresh: () => {},
+    onCancel: () => {},
+    onSelectTask: () => {},
+    onBack: () => {},
+    onOpenTranscript: () => {},
+    ...overrides,
+  };
+}
+
+function renderTaskRail(overrides: Partial<BackgroundTasksProps>) {
+  const container = document.createElement("div");
+  document.body.append(container);
+  render(
+    html`${renderBackgroundTasksRail(
+      makeProps({
+        collapsed: false,
+        tasks: [],
+        ...overrides,
+      }),
+    )}`,
+    container,
+  );
+  return container;
+}
+
+function renderStatusRow(overrides: Partial<BackgroundTasksProps>) {
+  const container = document.createElement("div");
+  document.body.append(container);
+  render(html`${renderBackgroundTasksStatusRow(makeProps(overrides))}`, container);
+  return container;
+}
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -83,10 +133,10 @@ describe("background tasks rail state", () => {
       },
     });
 
-    expect(createBackgroundTasksProps(host, openSession).collapsed).toBe(true);
+    expect(createBackgroundTasksProps(host).collapsed).toBe(true);
     await flushAsync();
 
-    const props = createBackgroundTasksProps(host, openSession);
+    const props = createBackgroundTasksProps(host);
     expect(props.collapsed).toBe(true);
     expect(props.finishedCollapsed).toBe(true);
     expect(request).toHaveBeenCalledTimes(2);
@@ -114,12 +164,12 @@ describe("background tasks rail state", () => {
       },
     });
 
-    createBackgroundTasksProps(host, openSession);
+    createBackgroundTasksProps(host);
     await flushAsync();
 
     expect(request.mock.calls[0]?.[1]).toMatchObject({ status: ["queued", "running"] });
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("status");
-    expect(createBackgroundTasksProps(host, openSession).tasks).toEqual([recent]);
+    expect(createBackgroundTasksProps(host).tasks).toEqual([recent]);
   });
 
   it("loads the snapshot when a task event arrives before any load", async () => {
@@ -127,7 +177,7 @@ describe("background tasks rail state", () => {
       connected: false,
       request: () => Promise.resolve({ tasks: [makeTask({ id: "task-1" })] }),
     });
-    createBackgroundTasksProps(host, openSession);
+    createBackgroundTasksProps(host);
     expect(request).not.toHaveBeenCalled();
 
     host.connected = true;
@@ -138,18 +188,18 @@ describe("background tasks rail state", () => {
     await flushAsync();
 
     expect(request).toHaveBeenCalledTimes(2);
-    const props = createBackgroundTasksProps(host, openSession);
+    const props = createBackgroundTasksProps(host);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
   });
 
   it("keeps expansion across session switches and reloads the new scope", async () => {
     const { host, request } = createHost();
-    createBackgroundTasksProps(host, openSession).onToggleCollapsed();
-    createBackgroundTasksProps(host, openSession);
+    createBackgroundTasksProps(host).onToggleCollapsed();
+    createBackgroundTasksProps(host);
     await flushAsync();
 
     host.sessionKey = "agent:main:another-thread";
-    const props = createBackgroundTasksProps(host, openSession);
+    const props = createBackgroundTasksProps(host);
     expect(props.collapsed).toBe(false);
     expect(props.sessionKey).toBe("agent:main:another-thread");
     expect(props.tasks).toBeNull();
@@ -169,13 +219,13 @@ describe("background tasks rail state", () => {
     });
     const auth = { role: "operator" as const, scopes: ["operator.write"] };
     host.hello = { type: "hello-ok", protocol: 4, auth };
-    createBackgroundTasksProps(host, openSession).onToggleCollapsed();
+    createBackgroundTasksProps(host).onToggleCollapsed();
     await flushAsync();
 
-    createBackgroundTasksProps(host, openSession).onCancel("task-1");
+    createBackgroundTasksProps(host).onCancel("task-1");
     await flushAsync();
 
-    const props = createBackgroundTasksProps(host, openSession);
+    const props = createBackgroundTasksProps(host);
     expect(props.error).toBe("already finished");
     expect(props.cancellingTaskIds.has("task-1")).toBe(false);
   });
@@ -192,20 +242,118 @@ describe("background tasks rail state", () => {
           ? Promise.resolve({ task: { ...running, prompt: "Audit the background task UI" } })
           : Promise.resolve({ tasks: [running] }),
     });
-    createBackgroundTasksProps(host, openSession);
+    createBackgroundTasksProps(host);
     await flushAsync();
 
-    createBackgroundTasksProps(host, openSession).onSelectTask(running);
+    createBackgroundTasksProps(host).onSelectTask(running);
     await flushAsync();
 
     expect(request).toHaveBeenCalledWith("tasks.get", { taskId: "task-1" });
-    const props = createBackgroundTasksProps(host, openSession);
-    expect(props.selectedTaskId).toBe("task-1");
+    const props = createBackgroundTasksProps(host);
+    expect(props.view).toEqual({ kind: "detail", taskId: "task-1" });
     expect(props.taskDetails.get("task-1")?.prompt).toBe("Audit the background task UI");
 
-    props.onBackToList();
-    expect(createBackgroundTasksProps(host, openSession).selectedTaskId).toBeNull();
+    props.onBack();
+    expect(createBackgroundTasksProps(host).view).toEqual({ kind: "list" });
   });
+
+  it("loads a task transcript in the rail and returns to its originating detail", async () => {
+    const task = makeTask({
+      id: "task-1",
+      runtime: "cli",
+      sessionKey: "agent:main:cli:fallback",
+      childSessionKey: "agent:main:cli:child",
+    });
+    const { host, request } = createHost({
+      request: (method) => {
+        if (method === "chat.history") {
+          return Promise.resolve({
+            messages: [
+              { role: "assistant", content: [{ type: "text", text: "CLI result" }] },
+              { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+            ],
+          });
+        }
+        return Promise.resolve({ tasks: [task] });
+      },
+    });
+    createBackgroundTasksProps(host);
+    await flushAsync();
+
+    const props = createBackgroundTasksProps(host);
+    props.onSelectTask(task);
+    props.onOpenTranscript(task, "detail");
+    expect(createBackgroundTasksProps(host).view).toMatchObject({
+      kind: "transcript",
+      taskId: "task-1",
+      sessionKey: "agent:main:cli:child",
+      returnTo: "detail",
+      load: { status: "loading" },
+    });
+    await flushAsync();
+
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "agent:main:cli:child",
+      limit: CHAT_HISTORY_REQUEST_LIMIT,
+    });
+    const loaded = createBackgroundTasksProps(host).view;
+    expect(loaded.kind).toBe("transcript");
+    if (loaded.kind !== "transcript") {
+      throw new Error("expected transcript view");
+    }
+    expect(loaded.load).toMatchObject({ status: "loaded" });
+    expect(loaded.load.status === "loaded" ? loaded.load.messages : []).toHaveLength(1);
+
+    createBackgroundTasksProps(host).onBack();
+    expect(createBackgroundTasksProps(host).view).toEqual({ kind: "detail", taskId: "task-1" });
+  });
+
+  it.each(["detail", "transcript"] as const)(
+    "returns a stale %s view to the list when refresh omits its task",
+    async (view) => {
+      const task = makeTask({
+        id: "task-1",
+        runtime: "cli",
+        sessionKey: "agent:main:cli:late",
+      });
+      let listCall = 0;
+      let resolveView: ((value: unknown) => void) | undefined;
+      const viewResponse = new Promise<unknown>((resolve) => {
+        resolveView = resolve;
+      });
+      const { host } = createHost({
+        request: (method) => {
+          if (method === "tasks.get" || method === "chat.history") {
+            return viewResponse;
+          }
+          listCall += 1;
+          return Promise.resolve({ tasks: listCall <= 2 ? [task] : [] });
+        },
+      });
+      createBackgroundTasksProps(host);
+      await flushAsync();
+
+      const props = createBackgroundTasksProps(host);
+      if (view === "detail") {
+        props.onSelectTask(task);
+      } else {
+        props.onOpenTranscript(task, "list");
+      }
+      createBackgroundTasksProps(host).onRefresh();
+      await flushAsync();
+      expect(createBackgroundTasksProps(host).tasks).toEqual([]);
+      expect(createBackgroundTasksProps(host).view).toEqual({ kind: "list" });
+
+      resolveView?.(
+        view === "detail"
+          ? { task: { ...task, prompt: "Late task detail" } }
+          : { messages: [{ role: "assistant", content: "Late transcript" }] },
+      );
+      await flushAsync();
+
+      expect(createBackgroundTasksProps(host).view).toEqual({ kind: "list" });
+    },
+  );
 
   it("moves focus into task details and restores it to the selected row", async () => {
     const running = makeTask({ id: "task-1", progressSummary: "Reading files" });
@@ -222,21 +370,18 @@ describe("background tasks rail state", () => {
           ? Promise.resolve({ task: completed })
           : Promise.resolve({ tasks: [running] }),
     });
-    createBackgroundTasksProps(host, openSession);
+    createBackgroundTasksProps(host);
     await flushAsync();
 
     const container = document.createElement("div");
     document.body.append(container);
     const renderRail = () => {
-      render(
-        html`${renderBackgroundTasksRail(createBackgroundTasksProps(host, openSession))}`,
-        container,
-      );
+      render(html`${renderBackgroundTasksRail(createBackgroundTasksProps(host))}`, container);
     };
     host.requestUpdate = renderRail;
     // finishedCollapsed defaults to true; back-navigation from a finished
     // detail must expand the section so the returned-to row stays visible.
-    const initialProps = createBackgroundTasksProps(host, openSession);
+    const initialProps = createBackgroundTasksProps(host);
     initialProps.onToggleCollapsed();
     renderRail();
 
@@ -252,7 +397,7 @@ describe("background tasks rail state", () => {
     back?.click();
     await flushAnimationFrame();
 
-    expect(createBackgroundTasksProps(host, openSession).finishedCollapsed).toBe(false);
+    expect(createBackgroundTasksProps(host).finishedCollapsed).toBe(false);
     expect(
       container.querySelector('[data-tasks-section="finished"] [data-task-id="task-1"]'),
     ).not.toBeNull();
@@ -276,13 +421,13 @@ describe("background tasks rail state", () => {
           ? Promise.resolve({ task: completed })
           : Promise.resolve({ tasks: [running] }),
     });
-    createBackgroundTasksProps(host, openSession);
+    createBackgroundTasksProps(host);
     await flushAsync();
 
-    createBackgroundTasksProps(host, openSession).onSelectTask(running);
+    createBackgroundTasksProps(host).onSelectTask(running);
     await flushAsync();
 
-    const props = createBackgroundTasksProps(host, openSession);
+    const props = createBackgroundTasksProps(host);
     expect(props.tasks?.map((task) => [task.id, task.status])).toEqual([["task-1", "completed"]]);
     expect(props.taskDetails.get("task-1")?.terminalSummary).toBe("Finished in lookup");
   });
@@ -317,17 +462,17 @@ describe("background tasks rail state", () => {
         return listCall === 3 ? active : recent;
       },
     });
-    createBackgroundTasksProps(host, openSession);
+    createBackgroundTasksProps(host);
     await flushAsync();
 
-    createBackgroundTasksProps(host, openSession).onRefresh();
-    createBackgroundTasksProps(host, openSession).onSelectTask(running);
+    createBackgroundTasksProps(host).onRefresh();
+    createBackgroundTasksProps(host).onSelectTask(running);
     await flushAsync();
     resolveActive?.({ tasks: [running] });
     resolveRecent?.({ tasks: [running] });
     await flushAsync();
 
-    const props = createBackgroundTasksProps(host, openSession);
+    const props = createBackgroundTasksProps(host);
     expect(props.tasks?.map((task) => [task.id, task.status])).toEqual([["task-1", "completed"]]);
     expect(props.taskDetails.get("task-1")).toMatchObject({
       status: "completed",
@@ -346,17 +491,17 @@ describe("background tasks rail state", () => {
       request: (method) =>
         method === "tasks.get" ? detail : Promise.resolve({ tasks: [running] }),
     });
-    createBackgroundTasksProps(host, openSession);
+    createBackgroundTasksProps(host);
     await flushAsync();
 
-    createBackgroundTasksProps(host, openSession).onSelectTask(running);
+    createBackgroundTasksProps(host).onSelectTask(running);
     handleBackgroundTasksEvent(host, { action: "deleted", taskId: "task-1" });
     resolveDetail?.({ task: { ...running, prompt: "Deleted task prompt" } });
     await flushAsync();
 
-    const props = createBackgroundTasksProps(host, openSession);
+    const props = createBackgroundTasksProps(host);
     expect(props.tasks).toEqual([]);
-    expect(props.selectedTaskId).toBeNull();
+    expect(props.view).toEqual({ kind: "list" });
     expect(props.taskDetails.has("task-1")).toBe(false);
   });
 });
@@ -366,7 +511,7 @@ describe("background tasks rail events", () => {
     const { host, request } = createHost({
       request: () => Promise.resolve({ tasks }),
     });
-    createBackgroundTasksProps(host, openSession).onToggleCollapsed();
+    createBackgroundTasksProps(host).onToggleCollapsed();
     await flushAsync();
     return { host, request };
   }
@@ -378,11 +523,11 @@ describe("background tasks rail events", () => {
       action: "upserted",
       task: makeTask({ id: "task-2", status: "completed", updatedAt: 9_000 }),
     });
-    let props = createBackgroundTasksProps(host, openSession);
+    let props = createBackgroundTasksProps(host);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-2", "task-1"]);
 
     handleBackgroundTasksEvent(host, { action: "deleted", taskId: "task-1" });
-    props = createBackgroundTasksProps(host, openSession);
+    props = createBackgroundTasksProps(host);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-2"]);
   });
 
@@ -403,7 +548,7 @@ describe("background tasks rail events", () => {
 
     handleBackgroundTasksEvent(host, { action: "upserted", task: correction });
 
-    expect(createBackgroundTasksProps(host, openSession).tasks).toEqual([correction]);
+    expect(createBackgroundTasksProps(host).tasks).toEqual([correction]);
   });
 
   it("does not roll back running tool activity from an equally current event", async () => {
@@ -423,7 +568,7 @@ describe("background tasks rail events", () => {
 
     handleBackgroundTasksEvent(host, { action: "upserted", task: stale });
 
-    expect(createBackgroundTasksProps(host, openSession).tasks).toEqual([progress]);
+    expect(createBackgroundTasksProps(host).tasks).toEqual([progress]);
   });
 
   it("preserves an opened prompt when a terminal event corrects its output", async () => {
@@ -446,14 +591,14 @@ describe("background tasks rail events", () => {
           ? Promise.resolve({ task: { ...completed, prompt } })
           : Promise.resolve({ tasks: [completed] }),
     });
-    createBackgroundTasksProps(host, openSession);
+    createBackgroundTasksProps(host);
     await flushAsync();
-    createBackgroundTasksProps(host, openSession).onSelectTask(completed);
+    createBackgroundTasksProps(host).onSelectTask(completed);
     await flushAsync();
 
     handleBackgroundTasksEvent(host, { action: "upserted", task: correction });
 
-    const props = createBackgroundTasksProps(host, openSession);
+    const props = createBackgroundTasksProps(host);
     expect(props.tasks?.[0]?.terminalSummary).toBe("Authoritative terminal details");
     expect(props.taskDetails.get("task-1")).toMatchObject({
       prompt,
@@ -469,7 +614,7 @@ describe("background tasks rail events", () => {
       task: makeTask({ id: "task-2", sessionKey: "agent:main:another-thread" }),
     });
 
-    const props = createBackgroundTasksProps(host, openSession);
+    const props = createBackgroundTasksProps(host);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
   });
 
@@ -485,7 +630,7 @@ describe("background tasks rail events", () => {
       },
     });
 
-    const props = createBackgroundTasksProps(host, openSession);
+    const props = createBackgroundTasksProps(host);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-owner", "task-1"]);
   });
 
@@ -514,9 +659,9 @@ describe("background tasks rail events", () => {
           ? Promise.resolve({ task: completed })
           : Promise.resolve({ tasks: [running] }),
     });
-    createBackgroundTasksProps(host, openSession);
+    createBackgroundTasksProps(host);
     await flushAsync();
-    createBackgroundTasksProps(host, openSession).onSelectTask(running);
+    createBackgroundTasksProps(host).onSelectTask(running);
     await flushAsync();
 
     handleBackgroundTasksEvent(host, {
@@ -524,7 +669,7 @@ describe("background tasks rail events", () => {
       task: makeTask({ id: "task-1", status: "running", updatedAt: 2_000 }),
     });
 
-    const props = createBackgroundTasksProps(host, openSession);
+    const props = createBackgroundTasksProps(host);
     expect(props.tasks?.[0]?.status).toBe("completed");
     expect(props.taskDetails.get("task-1")).toMatchObject({
       status: "completed",
@@ -535,52 +680,63 @@ describe("background tasks rail events", () => {
 });
 
 describe("background tasks rail rendering", () => {
+  it("renders explicit transcript loading, empty, and error states", () => {
+    const task = makeTask({ id: "task-1", runtime: "cli" });
+    const baseView = {
+      kind: "transcript" as const,
+      taskId: "task-1",
+      sessionKey: "agent:main:cli:task",
+      returnTo: "detail" as const,
+    };
+    const loading = renderTaskRail({
+      tasks: [task],
+      view: { ...baseView, load: { status: "loading" } },
+    });
+    expect(loading.textContent).toContain("Loading task transcript…");
+    expect(loading.querySelector(".chat-tasks-rail__back")?.getAttribute("aria-label")).toBe(
+      "Back to task details",
+    );
+
+    const empty = renderTaskRail({
+      tasks: [task],
+      view: { ...baseView, load: { status: "loaded", messages: [] } },
+    });
+    expect(empty.textContent).toContain("No transcript messages yet.");
+
+    const failed = renderTaskRail({
+      tasks: [task],
+      view: {
+        ...baseView,
+        load: { status: "error" },
+      },
+    });
+    expect(failed.textContent).toContain("Could not load task transcript.");
+  });
+
   it("keeps subagents in the rail and preserves linked sessions for other runtimes", () => {
     const onCancel = vi.fn();
-    const onOpenSession = vi.fn();
+    const onOpenTranscript = vi.fn();
     const onSelectTask = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksRail({
-        sessionKey: "agent:main:current",
-        statusRowId: "chat-tasks-status-test",
-        collapsed: false,
-        narrowLayout: false,
-        connected: true,
-        canCancel: true,
-        loading: false,
-        error: null,
-        tasks: [
-          makeTask({
-            id: "task-1",
-            taskId: "runtime-task-1",
-            childSessionKey: "agent:main:subagent:abc",
-          }),
-          makeTask({
-            id: "task-2",
-            status: "completed",
-            runtime: "cli",
-            title: "Finished work",
-            sessionKey: "agent:main:cli:finished",
-          }),
-        ],
-        cancellingTaskIds: new Set(),
-        finishedCollapsed: false,
-        selectedTaskId: null,
-        taskDetails: new Map(),
-        taskDetailErrors: new Map(),
-        taskDetailLoadingIds: new Set(),
-        onToggleCollapsed: () => {},
-        onToggleFinished: () => {},
-        onRefresh: () => {},
-        onCancel,
-        onSelectTask,
-        onBackToList: () => {},
-        onOpenSession,
-      })}`,
-      container,
-    );
+    const container = renderTaskRail({
+      canCancel: true,
+      tasks: [
+        makeTask({
+          id: "task-1",
+          taskId: "runtime-task-1",
+          childSessionKey: "agent:main:subagent:abc",
+        }),
+        makeTask({
+          id: "task-2",
+          status: "completed",
+          runtime: "cli",
+          title: "Finished work",
+          sessionKey: "agent:main:cli:finished",
+        }),
+      ],
+      onCancel,
+      onSelectTask,
+      onOpenTranscript,
+    });
 
     const rows = container.querySelectorAll(".chat-tasks-rail__task");
     expect(rows.length).toBe(2);
@@ -600,50 +756,27 @@ describe("background tasks rail rendering", () => {
     );
     expect(transcript).not.toBeNull();
     transcript?.click();
-    expect(onOpenSession).toHaveBeenCalledWith("agent:main:cli:finished");
+    expect(onOpenTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "task-2" }),
+      "list",
+    );
     expect(onSelectTask).not.toHaveBeenCalled();
   });
 
   it("shows live tool activity for running tasks and duration for finished tasks", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksRail({
-        sessionKey: "agent:main:current",
-        statusRowId: "chat-tasks-status-test",
-        collapsed: false,
-        narrowLayout: false,
-        connected: true,
-        canCancel: false,
-        loading: false,
-        error: null,
-        tasks: [
-          makeTask({ id: "task-1", toolUseCount: 12, lastToolName: "read" }),
-          makeTask({
-            id: "task-2",
-            status: "completed",
-            startedAt: 1_000,
-            endedAt: 66_000,
-            updatedAt: 70_000,
-            toolUseCount: 1,
-          }),
-        ],
-        cancellingTaskIds: new Set(),
-        finishedCollapsed: false,
-        selectedTaskId: null,
-        taskDetails: new Map(),
-        taskDetailErrors: new Map(),
-        taskDetailLoadingIds: new Set(),
-        onToggleCollapsed: () => {},
-        onToggleFinished: () => {},
-        onRefresh: () => {},
-        onCancel: () => {},
-        onSelectTask: () => {},
-        onBackToList: () => {},
-        onOpenSession: () => {},
-      })}`,
-      container,
-    );
+    const container = renderTaskRail({
+      tasks: [
+        makeTask({ id: "task-1", toolUseCount: 12, lastToolName: "read" }),
+        makeTask({
+          id: "task-2",
+          status: "completed",
+          startedAt: 1_000,
+          endedAt: 66_000,
+          updatedAt: 70_000,
+          toolUseCount: 1,
+        }),
+      ],
+    });
 
     const running = container.querySelector('[data-task-id="task-1"]');
     expect(running?.textContent).toContain("12 tool uses");
@@ -657,57 +790,47 @@ describe("background tasks rail rendering", () => {
   });
 
   it("opens a compact task detail view with prompt, output, and back navigation", () => {
-    const onBackToList = vi.fn();
+    const onBack = vi.fn();
+    const onOpenTranscript = vi.fn();
     const task = makeTask({
       id: "task-1",
+      runtime: "cli",
+      sessionKey: "agent:main:cli:audit",
       status: "completed",
       terminalSummary: "Audit complete",
     });
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksRail({
-        sessionKey: "agent:main:current",
-        statusRowId: "chat-tasks-status-test",
-        collapsed: false,
-        narrowLayout: false,
-        connected: true,
-        canCancel: false,
-        loading: false,
-        error: null,
-        tasks: [task],
-        cancellingTaskIds: new Set(),
-        finishedCollapsed: false,
-        selectedTaskId: "task-1",
-        taskDetails: new Map([
-          [
-            "task-1",
-            { ...task, terminalSummary: "Stale running progress", prompt: "Review running tasks" },
-          ],
-        ]),
-        taskDetailErrors: new Map(),
-        taskDetailLoadingIds: new Set(),
-        onToggleCollapsed: () => {},
-        onToggleFinished: () => {},
-        onRefresh: () => {},
-        onCancel: () => {},
-        onSelectTask: () => {},
-        onBackToList,
-        onOpenSession: () => {},
-      })}`,
-      container,
-    );
+    const container = renderTaskRail({
+      tasks: [task],
+      view: { kind: "detail", taskId: "task-1" },
+      taskDetails: new Map([
+        [
+          "task-1",
+          { ...task, terminalSummary: "Stale running progress", prompt: "Review running tasks" },
+        ],
+      ]),
+      onBack,
+      onOpenTranscript,
+    });
 
     const detail = container.querySelector('[data-task-detail="task-1"]');
     expect(detail?.textContent).toContain("Review running tasks");
     expect(detail?.textContent).toContain("Audit complete");
     expect(detail?.textContent).not.toContain("Stale running progress");
     expect(container.querySelector(".chat-tasks-rail__task")).toBeNull();
+    const transcript = container.querySelector<HTMLButtonElement>(
+      ".chat-tasks-rail__task-transcript",
+    );
+    expect(transcript).not.toBeNull();
+    transcript?.click();
+    expect(onOpenTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "task-1" }),
+      "detail",
+    );
 
     const back = container.querySelector<HTMLButtonElement>(".chat-tasks-rail__back");
     expect(back?.getAttribute("aria-label")).toBe("Back to background tasks");
     back?.click();
-    expect(onBackToList).toHaveBeenCalledTimes(1);
+    expect(onBack).toHaveBeenCalledTimes(1);
   });
 
   it("uses a newer lookup snapshot for output", () => {
@@ -724,35 +847,11 @@ describe("background tasks rail rendering", () => {
       terminalSummary: "Finished in lookup",
       prompt: "Review running tasks",
     });
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksRail({
-        sessionKey: "agent:main:current",
-        statusRowId: "chat-tasks-status-test",
-        collapsed: false,
-        narrowLayout: false,
-        connected: true,
-        canCancel: false,
-        loading: false,
-        error: null,
-        tasks: [listTask],
-        cancellingTaskIds: new Set(),
-        finishedCollapsed: false,
-        selectedTaskId: "task-1",
-        taskDetails: new Map([["task-1", lookupTask]]),
-        taskDetailErrors: new Map(),
-        taskDetailLoadingIds: new Set(),
-        onToggleCollapsed: () => {},
-        onToggleFinished: () => {},
-        onRefresh: () => {},
-        onCancel: () => {},
-        onSelectTask: () => {},
-        onBackToList: () => {},
-        onOpenSession: () => {},
-      })}`,
-      container,
-    );
+    const container = renderTaskRail({
+      tasks: [listTask],
+      view: { kind: "detail", taskId: "task-1" },
+      taskDetails: new Map([["task-1", lookupTask]]),
+    });
 
     const detail = container.querySelector('[data-task-detail="task-1"]');
     expect(detail?.textContent).toContain("Finished in lookup");
@@ -760,35 +859,10 @@ describe("background tasks rail rendering", () => {
   });
 
   it("collapses the finished section", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksRail({
-        sessionKey: "agent:main:current",
-        statusRowId: "chat-tasks-status-test",
-        collapsed: false,
-        narrowLayout: false,
-        connected: true,
-        canCancel: false,
-        loading: false,
-        error: null,
-        tasks: [makeTask({ id: "task-2", status: "completed" })],
-        cancellingTaskIds: new Set(),
-        finishedCollapsed: true,
-        selectedTaskId: null,
-        taskDetails: new Map(),
-        taskDetailErrors: new Map(),
-        taskDetailLoadingIds: new Set(),
-        onToggleCollapsed: () => {},
-        onToggleFinished: () => {},
-        onRefresh: () => {},
-        onCancel: () => {},
-        onSelectTask: () => {},
-        onBackToList: () => {},
-        onOpenSession: () => {},
-      })}`,
-      container,
-    );
+    const container = renderTaskRail({
+      tasks: [makeTask({ id: "task-2", status: "completed" })],
+      finishedCollapsed: true,
+    });
 
     expect(container.querySelectorAll(".chat-tasks-rail__task").length).toBe(0);
     expect(
@@ -798,49 +872,14 @@ describe("background tasks rail rendering", () => {
 });
 
 describe("running-tasks status row", () => {
-  function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksProps {
-    return {
-      sessionKey: "agent:main:current",
-      statusRowId: "chat-tasks-status-test",
-      collapsed: true,
-      narrowLayout: false,
-      connected: true,
-      canCancel: false,
-      loading: false,
-      error: null,
-      tasks: null,
-      cancellingTaskIds: new Set(),
-      finishedCollapsed: false,
-      selectedTaskId: null,
-      taskDetails: new Map(),
-      taskDetailErrors: new Map(),
-      taskDetailLoadingIds: new Set(),
-      onToggleCollapsed: () => {},
-      onToggleFinished: () => {},
-      onRefresh: () => {},
-      onCancel: () => {},
-      onSelectTask: () => {},
-      onBackToList: () => {},
-      onOpenSession: () => {},
-      ...overrides,
-    };
-  }
-
   it("ticks from the oldest active start and counts only active tasks", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({
-          tasks: [
-            makeTask({ id: "t1", startedAt: 9_000 }),
-            makeTask({ id: "t2", status: "queued", startedAt: undefined, createdAt: 4_000 }),
-            makeTask({ id: "t3", status: "completed", startedAt: 100 }),
-          ],
-        }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      tasks: [
+        makeTask({ id: "t1", startedAt: 9_000 }),
+        makeTask({ id: "t2", status: "queued", startedAt: undefined, createdAt: 4_000 }),
+        makeTask({ id: "t3", status: "completed", startedAt: 100 }),
+      ],
+    });
 
     const elapsed = container.querySelector<HTMLElement & { startMs: number | null }>(
       "openclaw-elapsed-time",
@@ -853,17 +892,10 @@ describe("running-tasks status row", () => {
 
   it("renders count, ticking elapsed time, and opens the collapsed rail", () => {
     const onToggleCollapsed = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({
-          tasks: [makeTask({ id: "t1", startedAt: 9_000 })],
-          onToggleCollapsed,
-        }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      tasks: [makeTask({ id: "t1", startedAt: 9_000 })],
+      onToggleCollapsed,
+    });
 
     const row = container.querySelector(".chat-tasks-status");
     expect(row).not.toBeNull();
@@ -879,18 +911,11 @@ describe("running-tasks status row", () => {
 
   it("pluralizes the label and leaves an open rail alone", () => {
     const onToggleCollapsed = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({
-          collapsed: false,
-          tasks: [makeTask({ id: "t1" }), makeTask({ id: "t2", status: "queued" })],
-          onToggleCollapsed,
-        }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      collapsed: false,
+      tasks: [makeTask({ id: "t1" }), makeTask({ id: "t2", status: "queued" })],
+      onToggleCollapsed,
+    });
 
     const link = container.querySelector<HTMLButtonElement>(".chat-tasks-status__link");
     expect(link?.textContent?.trim()).toBe("2 running tasks");
@@ -899,23 +924,16 @@ describe("running-tasks status row", () => {
   });
 
   it("anchors a hover preview of the latest tasks, active first, capped at five", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({
-          tasks: [
-            makeTask({ id: "a1", title: "Active one", updatedAt: 9_000 }),
-            makeTask({ id: "a2", status: "queued", title: "Queued two", updatedAt: 8_000 }),
-            makeTask({ id: "f1", status: "completed", title: "Finished one", updatedAt: 7_000 }),
-            makeTask({ id: "f2", status: "failed", title: "Finished two", updatedAt: 6_000 }),
-            makeTask({ id: "f3", status: "completed", title: "Finished three", updatedAt: 5_000 }),
-            makeTask({ id: "f4", status: "completed", title: "Finished four", updatedAt: 4_000 }),
-          ],
-        }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      tasks: [
+        makeTask({ id: "a1", title: "Active one", updatedAt: 9_000 }),
+        makeTask({ id: "a2", status: "queued", title: "Queued two", updatedAt: 8_000 }),
+        makeTask({ id: "f1", status: "completed", title: "Finished one", updatedAt: 7_000 }),
+        makeTask({ id: "f2", status: "failed", title: "Finished two", updatedAt: 6_000 }),
+        makeTask({ id: "f3", status: "completed", title: "Finished three", updatedAt: 5_000 }),
+        makeTask({ id: "f4", status: "completed", title: "Finished four", updatedAt: 4_000 }),
+      ],
+    });
 
     const preview = container.querySelector("openclaw-tooltip.chat-tasks-status__preview");
     expect(preview?.firstElementChild?.classList.contains("chat-tasks-status__link")).toBe(true);
@@ -937,40 +955,26 @@ describe("running-tasks status row", () => {
   });
 
   it("sizes the preview to the task list without an overflow line", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({ tasks: [makeTask({ id: "t1", title: "Only task" })] }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      tasks: [makeTask({ id: "t1", title: "Only task" })],
+    });
 
     expect(container.querySelectorAll(".chat-tasks-preview__row").length).toBe(1);
     expect(container.querySelector(".chat-tasks-preview__more")).toBeNull();
   });
 
   it("renders nothing without active tasks", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({ tasks: [makeTask({ id: "t1", status: "completed" })] }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      tasks: [makeTask({ id: "t1", status: "completed" })],
+    });
     expect(container.querySelector(".chat-tasks-status")).toBeNull();
   });
 
   it("hides the stale snapshot while disconnected", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    render(
-      html`${renderBackgroundTasksStatusRow(
-        makeProps({ connected: false, tasks: [makeTask({ id: "t1" })] }),
-      )}`,
-      container,
-    );
+    const container = renderStatusRow({
+      connected: false,
+      tasks: [makeTask({ id: "t1" })],
+    });
     expect(container.querySelector(".chat-tasks-status")).toBeNull();
   });
 });

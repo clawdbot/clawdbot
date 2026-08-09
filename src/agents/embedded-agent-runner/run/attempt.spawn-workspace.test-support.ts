@@ -78,7 +78,6 @@ type SessionManagerMocks = {
   flushPendingPersistence: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
-  mergePromptReleasedSessionEntries: UnknownMock;
   reloadPersistedTranscript: UnknownMock;
   clearNextUserMessagePersistenceSuppression: UnknownMock;
   removeTrailingEntries: UnknownMock;
@@ -250,7 +249,6 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     flushPendingPersistence: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
-    mergePromptReleasedSessionEntries: vi.fn(),
     reloadPersistedTranscript: vi.fn(),
     clearNextUserMessagePersistenceSuppression: vi.fn(),
     removeTrailingEntries: vi.fn(() => 0),
@@ -466,6 +464,8 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
 
 vi.mock("../../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: () => undefined,
+  resolveModelOverridePolicy: () => undefined,
+  setTtsMachinePrefsPathResolver: () => undefined,
 }));
 
 vi.mock("../../bootstrap-files.js", async () => {
@@ -618,8 +618,7 @@ vi.mock("../../system-prompt-params.js", () => ({
   buildSystemPromptParams: () => ({
     runtimeInfo: {},
     userTimezone: "UTC",
-    userTime: "00:00",
-    userTimeFormat: "24h",
+    userDate: "2026-01-05",
   }),
 }));
 
@@ -745,7 +744,8 @@ vi.mock("../../model-auth.js", () => ({
   resolveModelAuthMode: () => undefined,
 }));
 
-vi.mock("../../model-tool-support.js", () => ({
+vi.mock("../../model-tool-support.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../model-tool-support.js")>()),
   supportsModelTools: (...args: unknown[]) => hoisted.supportsModelToolsMock(...args),
 }));
 
@@ -967,6 +967,9 @@ type MutableSession = {
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: unknown[]) => Promise<unknown>;
     transport?: string;
+    subscribe?: (
+      listener: (event: unknown, signal: AbortSignal) => Promise<void> | void,
+    ) => () => void;
     reset: () => void;
     state: {
       messages: unknown[];
@@ -987,6 +990,7 @@ type MutableSession = {
     },
     options?: { deliverAs?: "nextTurn"; triggerTurn?: boolean },
   ) => Promise<void>;
+  getActiveToolNames: () => string[];
   setActiveToolsByName: (toolNames: string[]) => void;
   abort: () => Promise<void>;
   dispose: () => void;
@@ -1133,7 +1137,6 @@ export function resetEmbeddedAttemptHarness(
   hoisted.sessionManager.appendSessionInfo.mockReset();
   hoisted.sessionManager.appendLabelChange.mockReset();
   hoisted.sessionManager.flushPendingPersistence.mockReset();
-  hoisted.sessionManager.mergePromptReleasedSessionEntries.mockReset();
   hoisted.sessionManager.reloadPersistedTranscript.mockReset();
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
@@ -1157,6 +1160,7 @@ export function createDefaultEmbeddedSession(params?: {
     options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
   ) => Promise<void>;
 }): MutableSession {
+  let activeToolNames: string[] = [];
   let pendingPrompt:
     | {
         prompt: string;
@@ -1191,6 +1195,9 @@ export function createDefaultEmbeddedSession(params?: {
       reset: () => {
         session.messages = [];
       },
+      // Production cleanup hooks subscribe for lifecycle events; the default
+      // session double never emits them.
+      subscribe: () => () => {},
       state: {
         get messages() {
           return session.messages;
@@ -1200,7 +1207,10 @@ export function createDefaultEmbeddedSession(params?: {
         },
       },
     },
-    setActiveToolsByName: () => {},
+    getActiveToolNames: () => [...activeToolNames],
+    setActiveToolsByName: (toolNames) => {
+      activeToolNames = [...toolNames];
+    },
     setBaseSystemPrompt: (systemPrompt) => {
       session.agent.state.systemPrompt = systemPrompt;
     },

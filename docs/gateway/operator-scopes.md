@@ -31,7 +31,7 @@ require the `node` role.
 
 | Scope                   | Meaning                                                                                                                                                       |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operator.read`         | Read-only status, lists, catalog, logs, session reads, and other non-mutating calls.                                                                          |
+| `operator.read`         | Read-only status, lists, catalog, logs, session reads, retained audit and execution-identity diagnostics, and other non-mutating calls.                       |
 | `operator.write`        | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                |
 | `operator.admin`        | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals. |
 | `operator.pairing`      | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                            |
@@ -52,11 +52,17 @@ dispatch so authorization failures have one canonical structured response:
 - `agent` needs `operator.write` for ordinary turns and `operator.admin` for
   `/new` or `/reset` session lifecycle commands.
 - `node.invoke` needs `operator.write` for ordinary relay commands and
-  `operator.admin` for `browser.proxy`, `fs.listDir`, and `terminal.upload`.
+  `operator.admin` for `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`,
+  and `terminal.upload`.
 - `talk.config` needs `operator.read`; `includeSecrets: true` also needs
   `operator.talk.secrets`.
 - `talk.client.*`, `talk.session.*`, `talk.speak`, and `talk.mode` need
   `operator.talk` (or the compatible broader `operator.write`).
+- `sessions.patch` needs `operator.write` for session organization fields and
+  the per-session `model` override. Other runtime overrides, including
+  thinking, fast, verbose, trace, and reasoning levels, need `operator.admin`.
+  Persisting a selected model as the configured agent default is also
+  admin-only.
 
 Some handlers then apply stricter checks based on the concrete thing being
 approved or mutated:
@@ -77,12 +83,27 @@ independent of the connecting client's `client.id` or `client.mode`. Client
 identity can still affect connection and device-auth policy, but it neither
 grants nor removes session mutation authority.
 
+`audit.run.inspect` intentionally uses `operator.read`. Every client with that
+scope in a Gateway operator domain may receive the retained execution-identity
+context, including bounded pseudonymized references and secret-redacted display
+labels. `operator.read` is not a per-user or hostile multi-tenant privacy
+boundary. Operators who must keep this data separate need separate Gateway
+trust domains.
+
 ## Device pairing approvals
 
 Device pairing records are the durable source of approved roles and scopes.
 An already-paired device does not get broader access silently: a reconnect
 that asks for a broader role or broader scopes creates a new pending upgrade
 request.
+
+The explicit exception is the administrator-capable Control UI owner profile
+issued directly on the Gateway host by `openclaw dashboard` or graphical
+onboarding. Its short-lived, single-use bootstrap can approve the exact closed
+scope set for a fresh browser or upgrade an existing limited credential only
+when it binds to that same signed browser keypair. Generic Control UI and
+Telegram handoffs, mobile setup profiles, shared credentials, locality, and
+caller-selected scopes do not receive this exception.
 
 Approving a device request:
 
@@ -118,11 +139,11 @@ stores relate.
 `node.pair.approve` derives extra required scopes from the pending request's
 command list:
 
-| Declared commands                                                                                                    | Required scopes                       |
-| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| none                                                                                                                 | `operator.pairing`                    |
-| ordinary node commands                                                                                               | `operator.pairing` + `operator.write` |
-| `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
+| Declared commands                                                                                                                               | Required scopes                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| none                                                                                                                                            | `operator.pairing`                    |
+| ordinary node commands                                                                                                                          | `operator.pairing` + `operator.write` |
+| `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
 
 Approving a node declaration records its command surface. For `computer.act`,
 the node advertises that surface only after Computer Control is enabled locally;

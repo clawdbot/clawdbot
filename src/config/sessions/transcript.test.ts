@@ -43,7 +43,7 @@ import {
   readRecentUserAssistantTextForSession,
   readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 type SessionEntryFixture = Partial<SessionEntry> & { channel?: string };
 
@@ -55,12 +55,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       fs.mkdirSync(sessionsDir, { recursive: true });
       const storePath = path.join(sessionsDir, "sessions.json");
       await replaceSessionEntry(
-        { sessionKey: "warm", storePath },
+        { sessionKey: "agent:main:warm", storePath },
         { sessionId: "warm-session", chatType: "direct", updatedAt: 1 },
       );
       await appendAssistantMessageToSessionTranscript({
         agentId: "main",
-        sessionKey: "warm",
+        sessionKey: "agent:main:warm",
         text: "warm",
         storePath,
       });
@@ -325,6 +325,33 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("persists reply text alongside media names in SQLite", async () => {
+    await writeTranscriptStore();
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Revenue fell 12% quarter over quarter.",
+      mediaUrls: ["https://example.com/files/chart-q3.png?token=secret"],
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    const events = await loadFixtureMessages();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Revenue fell 12% quarter over quarter.\nchart-q3.png",
+            },
+          ],
+        }),
+      }),
+    );
+  });
+
   it("advances the session registry marker after managed transcript appends", async () => {
     const updatedAt = Date.parse("2026-05-18T09:00:00.000Z");
     const appendedAt = Date.parse("2026-05-18T09:05:00.000Z");
@@ -436,6 +463,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           sessionKey,
           storePath: fixture.storePath(),
         },
+        assertOwned: () => undefined,
         withSessionWriteLock: async (run) => {
           events.push("lock");
           return await run();
@@ -465,6 +493,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       {
         sessionFile: oldSessionFile,
         sessionKey,
+        assertOwned: () => undefined,
         withSessionWriteLock: async (run) => {
           events.push("lock");
           return await run();
@@ -503,6 +532,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           sessionFile: ownerTarget.sessionKey,
           sessionKey: ownerTarget.sessionKey,
           sessionTarget: ownerTarget,
+          assertOwned: () => undefined,
           withSessionWriteLock: async (run) => {
             events.push("lock");
             return await run();
@@ -534,6 +564,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       {
         sessionFile,
         sessionKey,
+        assertOwned: () => undefined,
         withSessionWriteLock: async (run) => {
           events.push("lock");
           return await run();
@@ -550,40 +581,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result).toBe("ok");
     expect(events).toEqual(["lock", "write"]);
-  });
-
-  it("appends to legacy lowercase Signal group session entries", async () => {
-    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
-    const signalSessionKey = `agent:main:signal:group:${mixedGroupId}`;
-    const legacySignalSessionKey = signalSessionKey.toLowerCase();
-    await writeTranscriptSessionEntry({
-      sessionKey: legacySignalSessionKey,
-      entry: {
-        sessionId,
-        chatType: "group",
-        channel: "signal",
-      },
-    });
-
-    const result = await appendAssistantMessageToSessionTranscript({
-      sessionKey: signalSessionKey,
-      text: "Hello Signal group",
-      storePath: fixture.storePath(),
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      const events = await loadFixtureMessages({
-        sessionKey: legacySignalSessionKey,
-      });
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          message: expect.objectContaining({
-            content: [{ type: "text", text: "Hello Signal group" }],
-          }),
-        }),
-      );
-    }
   });
 
   it("uses SQLite identity for malformed persisted sessionFile metadata", async () => {
@@ -1962,6 +1959,63 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       ok: false,
       code: "session-rebound",
     });
+  });
+
+  it("rejects a superseded writer claim and accepts the admitted writer", async () => {
+    await writeTranscriptStore({
+      activeWriterRunId: "run-a",
+      lifecycleRevision: "owned-revision",
+    } as InternalSessionEntry);
+    let releaseWriterChange = () => {};
+    const writerChangeGate = new Promise<void>((resolve) => {
+      releaseWriterChange = resolve;
+    });
+    let markWriterChangeStarted = () => {};
+    const writerChangeStarted = new Promise<void>((resolve) => {
+      markWriterChangeStarted = resolve;
+    });
+    const writerChange = updateSessionEntry(
+      {
+        agentId: "main",
+        storePath: fixture.storePath(),
+        sessionKey,
+      },
+      async () => {
+        markWriterChangeStarted();
+        await writerChangeGate;
+        return { activeWriterRunId: "run-b" } as Partial<InternalSessionEntry>;
+      },
+    );
+    await writerChangeStarted;
+
+    const staleAppend = appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      expectedLifecycleRevision: "owned-revision",
+      expectedSessionId: sessionId,
+      expectedWriterRunId: "run-a",
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "late output" }),
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseWriterChange();
+
+    await writerChange;
+    await expect(staleAppend).resolves.toMatchObject({
+      ok: false,
+      code: "session-rebound",
+    });
+    await expect(
+      appendExactAssistantMessageToSessionTranscript({
+        sessionKey,
+        expectedLifecycleRevision: "owned-revision",
+        expectedSessionId: sessionId,
+        expectedWriterRunId: "run-b",
+        storePath: fixture.storePath(),
+        message: createExactAssistantMessage({ text: "current output" }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
   });
 
   it("dedupes concurrent exact assistant appends by idempotency key", async () => {

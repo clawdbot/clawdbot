@@ -38,7 +38,7 @@ describe("memory manager database publication", () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  it("lazily adds recall metadata columns before publishing to an existing database", async () => {
+  it("lazily adds recall metadata storage before publishing to an existing database", async () => {
     const targetPath = path.join(fixtureRoot, "target.sqlite");
     const sourcePath = path.join(fixtureRoot, "source.sqlite");
     const targetDb = new DatabaseSync(targetPath);
@@ -65,24 +65,16 @@ describe("memory manager database publication", () => {
       sourceDb
         .prepare(
           `INSERT INTO memory_index_chunks
-           (id, path, source, start_line, end_line, hash, model, text, embedding,
-            updated_at, importance, triggers)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(
-          "new",
-          "MEMORY.md",
-          "memory",
-          1,
-          1,
-          "hash",
-          "model",
-          "body",
-          "[]",
-          1,
-          9,
-          "when flying",
-        );
+        .run("new", "MEMORY.md", "memory", 1, 1, "hash", "model", "body", "[]", 1);
+      sourceDb
+        .prepare(
+          `INSERT INTO memory_index_chunk_recall_metadata
+           (chunk_id, importance, triggers) VALUES (?, ?, ?)`,
+        )
+        .run("new", 9, "when flying");
       sourceDb.close();
 
       await publishMemoryDatabaseTables({
@@ -93,7 +85,9 @@ describe("memory manager database publication", () => {
       });
 
       expect(
-        targetDb.prepare("SELECT importance, triggers FROM memory_index_chunks").get(),
+        targetDb
+          .prepare("SELECT importance, triggers FROM memory_index_chunk_recall_metadata")
+          .get(),
       ).toEqual({ importance: 9, triggers: "when flying" });
     } finally {
       try {

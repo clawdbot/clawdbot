@@ -31,6 +31,7 @@ import {
   shouldRunControlUiI18nVerify,
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
+  shouldRunDoctorContractOwnerTests,
   shouldRunRuntimeSidecarBaselineCheck,
   shouldRunNpmLockGuard,
   shouldRunPluginSdkApiBaselineCheck,
@@ -300,7 +301,7 @@ describe("scripts/changed-lanes", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
+    expect(result.stderr).toContain("delegating through Crabbox workload routing");
     expect(result.stderr).not.toContain("ambiguous argument");
   });
 
@@ -334,7 +335,7 @@ describe("scripts/changed-lanes", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toContain("delegating to Blacksmith Testbox");
+    expect(result.stderr).toContain("delegating through Crabbox workload routing");
   });
 
   it.each([
@@ -348,7 +349,10 @@ describe("scripts/changed-lanes", () => {
       name: "rejects unknown changed check options before treating them as paths",
       script: "scripts/check-changed.mjs",
       option: "--dr-run",
-      expected: { stderr: "Unknown option: --dr-run", excludes: ["[check:changed]"] },
+      expected: {
+        stderr: "Unknown option: --dr-run\n[check:changed] FAILED (exit 1)",
+        excludes: [],
+      },
     },
   ])("$name", ({ script, option, expected }) => {
     const result = runRepoScript(script, [option], {
@@ -804,6 +808,48 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
+  it("keeps manifest-declared generated browser assets out of targeted extension lint", () => {
+    const generatedAsset = "extensions/browser/chrome-extension/modules/copilot-runtime.js";
+    const result = detectChangedLanes([
+      generatedAsset,
+      "packages/gateway-client/src/protocol-client.ts",
+    ]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expect(result.lanes.extensions).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:extensions");
+    expect(
+      plan.commands
+        .filter((command) => command.args[0] === "scripts/run-oxlint.mjs")
+        .flatMap((command) => command.args),
+    ).not.toContain(generatedAsset);
+  });
+
+  it("still lints extension source alongside its generated browser asset", () => {
+    const generatedAsset = "extensions/browser/chrome-extension/modules/copilot-runtime.js";
+    const source = "extensions/browser/scripts/copilot-runtime-entry.ts";
+    const result = detectChangedLanes([generatedAsset, source]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "lint extension changed file",
+        args: [
+          "scripts/run-oxlint.mjs",
+          "--tsconfig",
+          "config/tsconfig/oxlint.extensions.json",
+          source,
+        ],
+      }),
+    );
+    expect(
+      plan.commands
+        .filter((command) => command.args[0] === "scripts/run-oxlint.mjs")
+        .flatMap((command) => command.args),
+    ).not.toContain(generatedAsset);
+  });
+
   it.each([
     {
       owner: "core",
@@ -911,6 +957,7 @@ describe("scripts/changed-lanes", () => {
 
     expect(shouldRunControlUiI18nVerify(result.paths)).toBe(true);
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:ui:i18n");
+    expect(shouldRunControlUiI18nVerify(["ui/config/control-ui-locales.ts"])).toBe(true);
     expect(shouldRunControlUiI18nVerify(["scripts/lib/example.ts"])).toBe(false);
   });
 
@@ -1098,16 +1145,8 @@ describe("scripts/changed-lanes", () => {
     expect(buildChangedCheckCrabboxArgs(["--base", "origin/main", "--head", "HEAD"])).toEqual([
       "scripts/crabbox-wrapper.mjs",
       "run",
-      "--provider",
-      "blacksmith-testbox",
-      "--blacksmith-org",
-      "openclaw",
-      "--blacksmith-workflow",
-      ".github/workflows/ci-check-testbox.yml",
-      "--blacksmith-job",
-      "check",
-      "--blacksmith-ref",
-      "main",
+      "--workload",
+      "ci-fast",
       "--idle-timeout",
       "90m",
       "--ttl",
@@ -1421,6 +1460,7 @@ describe("scripts/changed-lanes", () => {
       "environment variable count ratchet",
       "max-lines suppression ratchet",
       "changelog attributions",
+      "doctor deprecation registry",
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
       "duplicate scan target coverage",
@@ -1601,6 +1641,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).toEqual([
       "check:no-conflict-markers",
       "check:changelog-attributions",
+      "check:doctor-deprecation-registry",
       "lint:extensions:no-guarded-wildcard-reexports",
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
@@ -1716,6 +1757,29 @@ describe("scripts/changed-lanes", () => {
           {
             name: "runtime sidecar owner test",
             args: ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
+          },
+        ],
+      },
+    },
+    {
+      name: "runs doctor contract owner tests for extension module and manifest changes",
+      predicate: shouldRunDoctorContractOwnerTests,
+      predicatePaths: [
+        "extensions/telegram/doctor-contract-api.ts",
+        "extensions/telegram/openclaw.plugin.json",
+        "extensions/codex/src/migration/session-binding-sidecars.ts",
+      ],
+      changedPath: "extensions/telegram/doctor-contract-api.ts",
+      expected: {
+        exact: [],
+        partial: [
+          {
+            name: "doctor contract declaration + closure guard tests",
+            args: [
+              "test:serial",
+              "src/plugins/doctor-contract-declarations.test.ts",
+              "src/plugins/doctor-contract-closure-guard.test.ts",
+            ],
           },
         ],
       },
@@ -1957,6 +2021,31 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
+  it("runs macOS CI tests for workspace rsync receiver owners", () => {
+    for (const changedPath of [
+      "src/worker/workspace-rsync-receiver.ts",
+      "src/gateway/worker-environments/workspace-sync.ts",
+      "src/gateway/worker-environments/workspace-sync-helpers.ts",
+      "src/gateway/worker-environments/workspace-accepted-sync.ts",
+      "src/gateway/worker-environments/workspace-accepted-remote-script.ts",
+      "src/gateway/worker-environments/workspace-mutation-remote-script.ts",
+      "src/gateway/worker-environments/workspace-rsync-path.test.ts",
+    ]) {
+      const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
+        env: { PATH: "/usr/bin" },
+        platform: "linux",
+        swiftlintAvailable: false,
+      });
+
+      expect(plan.commands).toContainEqual(
+        expect.objectContaining({
+          name: "macOS app CI tests",
+          args: ["test:macos:ci"],
+        }),
+      );
+    }
+  });
+
   it("runs the native state schema guard for either contract owner", () => {
     for (const changedPath of [
       "apps/shared/OpenClawKit/Sources/OpenClawNativeState/OpenClawNativeStateSQLite.swift",
@@ -2076,7 +2165,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
-        name: "Canvas A2UI native resource sync",
+        name: "Canvas A2UI native resource generation",
         bin: "node",
         args: ["scripts/sync-native-a2ui.mjs", "--check"],
       }),
@@ -2095,7 +2184,7 @@ describe("scripts/changed-lanes", () => {
     expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
-        name: "Canvas A2UI native resource sync",
+        name: "Canvas A2UI native resource generation",
         bin: "node",
         args: ["scripts/sync-native-a2ui.mjs", "--check"],
       }),
@@ -2114,7 +2203,26 @@ describe("scripts/changed-lanes", () => {
     expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
-        name: "Canvas A2UI native resource sync",
+        name: "Canvas A2UI native resource generation",
+        bin: "node",
+        args: ["scripts/sync-native-a2ui.mjs", "--check"],
+      }),
+    );
+  });
+
+  it.each([
+    "apps/android/app/build.gradle.kts",
+    "apps/ios/project.yml",
+    "apps/linux/src-tauri/build.rs",
+    "apps/linux/src-tauri/src/canvas.rs",
+  ])("checks native A2UI ownership when %s changes", (ownerPath) => {
+    const result = detectChangedLanes([ownerPath]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "Canvas A2UI native resource generation",
         bin: "node",
         args: ["scripts/sync-native-a2ui.mjs", "--check"],
       }),
@@ -2233,6 +2341,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
       { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
       {
         name: "guarded extension wildcard re-exports",
         args: ["lint:extensions:no-guarded-wildcard-reexports"],
@@ -2255,6 +2364,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands).toEqual([
       { name: "conflict markers", args: ["check:no-conflict-markers"] },
       { name: "changelog attributions", args: ["check:changelog-attributions"] },
+      { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
       {
         name: "guarded extension wildcard re-exports",
         args: ["lint:extensions:no-guarded-wildcard-reexports"],

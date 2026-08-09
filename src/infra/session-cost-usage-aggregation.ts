@@ -23,7 +23,7 @@ import {
   writeSessionCostUsageRollup,
 } from "./session-cost-usage-cache.sqlite.js";
 import {
-  listUsageCountedTranscriptFiles,
+  listUsageCountedTranscriptStats,
   resolveUsageCostTranscriptFile,
   type UsageCostTranscriptFile,
 } from "./session-cost-usage-collection.js";
@@ -590,7 +590,7 @@ export async function refreshCostUsageCacheForAgent(params: {
     const rows = readSessionCostUsageRollupRows(params.agentId, databasePath);
     const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
     const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, rows);
-    const discoveredFiles = await listUsageCountedTranscriptFiles(
+    const discoveredFiles = await listUsageCountedTranscriptStats(
       params.agentId,
       params.sessionsDir ? { sessionsDir: params.sessionsDir } : undefined,
     );

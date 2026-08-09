@@ -1,5 +1,9 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
   actionOpacity,
@@ -26,6 +30,8 @@ suite.define(() => {
     const parentKey = "agent:main:release-plan";
     const childOneKey = "agent:main:research-sources";
     const childTwoKey = "agent:main:verify-tests";
+    const staleRunningChildKey = "agent:main:stale-running";
+    const failedChildKey = "agent:main:failed-checks";
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -52,12 +58,34 @@ suite.define(() => {
                   startedAt: baseTime - 62_000,
                   status: "done",
                 }),
+                {
+                  ...sessionRow(staleRunningChildKey, "Stale activity", baseTime - 3_000, {
+                    hasActiveRun: false,
+                    spawnedBy: parentKey,
+                    startedAt: baseTime - 64_000,
+                    status: "running",
+                  }),
+                  runtimeMs: 61_000,
+                  runtimeSampledAt: baseTime,
+                },
+                {
+                  ...sessionRow(failedChildKey, "Failed checks", baseTime - 4_000, {
+                    endedAt: baseTime - 4_000,
+                    hasActiveRun: true,
+                    spawnedBy: parentKey,
+                    startedAt: baseTime - 64_000,
+                    status: "failed",
+                  }),
+                  lastReadAt: baseTime,
+                  runtimeMs: 60_000,
+                  runtimeSampledAt: baseTime,
+                },
               ]),
             },
             {
               response: sessionsListResponse([
                 sessionRow(parentKey, "Plan release", baseTime, {
-                  childSessions: [childOneKey, childTwoKey],
+                  childSessions: [childOneKey, childTwoKey, staleRunningChildKey, failedChildKey],
                 }),
               ]),
             },
@@ -74,9 +102,11 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session--child").count()).toBe(0);
       await captureUiProof(page, "child-sessions-collapsed.png");
 
-      await parent.getByRole("button", { name: "Show 2 child threads for Plan release" }).click();
+      await parent.getByRole("button", { name: "Show 4 child sessions for Plan release" }).click();
       await page.getByText("Research sources", { exact: true }).waitFor({ state: "visible" });
       await page.getByText("Verify tests", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("Stale activity", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("Failed checks", { exact: true }).waitFor({ state: "visible" });
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).some(
@@ -86,11 +116,28 @@ suite.define(() => {
         .toBe(true);
 
       const childRows = page.locator(".sidebar-recent-session--child");
-      await expect.poll(() => childRows.count()).toBe(2);
-      expect(await childRows.getByRole("button", { name: "Open thread menu" }).count()).toBe(0);
+      await expect.poll(() => childRows.count()).toBe(4);
+      expect(await childRows.getByRole("button", { name: "Open session menu" }).count()).toBe(0);
       await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
       await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
+
+      const staleRunningChild = page.locator(`[data-session-key="${staleRunningChildKey}"]`);
+      const failedChild = page.locator(`[data-session-key="${failedChildKey}"]`);
+      expect(await staleRunningChild.getByRole("img", { name: "Active run" }).count()).toBe(0);
+      expect(await failedChild.getByRole("img", { name: "Active run" }).count()).toBe(0);
+      await failedChild.getByRole("img", { name: "Failed" }).waitFor();
+      await expect.poll(() => childRows.getByRole("img", { name: "Active run" }).count()).toBe(1);
+
+      const childToggle = parent.locator(`[data-child-session-toggle="${parentKey}"]`);
+      expect(await childToggle.getAttribute("class")).toContain(
+        "sidebar-child-session-toggle--running",
+      );
+      for (const child of [staleRunningChild, failedChild]) {
+        expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
+        expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();
+      }
       await captureUiProof(page, "child-sessions-expanded.png");
+      await captureUiProof(page, "child-sessions-run-state-precedence.png");
 
       await childRows.nth(1).getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(childTwoKey));
@@ -146,7 +193,7 @@ suite.define(() => {
 
       const openSessionMenu = async () => {
         await row.hover();
-        await row.getByRole("button", { name: "Open thread menu" }).click();
+        await row.getByRole("button", { name: "Open session menu" }).click();
         await page
           .getByRole("menu", { name: "Actions for Research notes" })
           .waitFor({ state: "visible" });
@@ -257,6 +304,112 @@ suite.define(() => {
     }
   });
 
+  it("names session-row actions and tabs from their menu into the next visible session", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            "agent:main:research",
+            "Research notes",
+            Date.parse("2026-07-01T15:00:00.000Z"),
+          ),
+          sessionRow(
+            "agent:main:follow-up",
+            "Follow-up work",
+            Date.parse("2026-07-01T14:00:00.000Z"),
+          ),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const researchRow = page.locator('[data-session-key="agent:main:research"]');
+      const followUpRow = page.locator('[data-session-key="agent:main:follow-up"]');
+      const researchMenu = researchRow.getByRole("button", {
+        name: "Open session menu: Research notes",
+        exact: true,
+      });
+      await researchRow
+        .getByRole("button", { name: "Pin session: Research notes", exact: true })
+        .waitFor();
+      await followUpRow
+        .getByRole("button", { name: "Open session menu: Follow-up work", exact: true })
+        .waitFor();
+
+      await researchMenu.focus();
+      await page.keyboard.press("Enter");
+      const menu = page.getByRole("menu", { name: "Actions for Research notes" });
+      await menu.waitFor({ state: "visible" });
+
+      await page
+        .locator("openclaw-session-menu")
+        .getByRole("menuitem", { name: "Change icon" })
+        .click();
+      const iconPicker = page.getByRole("dialog", { name: "Change icon" });
+      await iconPicker.waitFor({ state: "visible" });
+      await expect
+        .poll(() => iconPicker.evaluate((element) => element.contains(document.activeElement)))
+        .toBe(true);
+      await page.keyboard.press("Tab");
+      await expect
+        .poll(() => iconPicker.evaluate((element) => element.contains(document.activeElement)))
+        .toBe(true);
+      await iconPicker.getByRole("button", { name: "Back" }).click();
+      await menu.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-session-menu")
+            .getByRole("menuitem", { name: "Change icon" })
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+      await page.keyboard.press("Tab");
+
+      await expect.poll(() => menu.count()).toBe(0);
+      await expect
+        .poll(() =>
+          followUpRow
+            .locator(".sidebar-recent-session__link")
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+
+      await researchRow.locator(".sidebar-recent-session__link").focus();
+      await page.keyboard.press("Shift+F10");
+      await menu.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-session-menu")
+            .getByRole("menuitem", { name: "Open chat" })
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+      await page.keyboard.press("Tab");
+
+      await expect.poll(() => menu.count()).toBe(0);
+      await expect
+        .poll(() =>
+          followUpRow
+            .locator(".sidebar-recent-session__link")
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps sidebar sessions visible through a same-client Gateway reconnect", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -285,12 +438,24 @@ suite.define(() => {
       await expect.poll(() => sidebarRows.count()).toBe(3);
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
-      await gateway.closeLatest(1006, "disconnect proof");
-      await gateway.deferNext("sessions.list");
-      await sidebarRow.waitFor({ state: "visible" });
+      const socketsBefore = await gateway.getSocketCount();
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      await expect.poll(() => sidebarRow.textContent()).toContain("Disconnect proof");
+      await expect.poll(() => sidebarRows.count()).toBe(3);
+      for (const otherKey of otherSessionKeys) {
+        await page
+          .locator(`.sidebar-recent-session[data-session-key="${otherKey}"]`)
+          .waitFor({ state: "visible" });
+      }
       await captureUiProof(page, "sidebar-sessions-during-reconnect.png");
 
-      await expect.poll(() => gateway.getSocketCount(), { timeout: 15_000 }).toBeGreaterThan(1);
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
+        .toBe(socketsBefore + 1);
+      await gateway.deferNext("sessions.list");
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
         .toBeGreaterThan(initialListCount);
@@ -312,6 +477,95 @@ suite.define(() => {
       await expect.poll(() => sidebarRow.textContent()).toContain("Reconnect refreshed");
       await expect.poll(() => sidebarRows.count()).toBe(3);
       await expectRequestCountStable(gateway, "sessions.list", firstReconnectListCount);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("retains the selected session and one observer while reconnecting across route changes", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const firstKey = "agent:main:reconnect-first";
+    const selectedKey = "agent:main:reconnect-selected";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow(firstKey, "First session", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(selectedKey, "Selected session", Date.parse("2026-07-01T15:59:00.000Z")),
+        ]),
+      },
+      sessionKey: firstKey,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstKey));
+      const firstRow = page.locator(`.sidebar-recent-session[data-session-key="${firstKey}"]`);
+      const selectedRow = page.locator(
+        `.sidebar-recent-session[data-session-key="${selectedKey}"]`,
+      );
+      await firstRow.waitFor({ state: "visible", timeout: 10_000 });
+      await selectedRow.waitFor({ state: "visible" });
+      await gateway.waitForRequest("sessions.subscribe");
+
+      await selectedRow.getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
+      await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
+      const initialObserverCount = (await gateway.getRequests("sessions.subscribe")).length;
+      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+
+      const socketsBefore = await gateway.getSocketCount();
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
+      await expect
+        .poll(() => gateway.getSocketCount(), { timeout: 15_000 })
+        .toBe(socketsBefore + 1);
+      await gateway.deferNext("sessions.subscribe");
+      await gateway.deferNext("sessions.list");
+      await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.subscribe")).length, {
+          timeout: 15_000,
+        })
+        .toBe(initialObserverCount + 1);
+
+      await firstRow.getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
+      await selectedRow.getByRole("link").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
+      expect(await gateway.getRequests("sessions.subscribe")).toHaveLength(
+        initialObserverCount + 1,
+      );
+
+      await gateway.resolveDeferred("sessions.subscribe", { subscribed: true });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
+        .toBeGreaterThan(initialListCount);
+      await gateway.resolveDeferred(
+        "sessions.list",
+        sessionsListResponse([
+          sessionRow(firstKey, "First session", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            selectedKey,
+            "Selected session recovered",
+            Date.parse("2026-07-01T16:01:00.000Z"),
+          ),
+        ]),
+      );
+      await expect.poll(() => selectedRow.textContent()).toContain("Selected session recovered");
+      await expect.poll(() => selectedRow.getAttribute("class")).toContain("--active");
+      await expect.poll(() => page.locator(".sidebar-recent-session--active").count()).toBe(1);
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(selectedKey));
+      expect(await gateway.getRequests("sessions.subscribe")).toHaveLength(
+        initialObserverCount + 1,
+      );
+      await captureUiProof(page, "sidebar-selected-session-route-reconnect.png");
     } finally {
       await context.close();
     }
@@ -411,7 +665,13 @@ suite.define(() => {
         ]),
         "sessions.patch": {},
       },
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+        "sessions.patch",
+      ],
       sessionKey: "agent:main:candidate",
       sessionGroups: ["Research"],
     });
@@ -524,7 +784,7 @@ suite.define(() => {
 
       // Names and subtitles never show raw node ids or raw agent keys.
       const names = await trimmedTextContents(page.locator(".sidebar-recent-session__name"));
-      expect(names).toContain("New thread");
+      expect(names).toContain("New session");
       expect(names).toContain("clawdbot ⎇ wt-1 · …0357");
       expect(names).toContain("node-mcp-debug-…8b2e");
       const subtitles = await trimmedTextContents(
@@ -677,14 +937,14 @@ suite.define(() => {
         .locator(".sidebar-recent-sessions__list .sidebar-recent-session")
         .filter({ hasText: "Research notes" });
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      const pin = row.getByRole("button", { name: "Pin thread" });
-      const menu = row.getByRole("button", { name: "Open thread menu" });
+      const pin = row.getByRole("button", { name: "Pin session" });
+      const menu = row.getByRole("button", { name: "Open session menu" });
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await expect.poll(() => actionPointerEvents(pin)).toBe("auto");
       await expect.poll(() => actionOpacity(menu)).toBe("1");
       await expect.poll(() => actionPointerEvents(menu)).toBe("auto");
       await menu.click();
-      await page.getByRole("menuitem", { name: "Archive thread" }).waitFor({ state: "visible" });
+      await page.getByRole("menuitem", { name: "Archive session" }).waitFor({ state: "visible" });
     } finally {
       await context.close();
     }

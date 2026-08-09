@@ -3,6 +3,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
@@ -35,6 +36,7 @@ export type CliExecutableIdentity = Readonly<{
     | Readonly<{
         kind: "package-tree";
         packageName: string;
+        packageVersion: string;
         rootPath: string;
         fileCount: number;
         totalBytes: string;
@@ -142,7 +144,7 @@ function isDurableRootedCommand(value: string): boolean {
 }
 
 function pathEntriesAreAbsolute(env: NodeJS.ProcessEnv): boolean {
-  const pathValue = env.PATH ?? env.Path ?? "";
+  const pathValue = resolveEnvironmentValue(env, "PATH") ?? "";
   const delimiter = process.platform === "win32" ? ";" : path.delimiter;
   return pathValue
     .split(delimiter)
@@ -229,9 +231,10 @@ async function resolvePackageTreeArtifact(params: {
   if (!params.policy || params.policy.kind !== "bundled-package-tree") {
     return undefined;
   }
+  const policy = params.policy;
   const rootPath = await findOwnedPackageRoot({
     entrypointPath: params.entrypointPath,
-    policy: params.policy,
+    policy,
   });
   if (!rootPath) {
     return undefined;
@@ -265,6 +268,7 @@ async function resolvePackageTreeArtifact(params: {
   let entryCount = 0;
   let fileCount = 0;
   let totalBytes = 0n;
+  let packageVersion: string | undefined;
   const visit = async (directory: string): Promise<boolean> => {
     let entries: Dirent[];
     try {
@@ -312,6 +316,29 @@ async function resolvePackageTreeArtifact(params: {
       if (!file) {
         return false;
       }
+      const relativePath = path.relative(rootPath, file.identity.path).split(path.sep).join("/");
+      if (relativePath === "package.json") {
+        let manifest: { name?: unknown; version?: unknown };
+        try {
+          manifest = JSON.parse(await fs.readFile(entryPath, "utf8")) as {
+            name?: unknown;
+            version?: unknown;
+          };
+        } catch {
+          return false;
+        }
+        const manifestAfterRead = await readExecutableFileIdentity(entryPath);
+        if (
+          !manifestAfterRead ||
+          JSON.stringify(manifestAfterRead.identity) !== JSON.stringify(file.identity) ||
+          manifest.name !== policy.packageName ||
+          typeof manifest.version !== "string" ||
+          !manifest.version.trim()
+        ) {
+          return false;
+        }
+        packageVersion = manifest.version.trim();
+      }
       fileCount += 1;
       totalBytes += BigInt(file.identity.size);
       if (fileCount > MAX_PACKAGE_ARTIFACT_FILES || totalBytes > MAX_PACKAGE_ARTIFACT_BYTES) {
@@ -319,7 +346,7 @@ async function resolvePackageTreeArtifact(params: {
       }
       hash.update(
         JSON.stringify([
-          path.relative(rootPath, file.identity.path).split(path.sep).join("/"),
+          relativePath,
           file.identity.mode,
           file.identity.size,
           file.identity.contentSha256,
@@ -329,12 +356,13 @@ async function resolvePackageTreeArtifact(params: {
     }
     return true;
   };
-  if (!(await visit(rootPath)) || fileCount === 0) {
+  if (!(await visit(rootPath)) || fileCount === 0 || !packageVersion) {
     return undefined;
   }
   return {
     kind: "package-tree",
-    packageName: params.policy.packageName,
+    packageName: policy.packageName,
+    packageVersion,
     rootPath,
     fileCount,
     totalBytes: String(totalBytes),

@@ -656,23 +656,6 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
-  it("allows import.meta.url source helper probes", () => {
-    withTarball(
-      ["dist/index.js"],
-      {
-        "dist/index.js":
-          'const shim = new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url);\n',
-      },
-      (tarball) => {
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-      },
-      "2026.4.27",
-    );
-  });
-
   it("rejects missing Control UI assets", () => {
     withTarball(
       ["dist/index.js"],

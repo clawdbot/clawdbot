@@ -382,6 +382,45 @@ describe("printDaemonStatus", () => {
     expect(errors.match(/Last gateway error:/g)).toHaveLength(1);
   });
 
+  it("does not claim an indeterminate port is not listening", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "Scheduled Task",
+          loaded: true,
+          loadedText: "registered",
+          notLoadedText: "not registered",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        port: {
+          port: 18789,
+          status: "unknown",
+          listeners: [],
+          hints: [],
+        },
+        rpc: {
+          ok: false,
+          kind: "connect",
+          capability: "unknown",
+          error: "gateway closed (1000): ",
+          url: "ws://127.0.0.1:18789",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).not.toContain("Gateway port 18789 is not listening");
+  });
+
   it("prints GUI-session wording before generic missing-supervision wording", () => {
     printDaemonStatus(
       {
@@ -1034,6 +1073,46 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Check the probe credentials/config");
     const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
     expect(logged).not.toContain("Warm-up: launch agents");
+  });
+
+  it("does not combine diagnostic-only service state with the active probe target", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          targetRole: "diagnostic-only",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18900,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18900",
+        },
+        port: {
+          port: 18900,
+          status: "free",
+          listeners: [],
+          hints: [],
+        },
+        rpc: {
+          ok: false,
+          error: "connect ECONNREFUSED 127.0.0.1:18900",
+          url: "ws://127.0.0.1:18900",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Runtime: running");
+    const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
+    expect(output).not.toContain("Warm-up: launch agents");
+    expect(output).not.toContain("service appears running");
   });
 
   it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {

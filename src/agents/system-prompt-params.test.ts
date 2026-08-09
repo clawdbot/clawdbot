@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
 import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
@@ -34,7 +34,25 @@ function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; c
 }
 
 describe("buildSystemPromptParams", () => {
-  afterEach(() => setActiveNodeContext(null));
+  afterEach(() => {
+    setActiveNodeContext(null);
+    vi.useRealTimers();
+  });
+
+  it("formats the current date in the configured user timezone", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-05T23:30:00.000Z"));
+
+    const utc = buildParams({
+      config: { agents: { defaults: { userTimezone: "UTC" } } },
+    });
+    const tokyo = buildParams({
+      config: { agents: { defaults: { userTimezone: "Asia/Tokyo" } } },
+    });
+
+    expect(utc.userDate).toBe("2026-01-05");
+    expect(tokyo.userDate).toBe("2026-01-06");
+  });
 
   it("projects only the stable active-node identity", () => {
     setActiveNodeContext({ nodeId: "mac-123" });

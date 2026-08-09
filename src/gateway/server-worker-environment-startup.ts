@@ -167,10 +167,17 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         }),
       });
     },
-    bootstrapWorker: async ({ sshEndpoint, installation, resolveIdentity, signal }) => {
+    bootstrapWorker: async ({
+      operationId,
+      sshEndpoint,
+      installation,
+      resolveIdentity,
+      signal,
+    }) => {
       const workerRuntime = await loadWorkerEnvironmentRuntimeModule();
       return await workerRuntime.bootstrapWorker(
         {
+          operationId,
           ssh: sshEndpoint,
           artifact: installation,
           pinnedHostKey: sshEndpoint.hostKey,

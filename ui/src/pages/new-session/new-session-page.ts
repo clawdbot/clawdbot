@@ -16,6 +16,10 @@ import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import {
+  readSessionMethodAccess,
+  type SessionMethodAccess,
+} from "../../lib/session-method-access.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
@@ -24,6 +28,8 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
 import "../../styles/new-session.css";
 import { buildChatApiAttachments, restoreChatApiAttachments } from "../chat/attachment-api.ts";
+import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
+import { clearChatModelSearchOnEscape } from "../chat/components/chat-model-picker.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
@@ -33,8 +39,13 @@ import {
   discoverCloudProfiles,
   selectProfiles,
 } from "./cloud-profile-discovery.ts";
-import { PendingCloudRecoveryState, resolveScope } from "./cloud-recovery-state.ts";
-import { advanceCloudDraftSession } from "./cloud-submit.ts";
+import {
+  PendingCloudRecoveryState,
+  resolveSubmissionOutcomeReason,
+  resolveScope,
+  type SubmissionOutcomeReason,
+} from "./cloud-recovery-state.ts";
+import { advanceCloudDraftSession, type CloudRecoveryRetirement } from "./cloud-submit.ts";
 import {
   NewSessionComposerTextareaController,
   renderDraftError,
@@ -55,7 +66,7 @@ import {
 } from "./discovery.ts";
 import { isMissingRestoredFolderError } from "./folder-validation.ts";
 import { discoverGatewayName } from "./gateway-name-discovery.ts";
-import type { NewSessionRouteData } from "./location.ts";
+import { newSessionSearch, type NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { isAbsolutePath } from "./path.ts";
 import { renderPlaceSelect } from "./place-picker.ts";
@@ -90,7 +101,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private cloudProfileId = "";
   @state() private message = "";
   @state() private submitting = false;
-  @state() private submissionOutcomeUnknown = false;
+  @state() private submissionOutcomeUnknown: SubmissionOutcomeReason | null = null;
   @state() private error: string | null = null;
   @state() private catalogRetrying = false;
   @state() private browserLoading = false;
@@ -124,6 +135,10 @@ class NewSessionPage extends OpenClawLightDomElement {
   private readonly modelControl = new NewSessionModelControl(
     () => this.requestUpdate(),
     (selection) => this.persistPreference(selection),
+    (catalogId) =>
+      this.context?.navigate("new-session", {
+        search: newSessionSearch(this.agentId, { catalogId }),
+      }),
   );
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
@@ -153,6 +168,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     .watch(
       () => this.context?.sessions,
       (sessions, notify) => sessions.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.config,
+      (config, notify) => config.subscribe(() => notify()),
     );
 
   private readonly gatewayNameTask = new Task(this, {
@@ -265,7 +284,14 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.visibility = "normal";
     }
     if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScope.changed) {
-      this.invalidateGatewayDiscovery(gatewayUrlChanged || recoveryScope.changed);
+      const gatewayIdentityChanged = gatewayUrlChanged || recoveryScope.changed;
+      this.invalidateGatewayDiscovery(
+        gatewayIdentityChanged,
+        resolveSubmissionOutcomeReason({
+          gatewayIdentityChanged,
+          cloudDraftOwned: Boolean(this.pendingCloud.sessionKey),
+        }),
+      );
     }
     if (
       firstBind ||
@@ -280,7 +306,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           this.pendingCloud.recoveryScope !== this.gatewayRecoveryScope)
       ) {
         this.pendingCloud.reset();
-        this.submissionOutcomeUnknown = false;
+        this.submissionOutcomeUnknown = null;
       }
       if (connected && snapshot.client?.recoveryScopeReady) {
         this.restorePendingCloudRecovery(this.gatewayUrl, this.gatewayRecoveryScope);
@@ -294,7 +320,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
   }
 
-  private invalidateGatewayDiscovery(resetHostSelection: boolean) {
+  private invalidateGatewayDiscovery(
+    resetHostSelection: boolean,
+    submissionOutcome: SubmissionOutcomeReason,
+  ) {
     this.nodesRequestToken += 1;
     this.nodesHydrated = false;
     this.gatewayName = "";
@@ -309,14 +338,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.attachmentDraft.abortReads();
     this.closeBrowser();
     this.cancelRestoredFolderValidation();
-    this.invalidateSubmission(true); // Transport loss makes an in-flight create outcome unknowable.
+    this.invalidateSubmission(submissionOutcome);
     if (!resetHostSelection) {
       return;
     }
     if (this.pendingCloud.sessionKey) {
       // Keep the original Gateway identity so a failed teardown cannot hide a worker elsewhere.
       this.pendingCloud.retryAllowed = false;
-      this.submissionOutcomeUnknown = true;
+      this.submissionOutcomeUnknown = submissionOutcome;
     }
     // A replacement client may target another Gateway. Keep the user's task,
     // but retire every selection and discovery result owned by the old host.
@@ -385,13 +414,21 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   handleEvent(event: Event) {
-    const picker = this.querySelector<HTMLDetailsElement>(".chat-controls__model[open]");
-    if (!picker) {
+    const pickers = this.querySelectorAll<HTMLDetailsElement>(
+      ".chat-controls__inline-select[open]",
+    );
+    if (pickers.length === 0) {
       return;
     }
     if (event.type === "keydown") {
       const keyEvent = event as KeyboardEvent;
+      clearChatModelSearchOnEscape(keyEvent);
       if (keyEvent.defaultPrevented || keyEvent.key !== "Escape") {
+        return;
+      }
+      const picker =
+        [...pickers].find((candidate) => event.composedPath().includes(candidate)) ?? pickers[0];
+      if (!picker) {
         return;
       }
       const restoreFocus = event.composedPath().includes(picker);
@@ -403,15 +440,17 @@ class NewSessionPage extends OpenClawLightDomElement {
       }
       return;
     }
-    if (!event.composedPath().includes(picker)) {
-      picker.open = false;
-    }
+    pickers.forEach((picker) => {
+      if (!event.composedPath().includes(picker)) {
+        picker.open = false;
+      }
+    });
   }
 
   override connectedCallback() {
     super.connectedCallback();
-    // /new renders chat controls without ChatPane, so the route owns both
-    // pointer and Escape light-dismissal for the combined picker.
+    // /new renders chat controls without ChatPane, so the route owns pointer
+    // and Escape light-dismissal for both picker popovers.
     document.addEventListener("keydown", this, true);
     document.addEventListener("pointerdown", this, true);
   }
@@ -422,7 +461,13 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.subscriptions.clear();
     // This invalidates submitRequestToken before payload release below, so a
     // late sessions.create result cannot navigate with attachments we no longer own.
-    this.invalidateGatewayDiscovery(true);
+    this.invalidateGatewayDiscovery(
+      true,
+      resolveSubmissionOutcomeReason({
+        gatewayIdentityChanged: false,
+        cloudDraftOwned: Boolean(this.pendingCloud.sessionKey),
+      }),
+    );
     this.gatewaySource = null;
     this.gatewayClient = null;
     this.gatewayConnected = false;
@@ -441,6 +486,11 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   override updated() {
     this.retryPendingCatalogTarget();
+    this.modelControl.loadCatalogTargets(
+      this.context,
+      this.agentId,
+      this.context?.config.current.cliAgentsEnabled === true && !catalog.isTarget(this.data),
+    );
     const agentState = this.context?.agents.state;
     const agentsReady = Boolean(
       this.gatewayConnected &&
@@ -530,6 +580,59 @@ class NewSessionPage extends OpenClawLightDomElement {
   private usesCustomFolder(): boolean {
     const folder = this.folder.trim();
     return Boolean(folder) && folder !== this.workspacePath();
+  }
+
+  private buildCreateParamsForAccess(
+    visibility: NewSessionVisibility = this.visibility,
+  ): Record<string, unknown> {
+    return buildDraftSessionCreateParams({
+      agentId: this.agentId,
+      message: "",
+      model: this.modelControl.selected,
+      thinkingLevel: this.modelControl.thinkingLevel,
+      visibility,
+      worktree: this.worktree,
+      baseRef: this.baseRef,
+      worktreeName: this.worktreeName,
+      cwd: this.folder,
+      workspace: this.workspacePath(),
+      execNode: this.execNode,
+      catalogId: this.data?.catalogId,
+    });
+  }
+
+  private submissionAccess(
+    createParams: Record<string, unknown> = this.pendingCloud.createParams ??
+      this.buildCreateParamsForAccess(),
+  ): SessionMethodAccess {
+    const gateway = this.context?.gateway.snapshot;
+    const pendingCloud = Boolean(this.pendingCloud.sessionKey);
+    if (!pendingCloud || this.pendingCloud.phase === "creating") {
+      const createAccess = readSessionMethodAccess(gateway, {
+        method: "sessions.create",
+        params: createParams,
+      });
+      if (!createAccess.allowed || !this.cloudProfileForSubmission()) {
+        return createAccess;
+      }
+    }
+    return readSessionMethodAccess(gateway, {
+      method: "sessions.dispatch",
+      requiredScope: "operator.admin",
+    });
+  }
+
+  private submitDisabledReason(): string | undefined {
+    const access = this.submissionAccess();
+    return access.allowed ? undefined : access.reason;
+  }
+
+  private incognitoDisabledReason(): string | undefined {
+    const access = readSessionMethodAccess(this.context?.gateway.snapshot, {
+      method: "sessions.create",
+      params: this.buildCreateParamsForAccess("incognito"),
+    });
+    return access.allowed ? undefined : access.reason;
   }
 
   private preference(): NewSessionPreference | null {
@@ -671,7 +774,9 @@ class NewSessionPage extends OpenClawLightDomElement {
   private resetDraft() {
     const preservePendingCloud = Boolean(this.pendingCloud.sessionKey);
     this.invalidateSubmission();
-    this.submissionOutcomeUnknown = preservePendingCloud;
+    this.submissionOutcomeUnknown = preservePendingCloud
+      ? (this.submissionOutcomeUnknown ?? "cloud-interrupted")
+      : null;
     this.agentSelectedByUser = false;
     this.folder = "";
     this.folderSelectedByUser = false;
@@ -714,27 +819,34 @@ class NewSessionPage extends OpenClawLightDomElement {
     });
   }
 
-  private invalidateSubmission(outcomeUnknown = false) {
+  private invalidateSubmission(outcomeUnknown: SubmissionOutcomeReason | null = null) {
     this.submitRequestToken += 1;
     if (outcomeUnknown && this.submitting) {
-      this.submissionOutcomeUnknown = true;
+      this.submissionOutcomeUnknown = outcomeUnknown;
     }
     this.submitting = false;
   }
 
   private clearPendingCloudRecovery() {
     this.pendingCloud.clear();
-    this.submissionOutcomeUnknown = false;
+    this.submissionOutcomeUnknown = null;
+  }
+
+  private showCloudDraftOwnershipLost() {
+    this.error = t("newSession.cloudOwnershipLost");
   }
 
   private clearPendingCloudRecoveryFor(
     gatewayUrl: string,
     recoveryScope: string,
     sessionKey: string,
+    retirement: CloudRecoveryRetirement,
   ) {
+    const submissionOutcome = this.submissionOutcomeUnknown;
     this.pendingCloud.clearFor(gatewayUrl, recoveryScope, sessionKey);
     if (!this.pendingCloud.sessionKey) {
-      this.submissionOutcomeUnknown = false;
+      this.submissionOutcomeUnknown =
+        retirement === "interrupted" ? (submissionOutcome ?? "cloud-interrupted") : null;
     }
   }
 
@@ -941,12 +1053,16 @@ class NewSessionPage extends OpenClawLightDomElement {
     const gateway = this.context?.gateway;
     if (
       this.submitting ||
+      this.requiresModelSetup() ||
       this.attachmentDraft.pendingReads > 0 ||
       (!pendingCloud && this.submissionOutcomeUnknown) ||
       (!message && !hasAttachments) ||
       gateway?.snapshot.phase !== "connected" ||
       !gateway.snapshot.client
     ) {
+      return false;
+    }
+    if (!this.submissionAccess().allowed) {
       return false;
     }
     if (this.restoredFolderValidation !== "none") {
@@ -1009,6 +1125,20 @@ class NewSessionPage extends OpenClawLightDomElement {
       return false;
     }
     return true;
+  }
+
+  private requiresModelSetup(): boolean {
+    const selectedAgent = this.selectedAgent();
+    return requiresChatModelSetup({
+      catalog:
+        catalog.isTarget(this.data) ||
+        Boolean(this.cloudProfileId) ||
+        Boolean(this.pendingCloud.sessionKey),
+      connected: this.gatewayConnected,
+      agentsLoaded: this.context?.agents.state.agentsList !== null,
+      selectedAgentFound: selectedAgent !== undefined,
+      agentModel: selectedAgent?.model?.primary,
+    });
   }
 
   private async submit() {
@@ -1079,6 +1209,11 @@ class NewSessionPage extends OpenClawLightDomElement {
               persistent: this.visibility !== "incognito",
             })
         : undefined;
+      const requestAccess = this.submissionAccess(cloudCreateParams ?? createParams);
+      if (!requestAccess.allowed) {
+        this.error = requestAccess.reason;
+        return;
+      }
       if (cloudProfileId && !pendingCloud && !cloudCreateParams) {
         this.error = t("newSession.cloudStartFailed", {
           error: "cloud recovery storage is unavailable",
@@ -1095,14 +1230,13 @@ class NewSessionPage extends OpenClawLightDomElement {
       let recoveryOwnerKey = submissionCloudRecovery?.sessionKey ?? "";
       const ownsSubmissionRecovery = () =>
         this.pendingCloud.owns(submissionGatewayUrl, submissionRecoveryScope, recoveryOwnerKey);
-      const isSubmissionCurrent = () =>
+      const isSubmissionLifecycleCurrent = () =>
         this.isConnected &&
         submissionClient.recoveryScopeReady &&
         requestId === this.submitRequestToken &&
         this.gatewayClient === submissionClient &&
         this.gatewayUrl === submissionGatewayUrl &&
-        this.gatewayRecoveryScope === submissionRecoveryScope &&
-        ownsSubmissionRecovery();
+        this.gatewayRecoveryScope === submissionRecoveryScope;
       const result =
         pendingCloud && this.pendingCloud.phase !== "creating"
           ? { key: this.pendingCloud.sessionKey, initialRun: { status: "idle" as const } }
@@ -1124,7 +1258,11 @@ class NewSessionPage extends OpenClawLightDomElement {
           submissionCloudRecovery.phase === "creating"
             ? "dispatching"
             : submissionCloudRecovery.phase;
-        if (submissionCloudRecovery.phase === "creating" && isSubmissionCurrent()) {
+        if (
+          submissionCloudRecovery.phase === "creating" &&
+          isSubmissionLifecycleCurrent() &&
+          ownsSubmissionRecovery()
+        ) {
           if (!this.pendingCloud.promoteToDispatching(result.key)) {
             this.error = t("newSession.cloudStartFailed", {
               error: "cloud recovery storage is unavailable",
@@ -1146,13 +1284,14 @@ class NewSessionPage extends OpenClawLightDomElement {
           recoveryPhase,
           persistRecovery: this.pendingCloud.persistent,
           recovering: pendingCloud,
-          isCurrent: isSubmissionCurrent,
+          isLifecycleCurrent: isSubmissionLifecycleCurrent,
           ownsRecovery: ownsSubmissionRecovery,
-          clearRecovery: () =>
+          clearRecovery: (retirement) =>
             this.clearPendingCloudRecoveryFor(
               submissionGatewayUrl,
               submissionRecoveryScope,
               result.key,
+              retirement,
             ),
           setRecoveryPhase: (phase) => {
             if (ownsSubmissionRecovery()) {
@@ -1166,7 +1305,9 @@ class NewSessionPage extends OpenClawLightDomElement {
           }
           if (cloudStart.cleanupError) {
             this.pendingCloud.retryAllowed = cloudStart.recoveryPersisted;
-            this.submissionOutcomeUnknown = !cloudStart.recoveryPersisted;
+            this.submissionOutcomeUnknown = cloudStart.recoveryPersisted
+              ? null
+              : "cloud-interrupted";
             this.error = t("newSession.cloudStartFailed", { error: cloudStart.cleanupError });
           } else if (!cloudStart.recoveryPersisted) {
             this.error = t("newSession.createFailed");
@@ -1184,7 +1325,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           }
           const retryAllowed = requestId === this.submitRequestToken;
           this.pendingCloud.retryAllowed = retryAllowed;
-          this.submissionOutcomeUnknown = !retryAllowed;
+          this.submissionOutcomeUnknown = retryAllowed ? null : "cloud-interrupted";
           this.message = this.pendingCloud.message;
           this.error = t("newSession.cloudStartFailed", { error: cloudStart.error });
           return;
@@ -1195,7 +1336,11 @@ class NewSessionPage extends OpenClawLightDomElement {
           });
           return;
         }
+        if (cloudStart.status === "interrupted") {
+          return;
+        }
         if (cloudStart.status === "ownership-lost") {
+          this.showCloudDraftOwnershipLost();
           return;
         }
         if (cloudStart.status === "send-rejected") {
@@ -1662,13 +1807,20 @@ class NewSessionPage extends OpenClawLightDomElement {
         ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
         ${this.error ? renderDraftError(this.error) : nothing}
         ${this.submissionOutcomeUnknown
-          ? renderDraftError(t("newSession.createOutcomeUnknown"))
+          ? renderDraftError(
+              t(
+                this.submissionOutcomeUnknown === "gateway-changed"
+                  ? "newSession.createOutcomeUnknown"
+                  : "newSession.cloudSetupInterrupted",
+              ),
+            )
           : nothing}
         ${renderNewSessionDraftComposer({
           agent: this.selectedAgent(),
           agentId: this.agentId,
           attachmentDraft: this.attachmentDraft,
           canSubmit: this.canSubmit(),
+          submitDisabledReason: this.submitDisabledReason(),
           context: this.context,
           isCatalogTarget: catalog.isTarget(this.data),
           message: this.message,
@@ -1679,6 +1831,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           submitting: this.submitting,
           textareaController: this.composerTextarea,
           messageLocked: Boolean(this.pendingCloud.sessionKey),
+          incognitoDisabledReason: this.incognitoDisabledReason(),
           onInput: (message) => {
             if (!this.submitting && !this.pendingCloud.sessionKey) {
               this.message = message;
@@ -1706,6 +1859,8 @@ class NewSessionPage extends OpenClawLightDomElement {
       assistantAvatarUrl: identity?.avatarUrl ?? null,
       hint: t("newSession.hint"),
       composer: this.renderDraftBlock(),
+      modelSetupRequired: this.requiresModelSetup(),
+      onModelSetup: () => this.context?.navigate("model-setup"),
       sessions: this.context?.sessions.state.result,
       sessionKey: buildAgentMainSessionKey({
         agentId: this.agentId || "main",

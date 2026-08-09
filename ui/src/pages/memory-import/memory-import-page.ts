@@ -6,9 +6,11 @@ import type {
   MigrationsMemoryApplyResult,
   MigrationsMemoryPlanResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -21,6 +23,7 @@ import {
 } from "./view.ts";
 
 const SESSION_BACKFILL_BATCH_DAYS = 14;
+const MEMORY_IMPORT_DOCS_URL = "https://docs.openclaw.ai/install/migrating";
 
 type PendingMemoryImport = {
   providerId: string;
@@ -567,6 +570,10 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("memory-import")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("memory-import")}
+            ${renderDocsLink(MEMORY_IMPORT_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}

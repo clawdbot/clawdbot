@@ -2,11 +2,15 @@
 
 ## Unreleased
 
-Uses the selected locale for Wear OS uppercase labels and compact token-count decimals.
+## 2026.7.4 - 2026-07-30
 
-Fixes secondary Gateway sessions disconnecting during temporary discovery gaps and preserves manual TLS when reopening saved Gateways and Control UI pages.
+Adds inline audio/video playback and uploads, session dashboards, run telemetry, chat rewind/fork, a Settings repair assistant, and Wear instant Talk.
 
-Prevents delayed Wear OS requests from a previous phone from blocking or corrupting the newly selected phone session.
+Improves the working claw, collapsible details, Skill Workshop flows, and generated images.
+
+Fixes reconnect/session state, Talk transcripts, manual gateway ports, large-text onboarding, reduced motion, and Wear pairing/reply reliability.
+
+Thanks @IWhatsskill, @NianJiuZst, @masatohoshino, @cygnostik, @licheer-zte, and @metaforismo.
 
 ## 2026.7.3 - 2026-07-20
 

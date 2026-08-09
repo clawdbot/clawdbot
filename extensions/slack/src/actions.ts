@@ -10,6 +10,7 @@ import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
+import { normalizeSlackOutboundText } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { hasSlackMessageTableBlock, resolveSlackMessageText } from "./monitor/block-text.js";
 import { resolveSlackMedia } from "./monitor/media.js";
@@ -31,6 +32,7 @@ export type SlackActionClientOpts = {
   cfg?: OpenClawConfig;
   accountId?: string;
   token?: string;
+  teamId?: string;
   client?: WebClient;
 };
 
@@ -213,7 +215,10 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
     return opts.client;
   }
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
-  return mode === "write" ? getSlackWriteClient(token) : createSlackLookupClient(token);
+  if (mode === "write") {
+    return getSlackWriteClient(token, { teamId: opts.teamId });
+  }
+  return createSlackLookupClient(token, { teamId: opts.teamId });
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -366,6 +371,16 @@ export async function editSlackMessage(
   content: string,
   opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
 ) {
+  await editSlackRenderedMessage(channelId, messageId, normalizeSlackOutboundText(content), opts);
+}
+
+// Finalized previews already contain Slack mrkdwn; a second Markdown render changes its meaning.
+export async function editSlackRenderedMessage(
+  channelId: string,
+  messageId: string,
+  content: string,
+  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
+) {
   const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   const editText = buildSlackEditTextPayload(content, blocks);
@@ -476,7 +491,7 @@ export async function readSlackMessages(
     ? {
         inclusive: true,
         latest: exactMessageId,
-        oldest: undefined,
+        oldest: exactMessageId,
       }
     : {
         latest: normalizeSlackReadTimestamp(opts.before, "before"),
@@ -486,11 +501,18 @@ export async function readSlackMessages(
 
   // Use conversations.replies for thread messages, conversations.history for channel messages.
   if (opts.threadId) {
+    // Slack pages thread roots before replies; exclude the root before its limit consumes the page.
+    const oldest = exactMessageId
+      ? exactMessageId
+      : exactBounds.oldest && Number(exactBounds.oldest) > Number(opts.threadId)
+        ? exactBounds.oldest
+        : opts.threadId;
     const result = await client.conversations.replies({
       channel: channelId,
       ts: opts.threadId,
       limit: readLimit,
       ...exactBounds,
+      oldest,
     });
     const messages = ((result.messages ?? []) as SlackMessageSummary[])
       .filter((message) => {
@@ -714,6 +736,7 @@ export async function downloadSlackFile(
         url_private_download: file.url_private_download,
       },
     ],
+    client,
     token,
     maxBytes: opts.maxBytes,
   });

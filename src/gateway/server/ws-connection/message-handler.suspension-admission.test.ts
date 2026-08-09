@@ -9,6 +9,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
+import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const { incrementPresenceVersionMock, loadConfigMock, upsertPresenceMock } = vi.hoisted(() => ({
   incrementPresenceVersionMock: vi.fn(() => 2),
@@ -100,6 +101,7 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
     events: [],
     extraHandlers: {},
     buildRequestContext: () => ({}) as GatewayRequestContext,
+    nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     send,
     close,

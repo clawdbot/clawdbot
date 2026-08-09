@@ -37,6 +37,7 @@ export const ModelChoiceSchema = closedObject({
   available: Type.Optional(Type.Boolean()),
   contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
+  supportsTools: Type.Optional(Type.Boolean()),
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
   apiKeySupported: Type.Optional(Type.Boolean()),
   input: Type.Optional(
@@ -477,6 +478,7 @@ export const SkillsSecurityVerdictsResultSchema = closedObject({
       decision: NonEmptyString,
       reasons: Type.Array(Type.String()),
       requestedSlug: NonEmptyString,
+      requestedOwnerHandle: Type.Optional(NonEmptyString),
       requestedVersion: NonEmptyString,
       slug: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
       version: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -1010,6 +1012,9 @@ export const ToolsEffectiveEntrySchema = closedObject({
   ]),
   pluginId: Type.Optional(NonEmptyString),
   channelId: Type.Optional(NonEmptyString),
+  mcpServer: Type.Optional(NonEmptyString),
+  mcpToolName: Type.Optional(NonEmptyString),
+  deniedBySession: Type.Optional(Type.Literal(true)),
   risk: Type.Optional(
     Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
   ),
@@ -1039,6 +1044,7 @@ export const ToolsEffectiveNoticeSchema = closedObject({
   id: NonEmptyString,
   severity: Type.Union([Type.Literal("info"), Type.Literal("warning")]),
   message: Type.String(),
+  servers: Type.Optional(Type.Array(NonEmptyString)),
 });
 
 /** Effective tool set for a session, including profile and filtering notices. */

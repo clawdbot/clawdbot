@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runQaSuiteCommand = vi.hoisted(() => vi.fn());
 
@@ -7,19 +7,13 @@ vi.mock("../../cli.runtime.js", () => ({ runQaSuiteCommand }));
 import { runLiveTransportQaSuiteCommand } from "./live-transport-suite.runtime.js";
 
 describe("live transport suite runtime", () => {
-  const originalExecutionShard = process.env.OPENCLAW_QA_EXECUTION_SHARD;
-
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_QA_CREDENTIAL_SOURCE", "");
     vi.clearAllMocks();
-    delete process.env.OPENCLAW_QA_EXECUTION_SHARD;
   });
 
-  afterAll(() => {
-    if (originalExecutionShard === undefined) {
-      delete process.env.OPENCLAW_QA_EXECUTION_SHARD;
-    } else {
-      process.env.OPENCLAW_QA_EXECUTION_SHARD = originalExecutionShard;
-    }
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("normalizes one live command into the shared suite host", async () => {
@@ -34,11 +28,13 @@ describe("live transport suite runtime", () => {
         fastMode: true,
         allowFailures: true,
         failFast: true,
+        credentialFile: "/secure/slack-qa.json",
         credentialSource: " convex ",
         credentialRole: " ci ",
         sutAccountId: "slack-sut",
       },
-      selectScenarioIds: ({ providerMode, scenarioIds }) => {
+      selectScenarioIds: ({ primaryModel, providerMode, scenarioIds }) => {
+        expect(primaryModel).toBe("openai/gpt-5.5");
         expect(providerMode).toBe("live-frontier");
         expect(scenarioIds).toBeUndefined();
         return ["slack-canary"];
@@ -59,6 +55,7 @@ describe("live transport suite runtime", () => {
       concurrency: 1,
       scenarioIds: ["slack-canary"],
       sutAccountId: "slack-sut",
+      credentialFile: "/secure/slack-qa.json",
       credentialSource: "convex",
       credentialRole: "ci",
       explicitScenarioSelection: false,
@@ -81,26 +78,19 @@ describe("live transport suite runtime", () => {
     );
   });
 
-  it("applies execution sharding only after semantic scenario selection", async () => {
-    const selectScenarioIds = vi.fn(() => ["semantic-c", "semantic-a", "semantic-b"]);
-    process.env.OPENCLAW_QA_EXECUTION_SHARD = "2/2";
+  it("normalizes the shared credential source environment override", async () => {
+    vi.stubEnv("OPENCLAW_QA_CREDENTIAL_SOURCE", " convex ");
 
     await runLiveTransportQaSuiteCommand({
-      channelId: "slack",
-      defaultProviderMode: "live-frontier",
+      channelId: "buzz",
+      defaultProviderMode: "mock-openai",
       options: {},
-      selectScenarioIds,
+      selectScenarioIds: () => ["channel-canary"],
     });
 
-    expect(selectScenarioIds).toHaveBeenCalledWith({
-      profile: undefined,
-      primaryModel: expect.any(String),
-      providerMode: "live-frontier",
-      scenarioIds: undefined,
-    });
-    const suiteArgs = runQaSuiteCommand.mock.calls[0]?.[0];
-    expect(suiteArgs?.scenarioIds).toHaveLength(1);
-    expect(suiteArgs?.scenarioIds?.[0]).toMatch(/^semantic-/);
+    expect(runQaSuiteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ credentialSource: "convex" }),
+    );
   });
 
   it("rejects shared credentials for disposable transports", async () => {

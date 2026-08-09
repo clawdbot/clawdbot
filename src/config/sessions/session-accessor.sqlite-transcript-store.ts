@@ -47,6 +47,7 @@ export function appendTranscriptEventInTransaction(
   scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
   options: {
+    allowStoredAlias?: boolean;
     dedupeByMessageIdempotency?: boolean;
     onProjectionReconcileNeeded?: () => void;
     scheduleProjectionReconcile?: boolean;
@@ -56,7 +57,9 @@ export function appendTranscriptEventInTransaction(
   const persistedEvent = canonicalizeTranscriptEventMedia(event);
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
-  ensureTranscriptSessionRoot(database, scope, createdAt);
+  ensureTranscriptSessionRoot(database, scope, createdAt, {
+    allowStoredAlias: options.allowStoredAlias === true,
+  });
   ensureTranscriptGenerationInTransaction(database, scope.sessionId);
   const identity = readTranscriptEventIdentity(persistedEvent);
   if (identity && readTranscriptIdentityByEventId(database, scope.sessionId, identity.eventId)) {
@@ -475,17 +478,17 @@ export function readTranscriptIdentityByEventId(
   database: OpenClawAgentDatabase,
   sessionId: string,
   eventId: string,
-): { eventId: string; seq: number } | undefined {
+): { eventId: string; parentId: string | null; seq: number } | undefined {
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
       .selectFrom("transcript_event_identities")
-      .select(["event_id", "seq"])
+      .select(["event_id", "parent_id", "seq"])
       .where("session_id", "=", sessionId)
       .where("event_id", "=", eventId),
   );
-  return row ? { eventId: row.event_id, seq: row.seq } : undefined;
+  return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
 }
 
 function readTranscriptIdentityByMessageIdempotencyKey(

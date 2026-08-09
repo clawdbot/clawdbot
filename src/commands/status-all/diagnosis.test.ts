@@ -82,6 +82,7 @@ function createBaseParams(
     channelsStatus: null,
     channelIssues: [],
     deliveryDiagnostics: null,
+    exporterDiagnostics: null,
     gatewayReachable: false,
     health: null,
     nodeOnlyGateway: null,
@@ -152,6 +153,32 @@ describe("status-all diagnosis port checks", () => {
     expect(output).toContain("! Port 18789");
     expect(output).toContain("2 OpenClaw gateway processes appear to be listening on port 18789");
     expect(output).toContain("Port 18789 is already in use.");
+  });
+
+  it("warns when port availability could not be determined", async () => {
+    const params = createBaseParams([]);
+    params.portUsage = { port: 18789, status: "unknown", listeners: [], hints: [] };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Port 18789");
+    expect(output).toContain("Port 18789 availability could not be determined.");
+    expect(output).not.toContain("Port 18789 is free.");
+  });
+
+  it("does not let attributed listeners override indeterminate availability", async () => {
+    const params = createBaseParams([
+      { pid: 5001, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+    ]);
+    params.portUsage!.status = "unknown";
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Port 18789");
+    expect(output).toContain("Port 18789 availability could not be determined.");
+    expect(output).not.toContain("Detected OpenClaw Gateway listener");
   });
 
   it("adds direct update restart guidance for failed update sentinels", async () => {
@@ -264,6 +291,38 @@ describe("status-all diagnosis port checks", () => {
       "✓ Inbound delivery telemetry: received 2 · dispatch 2/2 · turns 2 · processed 2",
     );
     expect(output).toContain("latest delivery event:");
+  });
+
+  it("renders the shared redacted telemetry exporter summary", async () => {
+    const params = createBaseParams([]);
+    params.exporterDiagnostics = {
+      events: [
+        {
+          seq: 1,
+          type: "telemetry.exporter",
+          source: "diagnostics-otel",
+          target: "traces",
+          transport: "otlp-http-protobuf",
+          outcome: "failure",
+          reason: "export_failed",
+          mode: "configured",
+          url: "https://collector.example/private",
+          headers: { authorization: "secret" },
+          error: "raw failure",
+        },
+      ],
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Telemetry exporters");
+    expect(output).toContain(
+      "diagnostics-otel · traces · failed · OTLP/HTTP protobuf (explicit endpoint) · export failed",
+    );
+    expect(output).not.toContain("collector.example");
+    expect(output).not.toContain("secret");
+    expect(output).not.toContain("raw failure");
   });
 
   it("keeps handled terminal delivery paths healthy without dispatch starts", async () => {

@@ -19,7 +19,10 @@ import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
+  appendSessionTranscriptMessageByIdentity,
+  readSessionTranscriptEvents,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
@@ -35,7 +38,11 @@ import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-bridge.js";
-import { CodexAppServerRpcError } from "./client.js";
+import {
+  consumeCodexAppServerLiveThread,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
+import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import {
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
@@ -91,7 +98,11 @@ import {
   releaseCodexSandboxExecServerEnvironment,
 } from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
-import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import {
+  createCodexTestBindingStore,
+  resetCodexTestBindingStore,
+  type CodexAppServerBindingIdentity,
+} from "./session-binding.test-helpers.js";
 import {
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
@@ -261,6 +272,24 @@ async function attachSqliteSessionTarget(
     sessionKey: params.sessionKey,
     storePath,
     entry: { sessionFile: params.sessionFile, sessionId, updatedAt: Date.now() },
+  });
+}
+
+async function appendSqliteHistoryMessage(
+  params: EmbeddedRunAttemptParams,
+  message: ReturnType<typeof userMessage> | ReturnType<typeof assistantMessage>,
+): Promise<void> {
+  const target = params.sessionTarget;
+  if (!target?.agentId || !target.sessionId || !target.sessionKey || !target.storePath) {
+    throw new Error("expected complete SQLite session target");
+  }
+  await appendSessionTranscriptMessageByIdentity({
+    agentId: target.agentId,
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    storePath: target.storePath,
+    message,
+    now: message.timestamp,
   });
 }
 
@@ -613,6 +642,10 @@ function createRunPaths() {
   };
 }
 
+function openRunSession(sessionFile: string) {
+  return openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" });
+}
+
 function createRunParams() {
   const { sessionFile, workspaceDir } = createRunPaths();
   return createParams(sessionFile, workspaceDir);
@@ -653,7 +686,7 @@ function googleCalendarAppInfo(isEnabled: boolean): v2.AppInfo {
   };
 }
 
-const GOOGLE_CALENDAR_PLUGIN_LIST_RESULT = {
+const GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT = {
   marketplaces: [
     {
       name: "openai-curated",
@@ -675,8 +708,12 @@ const GOOGLE_CALENDAR_PLUGIN_LIST_RESULT = {
     },
   ],
   marketplaceLoadErrors: [],
+} satisfies v2.PluginInstalledResponse;
+
+const GOOGLE_CALENDAR_PLUGIN_LIST_RESULT = {
+  ...GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT,
   featuredPluginIds: [],
-} as const;
+} satisfies v2.PluginListResponse;
 
 const GOOGLE_CALENDAR_PLUGIN_READ_RESULT = {
   plugin: {
@@ -701,7 +738,7 @@ const GOOGLE_CALENDAR_PLUGIN_READ_RESULT = {
         name: "Google Calendar",
         description: null,
         installUrl: null,
-        needsAuth: false,
+        category: null,
       },
     ],
     mcpServers: ["google-calendar"],
@@ -711,9 +748,23 @@ const GOOGLE_CALENDAR_PLUGIN_READ_RESULT = {
 function createGoogleCalendarRequest(
   appInventory?: (method: "app/installed" | "app/read") => unknown,
 ) {
-  return vi.fn(async (method: string) => {
+  let threadAppEnabled = false;
+  return vi.fn(async (method: string, params?: unknown) => {
+    if (method === "config/read") {
+      expect((params as { includeLayers?: boolean } | undefined)?.includeLayers).toBe(true);
+      return { config: {}, layers: [] };
+    }
+    if (
+      method === "app/installed" &&
+      typeof (params as { threadId?: unknown } | undefined)?.threadId === "string"
+    ) {
+      return codexAppInventoryResponse("app/installed", [googleCalendarAppInfo(threadAppEnabled)]);
+    }
     if ((method === "app/installed" || method === "app/read") && appInventory) {
       return appInventory(method);
+    }
+    if (method === "plugin/installed") {
+      return GOOGLE_CALENDAR_PLUGIN_INSTALLED_RESULT;
     }
     if (method === "plugin/list") {
       return GOOGLE_CALENDAR_PLUGIN_LIST_RESULT;
@@ -722,6 +773,9 @@ function createGoogleCalendarRequest(
       return GOOGLE_CALENDAR_PLUGIN_READ_RESULT;
     }
     if (method === "thread/start") {
+      const config = (params as { config?: { apps?: Record<string, { enabled?: boolean }> } })
+        ?.config;
+      threadAppEnabled = config?.apps?.["google-calendar-app"]?.enabled === true;
       return threadStartResult("thread-1");
     }
     if (method === "turn/start") {
@@ -763,8 +817,8 @@ async function writeTokenPressureState(
 }
 
 function installFailingThreadStartClient(onThreadStart: () => unknown) {
-  const clearSpy = vi.spyOn(sharedClientModule, "clearSharedCodexAppServerClientIfCurrent");
-  clearSpy.mockClear();
+  const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
+  retireSpy.mockClear();
   const state: { failedClient?: unknown } = {};
   setCodexAppServerClientFactoryForTest(async () => {
     const client = {
@@ -781,13 +835,14 @@ function installFailingThreadStartClient(onThreadStart: () => unknown) {
     state.failedClient = client;
     return client as never;
   });
-  return { clearSpy, state };
+  return { retireSpy, state };
 }
 
 async function runSharedClientRestartTest(closeCount: number) {
   const { sessionFile, workspaceDir } = createRunPaths();
   await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
   const requests: string[][] = [];
+  const clients: CodexAppServerClient[] = [];
   let starts = 0;
   const state: {
     notify: (notification: CodexServerNotification) => Promise<void>;
@@ -796,7 +851,7 @@ async function runSharedClientRestartTest(closeCount: number) {
     const startIndex = starts++;
     const methods: string[] = [];
     requests.push(methods);
-    return {
+    const client = {
       ...mockClientRuntimeMethods(),
       request: vi.fn(async (method: string) => {
         methods.push(method);
@@ -816,7 +871,9 @@ async function runSharedClientRestartTest(closeCount: number) {
         return () => undefined;
       },
       addRequestHandler: () => () => undefined,
-    } as never;
+    } as unknown as CodexAppServerClient;
+    clients.push(client);
+    return client;
   });
   const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
   await vi.waitFor(() => expect(requests[closeCount]).toContain("turn/start"), fastWait);
@@ -828,7 +885,23 @@ async function runSharedClientRestartTest(closeCount: number) {
       turn: { id: "turn-1", status: "completed" },
     },
   });
-  return { result: await run, requests };
+  return { result: await run, requests, client: clients[closeCount]! };
+}
+
+async function expectRetainedSuccessfulThread(client: CodexAppServerClient, threadId: string) {
+  const ownership = await consumeCodexAppServerLiveThread(client, threadId);
+  expect(ownership).toEqual(expect.objectContaining({ release: expect.any(Function) }));
+  // Restore the exact branded owner so this assertion itself cannot orphan
+  // the persistent subscription or alter later cleanup in the same test.
+  await expect(
+    retainCodexAppServerLiveThread(
+      client,
+      threadId,
+      ownership?.release,
+      ownership?.configFingerprint,
+      ownership?.serviceTier,
+    ),
+  ).resolves.toBe(true);
 }
 
 async function createSandboxReleaseFixture(
@@ -1581,10 +1654,13 @@ describe("runCodexAppServerAttempt", () => {
     );
     expect(withoutMessageToolInstructions).not.toContain("message(action=send)");
     expect(withoutMessageToolInstructions).not.toContain("Use `message`");
+    expect(withoutMessageToolInstructions).not.toContain("reacting to its current message");
     params.sourceReplyDeliveryMode = "automatic";
     const automaticInstructions = testing.buildDeveloperInstructions(params);
     expect(automaticInstructions).toContain("reply normally in your final assistant message");
     expect(automaticInstructions).not.toContain("message(action=send)");
+    expect(automaticInstructions).toContain("reacting to its current message");
+    expect(automaticInstructions).toContain("Reactions are not delivered automatically.");
   });
 
   it("includes Codex app-server scoped plugin command guidance in developer instructions", () => {
@@ -1922,12 +1998,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const result = await run;
     expect(readAttemptTerminal(result).promptError).toBeNull();
-    expect(result.lastToolError).toMatchObject({
-      toolName: "bash",
-      error: expect.stringContaining("without a matching tool.result"),
-      mutatingAction: true,
-    });
-    expect(result.lastToolError?.actionFingerprint).toContain("pnpm test extensions/codex");
+    expect(result.lastToolError).toBeUndefined();
     expect(result.assistantTexts).toEqual(["Recovered with final answer after orphan tool call."]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
@@ -2406,6 +2477,7 @@ describe("runCodexAppServerAttempt", () => {
       appendSystemContext: "post system",
       prependContext: "queued context",
       appendContext: "tail context",
+      toolsAllow: ["*"],
     }));
     initializeGlobalHookRunner(
       createMockPluginRegistry([
@@ -2414,7 +2486,7 @@ describe("runCodexAppServerAttempt", () => {
       ]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -2465,9 +2537,102 @@ describe("runCodexAppServerAttempt", () => {
     expect(JSON.stringify(llmInputPayload)).not.toContain("previous turn");
   });
 
+  it("fails closed when before_prompt_build restricts Codex tools", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ toolsAllow: ["message"] }),
+        },
+      ]),
+    );
+    const { sessionFile, workspaceDir } = createRunPaths();
+
+    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+      "Codex app-server cannot enforce before_prompt_build toolsAllow",
+    );
+  });
+
+  it("releases adopted startup resources when continuity prompt rebuilding fails", async () => {
+    let promptBuildCount = 0;
+    const beforePromptBuild = vi.fn(async () => {
+      promptBuildCount += 1;
+      return { toolsAllow: promptBuildCount === 1 ? ["*"] : ["message"] };
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+    );
+    const { sessionFile, workspaceDir } = createRunPaths();
+    openRunSession(sessionFile).appendMessage(userMessage("previous request", Date.now()));
+    const { closeAndWait, events, retireSpy, state } = installCleanupTrackingClient();
+    const abortController = new AbortController();
+    const removeAbortListener = vi.spyOn(abortController.signal, "removeEventListener");
+    const params = createParams(sessionFile, workspaceDir);
+    params.abortSignal = abortController.signal;
+    params.cleanupBundleMcpOnRunEnd = true;
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "Codex app-server cannot enforce before_prompt_build toolsAllow",
+    );
+
+    expect(beforePromptBuild).toHaveBeenCalledTimes(2);
+    expect(events).toContain("request:thread/start");
+    expect(events).not.toContain("request:turn/start");
+    expect(retireSpy).toHaveBeenCalledOnce();
+    expect(retireSpy).toHaveBeenCalledWith(state.client);
+    expect(closeAndWait).toHaveBeenCalledOnce();
+    expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
+  it("preserves binding retention errors while releasing fundamental resources", async () => {
+    const bindingStore = createCodexTestBindingStore();
+    const originalWithLease = bindingStore.withLease.bind(bindingStore);
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const params = createParams(sessionFile, workspaceDir);
+    let failBindingRetention = false;
+    let bindingCleanupFailures = 0;
+    const failingBindingStore: typeof bindingStore = {
+      ...bindingStore,
+      async withLease<T>(
+        identity: CodexAppServerBindingIdentity,
+        run: () => Promise<T>,
+      ): Promise<T> {
+        if (!failBindingRetention) {
+          return await originalWithLease(identity, run);
+        }
+        bindingCleanupFailures += 1;
+        params.cleanupBundleMcpOnRunEnd = true;
+        throw new Error("binding retention cleanup failed");
+      },
+    };
+    const { closeAndWait, events, retireSpy, state } = installCleanupTrackingClient();
+    const abortController = new AbortController();
+    const removeAbortListener = vi.spyOn(abortController.signal, "removeEventListener");
+    params.abortSignal = abortController.signal;
+    const run = runCodexAppServerAttempt(params, { bindingStore: failingBindingStore });
+    await vi.waitFor(() => expect(events).toContain("request:turn/start"), fastWait);
+    failBindingRetention = true;
+    if (!state.notify) {
+      throw new Error("expected turn notification handler");
+    }
+    await state.notify(turnCompleted({ id: "turn-1", status: "completed" }));
+
+    await expect(run).rejects.toThrow("binding retention cleanup failed");
+
+    expect(bindingCleanupFailures).toBe(1);
+    expect(params.cleanupBundleMcpOnRunEnd).toBe(true);
+    expect(events).toContain("request:turn/start");
+    expect(events).toContain("closeAndWait");
+    expect(retireSpy).toHaveBeenCalledOnce();
+    expect(retireSpy).toHaveBeenCalledWith(state.client);
+    expect(closeAndWait).toHaveBeenCalledOnce();
+    expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(queueActiveRunMessageForTest("session-1", "after cleanup")).toBe(false);
+  });
+
   it("projects bounded continuity when starting Codex without a native thread binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
@@ -2505,9 +2670,43 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("make the default webpage openclaw");
   });
+  it("projects canonical SQLite continuity when starting without a native thread binding", async () => {
+    const sessionId = "session-sqlite-fresh-continuity";
+    const sessionFile = `agent:main:${sessionId}`;
+    const storePath = path.join(tempDir, "sqlite-fresh-continuity.sqlite");
+    const workspaceDir = path.join(tempDir, "workspace-sqlite-fresh-continuity");
+    const params = createParams(sessionFile, workspaceDir);
+    await attachSqliteSessionTarget(params, storePath, sessionId);
+    await appendSqliteHistoryMessage(
+      params,
+      userMessage("canonical SQLite startup question", Date.now()),
+    );
+    await appendSqliteHistoryMessage(
+      params,
+      assistantMessage("canonical SQLite startup answer", Date.now() + 1),
+    );
+    params.prompt = "continue the canonical SQLite startup";
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+    expect(harness.requests.map((request) => request.method)).toContain("thread/start");
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("canonical SQLite startup question");
+    expect(inputText).toContain("canonical SQLite startup answer");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("continue the canonical SQLite startup");
+  });
   it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
@@ -2565,7 +2764,7 @@ describe("runCodexAppServerAttempt", () => {
       createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(userMessage("prior visible context", Date.now()));
     sessionManager.appendMessage(assistantMessage("prior assistant context", Date.now() + 1));
     const harness = createStartedThreadHarness();
@@ -2607,7 +2806,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt - 2_000),
     );
@@ -2740,7 +2939,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(userMessage("old native-owned context", bindingUpdatedAt - 2_000));
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt + 1_000),
@@ -2776,6 +2975,51 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("is the previous message trustworthy?");
   });
+  it("projects newer canonical SQLite continuity when a resumed binding is stale", async () => {
+    const sessionId = "session-sqlite-resume-continuity";
+    const sessionFile = `agent:main:${sessionId}`;
+    const storePath = path.join(tempDir, "sqlite-resume-continuity.sqlite");
+    const workspaceDir = path.join(tempDir, "workspace-sqlite-resume-continuity");
+    const params = createParams(sessionFile, workspaceDir);
+    await attachSqliteSessionTarget(params, storePath, sessionId);
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
+    if (!Number.isFinite(bindingUpdatedAt)) {
+      throw new Error("expected valid Codex binding timestamp");
+    }
+    await appendSqliteHistoryMessage(
+      params,
+      userMessage("old canonical SQLite native-owned context", bindingUpdatedAt - 2_000),
+    );
+    await appendSqliteHistoryMessage(
+      params,
+      userMessage("new canonical SQLite resume question", bindingUpdatedAt + 1_000),
+    );
+    await appendSqliteHistoryMessage(
+      params,
+      assistantMessage("new canonical SQLite resume answer", bindingUpdatedAt + 2_000),
+    );
+    params.prompt = "continue the canonical SQLite resume";
+    const harness = createResumeHarness();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+    expect(harness.requests.map((request) => request.method)).toContain("thread/resume");
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).not.toContain("old canonical SQLite native-owned context");
+    expect(inputText).toContain("new canonical SQLite resume question");
+    expect(inputText).toContain("new canonical SQLite resume answer");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("continue the canonical SQLite resume");
+  });
   it("does not project Codex mirrored transcript echoes as stale binding continuity", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
@@ -2784,7 +3028,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     const codexMirrorUserMessage = {
       ...userMessage("codex mirrored user echo", bindingUpdatedAt + 1_000),
       idempotencyKey: "client-run:user",
@@ -2831,7 +3075,7 @@ describe("runCodexAppServerAttempt", () => {
       ...originalBinding,
       historyCoveredThrough: new Date(originalBindingUpdatedAt).toISOString(),
     });
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     const firstHarness = createResumeHarness();
     const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await firstHarness.waitForMethod("turn/start");
@@ -2869,7 +3113,7 @@ describe("runCodexAppServerAttempt", () => {
       ...oldBinding,
       historyCoveredThrough: new Date(oldBindingUpdatedAt).toISOString(),
     });
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", oldBindingUpdatedAt + 1_000),
     );
@@ -3567,7 +3811,7 @@ describe("runCodexAppServerAttempt", () => {
   it("captures the complete mirrored branch through a settled tool-result boundary", async () => {
     const storePath = path.join(tempDir, "settled-finalization-context.sqlite");
     const sessionId = "session-settled-finalization-context";
-    const sessionFile = `sqlite:main:${sessionId}:${storePath}`;
+    const sessionFile = `agent:main:${sessionId}`;
     const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
@@ -3859,11 +4103,11 @@ describe("runCodexAppServerAttempt", () => {
       "thread/resume",
       "turn/start",
       "turn/start",
-      "thread/unsubscribe",
     ]);
+    await expectRetainedSuccessfulThread(harness.client, "thread-existing");
   });
 
-  it("waits for an already-active native turn before starting a resumed thread turn", async () => {
+  it("waits for the exact active native turn before starting a resumed thread turn", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const harness = createAppServerHarness(async (method) => {
@@ -3893,6 +4137,24 @@ describe("runCodexAppServerAttempt", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-existing",
+        turn: { id: "stale-turn", status: "completed" },
+      },
+    });
+    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    await harness.notify({
+      method: "error",
+      params: {
+        threadId: "thread-existing",
+        turnId: "compact-turn",
+        error: { message: "native turn has not completed" },
+        willRetry: false,
+      },
+    });
+    expect(harness.requests.map((request) => request.method)).not.toContain("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-existing",
         turn: { id: "compact-turn", status: "completed" },
       },
     });
@@ -3902,8 +4164,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.requests.map((request) => request.method)).toEqual([
       "thread/resume",
       "turn/start",
-      "thread/unsubscribe",
     ]);
+    await expectRetainedSuccessfulThread(harness.client, "thread-existing");
   });
   it("does not retry turn/start for non-compact active turns", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -4226,8 +4488,8 @@ describe("runCodexAppServerAttempt", () => {
         _meta: null,
       });
     const request = vi.fn(async (method: string) => {
-      if (method === "plugin/list") {
-        return {
+      if (method === "plugin/installed" || method === "plugin/list") {
+        const installed = {
           marketplaces: [
             {
               name: "openai-bundled",
@@ -4247,8 +4509,10 @@ describe("runCodexAppServerAttempt", () => {
             },
           ],
           marketplaceLoadErrors: [],
-          featuredPluginIds: [],
-        };
+        } satisfies v2.PluginInstalledResponse;
+        return method === "plugin/installed"
+          ? installed
+          : ({ ...installed, featuredPluginIds: [] } satisfies v2.PluginListResponse);
       }
       if (method === "plugin/read") {
         return {
@@ -4461,7 +4725,7 @@ describe("runCodexAppServerAttempt", () => {
       expectedAppEnabled: true,
     },
     {
-      name: "does not expose a cached disabled app when runtime callability is unknown",
+      name: "provisionally enables a cached disabled plugin app after thread attestation",
       cachedEnabled: false,
       cacheKey: ({ appServer, agentDir }: GoogleCalendarCacheKeyInput) =>
         buildCodexPluginAppCacheKey({
@@ -4471,8 +4735,8 @@ describe("runCodexAppServerAttempt", () => {
         }),
       appInventory: (method: "app/installed" | "app/read") =>
         codexAppInventoryResponse(method, [googleCalendarAppInfo(false)]),
-      expectsAppInventory: true,
-      expectedAppEnabled: undefined,
+      expectsAppInventory: false,
+      expectedAppEnabled: true,
     },
     {
       name: "keys plugin app inventory by inherited API key fallback credentials",
@@ -4527,12 +4791,31 @@ describe("runCodexAppServerAttempt", () => {
       expect(threadStartParams?.config?.apps?.["google-calendar-app"]?.enabled).toBe(
         expectedAppEnabled,
       );
+      const globalAppInventoryRequests = requests.filter(
+        (entry) =>
+          entry.method === "app/installed" &&
+          typeof (entry.params as { threadId?: unknown } | undefined)?.threadId !== "string",
+      );
       if (expectsAppInventory) {
-        expect(requests.map((entry) => entry.method)).toContain("app/installed");
+        expect(globalAppInventoryRequests).not.toHaveLength(0);
         expect(requests.map((entry) => entry.method)).toContain("app/read");
       } else {
-        expect(requests.map((entry) => entry.method)).not.toContain("app/installed");
+        expect(globalAppInventoryRequests).toHaveLength(0);
         expect(requests.map((entry) => entry.method)).not.toContain("app/read");
+      }
+      if (!cachedEnabled) {
+        expect(
+          requests.filter(
+            (entry) =>
+              entry.method === "app/installed" &&
+              typeof (entry.params as { threadId?: unknown } | undefined)?.threadId === "string",
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            method: "app/installed",
+            params: { threadId: "thread-1", forceRefresh: false },
+          }),
+        ]);
       }
     },
   );
@@ -4731,7 +5014,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = openFileBackedSessionManagerForTest(sessionFile);
+    const sessionManager = openRunSession(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "pre-binding native-owned context: keep the original plan",
@@ -4823,25 +5106,24 @@ describe("runCodexAppServerAttempt", () => {
     expect(savedBinding?.threadId).toBe("thread-1");
   });
   it("restarts the app-server once when a shared client closes during startup", async () => {
-    const { result, requests } = await runSharedClientRestartTest(1);
+    const { result, requests, client } = await runSharedClientRestartTest(1);
     expect(readAttemptTerminal(result).aborted).toBe(false);
-    expect(requests).toEqual([
-      ["thread/resume"],
-      ["thread/resume", "turn/start", "thread/unsubscribe"],
-    ]);
+    expect(requests).toEqual([["thread/resume"], ["thread/resume", "turn/start"]]);
+    await expectRetainedSuccessfulThread(client, "thread-existing");
   });
 
   it("tolerates a second app-server close while retrying startup", async () => {
-    const { result, requests } = await runSharedClientRestartTest(2);
+    const { result, requests, client } = await runSharedClientRestartTest(2);
     expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests).toEqual([
       ["thread/resume"],
       ["thread/resume"],
-      ["thread/resume", "turn/start", "thread/unsubscribe"],
+      ["thread/resume", "turn/start"],
     ]);
+    await expectRetainedSuccessfulThread(client, "thread-existing");
   });
   it("does not retire the shared Codex client when a spawned helper run fails with a logical thread/start error", async () => {
-    const { clearSpy, state } = installFailingThreadStartClient(() => {
+    const { retireSpy, state } = installFailingThreadStartClient(() => {
       throw new CodexAppServerRpcError(
         { message: "401 authentication_error: Invalid bearer token" },
         "thread/start",
@@ -4850,37 +5132,39 @@ describe("runCodexAppServerAttempt", () => {
     const params = createRunParams();
     params.spawnedBy = "agent:main:session-parent";
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow("Invalid bearer token");
-    const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === state.failedClient);
+    const calledWithFailedClient = retireSpy.mock.calls.some(([arg]) => arg === state.failedClient);
     expect(calledWithFailedClient).toBe(false);
-    clearSpy.mockRestore();
+    retireSpy.mockRestore();
   });
 
   it("retires the shared Codex client when a spawned helper run times out during thread/start", async () => {
-    const { clearSpy, state } = installFailingThreadStartClient(() => new Promise<never>(() => {}));
+    const { retireSpy, state } = installFailingThreadStartClient(
+      () => new Promise<never>(() => {}),
+    );
     const params = createRunParams();
     params.spawnedBy = "agent:main:session-parent";
     params.timeoutMs = 1;
     await expect(runCodexAppServerAttempt(params, { startupTimeoutFloorMs: 1 })).rejects.toThrow(
       "codex app-server startup timed out",
     );
-    const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === state.failedClient);
+    const calledWithFailedClient = retireSpy.mock.calls.some(([arg]) => arg === state.failedClient);
     expect(calledWithFailedClient).toBe(true);
-    clearSpy.mockRestore();
+    retireSpy.mockRestore();
   });
   it("retires the shared Codex client when a spawned helper hits a thread/start write failure", async () => {
-    const { clearSpy, state } = installFailingThreadStartClient(() => {
+    const { retireSpy, state } = installFailingThreadStartClient(() => {
       throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
     });
     const params = createRunParams();
     params.spawnedBy = "agent:main:session-parent";
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow("write EPIPE");
-    const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === state.failedClient);
+    const calledWithFailedClient = retireSpy.mock.calls.some(([arg]) => arg === state.failedClient);
     expect(calledWithFailedClient).toBe(true);
-    clearSpy.mockRestore();
+    retireSpy.mockRestore();
   });
 
   it("retires the shared Codex client when a top-level run fails with a logical thread/start error", async () => {
-    const { clearSpy, state } = installFailingThreadStartClient(() => {
+    const { retireSpy, state } = installFailingThreadStartClient(() => {
       throw new CodexAppServerRpcError(
         { message: "401 authentication_error: Invalid bearer token" },
         "thread/start",
@@ -4888,9 +5172,9 @@ describe("runCodexAppServerAttempt", () => {
     });
     const params = createRunParams();
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow("Invalid bearer token");
-    const calledWithFailedClient = clearSpy.mock.calls.some(([arg]) => arg === state.failedClient);
+    const calledWithFailedClient = retireSpy.mock.calls.some(([arg]) => arg === state.failedClient);
     expect(calledWithFailedClient).toBe(true);
-    clearSpy.mockRestore();
+    retireSpy.mockRestore();
   });
   it("passes configured app-server policy, sandbox, service tier, and model on resume", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -5430,11 +5714,17 @@ describe("runCodexAppServerAttempt", () => {
       fastMode: () => true,
       expectedServiceTier: "priority",
     },
+    {
+      name: "configured non-priority tier",
+      fastMode: undefined,
+      configuredServiceTier: "flex",
+      expectedServiceTier: "flex",
+    },
   ] satisfies Array<{
     name: string;
     fastMode: EmbeddedRunAttemptParams["fastMode"];
-    configuredServiceTier?: "priority";
-    expectedServiceTier?: "priority" | null;
+    configuredServiceTier?: "flex" | "priority";
+    expectedServiceTier?: "flex" | "priority" | null;
   }>)(
     "maps $name to app-server resume and turn service tier",
     async ({ fastMode, configuredServiceTier, expectedServiceTier }) => {
@@ -5444,6 +5734,8 @@ describe("runCodexAppServerAttempt", () => {
       const { requests, waitForMethod, completeTurn } = createResumeHarness();
       const params = createParams(sessionFile, workspaceDir);
       params.fastMode = fastMode;
+      const onAgentEvent = vi.fn();
+      params.onAgentEvent = onAgentEvent;
       const options = configuredServiceTier
         ? { pluginConfig: { appServer: { serviceTier: configuredServiceTier } } }
         : {};
@@ -5454,6 +5746,13 @@ describe("runCodexAppServerAttempt", () => {
         const requestParams = request?.params as Record<string, unknown> | undefined;
         expect(requestParams?.serviceTier).toBe(expectedServiceTier);
       }
+      expect(onAgentEvent).toHaveBeenCalledWith({
+        stream: "codex_app_server.lifecycle",
+        data: expect.objectContaining({
+          phase: "turn_starting",
+          serviceTier: expectedServiceTier,
+        }),
+      });
     },
   );
   it("reuses the bound auth profile for app-server startup when params omit it", async () => {

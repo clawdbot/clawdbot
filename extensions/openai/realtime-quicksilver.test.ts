@@ -1,6 +1,6 @@
 // Openai tests cover GPT-Live (quicksilver) realtime voice gating.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { isOpenAIGptLiveModel } from "./realtime-quicksilver.js";
+import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 const mintSecretMock = vi.hoisted(() => vi.fn());
@@ -28,6 +28,13 @@ describe("openai gpt-live model detection", () => {
     expect(isOpenAIGptLiveModel("gpt-realtime-2.1")).toBe(false);
     expect(isOpenAIGptLiveModel("gpt-liveish")).toBe(false);
   });
+
+  it("advertises only curated /v1/live models", () => {
+    expect(isSupportedOpenAIGptLiveModel("gpt-live-1-codex")).toBe(true);
+    expect(isSupportedOpenAIGptLiveModel(" GPT-Live-1-Boulder-Alpha ")).toBe(true);
+    expect(isSupportedOpenAIGptLiveModel("gpt-live-1")).toBe(false);
+    expect(isSupportedOpenAIGptLiveModel("gpt-live-1-mini")).toBe(false);
+  });
 });
 
 describe("openai realtime voice provider gpt-live transport routing", () => {
@@ -54,7 +61,7 @@ describe("openai realtime voice provider gpt-live transport routing", () => {
     });
   });
 
-  it("routes gpt-live models to a backend WebSocket bridge", () => {
+  it("routes gpt-live by the host-owned delegation seam", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const callbacks = {
       onAudio: vi.fn(),
@@ -66,6 +73,13 @@ describe("openai realtime voice provider gpt-live transport routing", () => {
         providerConfig: { apiKey: "test-key", model: "gpt-live-1-codex" },
       }),
     ).toMatchObject({ supportsToolResultContinuation: true });
+    expect(
+      provider.createBridge({
+        ...callbacks,
+        providerConfig: { apiKey: "test-key", model: "gpt-live-1" },
+        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+      }),
+    ).toMatchObject({ supportsToolResultContinuation: false });
     expect(() =>
       provider.createBridge({
         ...callbacks,

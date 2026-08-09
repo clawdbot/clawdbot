@@ -40,7 +40,7 @@ const PositiveDurationSchema = z.union([z.string(), z.number()]).superRefine((va
   }
 });
 
-export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
+const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
 
 export const SessionSchema = z
   .object({

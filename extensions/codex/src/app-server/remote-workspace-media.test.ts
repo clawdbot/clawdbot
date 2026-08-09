@@ -57,7 +57,7 @@ function createLocalCommandClient() {
         try {
           const result = await execFileAsync(params.command[0]!, params.command.slice(1), {
             maxBuffer: Math.max(1_024, params.outputBytesCap ?? 1024 * 1024),
-            ...(params.timeoutMs === undefined ? {} : { timeout: params.timeoutMs }),
+            ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
           });
           return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
         } catch (error) {

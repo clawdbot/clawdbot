@@ -22,7 +22,10 @@ import {
 } from "../../tool-search.js";
 import { resolveAgentToolSurfacePlan } from "../../tool-surface-plan.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
-import type { CronCreatorToolAllowlistEntry } from "../../tools/cron-tool.js";
+import type {
+  CronCreatorToolAllowlistEntry,
+  CronToolsAllowCaptureRef,
+} from "../../tools/cron-tool.js";
 import { log } from "../logger.js";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -90,6 +93,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     isRawModelRun,
     skillWorkshopProposalOnly: attempt.skillWorkshopProposalOnly,
     toolsAllow: attempt.toolsAllow,
+    forceCodeModeControls: attempt.forceCodeModeTools,
   });
   const effectiveToolsAllow =
     toolSearchControlsEnabledForRun && toolsAllowWithForcedRuntimeTools
@@ -109,6 +113,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
   const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
   const codeModeSkills = attempt.toolsAllow?.length ? [] : params.codeModeSkills;
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+  const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
   const spawnWorkspaceDir =
     params.effectiveCwd !== params.effectiveWorkspace
@@ -246,12 +251,14 @@ export function prepareEmbeddedAttemptToolBase(params: {
           workspaceDir: params.effectiveWorkspace,
           spawnWorkspaceDir,
           config: toolSearchRuntimeConfig,
+          webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
           abortSignal: params.runAbortController.signal,
           modelProvider: attempt.provider,
           modelId: attempt.modelId,
           skillWorkshop: {
             env: attempt.skillWorkshopProposalEnv,
             proposalOnly: attempt.skillWorkshopProposalOnly,
+            ...(attempt.skillWorkshopUpdateProposals ? { updateProposals: true } : {}),
             ...(attempt.skillWorkshopAutonomousCapture ? { autonomousCapture: true } : {}),
             origin: attempt.skillWorkshopOrigin,
             proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
@@ -298,9 +305,11 @@ export function prepareEmbeddedAttemptToolBase(params: {
           runtimeToolAllowlist: effectiveToolsAllow,
           inheritedToolAllowlistRef: inheritedToolAllowlist,
           cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
+          cronCreatorToolAllowlistCaptureRef,
           authProfileStore: attempt.authProfileStore,
           recordToolPrepStage: params.markCoreToolStage,
           onToolOutcome: attempt.onToolOutcome,
+          isTurnTainted: attempt.isTurnTainted,
           allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
           skillsSnapshot: params.skillsSnapshot,
           skillUsagePaths: params.skillUsagePaths,
@@ -329,6 +338,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
     codeModeSkills,
     computerContextEpoch,
     cronCreatorToolAllowlist,
+    cronCreatorToolAllowlistCaptureRef,
     effectiveToolsAllow,
     forceDirectMessageTool,
     inheritedToolAllowlist,

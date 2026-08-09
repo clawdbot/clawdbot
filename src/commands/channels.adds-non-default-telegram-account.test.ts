@@ -10,7 +10,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import { configMocks, offsetMocks, secretMocks } from "./channels.mock-harness.js";
 import { channelsAddCommand } from "./channels/add.js";
 import { channelsRemoveCommand } from "./channels/remove.js";
-import { formatGatewayChannelsStatusLines } from "./channels/status.js";
+import { formatGatewayChannelsStatusLines } from "./channels/status.runtime.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const runtime = createTestRuntime();

@@ -18,7 +18,7 @@ type TeamsMeetingsSpeechBlockedReason =
   | "audio-bridge-unavailable"
   | "teams-microphone-muted";
 
-export type TeamsMeetingsPluginTypes = ReturnType<
+type TeamsMeetingsPluginTypes = ReturnType<
   typeof MeetingPlatformAdapter.pluginTypes<
     TeamsMeetingsConfig,
     TeamsMeetingsTransport,
@@ -30,6 +30,4 @@ export type TeamsMeetingsPluginTypes = ReturnType<
 export type TeamsMeetingsTranscriptSnapshot = TeamsMeetingsPluginTypes["TranscriptSnapshot"];
 export type TeamsMeetingsJoinRequest = TeamsMeetingsPluginTypes["JoinRequest"];
 export type TeamsMeetingsChromeHealth = TeamsMeetingsPluginTypes["ChromeHealth"];
-export type TeamsMeetingsBrowserTab = TeamsMeetingsPluginTypes["BrowserTab"];
 export type TeamsMeetingsSession = TeamsMeetingsPluginTypes["Session"];
-export type TeamsMeetingsJoinResult = TeamsMeetingsPluginTypes["JoinResult"];

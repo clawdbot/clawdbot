@@ -9,12 +9,12 @@ import type { RuntimeEnv } from "../../runtime.js";
 
 type AuthRunCall = {
   agentDir?: string;
+  signal?: AbortSignal;
   workspaceDir?: string;
 };
 
 type ResolvePluginProvidersCall = {
   activate?: boolean;
-  bundledProviderVitestCompat?: boolean;
   config?: unknown;
   includeUntrustedWorkspacePlugins?: boolean;
   providerRefs?: string[];
@@ -75,6 +75,7 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   removeProviderAuthProfilesWithLock: mocks.removeProviderAuthProfilesWithLock,
   upsertAuthProfile: mocks.upsertAuthProfile,
   upsertAuthProfileWithLock: mocks.upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow: mocks.upsertAuthProfileWithLock,
 }));
 
 vi.mock("../../agents/auth-profiles/store.js", () => ({
@@ -272,6 +273,7 @@ const {
   modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
+  runModelsAuthLoginFlow,
 } = await import("./auth.js");
 
 function createRuntime(): RuntimeEnv {
@@ -858,6 +860,60 @@ describe("modelsAuthLoginCommand", () => {
     ).toBe("/tmp/openclaw/agents/coder");
   });
 
+  it("forwards an app-owned cancellation signal to provider auth", async () => {
+    const runtime = createRuntime();
+    const abortController = new AbortController();
+
+    await runModelsAuthLoginFlow({
+      provider: "openai",
+      method: "oauth",
+      config: currentConfig,
+      runtime,
+      prompter: mocks.createClackPrompter(),
+      signal: abortController.signal,
+    });
+
+    expect((readMockCallArg(runProviderAuth) as AuthRunCall).signal).toBe(abortController.signal);
+  });
+
+  it("does not persist credentials returned after app-owned cancellation", async () => {
+    const runtime = createRuntime();
+    const abortController = new AbortController();
+    const cancellation = new Error("Login was replaced");
+    runProviderAuth.mockImplementationOnce(() => {
+      abortController.abort(cancellation);
+      return {
+        profiles: [
+          {
+            profileId: "openai:late@example.com",
+            credential: {
+              type: "oauth",
+              provider: "openai",
+              access: "late-access-token",
+              refresh: "late-refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          },
+        ],
+      };
+    });
+
+    await expect(
+      runModelsAuthLoginFlow({
+        provider: "openai",
+        method: "oauth",
+        config: currentConfig,
+        runtime,
+        prompter: mocks.createClackPrompter(),
+        signal: abortController.signal,
+      }),
+    ).rejects.toBe(cancellation);
+
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.promoteAuthProfileInOrder).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
   it("loads the owning plugin for an explicit provider even in a clean config", async () => {
     const runtime = createRuntime();
     const runClaudeCliMigration = vi.fn().mockResolvedValue({
@@ -903,7 +959,6 @@ describe("modelsAuthLoginCommand", () => {
     ) as ResolvePluginProvidersCall;
     expect(providerResolutionCall.config).toEqual({});
     expect(providerResolutionCall.workspaceDir).toBe("/tmp/openclaw/workspace");
-    expect(providerResolutionCall.bundledProviderVitestCompat).toBe(true);
     expect(providerResolutionCall.includeUntrustedWorkspacePlugins).toBe(false);
     expect(providerResolutionCall.providerRefs).toEqual(["anthropic"]);
     expect(providerResolutionCall.activate).toBe(true);
@@ -1317,6 +1372,15 @@ describe("modelsAuthLoginCommand", () => {
       'Unknown provider "anthropic". Loaded providers: openai. Verify plugins via `openclaw plugins list --json`.',
     );
   });
+
+  it.each(["openai-codex", "codex-cli"])(
+    "rejects retired manual auth provider %s",
+    async (provider) => {
+      await expect(modelsAuthLoginCommand({ provider }, createRuntime())).rejects.toThrow(
+        `"${provider}" is a legacy provider ID; use --provider openai.`,
+      );
+    },
+  );
 
   it("does not persist a cancelled manual token entry", async () => {
     const runtime = createRuntime();

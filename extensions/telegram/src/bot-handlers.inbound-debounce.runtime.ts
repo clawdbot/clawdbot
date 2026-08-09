@@ -12,7 +12,12 @@ import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import type { TelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
-import { getTelegramTextParts } from "./bot/helpers.js";
+import {
+  buildTelegramThreadParams,
+  getTelegramTextParts,
+  joinTelegramTextParts,
+  resolveTelegramMessageThreadSpec,
+} from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
@@ -123,10 +128,11 @@ export function createTelegramInboundDebounceRuntime(
             settleSpooledReplayParticipants(participants, result);
             return;
           }
-          const combinedText = entries
-            .map((entry) => getTelegramTextParts(entry.msg).text)
-            .filter(Boolean)
-            .join("\n");
+          const combinedTextParts = joinTelegramTextParts(
+            entries.map((entry) => entry.msg),
+            "\n",
+          );
+          const combinedText = combinedTextParts.text;
           const combinedMedia = entries.flatMap((entry) => entry.allMedia);
           if (!combinedText.trim() && combinedMedia.length === 0) {
             releaseDispatchDedupeClaims(
@@ -141,6 +147,7 @@ export function createTelegramInboundDebounceRuntime(
             ...buildSyntheticTextMessage({
               base: first.msg,
               text: combinedText,
+              entities: combinedTextParts.entities,
               date: last.msg.date ?? first.msg.date,
             }),
             forward_origin: undefined,
@@ -197,12 +204,15 @@ export function createTelegramInboundDebounceRuntime(
       }
       const chatId = items[0]?.msg.chat.id;
       if (chatId != null) {
-        const threadId = items[0]?.msg.message_thread_id;
+        const firstMessage = items[0]?.msg;
+        const threadParams = firstMessage
+          ? buildTelegramThreadParams(resolveTelegramMessageThreadSpec(firstMessage))
+          : undefined;
         void bot.api
           .sendMessage(
             chatId,
             "Something went wrong while processing your message. Please try again.",
-            threadId != null ? { message_thread_id: threadId } : undefined,
+            threadParams,
           )
           .catch((sendError: unknown) => {
             logVerbose(`telegram: error fallback send failed: ${String(sendError)}`);

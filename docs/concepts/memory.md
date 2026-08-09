@@ -184,16 +184,12 @@ a generic OpenAI-compatible endpoint.
 See [Memory search](/concepts/memory-search) for how search works, tuning
 options, and provider setup.
 
-## Memory backends
+## Memory engines
 
 <CardGroup cols={3}>
 <Card title="Builtin (default)" icon="database" href="/concepts/memory-builtin">
 SQLite-based. Works out of the box with keyword search, vector similarity, and
 hybrid search. No extra dependencies.
-</Card>
-<Card title="QMD" icon="search" href="/concepts/memory-qmd">
-Local-first sidecar with reranking, query expansion, and the ability to index
-directories outside the workspace.
 </Card>
 <Card title="Honcho" icon="brain" href="/concepts/memory-honcho">
 AI-native cross-session memory with user modeling, semantic search, and
@@ -216,7 +212,9 @@ dashboards, compiled digests, and wiki-native tools (`wiki_status`,
 
 `memory-wiki` does not replace the active memory plugin; the active memory
 plugin still owns recall, promotion, and dreaming. `memory-wiki` adds a
-provenance-rich knowledge layer beside it.
+provenance-rich knowledge layer beside it. You can browse the compiled wiki
+in the Control UI under Memory → Dreams → Diary → **Memory Wiki**
+([details](/plugins/memory-wiki#browsing-the-wiki-in-the-control-ui)).
 
 <CardGroup cols={1}>
 <Card title="Memory Wiki" icon="book" href="/plugins/memory-wiki">
@@ -328,7 +326,6 @@ openclaw memory index --force   # Rebuild the index
 
 - [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
 - [Builtin memory engine](/concepts/memory-builtin): default SQLite backend.
-- [QMD memory engine](/concepts/memory-qmd): advanced local-first sidecar.
 - [Honcho memory](/concepts/memory-honcho): AI-native cross-session memory.
 - [Memory LanceDB](/plugins/memory-lancedb): LanceDB-backed plugin with OpenAI-compatible embeddings.
 - [Memory Wiki](/plugins/memory-wiki): compiled knowledge vault and wiki-native tools.

@@ -1,4 +1,5 @@
 // Matrix tests cover handler.thread root media plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import {
@@ -7,12 +8,7 @@ import {
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function readFirstMockArg(fn: unknown): unknown {
   return (fn as { mock: { calls: unknown[][] } }).mock.calls.at(0)?.[0];

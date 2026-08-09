@@ -213,10 +213,33 @@ describe("agent command registration", () => {
         codeMode: "code",
         localModelLean: true,
         fallback: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
-        authEnvOnly: true,
+        // Stored credentials are the default so exec reaches the same logins as
+        // the rest of the CLI; --auth-env-only is the opt-in restriction.
+        authEnvOnly: false,
+        isolated: false,
         timeout: "600",
         json: true,
       }),
+      runtime,
+    );
+  });
+
+  it("restricts credentials and config to the process environment with --auth-env-only", async () => {
+    await runCli(["agent", "exec", "fix it", "--auth-env-only"]);
+
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "fix it",
+      expect.objectContaining({ authEnvOnly: true }),
+      runtime,
+    );
+  });
+
+  it("forwards the pinned-config and isolated run flags", async () => {
+    await runCli(["agent", "exec", "fix it", "--config", "/tmp/ci.json", "--isolated"]);
+
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "fix it",
+      expect.objectContaining({ config: "/tmp/ci.json", isolated: true }),
       runtime,
     );
   });
@@ -262,6 +285,17 @@ describe("agent command registration", () => {
     expect((betaOptions as { json?: boolean }).json).toBe(true);
     expect(betaRuntime).toBe(runtime);
     expect(betaFlags).toEqual({ hasFlags: true });
+  });
+
+  it("keeps JSON-only agent creation non-interactive", async () => {
+    await runCli(["agents", "add", "alpha", "--json"]);
+
+    const [options, callRuntime, flags] = commandCall(agentsAddCommandMock);
+    expect(options).toEqual(
+      expect.objectContaining({ name: "alpha", json: true, nonInteractive: false }),
+    );
+    expect(callRuntime).toBe(runtime);
+    expect(flags).toEqual({ hasFlags: true });
   });
 
   it("runs agents list when root agents command is invoked", async () => {

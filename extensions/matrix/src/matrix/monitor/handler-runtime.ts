@@ -4,9 +4,11 @@ import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 
 export type MatrixDraftStreamHandle = {
   update: (text: string) => void;
+  flush: () => Promise<void>;
   stop: () => Promise<string | undefined>;
   discardPending: () => Promise<void>;
   eventId: () => string | undefined;
+  content: () => string | undefined;
   mustDeliverFinalNormally: () => boolean;
   matchesPreparedText: (text: string) => boolean;
   finalizeLive: () => Promise<boolean>;
@@ -17,8 +19,11 @@ export async function redactMatrixDraftEvent(
   client: MatrixClient,
   roomId: string,
   draftEventId: string,
-): Promise<void> {
-  await client.redactEvent(roomId, draftEventId).catch(() => {});
+): Promise<boolean> {
+  return await client.redactEvent(roomId, draftEventId).then(
+    () => true,
+    () => false,
+  );
 }
 
 export function buildMatrixFinalizedPreviewContent(): Record<string, unknown> {

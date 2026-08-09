@@ -107,6 +107,20 @@ function buildUnknownNodePairRequestIdMessage(
   return lines.join("\n");
 }
 
+function rethrowUnknownNodePairRequestId(
+  error: unknown,
+  requestId: string,
+  opts: NodesRpcOpts,
+): never {
+  if (!isUnknownNodePairRequestIdError(error)) {
+    throw error;
+  }
+  // Reuse the gateway error so generic formatting does not append its raw cause.
+  error.name = "Error";
+  error.message = buildUnknownNodePairRequestIdMessage(requestId, opts);
+  throw error;
+}
+
 /** Register node pairing management commands. */
 export function registerNodesPairingCommands(nodes: Command) {
   nodesCallOpts(
@@ -162,13 +176,7 @@ export function registerNodesPairingCommands(nodes: Command) {
               },
             );
           } catch (error) {
-            if (!isUnknownNodePairRequestIdError(error)) {
-              throw error;
-            }
-            // Reuse the gateway error so generic formatting does not append its raw cause.
-            error.name = "Error";
-            error.message = buildUnknownNodePairRequestIdMessage(requestId, opts);
-            throw error;
+            rethrowUnknownNodePairRequestId(error, requestId, opts);
           }
           defaultRuntime.writeJson(result);
         });
@@ -182,9 +190,14 @@ export function registerNodesPairingCommands(nodes: Command) {
       .argument("<requestId>", "Pending request id")
       .action(async (requestId: string, opts: NodesRpcOpts) => {
         await runNodesCommand("reject", async () => {
-          const result = await callGatewayCli("node.pair.reject", opts, {
-            requestId,
-          });
+          let result: unknown;
+          try {
+            result = await callGatewayCli("node.pair.reject", opts, {
+              requestId,
+            });
+          } catch (error) {
+            rethrowUnknownNodePairRequestId(error, requestId, opts);
+          }
           defaultRuntime.writeJson(result);
         });
       }),

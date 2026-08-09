@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type {
   PluginHookSkillEvaluationFinding,
   PluginHookSkillProposalEvaluateResult,
@@ -22,6 +24,11 @@ export const MAX_PROPOSAL_SUPPORT_FILES = 64;
 export const MAX_SKILL_PROPOSAL_EVALUATION_BYTES = 512 * 1024;
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
 
+type SkillProposalRecordValidationError = {
+  code: "invalid-proposal-metadata" | "invalid-rollback-metadata";
+  message: string;
+};
+
 export function assertSkillProposalEvaluationWithinLimit(
   evaluation: SkillProposalEvaluation,
 ): void {
@@ -39,9 +46,11 @@ export function assertProposalId(proposalId: string): void {
   }
 }
 
-export function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return null;
+export function validateSkillProposalRecord(
+  raw: unknown,
+): Result<SkillProposalRecord, SkillProposalRecordValidationError> {
+  if (!isRecord(raw)) {
+    return invalidMetadata("proposal");
   }
   const record = raw as SkillProposalRecord;
   if (
@@ -68,13 +77,18 @@ export function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | nu
     !record.scan ||
     typeof record.scan !== "object"
   ) {
-    return null;
+    return invalidMetadata("proposal");
   }
-  return record;
+  return ok(record);
+}
+
+export function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | null {
+  const result = validateSkillProposalRecord(raw);
+  return result.ok ? result.value : null;
 }
 
 export function parseSkillProposalEvaluation(raw: unknown): SkillProposalEvaluation | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+  if (!isRecord(raw)) {
     return null;
   }
   const value = raw as SkillProposalEvaluation;
@@ -107,7 +121,7 @@ export function parseSkillProposalEvaluation(raw: unknown): SkillProposalEvaluat
 function isValidEvaluationOutcome(
   value: unknown,
 ): value is PluginHookSkillProposalEvaluationOutcome {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const outcome = value as PluginHookSkillProposalEvaluationOutcome;
@@ -133,7 +147,7 @@ function isValidEvaluationOutcome(
 }
 
 function isValidEvaluationResult(value: unknown): value is PluginHookSkillProposalEvaluateResult {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const result = value as PluginHookSkillProposalEvaluateResult;
@@ -182,7 +196,7 @@ function isValidEvaluationMetrics(
   if (value === undefined) {
     return true;
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const entries = Object.entries(value);
@@ -208,7 +222,7 @@ function isValidSupportFileList(value: unknown): boolean {
   }
   const seen = new Set<string>();
   for (const item of value) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) {
+    if (!isRecord(item)) {
       return false;
     }
     const file = item as SkillProposalSupportFile;
@@ -241,9 +255,11 @@ function isValidSupportFileList(value: unknown): boolean {
   return true;
 }
 
-export function parseSkillProposalRollback(raw: unknown): SkillProposalRollback | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return null;
+export function validateSkillProposalRollback(
+  raw: unknown,
+): Result<SkillProposalRollback, SkillProposalRecordValidationError> {
+  if (!isRecord(raw)) {
+    return invalidMetadata("rollback");
   }
   const rollback = raw as SkillProposalRollback;
   if (
@@ -258,7 +274,21 @@ export function parseSkillProposalRollback(raw: unknown): SkillProposalRollback 
     (rollback.previousContent !== undefined && typeof rollback.previousContent !== "string") ||
     (rollback.supportFiles !== undefined && !Array.isArray(rollback.supportFiles))
   ) {
-    return null;
+    return invalidMetadata("rollback");
   }
-  return rollback;
+  return ok(rollback);
+}
+
+export function parseSkillProposalRollback(raw: unknown): SkillProposalRollback | null {
+  const result = validateSkillProposalRollback(raw);
+  return result.ok ? result.value : null;
+}
+
+function invalidMetadata<T>(
+  kind: "proposal" | "rollback",
+): Result<T, SkillProposalRecordValidationError> {
+  return err({
+    code: `invalid-${kind}-metadata`,
+    message: `invalid ${kind} metadata`,
+  });
 }

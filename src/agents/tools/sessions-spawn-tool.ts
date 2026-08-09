@@ -14,7 +14,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -24,6 +23,7 @@ import {
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagent-attachments.js";
+import { getSubagentDeliveryBacklogPressure } from "../subagent-registry.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
@@ -103,7 +103,7 @@ function hasAnyThreadAvailability(availability: SessionsSpawnThreadAvailability)
 
 function resolveSessionsSpawnThreadAvailability(opts?: {
   config?: OpenClawConfig;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   agentAccountId?: string;
 }): SessionsSpawnThreadAvailability {
   const channel = opts?.agentChannel;
@@ -268,7 +268,7 @@ export function createSessionsSpawnTool(
     requesterTurnRunId?: string;
     /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
     completionOwnerKey?: string;
-    agentChannel?: GatewayMessageChannel;
+    agentChannel?: string;
     agentAccountId?: string;
     agentTo?: string;
     agentThreadId?: string | number;
@@ -397,6 +397,14 @@ export function createSessionsSpawnTool(
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
+      const deliveryPressure = getSubagentDeliveryBacklogPressure();
+      if (deliveryPressure.blocked) {
+        return jsonResult({
+          status: "forbidden",
+          error: `sessions_spawn is paused because ${deliveryPressure.suspended} completed tasks have blocked delivery. Run openclaw tasks list, then retry or dismiss blocked deliveries.`,
+          ...roleContext,
+        });
+      }
       const visibleResult = await maybeSpawnVisibleSession({
         raw: params,
         task,

@@ -125,6 +125,8 @@ export class CopilotGatewayClient {
     this.statusListeners = new Set();
     this.lifecycle = null;
     this.tokenRecovery = null;
+    this.tickWatchTimer = null;
+    this.lastInboundActivityAtMs = null;
   }
 
   onEvent(listener) {
@@ -158,7 +160,7 @@ export class CopilotGatewayClient {
     const protocol = new GatewayProtocolClient({
       createSocket: (handlers) => createBrowserSocket(gatewayScope, handlers, this.WebSocketImpl),
       createRequestId: () => crypto.randomUUID(),
-      buildConnectPlan: ({ nonce }) =>
+      buildConnectPlan: ({ nonce, challengeTs }) =>
         lifecycle.buildPlan({
           client: {
             id: CLIENT_ID,
@@ -170,6 +172,7 @@ export class CopilotGatewayClient {
           role: ROLE,
           defaultScopes: SCOPES,
           nonce,
+          challengeTs,
         }),
       buildConnectParams: (plan) => ({
         minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
@@ -195,6 +198,7 @@ export class CopilotGatewayClient {
       onHello: (hello) => {
         this.ready = true;
         this.hello = hello;
+        this.#startTickWatch(hello, protocol);
         this.#emitStatus({ state: "ready", label: "Gateway connected", hello });
       },
       onConnectFailure: (error, { plan }) => {
@@ -223,6 +227,7 @@ export class CopilotGatewayClient {
         if (this.protocol !== protocol) {
           return;
         }
+        this.#stopTickWatch();
         this.ready = false;
         this.hello = null;
         if (!decision.retry) {
@@ -263,6 +268,11 @@ export class CopilotGatewayClient {
       },
       onConnectError: (error) =>
         this.#emitStatus({ state: "error", label: error.message || "Gateway unavailable" }),
+      onActivity: () => {
+        if (this.protocol === protocol && this.ready) {
+          this.lastInboundActivityAtMs = Date.now();
+        }
+      },
       onEvent: (event) => {
         for (const listener of this.listeners) {
           listener(event);
@@ -277,6 +287,7 @@ export class CopilotGatewayClient {
   }
 
   stop() {
+    this.#stopTickWatch();
     this.ready = false;
     this.hello = null;
     this.tokenRecovery = null;
@@ -292,6 +303,40 @@ export class CopilotGatewayClient {
       return Promise.reject(new Error("Gateway is not ready"));
     }
     return this.protocol.request(method, params, options);
+  }
+
+  #startTickWatch(hello, protocol) {
+    this.#stopTickWatch();
+    const advertised = hello?.policy?.tickIntervalMs;
+    // Gateway policy is remote input; clamp it before allocating a browser timer.
+    const intervalMs = Math.min(
+      2_147_483_647,
+      Math.max(
+        1_000,
+        typeof advertised === "number" && Number.isFinite(advertised) && advertised > 0
+          ? Math.floor(advertised)
+          : 30_000,
+      ),
+    );
+    this.lastInboundActivityAtMs = Date.now();
+    this.tickWatchTimer = setInterval(() => {
+      if (
+        this.protocol === protocol &&
+        this.ready &&
+        this.lastInboundActivityAtMs !== null &&
+        Date.now() - this.lastInboundActivityAtMs > intervalMs * 2
+      ) {
+        protocol.closeSocket(4000, "tick timeout");
+      }
+    }, intervalMs);
+  }
+
+  #stopTickWatch() {
+    if (this.tickWatchTimer !== null) {
+      clearInterval(this.tickWatchTimer);
+      this.tickWatchTimer = null;
+    }
+    this.lastInboundActivityAtMs = null;
   }
 
   #emitStatus(status) {

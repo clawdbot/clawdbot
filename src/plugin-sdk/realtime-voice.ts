@@ -1,15 +1,15 @@
-/**
- * Public SDK subpath for realtime voice provider types, runtime helpers, and talk events.
- */
+/** Production-private runtime seam for bundled and separately published official plugins. */
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
   RealtimeVoiceAudioFormat,
+  RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceGatewayControl,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceCloseReason,
@@ -121,6 +121,7 @@ export {
 export {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
   consultRealtimeVoiceAgent,
+  REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
   type RealtimeVoiceAgentConsultResult,
   type RealtimeVoiceAgentConsultRuntime,
 } from "../talk/agent-consult-runtime.js";
@@ -175,6 +176,12 @@ export {
   createRealtimeVoiceSessionHarness,
   type RealtimeVoiceSessionHarness,
 } from "../talk/realtime-session-harness.js";
+export {
+  createRealtimeVoiceAudioQueue,
+  RealtimeVoiceSessionLifecycle,
+  type RealtimeVoiceAudioQueue,
+  type RealtimeVoiceSessionConnection,
+} from "../talk/realtime-session-lifecycle.js";
 export {
   extendRealtimeVoiceOutputEchoSuppression,
   getRealtimeVoiceBridgeEventHealth,

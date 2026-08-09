@@ -42,7 +42,7 @@ struct ChatMediaImageAttachment: View {
     let artifactId: String
     let label: String
     let resolverReady: Bool
-    let load: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedImage?
+    let load: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?
 
     @State private var state: LoadState = .loading
     @State private var retryGeneration = 0
@@ -134,8 +134,14 @@ struct ChatMediaImageAttachment: View {
                 if !Task.isCancelled { self.state = .unavailable }
                 return
             }
+            guard case let .data(media) = loaded,
+                  media.mimeType.lowercased().hasPrefix("image/")
+            else {
+                self.state = .unavailable
+                return
+            }
             let image = await Task.detached(priority: .userInitiated) {
-                ChatMediaImageDecoder.decode(loaded.data)
+                ChatMediaImageDecoder.decode(media.data)
             }.value
             guard !Task.isCancelled else { return }
             self.state = image.map(LoadState.loaded) ?? .unavailable

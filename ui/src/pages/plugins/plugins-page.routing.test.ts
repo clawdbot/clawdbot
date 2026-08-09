@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import {
   createClient,
   createContext,
   createGateway,
+  createPluginsRouteData,
   createPluginsRouteLocation,
   createResult,
   mountPage,
@@ -29,20 +30,12 @@ describe("PluginsPage routing", () => {
   it("applies the Discover path from route data", async () => {
     const { client } = createClient(async () => createResult());
     const harness = createGateway(client);
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      result: createResult(),
-      error: null,
-      location: createPluginsRouteLocation("/settings/plugins/discover"),
-    };
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      routeData,
+    const routeData: PluginsRouteData = createPluginsRouteData(
+      harness.gateway,
+      createResult(),
+      createPluginsRouteLocation("/settings/plugins/discover"),
     );
+    const { page } = await mountPage(createContext(harness.gateway), routeData);
 
     expect(page.activeTab).toBe("discover");
     const tabGroup = page.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
@@ -70,17 +63,12 @@ describe("PluginsPage routing", () => {
     async (sourceUrl, expectedTab, expectedUrl) => {
       const { client } = createClient(async () => createResult());
       const harness = createGateway(client);
-      const context = createContext(
+      const context = createContext(harness.gateway);
+      const routeData: PluginsRouteData = createPluginsRouteData(
         harness.gateway,
-        vi.fn(async () => undefined),
+        createResult(),
+        createPluginsRouteLocation(sourceUrl),
       );
-      const routeData: PluginsRouteData = {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        result: createResult(),
-        error: null,
-        location: createPluginsRouteLocation(sourceUrl),
-      };
       const { page } = await mountPage(context, routeData);
 
       expect(page.activeTab).toBe(expectedTab);
@@ -117,17 +105,8 @@ describe("PluginsPage routing", () => {
   it("pushes catalog tab paths and restores the tab from history", async () => {
     const { client } = createClient(async () => createResult());
     const harness = createGateway(client);
-    const context = createContext(
-      harness.gateway,
-      vi.fn(async () => undefined),
-    );
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      location: createPluginsRouteLocation(),
-      result: createResult(),
-      error: null,
-    };
+    const context = createContext(harness.gateway);
+    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway);
     const { page } = await mountPage(context, routeData);
 
     clickHubTab(page, "skills");

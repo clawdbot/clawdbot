@@ -18,6 +18,8 @@ import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-s
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { ProviderPlugin } from "../plugins/types.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
@@ -88,12 +90,7 @@ export async function getCachedLiveCatalogValue<T>(params: {
   if (expiresAt !== undefined) {
     // Auth-scoped live provider catalogs can vary by token; keep this
     // process-local cache bounded so discovery cannot grow without limit.
-    if (liveCatalogCache.size >= LIVE_CATALOG_CACHE_MAX_ENTRIES) {
-      const oldestKey = liveCatalogCache.keys().next();
-      if (!oldestKey.done) {
-        liveCatalogCache.delete(oldestKey.value);
-      }
-    }
+    pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
     liveCatalogCache.set(key, {
       expiresAt,
       value,
@@ -243,6 +240,71 @@ export function buildManifestModelProviderConfig(params: {
     ...(catalog.api ? { api: catalog.api } : {}),
     ...(catalog.headers ? { headers: { ...catalog.headers } } : {}),
     models: catalog.models.map((model) => buildManifestCatalogModel(params.providerId, model)),
+  };
+}
+
+export type ManifestProviderCatalogSurface = {
+  id: string;
+  label: string;
+  catalog: unknown;
+};
+
+export type ManifestProviderCatalogEntry = {
+  id: string;
+  label: string;
+  baseUrl: string;
+  models: ModelProviderConfig["models"];
+  buildProvider: () => ModelProviderConfig;
+};
+
+/** Projects an ordered family of manifest catalogs into static provider and model surfaces. */
+export function buildManifestProviderCatalogFamily(params: {
+  surfaces: readonly ManifestProviderCatalogSurface[];
+  docsPath?: string;
+}) {
+  const entries: ManifestProviderCatalogEntry[] = params.surfaces.map((surface) => {
+    const buildProvider = () =>
+      buildManifestModelProviderConfig({
+        providerId: surface.id,
+        catalog: surface.catalog,
+      });
+    const provider = buildProvider();
+    return {
+      id: surface.id,
+      label: surface.label,
+      baseUrl: provider.baseUrl,
+      models: provider.models,
+      buildProvider,
+    };
+  });
+  const staticDiscovery: ProviderPlugin[] = entries.map(({ id, label, buildProvider }) => ({
+    id,
+    label,
+    docsPath: params.docsPath ?? "/providers/models",
+    auth: [],
+    staticCatalog: {
+      order: "simple",
+      run: async () => ({ provider: buildProvider() }),
+    },
+  }));
+
+  return {
+    entries,
+    staticDiscovery,
+    staticCatalog: async () => ({
+      providers: Object.fromEntries(entries.map(({ id, buildProvider }) => [id, buildProvider()])),
+    }),
+    augmentModelCatalog: () =>
+      entries.flatMap(({ id: provider, models }) =>
+        models.map((entry) => ({
+          provider,
+          id: entry.id,
+          name: entry.name,
+          reasoning: entry.reasoning,
+          input: [...entry.input],
+          contextWindow: entry.contextWindow,
+        })),
+      ),
   };
 }
 

@@ -1,14 +1,17 @@
 // Slack plugin module implements channels behavior.
-import type { SlackEventMiddlewareArgs } from "@slack/bolt";
+import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
-import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import {
+  mutateConfigFile,
+  readConfigFileSnapshotForWrite,
+} from "openclaw/plugin-sdk/config-mutation";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { migrateSlackChannelConfig } from "../../channel-migration.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
 import type {
   SlackChannelCreatedEvent,
   SlackChannelIdChangedEvent,
@@ -94,7 +97,12 @@ export function registerSlackChannelEvents(params: {
 
   ctx.app.event(
     "channel_id_changed",
-    async ({ event, body }: SlackEventMiddlewareArgs<"channel_id_changed">) => {
+    async ({
+      event,
+      body,
+      context,
+    }: SlackEventMiddlewareArgs<"channel_id_changed"> & AllMiddlewareArgs) => {
+      const turnAdoptionLifecycle = resolveSlackIngressTurnLifecycle(context);
       try {
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
@@ -131,34 +139,39 @@ export function registerSlackChannelEvents(params: {
           return;
         }
 
-        const currentConfig = getRuntimeConfig();
-        const migration = migrateSlackChannelConfig({
-          cfg: currentConfig,
+        const { snapshot } = await readConfigFileSnapshotForWrite();
+        const previewConfig = structuredClone(snapshot.sourceConfig);
+        const preview = migrateSlackChannelConfig({
+          cfg: previewConfig,
           accountId: ctx.accountId,
           oldChannelId,
           newChannelId,
         });
 
-        if (migration.migrated) {
-          migrateSlackChannelConfig({
-            cfg: ctx.cfg,
-            accountId: ctx.accountId,
-            oldChannelId,
-            newChannelId,
-          });
-          await mutateConfigFile({
+        if (preview.migrated) {
+          const persisted = await mutateConfigFile({
+            baseHash: snapshot.hash ?? undefined,
             afterWrite: { mode: "auto" },
-            mutate: (draft) => {
+            mutate: (draft) =>
               migrateSlackChannelConfig({
                 cfg: draft,
                 accountId: ctx.accountId,
                 oldChannelId,
                 newChannelId,
-              });
-            },
+              }),
           });
-          ctx.runtime.log?.(warn("[slack] Channel config migrated and saved successfully."));
-        } else if (migration.skippedExisting) {
+          if (persisted.result?.migrated) {
+            // Persistence owns the migration. Update this monitor's captured
+            // config only after the durable write succeeds.
+            migrateSlackChannelConfig({
+              cfg: ctx.cfg,
+              accountId: ctx.accountId,
+              oldChannelId,
+              newChannelId,
+            });
+            ctx.runtime.log?.(warn("[slack] Channel config migrated and saved successfully."));
+          }
+        } else if (preview.skippedExisting) {
           ctx.runtime.log?.(
             warn(
               `[slack] Channel config already exists for ${newChannelId}; leaving ${oldChannelId} unchanged`,
@@ -175,6 +188,9 @@ export function registerSlackChannelEvents(params: {
         ctx.runtime.error?.(
           danger(`slack channel_id_changed handler failed: ${formatErrorMessage(err)}`),
         );
+        if (turnAdoptionLifecycle) {
+          throw err;
+        }
       }
     },
   );

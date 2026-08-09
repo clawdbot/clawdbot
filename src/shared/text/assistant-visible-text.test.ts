@@ -5,6 +5,7 @@ import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
+  stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
@@ -189,30 +190,63 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
-    it("strips standalone bracketed local-model tool blocks", () => {
-      expectVisibleText(
-        [
-          "Let me check.",
-          "[mempalace_mempalace_search]",
-          '{"query":"codename","wing":"personal","room":"identities"}',
-          "[END_TOOL_REQUEST]",
-          "Done.",
-        ].join("\n"),
-        "Let me check.\nDone.",
-      );
-    });
-
-    it("strips bracketed local-model tool blocks with named closing tags", () => {
-      expectVisibleText(
-        [
-          "Before",
-          "[mempalace_mempalace_search]",
-          '{"query":"codename","limit":1}',
-          "[/mempalace_mempalace_search]",
-          "After",
-        ].join("\n"),
-        "Before\nAfter",
-      );
+    it.each([
+      {
+        title: "strips standalone bracketed local-model tool blocks",
+        prefix: "Let me check.",
+        openMarker: "[mempalace_mempalace_search]",
+        payload: '{"query":"codename","wing":"personal","room":"identities"}',
+        closeMarker: "[END_TOOL_REQUEST]",
+        suffix: "Done.",
+        expected: "Let me check.\nDone.",
+      },
+      {
+        title: "strips bracketed local-model tool blocks with named closing tags",
+        prefix: "Before",
+        openMarker: "[mempalace_mempalace_search]",
+        payload: '{"query":"codename","limit":1}',
+        closeMarker: "[/mempalace_mempalace_search]",
+        suffix: "After",
+        expected: "Before\nAfter",
+      },
+      {
+        title: "does not close early on </tool_call> text inside JSON strings",
+        prefix: "prefix",
+        openMarker: "<tool_call>",
+        payload: '{"name":"x","arguments":{"html":"<div></tool_call><span>leak</span>"}}',
+        closeMarker: "</tool_call>",
+        suffix: "suffix",
+        expected: "prefix\n\nsuffix",
+      },
+      {
+        title: "does not close early on </tool_call> text inside single-quoted payload strings",
+        prefix: "prefix",
+        openMarker: "<tool_call>",
+        payload: "{'html':'</tool_call> leak','tail':'still hidden'}",
+        closeMarker: "</tool_call>",
+        suffix: "suffix",
+        expected: "prefix\n\nsuffix",
+      },
+      {
+        title: "strips Gemma-style <function> with newlines between parameters (#67093)",
+        prefix: "Let me check that.",
+        openMarker: '<function name="read">',
+        payload: '<parameter name="file_path">/home/user/test.md</parameter>',
+        closeMarker: "</function>",
+        suffix: "After the call.",
+        expected: "Let me check that.\n\nAfter the call.",
+      },
+      {
+        title: "strips standalone <function> blocks with apostrophes in XML payloads (#67093)",
+        prefix: "prefix",
+        openMarker: '<function name="spawn">',
+        payload: '<parameter name="message">what\'s up</parameter>',
+        closeMarker: "</function>",
+        suffix: "suffix",
+        expected: "prefix\n\nsuffix",
+      },
+    ])("$title", ({ prefix, openMarker, payload, closeMarker, suffix, expected }) => {
+      expectVisibleText([prefix, openMarker, payload, closeMarker, suffix].join("\n"), expected);
     });
 
     it("strips legacy uppercase TOOL_CALL blocks with hash-style payloads", () => {
@@ -275,32 +309,6 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText("prefix\n<tool_call><function=read><parameter=path>/home", "prefix\n");
     });
 
-    it("does not close early on </tool_call> text inside JSON strings", () => {
-      expectVisibleText(
-        [
-          "prefix",
-          "<tool_call>",
-          '{"name":"x","arguments":{"html":"<div></tool_call><span>leak</span>"}}',
-          "</tool_call>",
-          "suffix",
-        ].join("\n"),
-        "prefix\n\nsuffix",
-      );
-    });
-
-    it("does not close early on </tool_call> text inside single-quoted payload strings", () => {
-      expectVisibleText(
-        [
-          "prefix",
-          "<tool_call>",
-          "{'html':'</tool_call> leak','tail':'still hidden'}",
-          "</tool_call>",
-          "suffix",
-        ].join("\n"),
-        "prefix\n\nsuffix",
-      );
-    });
-
     it("does not close early on mismatched closing tool tags", () => {
       expectVisibleText(
         [
@@ -349,36 +357,10 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
-    it("strips Gemma-style <function> with newlines between parameters (#67093)", () => {
-      expectVisibleText(
-        [
-          "Let me check that.",
-          '<function name="read">',
-          '<parameter name="file_path">/home/user/test.md</parameter>',
-          "</function>",
-          "After the call.",
-        ].join("\n"),
-        "Let me check that.\n\nAfter the call.",
-      );
-    });
-
     it("strips inline standalone <function> blocks after sentence lead-ins", () => {
       expectVisibleText(
         'Let me check that. <function name="read"><parameter name="file_path">/tmp/test.md</parameter></function> Done.',
         "Let me check that.  Done.",
-      );
-    });
-
-    it("strips standalone <function> blocks with apostrophes in XML payloads (#67093)", () => {
-      expectVisibleText(
-        [
-          "prefix",
-          '<function name="spawn">',
-          '<parameter name="message">what\'s up</parameter>',
-          "</function>",
-          "suffix",
-        ].join("\n"),
-        "prefix\n\nsuffix",
       );
     });
 
@@ -858,6 +840,34 @@ describe("sanitizeAssistantVisibleText", () => {
     );
   });
 
+  it("preserves fenced log lines quoting tool markers through delivery", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Tool Result for ID abc]",
+      "stdout: hello",
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("preserves fenced serialized tool-call examples through delivery", () => {
+    const input = [
+      "Example:",
+      "```json",
+      "[read]",
+      '{"path":"example.txt"}',
+      "[/read]",
+      "```",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
     const input = [
       '<invoke name="read">payload</invoke></minimax:tool_call>',
@@ -1016,5 +1026,70 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
     expect(sanitizeAssistantVisibleTextWithProfile(input, "tool-progress")).toBe(
       "🛠️ run git status",
     );
+  });
+});
+
+describe("stripDowngradedToolCallText", () => {
+  it("preserves fenced log lines that quote [Tool Result for ID ...]", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Tool Result for ID abc]",
+      "stdout: hello",
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
+  });
+
+  it("preserves fenced log lines that quote [Tool Call: ...] and Arguments", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Tool Call: bash (ID: 7)]",
+      'Arguments: {"cmd":"ls"}',
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
+  });
+
+  it("preserves fenced log lines that quote [Historical context: ...]", () => {
+    const input = [
+      "Log format explainer:",
+      "",
+      "```text",
+      "[Historical context: earlier run]",
+      "stdout: hello",
+      "```",
+      "",
+      "Then we continue the answer with important details.",
+    ].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe(input);
+  });
+
+  it("strips real [Tool Result for ID ...] blocks outside code", () => {
+    const input = ["[Tool Result for ID abc]", "stdout: hello"].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe("");
+  });
+
+  it("strips real [Tool Call: ...] blocks outside code", () => {
+    const input = ["[Tool Call: read (ID: toolu_1)]", 'Arguments: {"path":"/tmp/x"}'].join("\n");
+
+    expect(stripDowngradedToolCallText(input)).toBe("");
+  });
+
+  it("strips real [Historical context: ...] markers outside code", () => {
+    const input = "[Historical context: earlier run]\nVisible answer";
+
+    expect(stripDowngradedToolCallText(input)).toBe("Visible answer");
   });
 });

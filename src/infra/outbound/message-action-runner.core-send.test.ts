@@ -660,6 +660,35 @@ describe("runMessageAction core send routing", () => {
     expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
   });
 
+  it("marks automatic-mode Slack sends to the trusted current source conversation", async () => {
+    registerSlackTextPlugin();
+
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        target: "channel:C123",
+        message: "visible source reply",
+      },
+      messageActionAuthorization: {
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "channel:C123",
+          currentSourceTurnId: "source-turn-1",
+        },
+      },
+      sessionKey: "agent:main:slack:channel:C123",
+      defaultAccountId: "default",
+      sourceReplyDeliveryMode: "automatic",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+  });
+
   it("does not mark a message-scoped reply that enters a new thread as current-source", async () => {
     registerSlackTextPlugin();
 

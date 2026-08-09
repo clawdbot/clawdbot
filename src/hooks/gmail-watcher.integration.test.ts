@@ -10,8 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-// Only run when explicitly opted in — requires real subprocess spawning.
-const RUN = process.platform !== "win32" && process.env["OPENCLAW_INTEGRATION_TEST"] === "1";
+const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 function alive(pid: number): boolean {
   try {
@@ -22,7 +21,7 @@ function alive(pid: number): boolean {
   }
 }
 
-describe.skipIf(!RUN)("gmail-watcher process-tree shutdown (integration)", () => {
+describePosix("gmail-watcher process-tree shutdown (integration)", () => {
   let tmpDir: string;
   let savedPath: string | undefined;
   let gogPid: number | undefined;

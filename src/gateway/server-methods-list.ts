@@ -50,6 +50,7 @@ export const GATEWAY_EVENTS = [
   "session.typing",
   "session.tool",
   "sessions.changed",
+  "controlUi.sessionPullRequests.changed",
   "presence",
   "tick",
   "talk.mode",

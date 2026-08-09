@@ -243,6 +243,21 @@ describe("session transcript runtime SDK", () => {
     if (blocked.kind !== "reset") {
       throw new Error("expected invalid cursor reset");
     }
+    const beyondFrontierCursor = Buffer.from(
+      JSON.stringify({
+        ...(JSON.parse(Buffer.from(blocked.cursor, "base64url").toString("utf8")) as object),
+        lastSeq: 1,
+      }),
+      "utf8",
+    ).toString("base64url");
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...scope,
+        cursor: beyondFrontierCursor,
+        maxBytes: 10,
+        maxEvents: 1,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
     const unsafeCursor = Buffer.from(
       JSON.stringify({
         agentId: scope.agentId,
@@ -739,6 +754,8 @@ describe("session transcript runtime SDK", () => {
 
     const target = await withSessionTranscriptWriteLock(scope, async (locked) => {
       expect(await locked.readEvents()).toEqual([]);
+      expect(locked).not.toHaveProperty("appendMessageWithMessageSequence");
+      expect(locked).not.toHaveProperty("readMessageFacts");
       await locked.appendMessage({
         message: {
           role: "assistant",

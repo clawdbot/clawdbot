@@ -2,15 +2,18 @@
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import type { Compilable, CompiledQuery, Kysely, QueryResult } from "kysely";
 import { InsertQueryNode, Kysely as KyselyInstance, SqliteDialect } from "kysely";
+import {
+  clearNodeSqliteKyselyCacheForDatabase,
+  kyselyByDatabase,
+  queryErrorHandlerByDatabase,
+  statementCacheSymbol,
+} from "./kysely-sync-cache-state.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 
 // Sync query helpers execute compiled Kysely SQL against node:sqlite without
 // going through Kysely's async driver path.
 
-const kyselyByDatabase = new WeakMap<DatabaseSync, Kysely<unknown>>();
-const queryErrorHandlerByDatabase = new WeakMap<DatabaseSync, (error: unknown) => void>();
-// Cached statements retain their database. Per-instance lifecycle wrappers clear
-// both caches before the native database handle closes.
-const statementCacheSymbol = Symbol("openclaw.kyselySyncStatementCache");
+export { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 const statementInvalidationSymbol = Symbol("openclaw.kyselySyncStatementInvalidation");
 const statementCacheEnabledSymbol = Symbol("openclaw.kyselySyncStatementCacheEnabled");
 const authorizerActiveSymbol = Symbol("openclaw.kyselySyncAuthorizerActive");
@@ -44,7 +47,7 @@ const compileOnlySqliteDialect = new SqliteDialect({
 });
 
 export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database> {
-  const existing = kyselyByDatabase.get(db);
+  const existing = kyselyByDatabase.get(db) as Kysely<unknown> | undefined;
   if (existing) {
     return existing as Kysely<Database>;
   }
@@ -201,12 +204,7 @@ function executeWithCachedStatement<Result>(
     statement = db.prepare(sql);
     if (!cached && cache.candidates.delete(sql)) {
       cache.statements.set(sql, statement);
-      if (cache.statements.size > statementCacheCapacity) {
-        const oldestSql = cache.statements.keys().next().value;
-        if (oldestSql !== undefined) {
-          cache.statements.delete(oldestSql);
-        }
-      }
+      pruneMapToMaxSize(cache.statements, statementCacheCapacity);
     } else if (!cached) {
       // Admit only on second use so variable placeholder counts cannot fill
       // the native statement cache with one-shot SQL strings.
@@ -316,13 +314,4 @@ export function executeSqliteQueryTakeFirstSync<Row>(
   query: Compilable<Row>,
 ): Row | undefined {
   return executeSqliteQuerySync<Row>(db, query).rows[0];
-}
-
-/** Drop cached Kysely state for a DatabaseSync. */
-export function clearNodeSqliteKyselyCacheForDatabase(db: DatabaseSync): void {
-  // Delete the database-owned cache before close so statements release their
-  // native database backreferences instead of recreating the WeakMap leak.
-  delete (db as StatementCacheOwner)[statementCacheSymbol];
-  kyselyByDatabase.delete(db);
-  queryErrorHandlerByDatabase.delete(db);
 }

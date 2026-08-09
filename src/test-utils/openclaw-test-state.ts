@@ -7,6 +7,7 @@ import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.j
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/config.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -72,6 +73,7 @@ const ENV_KEYS = [
   "USERPROFILE",
   "HOMEDRIVE",
   "HOMEPATH",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",

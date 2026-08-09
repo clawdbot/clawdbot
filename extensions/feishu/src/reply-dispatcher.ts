@@ -707,10 +707,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     statusLine = nextStatusLine;
     const hasStreamingSession = Boolean(streaming?.isActive() || streamingStartPromise);
     if (!hasStreamingSession && (options?.startIfNeeded === false || renderMode !== "card")) {
-      return;
+      return false;
     }
     startStreaming();
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    return false;
   };
 
   const sendChunkedTextReply = async (paramsLocal: {
@@ -765,6 +766,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         acceptedChunks.push(chunk);
         markVisibleReplySent();
       } catch (error: unknown) {
+        if (isChannelPartialDeliveryError(error)) {
+          markVisibleReplySent();
+        }
         throw createFeishuPartialReplyDeliveryError(
           error,
           createFeishuReplyDeliveryResult({
@@ -843,7 +847,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         onError:
           options?.fallbackText === undefined
             ? undefined
-            : async ({ mediaUrl }) => {
+            : async ({ error, mediaUrl }) => {
+                if (isChannelPartialDeliveryError(error)) {
+                  // The attachment is already visible; text recovery would duplicate delivery.
+                  markVisibleReplySent();
+                  throw toError(error);
+                }
                 const fallbackText = await buildFeishuMediaFallbackText({
                   text: sentFallbackText ? undefined : options.fallbackText,
                   mediaUrl,
@@ -858,6 +867,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
     } catch (error: unknown) {
       const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+      if (partial) {
+        markVisibleReplySent();
+      }
       throw createFeishuPartialReplyDeliveryError(
         error,
         mergeFeishuReplyDeliveryResults([...results, ...(partial ? [partial] : [])]),
@@ -1215,6 +1227,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     },
   };
   const handleDeliveryError = async (error: unknown, info: { kind: string }) => {
+    if (isChannelPartialDeliveryError(error)) {
+      // Core invokes this before no-visible recovery; keep accepted sends visible even
+      // when their normal success bookkeeping could not run.
+      markVisibleReplySent();
+    }
     params.runtime.error?.(
       `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
     );
@@ -1507,32 +1524,34 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       onPartialReply: previewStreamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
-              return;
+              return false;
             }
             const cleaned = stripReasoningTagsFromText(payload.text, {
               mode: "strict",
               trim: "both",
             });
             if (!cleaned) {
-              return;
+              return false;
             }
             startStreaming();
             queueStreamingUpdate(cleaned, {
               dedupeWithLastPartial: true,
               mode: "snapshot",
             });
+            return false;
           }
         : undefined,
       onReasoningStream: reasoningPreviewEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
-              return;
+              return false;
             }
             startStreaming();
             queueReasoningUpdate(formatReasoningMessage(payload.text));
+            return false;
           }
         : undefined,
-      onReasoningEnd: reasoningPreviewEnabled ? () => {} : undefined,
+      onReasoningEnd: reasoningPreviewEnabled ? () => false : undefined,
       onToolStart: previewStreamingEnabled
         ? (payload: {
             name?: string;
@@ -1541,7 +1560,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             detailMode?: "explain" | "raw";
           }) => {
             if (!isChannelProgressDraftWorkToolName(payload.name)) {
-              return;
+              return false;
             }
             const statusLineLocal = formatChannelProgressDraftLineForEntry(
               account.config,
@@ -1556,25 +1575,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               },
             );
             if (statusLineLocal) {
-              updateStreamingStatusLine(statusLineLocal);
+              return updateStreamingStatusLine(statusLineLocal);
             }
+            return false;
           }
         : undefined,
       onAssistantMessageStart: previewStreamingEnabled
-        ? () => {
-            updateStreamingStatusLine("", { startIfNeeded: false });
-          }
+        ? () => updateStreamingStatusLine("", { startIfNeeded: false })
         : undefined,
       onCompactionStart: previewStreamingEnabled
-        ? () => {
-            updateStreamingStatusLine("📦 **Compacting context...**");
-          }
+        ? () => updateStreamingStatusLine("📦 **Compacting context...**")
         : undefined,
-      onCompactionEnd: previewStreamingEnabled
-        ? () => {
-            updateStreamingStatusLine("");
-          }
-        : undefined,
+      onCompactionEnd: previewStreamingEnabled ? () => updateStreamingStatusLine("") : undefined,
     },
     ensureNoVisibleReplyFallback,
     getVisibleReplyState: () => ({

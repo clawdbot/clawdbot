@@ -4,14 +4,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import type { AgentMessage } from "../../agents/runtime/index.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionWriteLockOptions,
-} from "../../agents/session-write-lock.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockOptions,
+} from "../../plugin-sdk/session-write-lock-runtime.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";

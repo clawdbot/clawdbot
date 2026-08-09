@@ -10,10 +10,11 @@ import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
 const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set([
   "browser",
-  "cron",
+  AUTOMATIONS_TOOL_NAME,
   "image_generate",
   "message",
   "music_generate",

@@ -4,6 +4,7 @@ import type {
   AgentHarnessAttemptResult,
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildAssistantMessage,
   hasOwnKeys,
@@ -44,6 +45,7 @@ export interface SessionLike {
       cancelBackgroundCompaction?: () => Promise<unknown>;
     };
   };
+  send(options: MessageOptions): Promise<string>;
   sendAndWait(options: MessageOptions, timeout?: number): Promise<SessionEvent | undefined>;
   sessionId?: string;
 }
@@ -72,6 +74,7 @@ interface EventBridgeOptions {
     journal: AttemptTranscriptJournalProjection;
     modelRef: { api?: string; id: string; provider: string };
     now: () => number;
+    resultContentSourceByToolName?: ReadonlyMap<string, "network">;
   };
 }
 
@@ -253,7 +256,7 @@ export function attachEventBridge(
       });
     deltaChain = deltaQueue.then(() => {
       if (firstDeltaError !== undefined) {
-        throw toLintErrorObject(firstDeltaError, "Non-Error thrown");
+        throw toErrorObject(firstDeltaError, "Non-Error thrown");
       }
     });
     void deltaChain.catch(() => undefined);
@@ -347,7 +350,7 @@ export function attachEventBridge(
       toolMetas[toolMetaIndex] = {
         ...(meta ? { meta } : {}),
         toolName,
-        ...(event.data.success ? {} : { isError: true }),
+        isError: !event.data.success,
       };
     }
     const projection = options.transcriptProjection;
@@ -370,17 +373,21 @@ export function attachEventBridge(
       const replayIncomplete = Boolean(
         event.data.result?.binaryResultsForLlm?.length || event.data.result?.citableSources?.length,
       );
+      const resolvedToolName =
+        toolName ?? event.data.toolDescription?.name ?? projectedToolName ?? "unknown";
+      const resultContentSource = projection.resultContentSourceByToolName?.get(resolvedToolName);
       projection.journal.recordToolResult({
         eventId: event.id,
         replayIncomplete,
         message: {
           role: "toolResult",
           toolCallId: event.data.toolCallId,
-          toolName: toolName ?? event.data.toolDescription?.name ?? projectedToolName ?? "unknown",
+          toolName: resolvedToolName,
           content: [{ type: "text", text: sanitizeToolDetailText(resultText) }],
           ...(hasOwnKeys(details) ? { details } : {}),
           isError: !event.data.success,
           timestamp: resolveEventTimestamp(event.timestamp, projection.now),
+          ...(resultContentSource ? { __openclaw: { resultContentSource } } : {}),
         },
       });
     }
@@ -980,18 +987,4 @@ function registerListener<K extends SessionEventType>(
   unsubscribeFns.push(() => {
     session.off?.(eventType, handler as (...args: unknown[]) => void);
   });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -39,7 +39,7 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
       parseAgentSessionKey(params.sessionKey)?.agentId ??
       resolveDefaultAgentId(cfg),
   );
-  // spawnedCwd first, matching controlUi.sessionPullRequests: the diff must
+  // spawnedCwd first, matching pushed Control UI session PR state: the diff must
   // describe the same checkout whose branch the PR chips report.
   const cwd =
     normalizeOptionalString(entry.spawnedCwd) ??

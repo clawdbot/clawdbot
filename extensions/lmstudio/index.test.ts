@@ -89,7 +89,13 @@ describe("lmstudio plugin", () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [{ type: "llm", key: "qwen/qwen3.5-9b" }],
+      models: [
+        {
+          type: "llm",
+          key: "qwen/qwen3.5-9b",
+          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
+        },
+      ],
     });
     const ctx = createLmstudioResetValidationContext({
       customBaseUrl: "http://lmstudio.internal:1234/api/v1/",
@@ -112,7 +118,13 @@ describe("lmstudio plugin", () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [{ type: "llm", key: "qwen/qwen3.5-9b" }],
+      models: [
+        {
+          type: "llm",
+          key: "qwen/qwen3.5-9b",
+          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
+        },
+      ],
     });
     const ctx = createLmstudioResetValidationContext(
       {
@@ -173,7 +185,13 @@ describe("lmstudio plugin", () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [{ type: "llm", key: "phi-4" }],
+      models: [
+        {
+          type: "llm",
+          key: "phi-4",
+          loaded_instances: [{ id: "phi", config: { context_length: 32_768 } }],
+        },
+      ],
     });
     const ctx = createLmstudioResetValidationContext({
       customBaseUrl: "http://lmstudio.internal:1234/v1",
@@ -192,7 +210,13 @@ describe("lmstudio plugin", () => {
     fetchLmstudioModelsMock.mockResolvedValue({
       reachable: true,
       status: 200,
-      models: [{ type: "llm", key: "qwen/qwen3.5-9b" }],
+      models: [
+        {
+          type: "llm",
+          key: "qwen/qwen3.5-9b",
+          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
+        },
+      ],
     });
     const ctx = createLmstudioResetValidationContext({
       customBaseUrl: "http://lmstudio.internal:1234/v1",
@@ -220,7 +244,26 @@ describe("lmstudio plugin", () => {
     await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
 
     expect(ctx.runtime.error).toHaveBeenCalledWith(
-      "No LM Studio LLM models were found at http://lmstudio.internal:1234/v1.\nLoad at least one model in LM Studio (or run lms load), then re-run setup.",
+      "No loaded LM Studio LLM models were found at http://lmstudio.internal:1234/v1.\nLoad a model in LM Studio (or run lms load <model>), then re-run setup.",
+    );
+    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects an installed but unloaded LM Studio model before destructive reset", async () => {
+    fetchLmstudioModelsMock.mockResolvedValue({
+      reachable: true,
+      status: 200,
+      models: [{ type: "llm", key: "qwen/qwen3.5-9b", loaded_instances: [] }],
+    });
+    const ctx = createLmstudioResetValidationContext({
+      customBaseUrl: "http://lmstudio.internal:1234/v1",
+      customModelId: "qwen/qwen3.5-9b",
+    });
+
+    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
+
+    expect(ctx.runtime.error).toHaveBeenCalledWith(
+      "LM Studio model qwen/qwen3.5-9b is installed but not loaded at http://lmstudio.internal:1234/v1.\nLoad that model in LM Studio, then re-run setup.",
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
   });

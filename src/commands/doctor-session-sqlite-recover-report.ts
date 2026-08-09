@@ -12,7 +12,7 @@ import {
   clearOpenClawAgentDatabaseOpenFailure,
   migrateOpenClawAgentDatabaseForMaintenance,
 } from "../state/openclaw-agent-db.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import {
   createSessionSqliteMigrationFailureIssue,
@@ -23,10 +23,13 @@ import {
   type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
-import type {
-  DoctorSessionSqliteOptions,
-  DoctorSessionSqliteReport,
-  DoctorSessionSqliteTargetReport,
+import {
+  createDoctorSessionSqliteTotals,
+  createDoctorSessionSqliteTargetReport,
+  sumDoctorSessionSqliteTargets,
+  type DoctorSessionSqliteOptions,
+  type DoctorSessionSqliteReport,
+  type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
 
 type SessionSqliteRecoverTargetValidator = (
@@ -383,70 +386,38 @@ function createSyntheticRecoverTargetReport(
   env: NodeJS.ProcessEnv,
   message: string,
 ): DoctorSessionSqliteTargetReport {
-  return {
+  return createDoctorSessionSqliteTargetReport({
     agentId: "recover",
-    archivedTranscriptFiles: [],
-    archivedUnreferencedJsonlFiles: [],
-    importedEntries: 0,
-    importedTranscriptEvents: 0,
     issues: [{ code: "recover_manifest_missing", message }],
-    legacyEntries: 0,
-    referencedTranscriptFiles: 0,
-    sqliteEntries: 0,
     sqlitePath: "",
     storePath: resolveSessionSqliteMigrationRunsDir(env),
-    unreferencedJsonlFiles: [],
-    validatedEntries: 0,
-    validatedTranscriptEvents: 0,
-  };
+  });
 }
 
 function createEmptyRecoverTargetReport(
   target: SessionStoreTarget,
   sqlitePath: string,
 ): DoctorSessionSqliteTargetReport {
-  return {
+  return createDoctorSessionSqliteTargetReport({
     agentId: target.agentId,
-    archivedTranscriptFiles: [],
-    archivedUnreferencedJsonlFiles: [],
-    importedEntries: 0,
-    importedTranscriptEvents: 0,
-    issues: [],
-    legacyEntries: 0,
-    referencedTranscriptFiles: 0,
-    sqliteEntries: 0,
     sqlitePath,
     storePath: target.storePath,
-    unreferencedJsonlFiles: [],
-    validatedEntries: 0,
-    validatedTranscriptEvents: 0,
-  };
+  });
 }
 
 function summarizeRecoverReport(
   targets: DoctorSessionSqliteTargetReport[],
 ): DoctorSessionSqliteReport {
+  const sum = (value: (target: DoctorSessionSqliteTargetReport) => number) =>
+    sumDoctorSessionSqliteTargets(targets, value);
   return {
     mode: "recover",
     targets,
-    totals: {
-      archivedTranscriptFiles: 0,
-      archivedUnreferencedJsonlFiles: 0,
-      importedEntries: 0,
-      importedTranscriptEvents: 0,
-      issues: targets.reduce((total, target) => total + target.issues.length, 0),
-      legacyEntries: targets.reduce((total, target) => total + target.legacyEntries, 0),
-      sqliteEntries: targets.reduce((total, target) => total + target.sqliteEntries, 0),
-      targets: targets.length,
-      unreferencedJsonlFiles: targets.reduce(
-        (total, target) => total + target.unreferencedJsonlFiles.length,
-        0,
-      ),
-      validatedEntries: targets.reduce((total, target) => total + target.validatedEntries, 0),
-      validatedTranscriptEvents: targets.reduce(
-        (total, target) => total + target.validatedTranscriptEvents,
-        0,
-      ),
-    },
+    totals: createDoctorSessionSqliteTotals(targets, {
+      legacyEntries: sum((target) => target.legacyEntries),
+      unreferencedJsonlFiles: sum((target) => target.unreferencedJsonlFiles.length),
+      validatedEntries: sum((target) => target.validatedEntries),
+      validatedTranscriptEvents: sum((target) => target.validatedTranscriptEvents),
+    }),
   };
 }

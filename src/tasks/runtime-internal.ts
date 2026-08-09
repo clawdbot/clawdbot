@@ -39,6 +39,7 @@ export {
   markTaskRunningByRunId,
   markTaskTerminalById,
   maybeDeliverTaskTerminalUpdate,
+  publishTaskRecordAfterAtomicStore,
   recordTaskProgressByRunId,
   resolveTaskForLookupToken,
   isParentFlowLinkError,

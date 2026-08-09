@@ -3,14 +3,26 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenBlobStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
+  createPluginBlobStoreForTests,
   createPluginStateKeyedStoreForTests,
+  resetPluginBlobStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
+import { rollbackChatGptImportRun } from "./src/chatgpt-import.js";
 import {
+  configureMemoryWikiCompiledCacheStore,
+  createMemoryWikiCompiledCacheStore,
+} from "./src/compiled-cache.js";
+import { resolveMemoryWikiConfig } from "./src/config.js";
+import {
+  configureMemoryWikiImportRunStateStore,
   createMemoryWikiImportRunStateStore,
   readMemoryWikiImportRunRecord,
 } from "./src/import-runs-state.js";
@@ -73,6 +85,9 @@ describe("memory-wiki doctor source sync migration", () => {
   });
 
   afterEach(async () => {
+    configureMemoryWikiCompiledCacheStore(undefined);
+    configureMemoryWikiImportRunStateStore(undefined);
+    resetPluginBlobStoreForTests();
     resetPluginStateStoreForTests();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
@@ -210,6 +225,10 @@ describe("memory-wiki doctor source sync migration", () => {
     );
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
     await fs.mkdir(path.dirname(snapshotPath), { recursive: true });
+    const legacyPagePath = path.join(vaultRoot, "sources", "legacy.md");
+    const legacyPageContent = "# Edited legacy import page\n";
+    await fs.mkdir(path.dirname(legacyPagePath), { recursive: true });
+    await fs.writeFile(legacyPagePath, legacyPageContent, "utf8");
     await fs.writeFile(snapshotPath, "previous page\n", "utf8");
     await fs.writeFile(
       legacyPath,
@@ -220,11 +239,14 @@ describe("memory-wiki doctor source sync migration", () => {
         exportPath: "/tmp/chatgpt",
         sourcePath: "/tmp/chatgpt/conversations.json",
         appliedAt: "2026-04-10T10:00:00.000Z",
-        conversationCount: 2,
-        createdCount: 1,
+        conversationCount: 3,
+        createdCount: 2,
         updatedCount: 1,
         skippedCount: 0,
-        createdPaths: ["sources/new.md"],
+        createdPaths: [
+          "sources/legacy.md",
+          { path: "sources/new.md", contentHash: "new-content-hash" },
+        ],
         updatedPaths: [{ path: "sources/existing.md", snapshotPath: "snapshots/alpha.md" }],
       })}\n`,
     );
@@ -255,17 +277,39 @@ describe("memory-wiki doctor source sync migration", () => {
         exportPath: "/tmp/chatgpt",
         sourcePath: "/tmp/chatgpt/conversations.json",
         appliedAt: "2026-04-10T10:00:00.000Z",
-        conversationCount: 2,
-        createdCount: 1,
+        conversationCount: 3,
+        createdCount: 2,
         updatedCount: 1,
         skippedCount: 0,
-        createdPaths: ["sources/new.md"],
+        createdPaths: [
+          { path: "sources/legacy.md" },
+          { path: "sources/new.md", contentHash: "new-content-hash" },
+        ],
         updatedPaths: [{ path: "sources/existing.md", snapshotPath: "snapshots/alpha.md" }],
       },
     );
     await expect(fs.stat(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(`${legacyPath}.migrated`)).resolves.toBeDefined();
     await expect(fs.readFile(snapshotPath, "utf8")).resolves.toBe("previous page\n");
+
+    configureMemoryWikiImportRunStateStore(store);
+    const blobStoreEnv = { ...process.env, HOME: stateDir, OPENCLAW_STATE_DIR: stateDir };
+    configureMemoryWikiCompiledCacheStore(
+      createMemoryWikiCompiledCacheStore(<T>(options: OpenBlobStoreOptions) =>
+        createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv),
+      ),
+    );
+    const rollback = await rollbackChatGptImportRun({
+      config: resolveMemoryWikiConfig({ vault: { path: vaultRoot } }),
+      runId: "chatgpt-alpha",
+    });
+    const preservedLegacy = rollback.preservedPaths.find(
+      (entry) => entry.path === "sources/legacy.md",
+    );
+    expect(preservedLegacy).toBeDefined();
+    await expect(
+      fs.readFile(path.join(vaultRoot, preservedLegacy?.recoveryPath ?? ""), "utf8"),
+    ).resolves.toBe(legacyPageContent);
   });
 
   it("merges legacy entries with existing plugin state before archiving", async () => {

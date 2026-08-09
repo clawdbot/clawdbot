@@ -32,7 +32,7 @@ import type {
   GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
 import {
-  resolveFreshestSessionStoreMatchFromStoreKeys,
+  resolveCanonicalSessionStoreMatchFromStoreKeys,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
@@ -117,7 +117,7 @@ export function resolveSessionSharingTarget(params: {
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
-  const match = resolveFreshestSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
+  const match = resolveCanonicalSessionStoreMatchFromStoreKeys(target.store, target.storeKeys);
   return match
     ? {
         agentId: target.agentId,
@@ -412,6 +412,16 @@ function resolveSessionMutationTargets(params: {
   context: GatewayRequestContext;
   getCfg: () => OpenClawConfig;
 }): SessionMutationTarget[] | undefined {
+  if (params.method === "sessions.patchMany") {
+    const targets = (params.requestParams as { targets?: unknown } | null)?.targets;
+    return Array.isArray(targets)
+      ? targets.slice(0, 101).flatMap((target): SessionMutationTarget[] => {
+          const sessionKey = readStringParam(target, "key");
+          const agentId = readStringParam(target, "agentId");
+          return sessionKey ? [{ sessionKey, ...(agentId ? { agentId } : {}) }] : [];
+        })
+      : undefined;
+  }
   if (params.method === "sessions.groups.rename" || params.method === "sessions.groups.delete") {
     return resolveSessionGroupMutationTargets({
       getCfg: params.getCfg,
@@ -532,7 +542,15 @@ export function resolveSessionMutationAuthorization(params: {
       agentId: targetRef.agentId,
       ...lookupCaches,
     });
-    const error = target ? authorizeSessionSharingTarget({ client: params.client, target }) : null;
+    const error =
+      (params.method === "sessions.patchMany"
+        ? authorizeIncognitoSessionTarget({
+            client: params.client,
+            sessionKey: targetRef.sessionKey,
+            target,
+          })
+        : null) ??
+      (target ? authorizeSessionSharingTarget({ client: params.client, target }) : null);
     if (error) {
       return { error };
     }
@@ -565,7 +583,7 @@ export function resolveSessionMutationAuthorization(params: {
           ...currentLookupCaches,
         });
         const sameResolvedTarget =
-          expected === undefined ||
+          expected !== undefined &&
           (current === null
             ? expected.resolved === null
             : expected.resolved !== null &&
@@ -592,7 +610,14 @@ export function resolveSessionMutationAuthorization(params: {
         if (!current) {
           return;
         }
-        const error = authorizeSessionSharingTarget({ client: params.client, target: current });
+        const error =
+          (params.method === "sessions.patchMany"
+            ? authorizeIncognitoSessionTarget({
+                client: params.client,
+                sessionKey: targetRef.sessionKey,
+                target: current,
+              })
+            : null) ?? authorizeSessionSharingTarget({ client: params.client, target: current });
         if (error) {
           throw new SessionMutationAuthorizationChangedError(error);
         }
@@ -606,11 +631,15 @@ export function resolveSessionMutationAuthorization(params: {
           }
         },
         assertTargetCurrent: (targetRef: SessionMutationTarget) => {
+          // Batch outcomes preserve caller identities, but authorization owns normalized targets.
+          // Resolve the same normalized identity so padded aliases cannot escape the snapshot fence.
+          const sessionKey = normalizeOptionalString(targetRef.sessionKey);
+          const agentId = normalizeOptionalString(targetRef.agentId);
+          const normalizedTarget = { sessionKey: sessionKey ?? targetRef.sessionKey, agentId };
           const expected = authorizedTargets.find(
-            (target) =>
-              target.sessionKey === targetRef.sessionKey && target.agentId === targetRef.agentId,
+            (target) => target.sessionKey === sessionKey && target.agentId === agentId,
           );
-          assertTargetCurrent(targetRef, expected, params.context.getRuntimeConfig());
+          assertTargetCurrent(normalizedTarget, expected, params.context.getRuntimeConfig());
         },
       };
     })(),

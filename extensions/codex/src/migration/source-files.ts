@@ -28,7 +28,6 @@ export type CodexPluginMigrationBlockCode =
 export type CodexPluginMigrationAppFact = {
   id: string;
   name: string;
-  needsAuth?: boolean;
   isAccessible?: boolean;
   isEnabled?: boolean;
 };

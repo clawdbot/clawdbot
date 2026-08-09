@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
   materializeSessionArchiveForRead,
   readSessionArchiveContentSync,
@@ -30,6 +31,31 @@ function makeTempDir(): string {
 }
 
 describe("archive compression", () => {
+  it("decodes both plain bytes and runtime-supported compressed archive bytes", () => {
+    const content = `${JSON.stringify({ type: "message", body: "archive round trip" })}\n`;
+    const encoded = encodeSessionArchiveContent(content);
+
+    expect(decodeSessionArchiveBytes(Buffer.from(content, "utf8"), false)).toBe(content);
+    expect(decodeSessionArchiveBytes(encoded.bytes, encoded.suffix !== "")).toBe(content);
+  });
+
+  it("invalidates a materialized cache when its source archive is removed", () => {
+    const encoded = encodeSessionArchiveContent("cached archive contents\n");
+    if (encoded.suffix !== SESSION_ARCHIVE_ZSTD_SUFFIX) {
+      return;
+    }
+    const dir = makeTempDir();
+    const archivePath = path.join(dir, `removed.jsonl.deleted.2026-07-11${encoded.suffix}`);
+    fs.writeFileSync(archivePath, encoded.bytes);
+    const cachePath = materializeSessionArchiveForRead(archivePath);
+    expect(fs.existsSync(cachePath)).toBe(true);
+
+    fs.rmSync(archivePath);
+
+    expect(() => materializeSessionArchiveForRead(archivePath)).toThrow();
+    expect(fs.existsSync(cachePath)).toBe(false);
+  });
+
   it("round-trips archived transcript content through encode and read", () => {
     const content = `${JSON.stringify({ type: "message", body: "hello" })}\n`.repeat(200);
     const encoded = encodeSessionArchiveContent(content);

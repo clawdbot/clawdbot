@@ -1,5 +1,6 @@
 // Message-action runner normalizes tool params, resolves channel/target/media,
 // applies policies, and dispatches send/poll/plugin actions.
+import { asOptionalRecord as asResultRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -57,6 +58,7 @@ import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
+import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
@@ -67,7 +69,6 @@ import {
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
@@ -125,7 +126,9 @@ import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbo
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
+  isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply,
+  isDeliveredCurrentSourceReplyAction,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
@@ -155,6 +158,8 @@ export type RunMessageActionParams = {
   cfg: OpenClawConfig;
   action: ChannelMessageActionName;
   params: Record<string, unknown>;
+  /** @internal Identifies model-authored calls for lossy input normalization. */
+  actionOrigin?: "message-tool";
   defaultAccountId?: string;
   requesterAccountId?: string | null;
   requesterSenderId?: string | null;
@@ -214,6 +219,11 @@ export type RunMessageActionParams = {
 
 const log = createSubsystemLogger("outbound/message-action");
 
+type MessageActionNormalization = {
+  locationOmitted: true;
+  notice: string;
+};
+
 export type MessageActionRunResult =
   | {
       kind: "send";
@@ -222,6 +232,7 @@ export type MessageActionRunResult =
       to: string;
       handledBy: "plugin" | "core" | "internal-source";
       payload: unknown;
+      normalization?: MessageActionNormalization;
       /** Exact text handed to the direct transport after core normalization and hooks. */
       deliveredText?: string;
       toolResult?: AgentToolResult<unknown>;
@@ -273,10 +284,11 @@ export function getToolResult(
   return "toolResult" in result ? result.toolResult : undefined;
 }
 
-function asResultRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+function withSendNormalization(
+  result: MessageActionRunResult,
+  normalization?: MessageActionNormalization,
+): MessageActionRunResult {
+  return normalization && result.kind === "send" ? { ...result, normalization } : result;
 }
 
 function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
@@ -291,26 +303,38 @@ function markDeliveredCurrentSourceReply<T extends MessageActionRunResult>(
     replyToIsExplicit: boolean;
   },
 ): T {
-  if (result.kind !== "send" || params.input.sourceReplyDeliveryMode !== "message_tool_only") {
+  // Current-source identity comes from the authorized route and delivery receipt,
+  // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
+  // Reply-type actions and polls are visible source replies too: leaving them
+  // unmarked made dispatch send the no-visible-reply fallback after a delivered
+  // reply or poll.
+  const isReplyActionResult =
+    result.kind === "action" && isCurrentSourceReplyActionName(result.action);
+  if (result.kind !== "send" && result.kind !== "poll" && !isReplyActionResult) {
     return result;
   }
   const authorization = params.input.messageActionAuthorization;
+  if (!authorization?.toolContext) {
+    return result;
+  }
+  const mirrorParams = {
+    action: isReplyActionResult ? result.action : result.kind === "poll" ? "poll" : "send",
+    channel: params.channel,
+    actionParams: params.actionParams,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    currentAccountId: authorization.requesterAccountId ?? params.input.defaultAccountId,
+    sessionKey: params.input.sessionKey,
+    sessionId: params.input.sessionId,
+    agentId: params.agentId,
+    toolContext: authorization.toolContext,
+    deliveredPayload: result.payload,
+    replyToIsExplicit: params.replyToIsExplicit,
+  };
   if (
-    !authorization?.toolContext ||
-    !isDeliveredCurrentSourceReply({
-      action: "send",
-      channel: params.channel,
-      actionParams: params.actionParams,
-      cfg: params.cfg,
-      accountId: params.accountId,
-      currentAccountId: authorization.requesterAccountId ?? params.input.defaultAccountId,
-      sessionKey: params.input.sessionKey,
-      sessionId: params.input.sessionId,
-      agentId: params.agentId,
-      toolContext: authorization.toolContext,
-      deliveredPayload: result.payload,
-      replyToIsExplicit: params.replyToIsExplicit,
-    })
+    isReplyActionResult
+      ? !isDeliveredCurrentSourceReplyAction(mirrorParams)
+      : !isDeliveredCurrentSourceReply(mirrorParams)
   ) {
     return result;
   }
@@ -515,7 +539,7 @@ async function resolveChannel(
   if (selection.source === "tool-context-fallback") {
     params.channel = selection.channel;
   }
-  return selection.channel;
+  return selection;
 }
 
 function enforceCrossProviderEgressPolicyBeforeTargetResolution(params: {
@@ -686,8 +710,9 @@ async function resolveResolvedTargetOrThrow(params: {
 type ResolvedActionContext = {
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
+  idempotencyKey?: string;
   channel: ChannelId;
-  channelPlugin?: ChannelPlugin;
+  channelPlugin: ChannelPlugin;
   mediaAccess: OutboundMediaAccess;
   extraActionMediaSourceParamKeys?: readonly string[];
   accountId?: string | null;
@@ -709,6 +734,7 @@ type SendPayloadParts = {
   forceDocument: boolean;
   bestEffort?: boolean;
   silent?: boolean;
+  normalization?: MessageActionNormalization;
 };
 
 function updateSendPayloadPartsFromReplyPayload(
@@ -1030,7 +1056,7 @@ async function handleBroadcastAction(
   }
   const targetChannels =
     channelHint && normalizeOptionalLowercaseString(channelHint) !== "all"
-      ? [await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)]
+      ? [(await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)).channel]
       : input.broadcastAccountPlan
         ? input.broadcastAccountPlan.candidateChannels
         : await (async () => {
@@ -1142,16 +1168,19 @@ async function handleInternalSourceReplySendAction(
     ...(sourceReply.mediaUrls?.length ? { mediaUrls: sourceReply.mediaUrls } : {}),
     dryRun,
   };
-  return {
-    kind: "send",
-    channel: INTERNAL_MESSAGE_CHANNEL,
-    action: "send",
-    to: "current-run",
-    handledBy: "internal-source",
-    payload,
-    toolResult: buildInternalSourceReplyToolResult(payload),
-    dryRun,
-  };
+  return withSendNormalization(
+    {
+      kind: "send",
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      action: "send",
+      to: "current-run",
+      handledBy: "internal-source",
+      payload,
+      toolResult: buildInternalSourceReplyToolResult(payload),
+      dryRun,
+    },
+    sourceReply.normalization,
+  );
 }
 
 function buildInternalSourceReplyToolResult(payload: {
@@ -1239,18 +1268,18 @@ async function buildSendPayloadParts(params: {
     readStringParam(actionParams, "image", { trim: false });
   const mediaUrlHints = readStringArrayParam(actionParams, "mediaUrls") ?? [];
   const attachmentMediaHints = collectMessageAttachmentMediaHints(actionParams.attachments);
+  const hasBuffer = Boolean(readStringParam(actionParams, "buffer", { trim: false }));
   const hasMediaHint =
-    Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
+    hasBuffer || Boolean(mediaHint) || mediaUrlHints.length > 0 || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasLegacyInteractiveReplyBlocks(actionParams.interactive);
   const rawLocation = actionParams.location;
   // The flat tool schema also carries scheduled-event `location` as a string,
   // and some models pad unused optional slots with blanks. Keep real send locations strict.
-  const location =
+  let location =
     typeof rawLocation === "string" && normalizeOptionalString(rawLocation) === undefined
       ? undefined
       : normalizeOutboundLocation(rawLocation);
-  applySendLocationToActionParams(actionParams, location);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(actionParams, "message", {
@@ -1293,7 +1322,9 @@ async function buildSendPayloadParts(params: {
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
 
-  message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text));
+  message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text), {
+    resolveProtectedRanges: findCodeRegions,
+  });
   if (message || !hasPresentation) {
     actionParams.message = message;
   } else {
@@ -1307,12 +1338,29 @@ async function buildSendPayloadParts(params: {
   }
   actionParams.mediaUrls = mergedMediaUrls.length > 0 ? [...mergedMediaUrls] : undefined;
 
-  if (
+  const hasLocationConflict = Boolean(
     location &&
-    (message.trim() || mergedMediaUrls.length > 0 || hasPresentation || hasInteractive)
-  ) {
+    (message.trim() ||
+      hasBuffer ||
+      mergedMediaUrls.length > 0 ||
+      hasPresentation ||
+      hasInteractive),
+  );
+  const normalization =
+    hasLocationConflict && input.actionOrigin === "message-tool"
+      ? {
+          locationOmitted: true as const,
+          notice:
+            "Content sent; location omitted because locations must be sent separately. Do not retry this send. Send a standalone location only if the user explicitly requested it.",
+        }
+      : undefined;
+  if (hasLocationConflict && !normalization) {
     throw new Error("Location sends cannot be combined with message text or media.");
   }
+  if (normalization) {
+    location = undefined;
+  }
+  applySendLocationToActionParams(actionParams, location);
 
   if (params.channel && params.target) {
     message = await maybeApplyCrossContextMarker({
@@ -1394,6 +1442,7 @@ async function buildSendPayloadParts(params: {
     forceDocument,
     ...(bestEffort !== undefined ? { bestEffort } : {}),
     ...(silent !== undefined ? { silent } : {}),
+    ...(normalization ? { normalization } : {}),
   };
 }
 
@@ -1546,15 +1595,18 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
         }),
       });
   if (gatewayPluginAction) {
-    return markDeliveredCurrentSourceReply(gatewayPluginAction, {
-      cfg,
-      actionParams: params,
-      channel,
-      accountId,
-      input,
-      agentId,
-      replyToIsExplicit,
-    });
+    return markDeliveredCurrentSourceReply(
+      withSendNormalization(gatewayPluginAction, sendPayload.normalization),
+      {
+        cfg,
+        actionParams: params,
+        channel,
+        accountId,
+        input,
+        agentId,
+        replyToIsExplicit,
+      },
+    );
   }
 
   const useCorePresentationDelivery = Boolean(
@@ -1577,7 +1629,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     ctx: {
       cfg,
       channel,
+      plugin: channelPlugin,
       params,
+      idempotencyKey: ctx.idempotencyKey,
       agentId,
       sessionKey: input.sessionKey,
       requesterAccountId: input.requesterAccountId ?? undefined,
@@ -1642,7 +1696,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     threadId: resolvedThreadId ?? undefined,
   });
 
-  const result: MessageActionRunResult = {
+  const result: Extract<MessageActionRunResult, { kind: "send" }> = {
     kind: "send",
     channel,
     action,
@@ -1654,7 +1708,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     sendResult: send.sendResult,
     dryRun,
   };
-  return markDeliveredCurrentSourceReply(result, {
+  return markDeliveredCurrentSourceReply(withSendNormalization(result, sendPayload.normalization), {
     cfg,
     actionParams: params,
     channel,
@@ -1726,15 +1780,26 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       dryRun,
     }),
   });
+  const pollReplyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
-    return gatewayPluginAction;
+    return markDeliveredCurrentSourceReply(gatewayPluginAction, {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit: pollReplyToIsExplicit,
+    });
   }
 
   const poll = await executePollAction({
     ctx: {
       cfg,
       channel,
+      plugin: channelPlugin,
       params,
+      idempotencyKey: ctx.idempotencyKey,
       accountId: accountId ?? undefined,
       agentId,
       requesterAccountId: input.requesterAccountId ?? undefined,
@@ -1774,17 +1839,28 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     },
   });
 
-  return {
-    kind: "poll",
-    channel,
-    action,
-    to,
-    handledBy: poll.handledBy,
-    payload: poll.payload,
-    toolResult: poll.toolResult,
-    pollResult: poll.pollResult,
-    dryRun,
-  };
+  return markDeliveredCurrentSourceReply(
+    {
+      kind: "poll",
+      channel,
+      action,
+      to,
+      handledBy: poll.handledBy,
+      payload: poll.payload,
+      toolResult: poll.toolResult,
+      pollResult: poll.pollResult,
+      dryRun,
+    },
+    {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit: pollReplyToIsExplicit,
+    },
+  );
 }
 
 async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
@@ -1816,6 +1892,16 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
 
   if (!channelPlugin?.actions?.handleAction) {
     throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
+  }
+
+  // Plugin actions bypass buildSendPayloadParts, so model-authored text here
+  // never crossed the outbound text hygiene sends get: reply/edit deliveries
+  // leaked raw citation control markers to end users.
+  const rawActionMessage = params.message;
+  if (typeof rawActionMessage === "string" && rawActionMessage) {
+    params.message = stripPlainTextToolCallBlocks(
+      stripUnsupportedCitationControlMarkers(rawActionMessage),
+    );
   }
 
   // Plugin actions bypass send/poll, so inherit thread metadata before either
@@ -1854,9 +1940,18 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
       dryRun,
     }),
   });
+  const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
     // Gateway-owned actions must execute where the live channel runtime exists.
-    return gatewayPluginAction;
+    return markDeliveredCurrentSourceReply(gatewayPluginAction, {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit,
+    });
   }
 
   const authorization = input.messageActionAuthorization;
@@ -1890,15 +1985,26 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
-  return {
-    kind: "action",
-    channel,
-    action,
-    handledBy: "plugin",
-    payload: extractToolPayload(handled),
-    toolResult: handled,
-    dryRun,
-  };
+  return markDeliveredCurrentSourceReply(
+    {
+      kind: "action",
+      channel,
+      action,
+      handledBy: "plugin",
+      payload: extractToolPayload(handled),
+      toolResult: handled,
+      dryRun,
+    },
+    {
+      cfg,
+      actionParams: params,
+      channel,
+      accountId,
+      input,
+      agentId,
+      replyToIsExplicit,
+    },
+  );
 }
 
 export async function runMessageAction(
@@ -1936,9 +2042,9 @@ export async function runMessageAction(
   if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, params)) {
     throw new Error(`Action ${action} requires a target.`);
   }
-  const channel = await resolveChannel(cfg, params, input.toolContext, action);
+  const selection = await resolveChannel(cfg, params, input.toolContext, action);
+  const { channel, plugin: channelPlugin } = selection;
   params.channel = channel;
-  const channelPlugin = resolveOutboundChannelPlugin({ channel, cfg });
   const explicitAccountId = validateExplicitMessageAccountSelection({
     cfg,
     channel,
@@ -1958,6 +2064,9 @@ export async function runMessageAction(
     args: params,
     toolContext: input.toolContext,
     targetAliasSpec: channelPlugin?.actions?.messageActionTargetAliases?.[action],
+    // Trusted direct operators retain opaque resource-id workflows. Native conversation
+    // aliases still normalize above and remain subject to the shared cross-context policy.
+    allowResourceOnly: input.conversationReadOrigin === "direct-operator",
   });
   let accountId = explicitAccountId ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
@@ -2112,6 +2221,7 @@ export async function runMessageAction(
   const context: ResolvedActionContext = {
     cfg,
     params,
+    idempotencyKey: normalizeOptionalString(params.idempotencyKey),
     channel,
     channelPlugin,
     mediaAccess,

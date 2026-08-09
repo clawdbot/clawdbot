@@ -19,7 +19,7 @@ function makeRun(runId: string, requesterTurnYielded = true): SubagentRunRecord 
     task: "finish",
     cleanup: "keep",
     createdAt: 1_000,
-    endedAt: 2_000,
+    execution: { status: "terminal", endedAt: 2_000 },
     expectsCompletionMessage: true,
     delivery: { status: "delivered" },
   };
@@ -79,9 +79,51 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(schedule).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["matches", "agent:main:subagent:worker", true],
+    ["rejects", "agent:main:subagent:other", false],
+  ] as const)("%s the exact child session after same-turn steer", (_, sessionKey, expected) => {
+    const originalRunId = "run-original";
+    const entry = makeRun("run-steered", false);
+    entry.taskRunId = originalRunId;
+    entry.childSessionKey = "agent:main:subagent:worker";
+    const runs = new Map([[entry.runId, entry]]);
+    const persistOrThrow = vi.fn();
+    const schedule = vi.fn();
+
+    expect(
+      markRequesterTurnYieldedInRuns({
+        requesterSessionKey: REQUESTER,
+        requesterTurnRunId: REQUESTER_TURN,
+        runs,
+        persistOrThrow,
+      }),
+    ).toBe(1);
+    expect(
+      settleRequesterTurnAfterSessionSpawns({
+        requesterSessionKey: REQUESTER,
+        requesterTurnRunId: REQUESTER_TURN,
+        requesterYielded: true,
+        acceptedSessionSpawns: [{ runId: originalRunId, childSessionKey: sessionKey }],
+        runs,
+        persistOrThrow,
+        schedule,
+      }),
+    ).toBe(expected);
+    expect(persistOrThrow).toHaveBeenCalledTimes(expected ? 2 : 1);
+    if (expected) {
+      expect(entry.requesterSettleWake?.batchRunIds).toEqual([entry.runId]);
+      expect(schedule).toHaveBeenCalledExactlyOnceWith(entry.runId, entry);
+    } else {
+      expect(entry.requesterSettleWake).toBeUndefined();
+      expect(entry.requesterTurnRunId).toBe(REQUESTER_TURN);
+      expect(schedule).not.toHaveBeenCalled();
+    }
+  });
+
   it("freezes active yielded children without scheduling before terminal delivery", () => {
     const entry = makeRun("run-child");
-    entry.endedAt = undefined;
+    entry.execution = { ...entry.execution, status: "running", endedAt: undefined };
     entry.delivery = { status: "pending" };
     const schedule = vi.fn();
 
@@ -124,33 +166,104 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       requesterYieldBatch: true,
       afterRequesterYield: true,
     });
-    expect(schedule).not.toHaveBeenCalled();
+    expect(entry.delivery?.disposition).toBe("intentional_non_delivery");
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(entry.runId, entry);
   });
 
-  it("ignores accepted spawns that do not produce completion messages", () => {
-    const completion = makeRun("run-completion");
-    const inline = makeRun("run-inline");
-    inline.requesterTurnRunId = undefined;
-    inline.expectsCompletionMessage = false;
-    inline.delivery = { status: "not_required" };
+  it("persists a mixed delivered and in-progress yielded batch before scheduling", () => {
+    const alpha = makeRun("run-alpha");
+    const beta = makeRun("run-beta");
+    beta.delivery = { status: "in_progress" };
+    const calls: string[] = [];
+    const persistOrThrow = vi.fn(() => calls.push("persist"));
+    const schedule = vi.fn(() => calls.push("schedule"));
 
     expect(
       settleRequesterTurnAfterSessionSpawns({
         requesterSessionKey: REQUESTER,
         requesterTurnRunId: REQUESTER_TURN,
         requesterYielded: true,
-        acceptedSessionSpawns: [accepted(completion), accepted(inline)],
+        acceptedSessionSpawns: [accepted(alpha), accepted(beta)],
         runs: new Map([
-          [completion.runId, completion],
-          [inline.runId, inline],
+          [alpha.runId, alpha],
+          [beta.runId, beta],
         ]),
-        persistOrThrow: vi.fn(),
-        schedule: vi.fn(),
+        persistOrThrow,
+        schedule,
       }),
     ).toBe(true);
-    expect(completion.requesterSettleWake?.afterRequesterYield).toBe(true);
-    expect(inline.requesterSettleWake).toBeUndefined();
+
+    const frozenState = {
+      status: "pending",
+      attemptCount: 0,
+      batchRunIds: ["run-alpha", "run-beta"],
+      requesterYieldBatch: true,
+      afterRequesterYield: true,
+      rearmGeneration: 1,
+    } as const;
+    expect(alpha.requesterSettleWake).toEqual(frozenState);
+    expect(beta.requesterSettleWake).toEqual(frozenState);
+    expect(alpha.requesterTurnRunId).toBeUndefined();
+    expect(beta.requesterTurnRunId).toBeUndefined();
+    expect(beta.delivery?.disposition).toBe("intentional_non_delivery");
+    expect(calls).toEqual(["persist", "schedule"]);
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(alpha.runId, alpha);
   });
+
+  it.each([true, false])(
+    "ignores same-turn non-completion spawns during settlement (yielded: %s)",
+    (requesterYielded) => {
+      const completion = makeRun("run-completion", false);
+      const inline = makeRun("run-inline", false);
+      inline.expectsCompletionMessage = false;
+      inline.delivery = { status: "not_required" };
+      const runs = new Map([
+        [inline.runId, inline],
+        [completion.runId, completion],
+      ]);
+      const persistOrThrow = vi.fn();
+      const schedule = vi.fn();
+
+      if (requesterYielded) {
+        expect(
+          markRequesterTurnYieldedInRuns({
+            requesterSessionKey: REQUESTER,
+            requesterTurnRunId: REQUESTER_TURN,
+            runs,
+            persistOrThrow,
+          }),
+        ).toBe(1);
+      }
+
+      expect(
+        settleRequesterTurnAfterSessionSpawns({
+          requesterSessionKey: REQUESTER,
+          requesterTurnRunId: REQUESTER_TURN,
+          requesterYielded,
+          acceptedSessionSpawns: [accepted(inline), accepted(completion)],
+          runs,
+          persistOrThrow,
+          schedule,
+        }),
+      ).toBe(true);
+      expect(persistOrThrow.mock.calls).toEqual(
+        requesterYielded ? [[completion.runId], [completion.runId]] : [[completion.runId]],
+      );
+      if (requesterYielded) {
+        expect(completion.requesterSettleWake).toMatchObject({
+          batchRunIds: [completion.runId],
+          afterRequesterYield: true,
+        });
+        expect(schedule).toHaveBeenCalledExactlyOnceWith(completion.runId, completion);
+      } else {
+        expect(completion.requesterSettleWake).toBeUndefined();
+        expect(schedule).not.toHaveBeenCalled();
+      }
+      expect(inline.requesterTurnRunId).toBe(REQUESTER_TURN);
+      expect(inline.requesterTurnYielded).toBeUndefined();
+      expect(inline.requesterSettleWake).toBeUndefined();
+    },
+  );
 
   it("re-arms a delivered delete-mode row retained through requester settlement", () => {
     const entry = makeRun("run-delete");

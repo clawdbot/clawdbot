@@ -259,6 +259,7 @@ const inboundCompletedReasonSchema = Type.Union([
   Type.Literal("before_dispatch_handled"),
   Type.Literal("acp_dispatch_completed"),
   Type.Literal("acp_dispatch_empty"),
+  Type.Literal("active_run_injected"),
 ]);
 
 const inboundSkippedReasonSchema = Type.Union([
@@ -524,7 +525,8 @@ type AuditActivityInboundMessageV1Terminal =
         | "plugin_bound_declined"
         | "before_dispatch_handled"
         | "acp_dispatch_completed"
-        | "acp_dispatch_empty";
+        | "acp_dispatch_empty"
+        | "active_run_injected";
     }
   | {
       status: "blocked";

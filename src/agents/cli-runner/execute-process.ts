@@ -167,12 +167,15 @@ export async function executeCliProcess(params: {
     ? createCliJsonlStreamingParser({
         backend: params.backend,
         providerId: context.backendResolved.id,
+        parseJsonlEvent: context.backendResolved.parseJsonlEvent,
         onAssistantDelta: params.events.emitCliAssistantDelta,
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
         onPlanUpdate: params.events.emitCliPlanUpdate,
         onToolUseStart: params.events.emitParsedToolUseStart,
         onToolResult: params.events.emitParsedToolResult,
+        onDisplayToolUseStart: params.events.emitCliDisplayToolUseStart,
+        onDisplayToolResult: params.events.emitCliDisplayToolResult,
         onCommentaryText:
           params.events.emitLiveEvents && runParams.emitCommentaryText
             ? params.events.emitCliCommentaryText
@@ -281,12 +284,11 @@ export async function executeCliProcess(params: {
         onStderr: consumeStderr,
       });
       managedRunPid = managedRun.pid;
-      let replyBackendCompleted = false;
       const replyBackendHandle = runParams.replyOperation
         ? {
             kind: "cli" as const,
+            runId: runParams.runId,
             cancel: () => managedRun.cancel("manual-cancel"),
-            isStreaming: () => !replyBackendCompleted,
           }
         : undefined;
       if (replyBackendHandle) {
@@ -295,7 +297,6 @@ export async function executeCliProcess(params: {
       try {
         result = await managedRun.wait();
       } finally {
-        replyBackendCompleted = true;
         if (replyBackendHandle) {
           runParams.replyOperation?.detachBackend(replyBackendHandle);
         }

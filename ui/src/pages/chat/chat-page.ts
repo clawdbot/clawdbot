@@ -20,9 +20,13 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { persistSessionBoardFace } from "./chat-board-face-persistence.ts";
 import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
+import { closePaneBrowserAnnotations } from "./chat-pane-browser-annotation.ts";
+import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import "../../styles/chat.css";
 import "./chat-pane.ts";
-import { locationWithoutDraft, type SessionChatRouteData } from "./route-loader.ts";
+import { RouteDraftComposerFocus, type ChatPaneElement } from "./route-draft-focus-handoff.ts";
+import { locationWithoutDraft, routeDraft } from "./route-draft.ts";
+import type { SessionChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import {
   resolveSplitDropZone,
@@ -43,13 +47,12 @@ import {
   singlePaneLayout,
   splitRatio,
   splitWeight,
+  visiblePanesOf,
   type ChatSplitLayout,
   type ChatSplitPane,
 } from "./split-layout.ts";
 
 type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
-type ChatPaneElement = HTMLElement & { paneId?: string; sessionKey?: string };
-
 export class ChatPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -75,10 +78,12 @@ export class ChatPage extends OpenClawLightDomElement {
   private dragFrame = 0;
   private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
   private consumedDraftData: SessionChatRouteData | null = null;
+  private readonly draftFocus = new RouteDraftComposerFocus(this);
   private readonly chatMessagesBySession: ChatMessageCache = new Map();
   private classicColumnId = "c1";
   private classicPaneId = "p1";
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
+  private readonly viewerPresence = new ChatViewerPresenceController(this);
 
   override connectedCallback() {
     super.connectedCallback();
@@ -97,9 +102,12 @@ export class ChatPage extends OpenClawLightDomElement {
     window.addEventListener(UI_COMMAND_EVENT, this.handleUiCommand);
     this.syncRouteAgent();
     this.syncRouteToActivePane();
+    const layout = this.layout ?? this.classicLayout();
+    this.viewerPresence.sync(this.context?.gateway, layout, this.narrow);
   }
 
   override disconnectedCallback() {
+    this.viewerPresence.dispose();
     this.subscriptions.clear();
     this.mediaQuery?.removeEventListener("change", this.handleViewportChange);
     this.mediaQuery = null;
@@ -116,12 +124,14 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown>) {
+    const layout = this.layout ?? this.classicLayout();
+    if (this.isConnected) {
+      this.viewerPresence.sync(this.context?.gateway, layout, this.narrow);
+    }
     const data = this.data;
     const activePane = this.layout ? findPane(this.layout, this.layout.activePaneId)?.pane : null;
-    const routeDraftWasRendered =
-      Boolean(data?.draft) &&
-      this.consumedDraftData !== data &&
-      (!this.layout || activePane?.sessionKey === data.sessionKey);
+    const activeSessionKey = this.layout ? (activePane?.sessionKey ?? null) : undefined;
+    const draftRendered = this.draftFocus.rendered(data, activeSessionKey, this.consumedDraftData);
     if (changedProperties.has("data")) {
       if (
         data?.canonicalLocation &&
@@ -150,10 +160,11 @@ export class ChatPage extends OpenClawLightDomElement {
       this.syncRouteAgent();
       this.syncRouteToActivePane();
     }
-    if (data && routeDraftWasRendered) {
+    if (data && draftRendered) {
       // Process the route draft once so later focus changes cannot hand it to another pane.
       queueMicrotask(() => {
         if (this.isConnected && this.data === data && this.consumedDraftData !== data) {
+          this.draftFocus.beforeDraftCleanup(data);
           this.consumedDraftData = data;
           // Remove the one-shot draft from history once the matching pane owns it.
           this.updateRoute(data.sessionKey, true, data.face ?? "chat");
@@ -206,12 +217,12 @@ export class ChatPage extends OpenClawLightDomElement {
       return;
     }
     const targetPane =
-      command.kind === "split"
-        ? undefined
-        : panesOf(layout).find((pane) => pane.sessionKey === command.sessionKey);
+      command.kind === "close-pane"
+        ? panesOf(layout).find((pane) => pane.sessionKey === command.sessionKey)
+        : undefined;
     const survivingPane =
       command.kind === "close-pane" && targetPane
-        ? panesOf(layout).find((pane) => pane.id !== targetPane.id)
+        ? closePaneBrowserAnnotations(this.context, this, layout, targetPane.id)
         : undefined;
     const next = applyUiCommandToSplitLayout(layout, command, sourceSessionKey);
     if (next === layout) {
@@ -508,7 +519,7 @@ export class ChatPage extends OpenClawLightDomElement {
     if (!layout) {
       return;
     }
-    const survivingPane = panesOf(layout).find((pane) => pane.id !== paneId);
+    const survivingPane = closePaneBrowserAnnotations(this.context, this, layout, paneId);
     const next = closePane(layout, paneId);
     if (!next && survivingPane) {
       const survivingLocation = findPane(layout, survivingPane.id);
@@ -530,15 +541,6 @@ export class ChatPage extends OpenClawLightDomElement {
     }
   };
 
-  private routeDraftForActivePane(sessionKey = this.data?.sessionKey): string | undefined {
-    const data = this.data;
-    // Never hand a new route's draft to the old pane while the split layout catches up.
-    if (!data || sessionKey !== data.sessionKey || this.consumedDraftData === data) {
-      return undefined;
-    }
-    return data.draft;
-  }
-
   private renderPaneCell(
     pane: ChatSplitPane,
     active: boolean,
@@ -549,6 +551,10 @@ export class ChatPage extends OpenClawLightDomElement {
   ) {
     const sessions = this.context?.sessions?.state.result?.sessions ?? [];
     const nativeGateways = nativeGatewaysCapability();
+    const draft = active
+      ? routeDraft(this.data, this.consumedDraftData, pane.sessionKey)
+      : undefined;
+    const focus = this.draftFocus.shouldFocusPane(active, draft, pane.sessionKey, this.data);
     // Resolve aliases like the pane does so renamed sessions keep their display title.
     const resolvedKey =
       resolveSessionKey(pane.sessionKey, this.context?.gateway?.snapshot?.hello) || pane.sessionKey;
@@ -570,7 +576,8 @@ export class ChatPage extends OpenClawLightDomElement {
           .chatMessagesBySession=${this.chatMessagesBySession}
           .sessionKey=${pane.sessionKey}
           .active=${active}
-          .draft=${active ? this.routeDraftForActivePane(pane.sessionKey) : undefined}
+          .draft=${draft}
+          .focusComposer=${focus}
           .routeFace=${this.data?.face ?? "chat"}
           .paneTitle=${title}
           .narrow=${this.narrow}
@@ -695,14 +702,12 @@ export class ChatPage extends OpenClawLightDomElement {
   override render() {
     const indicator = this.dropIndicator;
     const layout = this.layout ?? this.classicLayout();
-    const activeLocation = findPane(layout, layout.activePaneId);
-    const renderedPaneOwners = this.narrow
-      ? activeLocation
-        ? [{ columnId: activeLocation.column.id, pane: activeLocation.pane }]
-        : []
-      : layout.columns.flatMap((column) =>
-          column.panes.map((pane) => ({ columnId: column.id, pane })),
-        );
+    const renderedPaneIds = new Set(visiblePanesOf(layout, this.narrow).map((pane) => pane.id));
+    const renderedPaneOwners = layout.columns.flatMap((column) =>
+      column.panes
+        .filter((pane) => renderedPaneIds.has(pane.id))
+        .map((pane) => ({ columnId: column.id, pane })),
+    );
     const nextPaneKeys = new Set(
       renderedPaneOwners.map(({ columnId, pane }) =>
         JSON.stringify([columnId, pane.id, pane.sessionKey]),

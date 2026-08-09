@@ -12,7 +12,6 @@ import {
   getMemorySearchManagerMockParams,
   getReadAgentMemoryFileMockCalls,
   resetMemoryToolMockState,
-  setMemoryBackend,
   setMemoryReadFileImpl,
   setMemorySearchImpl,
   setMemoryWorkspaceDir,
@@ -63,7 +62,6 @@ beforeEach(() => {
   clearMemoryPluginState();
   memoryToolsTesting.resetMemorySearchToolCooldowns();
   resetMemoryToolMockState({
-    backend: "builtin",
     searchImpl: async () => [
       {
         path: "MEMORY.md",
@@ -93,8 +91,8 @@ describe("memory search citations", () => {
     return result;
   }
 
+  // The first tool call pays Vitest's cold lazy-runtime transform cost on Node 24 CI.
   it("appends source information when citations are enabled", async () => {
-    setMemoryBackend("builtin");
     const cfg = asOpenClawConfig({
       memory: { citations: "on" },
       agents: { list: [{ id: "main", default: true }] },
@@ -105,10 +103,9 @@ describe("memory search citations", () => {
     const firstResult = expectFirstMemoryResult(details);
     expect(firstResult.snippet).toMatch(/Source: MEMORY.md#L5-L7/);
     expect(firstResult.citation).toBe("MEMORY.md#L5-L7");
-  });
+  }, 180_000);
 
   it("leaves snippet untouched when citations are off", async () => {
-    setMemoryBackend("builtin");
     const cfg = asOpenClawConfig({
       memory: { citations: "off" },
       agents: { list: [{ id: "main", default: true }] },
@@ -121,31 +118,7 @@ describe("memory search citations", () => {
     expect(firstResult.citation).toBeUndefined();
   });
 
-  it("clamps decorated snippets to qmd injected budget", async () => {
-    setMemoryBackend("qmd");
-    setMemorySearchImpl(async () => [
-      {
-        path: "MEMORY.md",
-        startLine: 5,
-        endLine: 7,
-        score: 0.9,
-        snippet: "abc😀tail",
-        source: "memory" as const,
-      },
-    ]);
-    const cfg = asOpenClawConfig({
-      memory: { citations: "on", backend: "qmd", qmd: { limits: { maxInjectedChars: 4 } } },
-      agents: { list: [{ id: "main", default: true }] },
-    });
-    const tool = createMemorySearchToolOrThrow({ config: cfg });
-    const result = await tool.execute("call_citations_qmd", { query: "notes" });
-    const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
-    const firstResult = expectFirstMemoryResult(details);
-    expect(firstResult.snippet).toBe("abc");
-  });
-
   it("honors auto mode for direct chats", async () => {
-    setMemoryBackend("builtin");
     const tool = createAutoCitationsMemorySearchTool("agent:main:discord:dm:u123");
     const result = await tool.execute("auto_mode_direct", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string }> };
@@ -154,7 +127,6 @@ describe("memory search citations", () => {
   });
 
   it("suppresses citations for auto mode in group chats", async () => {
-    setMemoryBackend("builtin");
     const tool = createAutoCitationsMemorySearchTool("agent:main:discord:group:c123");
     const result = await tool.execute("auto_mode_group", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string }> };
@@ -181,10 +153,8 @@ describe("memory tools", () => {
   });
 
   it("uses default memory manager mode for shared memory_search", async () => {
-    setMemoryBackend("qmd");
     const tool = createMemorySearchToolOrThrow({
       config: asOpenClawConfig({
-        memory: { backend: "qmd", qmd: { command: "qmd" } },
         agents: { list: [{ id: "main", default: true }] },
       }),
     });
@@ -201,10 +171,8 @@ describe("memory tools", () => {
   });
 
   it("uses one-shot CLI memory manager mode for explicit local CLI memory_search", async () => {
-    setMemoryBackend("qmd");
     const tool = createMemorySearchToolOrThrow({
       config: asOpenClawConfig({
-        memory: { backend: "qmd", qmd: { command: "qmd" } },
         agents: { list: [{ id: "main", default: true }] },
       }),
       oneShotCliRun: true,
@@ -254,7 +222,6 @@ describe("memory tools", () => {
   });
 
   it("uses the builtin direct memory file path for memory_get", async () => {
-    setMemoryBackend("builtin");
     const tool = createMemoryGetToolOrThrow();
 
     const result = await tool.execute("call_builtin_fast_path", { path: "memory/2026-02-19.md" });
@@ -270,7 +237,6 @@ describe("memory tools", () => {
   });
 
   it("rejects fractional memory_get ranges before reading files", async () => {
-    setMemoryBackend("builtin");
     const tool = createMemoryGetToolOrThrow();
 
     await expect(
@@ -285,7 +251,6 @@ describe("memory tools", () => {
   });
 
   it("returns truncation metadata and a continuation notice for partial memory_get results", async () => {
-    setMemoryBackend("builtin");
     setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
       path: params.relPath,
       text: "alpha\nbeta\n\n[More content available. Use from=41 to continue.]",
@@ -311,7 +276,6 @@ describe("memory tools", () => {
   it("persists short-term recall events from memory_search tool hits", async () => {
     const workspaceDir = await createTempWorkspace("memory-tools-recall-");
     try {
-      setMemoryBackend("builtin");
       setMemoryWorkspaceDir(workspaceDir);
       setMemorySearchImpl(async () => [
         {

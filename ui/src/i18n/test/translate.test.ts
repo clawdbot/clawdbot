@@ -150,6 +150,18 @@ describe("i18n", () => {
 
     await vi.waitFor(() => expect(fresh.i18n.getLocale()).toBe("fa"));
     expect(documentElement).toEqual({ lang: "fa", dir: "rtl" });
+    expect(localStorage.getItem("openclaw.i18n.locale")).toBeNull();
+  });
+
+  it("clears an explicit locale when returning to the system language", async () => {
+    vi.stubGlobal("navigator", { language: "de-DE" } as Navigator);
+    await translate.i18n.setLocale("fr");
+    expect(localStorage.getItem("openclaw.i18n.locale")).toBe("fr");
+
+    await translate.i18n.useSystemLocale();
+
+    expect(translate.i18n.getLocale()).toBe("de");
+    expect(localStorage.getItem("openclaw.i18n.locale")).toBeNull();
   });
 
   it("syncs document locale metadata when the locale changes", async () => {
@@ -261,7 +273,7 @@ describe("i18n", () => {
 
   it("keeps mobile pairing copy localized in shipped locale bundles", () => {
     const checkedKeys = flatten(en).filter(
-      (key) => key.startsWith("nodes.pairing.") && key !== "nodes.pairing.title",
+      (key) => key.startsWith("devices.pairing.") && key !== "devices.pairing.title",
     );
 
     for (const [locale, value] of Object.entries(shippedLocales)) {

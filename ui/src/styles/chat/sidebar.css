@@ -906,6 +906,23 @@ openclaw-chat-sidebar-region,
   overflow: auto;
 }
 
+.chat-tasks-rail__transcript {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-tasks-rail__transcript > .chat-thread {
+  padding: 12px 0 6px;
+  border-radius: 0;
+}
+
+.chat-tasks-rail__transcript .chat-thread-inner {
+  width: calc(100% - 16px);
+}
+
 /* List mode splits scrolling per section: running work owns the rail and the
    finished history pins to the bottom, so a long history can never clip the
    active tasks (each section scrolls on its own instead of the container). */

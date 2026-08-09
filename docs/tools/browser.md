@@ -102,16 +102,10 @@ Plugin-bundled skills are listed in the agent's available skills when the
 plugin is enabled. The full skill instructions load on demand, so routine
 turns do not pay the full token cost.
 
-For “read this page and answer X,” use browser `action="extract"` with a
-`query`. It sends sanitized, bounded readable text through one model call and
-returns only the answer; keep `snapshot` for choosing actions and obtaining
-refs. Extraction requires a Playwright-backed profile and falls back to a
-snapshot workflow when it cannot complete.
-
-On large pages, pass `selector` to capture only the relevant CSS subtree and
-`ignoreSelectors` to remove repeated chrome before conversion. Pass a JSON
-`schema` when the caller needs validated machine-usable fields in
-`details.json`; without it, extraction remains a free-text answer.
+For page text, use a selector-scoped snapshot or `act:evaluate` that returns
+only the relevant text or structured data, then let the active agent model
+reason over that bounded result. Use efficient snapshots for controls and
+action discovery; they intentionally omit most non-interactive prose.
 
 ## Missing browser command or tool
 
@@ -165,8 +159,9 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     evaluateEnabled: true, // default: true; false disables act:evaluate (arbitrary JS)
     ssrfPolicy: {
       // dangerouslyAllowPrivateNetwork: true, // opt in only for trusted private-network access
-      // hostnameAllowlist: ["*.example.com", "example.com"],
       // allowedHostnames: ["localhost"],
+      // allowRfc2544BenchmarkRange: true, // trusted fake-IP proxy range
+      // allowIpv6UniqueLocalRange: true, // trusted fake-IP proxy IPv6 range
     },
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
     tabCleanup: {
@@ -332,6 +327,8 @@ main model can read the screenshot directly.
 - OpenClaw-managed local CDP readiness probes and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.
 - To proxy the managed browser itself, pass explicit Chrome proxy flags through `browser.extraArgs`, such as `--proxy-server=...` or `--proxy-pac-url=...`. Strict SSRF mode blocks explicit browser proxy routing unless private-network browser access is intentionally enabled.
 - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is off by default; enable only when private-network browser access is intentionally trusted.
+- `browser.ssrfPolicy.allowedHostnames` grants exact hosts while the rest of the private network remains blocked.
+- `browser.ssrfPolicy.allowRfc2544BenchmarkRange` and `browser.ssrfPolicy.allowIpv6UniqueLocalRange` narrowly allow trusted fake-IP proxy ranges.
 - `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 
 </Accordion>

@@ -1,7 +1,8 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { ensureMeetingAudioBackend, resolveMeetingAudioRuntimeForFormat } from "./audio-backend.js";
 import { createMeetingChromeTransport } from "./chrome-transport.js";
+import { createMeetingConfiguredNodeHost } from "./configured-node-host.js";
 import { isMeetingRealtimeRouteReady, isMeetingTalkBackMode } from "./meeting-modes.js";
-import { createMeetingConfiguredNodeHost } from "./node-host.js";
 import type {
   MeetingBrowserAdapter,
   MeetingBrowserLeaveStep,
@@ -21,7 +22,9 @@ import {
   createMeetingPluginShellEntry,
   createMeetingPluginTypes,
 } from "./plugin-shell.js";
+import { createMeetingRuntimeFacade } from "./runtime-facade.js";
 import { createMeetingRuntimeProbes, resolveMeetingProbeTimeoutMs } from "./runtime-probes.js";
+import { createMeetingRuntimeSetup } from "./runtime-setup.js";
 import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";
 import { createMeetingStatusCallSource } from "./status-call-source.js";
 import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
@@ -385,6 +388,8 @@ export const MeetingPlatformAdapter = {
   createPluginNodeHostHandler: createMeetingPluginNodeHostHandler,
   createPluginNodeInvokePolicy: createMeetingPluginNodeInvokePolicy,
   createPluginShellEntry: createMeetingPluginShellEntry,
+  createRuntimeFacade: createMeetingRuntimeFacade,
+  createRuntimeSetup: createMeetingRuntimeSetup,
   pluginTypes: createMeetingPluginTypes,
   registerPluginCli: registerMeetingPluginCli,
   resolveProbeTimeoutMs: resolveMeetingProbeTimeoutMs,
@@ -395,4 +400,6 @@ export const MeetingPlatformAdapter = {
   createStatusPreludeSource: createMeetingStatusPreludeSource,
   isRealtimeRouteReady: isMeetingRealtimeRouteReady,
   isTalkBackMode: isMeetingTalkBackMode,
+  ensureAudioBackend: ensureMeetingAudioBackend,
+  resolveAudioRuntimeForFormat: resolveMeetingAudioRuntimeForFormat,
 };

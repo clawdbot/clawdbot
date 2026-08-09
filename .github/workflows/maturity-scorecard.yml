@@ -22,6 +22,11 @@ on:
         required: false
         default: true
         type: boolean
+      allow_failures:
+        description: Allow rendering from valid incomplete QA evidence
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       qa_evidence_run_id:
@@ -38,6 +43,11 @@ on:
         required: false
         default: ""
         type: string
+      allow_failures:
+        description: Allow rendering from valid incomplete QA evidence
+        required: false
+        default: false
+        type: boolean
     secrets:
       OPENAI_API_KEY:
         description: OpenAI API key used by live QA profile scenarios
@@ -321,6 +331,7 @@ jobs:
       ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       expected_sha: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       qa_profile: all
+      allow_failures: ${{ inputs.allow_failures }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -417,9 +428,11 @@ jobs:
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
         run: |
           set -euo pipefail
-          node --input-type=module <<'NODE'
+          node --import tsx --input-type=module <<'NODE'
           import fs from "node:fs";
           import path from "node:path";
+          import { validateQaEvidenceSummaryJson } from "./extensions/qa-lab/src/evidence-summary.ts";
+          import { qaProfileEvidencePlan } from "./extensions/qa-lab/src/profile-evidence-plan.ts";
 
           const evidencePath = process.env.QA_EVIDENCE_PATH;
           const targetSha = process.env.TARGET_SHA;
@@ -430,9 +443,12 @@ jobs:
             throw new Error("TARGET_SHA is required");
           }
 
-          const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+          const evidence = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
           if (evidence.profile !== "all") {
             throw new Error(`qa-evidence.json profile must be all, got ${JSON.stringify(evidence.profile)}`);
+          }
+          if (!evidence.profilePlan) {
+            throw new Error("qa-evidence.json is missing profilePlan; rerun the QA Profile Evidence workflow with current code.");
           }
 
           const artifactDir = path.dirname(evidencePath);
@@ -454,6 +470,19 @@ jobs:
           }
           if (manifest.targetSha !== targetSha) {
             throw new Error(`QA evidence manifest targetSha ${manifest.targetSha} does not match selected ref ${targetSha}`);
+          }
+          if (typeof manifest.profilePlanSha256 !== "string") {
+            throw new Error("QA evidence manifest is missing profilePlanSha256; rerun the QA Profile Evidence workflow with current code.");
+          }
+          const { plan: profilePlan, sha256: profilePlanSha256 } = qaProfileEvidencePlan.attest(
+            evidence.profilePlan,
+            manifest.qaPassed === true,
+          );
+          if (profilePlan.profile !== "all") {
+            throw new Error(`qa-evidence.json profilePlan.profile must be all, got ${JSON.stringify(profilePlan.profile)}`);
+          }
+          if (profilePlanSha256 !== manifest.profilePlanSha256) {
+            throw new Error("QA evidence profilePlan digest does not match the manifest");
           }
           NODE
 
@@ -533,31 +562,46 @@ jobs:
           NODE
 
       - name: Render artifact docs
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
         run: |
           set -euo pipefail
+          allow_failures_args=()
+          if [[ "$ALLOW_FAILURES" == "true" ]]; then
+            allow_failures_args+=(--allow-failures)
+          fi
           pnpm maturity:render -- \
             --output-dir .artifacts/maturity-docs \
             --static-assets-dir .artifacts/maturity-docs/assets/maturity \
             --scores qa/maturity-scores.yaml \
             --evidence-dir .artifacts/maturity-evidence \
-            --strict-inputs
+            --strict-inputs \
+            "${allow_failures_args[@]}"
           {
             echo "### Maturity scorecard docs"
             echo
             echo "- Source validation: passed"
             echo "- Artifact docs: \`.artifacts/maturity-docs\`"
             echo "- Strict inputs: \`true\`"
+            echo "- QA failures allowed: \`${ALLOW_FAILURES}\`"
             echo "- QA evidence: included"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Render committed docs preview
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
         run: |
           set -euo pipefail
+          allow_failures_args=()
+          if [[ "$ALLOW_FAILURES" == "true" ]]; then
+            allow_failures_args+=(--allow-failures)
+          fi
           pnpm maturity:render -- \
             --output-dir docs \
             --scores qa/maturity-scores.yaml \
             --evidence-dir .artifacts/maturity-evidence \
-            --strict-inputs
+            --strict-inputs \
+            "${allow_failures_args[@]}"
 
       - name: Upload generated PR files
         if: ${{ inputs.publish_pull_request }}
@@ -721,7 +765,7 @@ jobs:
 
             ## Why This Change Was Made
 
-            The maturity workflow generated this update from the selected immutable source and strict QA evidence.
+            The maturity workflow generated this update from the selected immutable source and validated QA evidence.
 
             ## User Impact
 

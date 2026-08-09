@@ -133,7 +133,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       if (send.status === "failed" || send.status === "partial_failed") {
         throw send.error;
       }
-      return true;
+      return send.status === "sent";
     } catch (err) {
       log.warn(`heartbeat: HEARTBEAT_OK delivery failed: ${formatErrorMessage(err)}`);
       return false;

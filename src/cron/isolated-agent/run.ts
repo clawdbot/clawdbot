@@ -5,16 +5,19 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
-  claimAgentRunContext,
-  consumeCronNextCheckProposal,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
-  releaseAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  consumeCronNextCheckProposal,
+  getAgentRunContext,
+  releaseAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -28,7 +31,7 @@ import type {
 } from "../types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import { prepareCronRunContext } from "./run-prepare.js";
-import type { MutableCronSession } from "./run-session-state.js";
+import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
 import { logWarn } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
@@ -100,13 +103,25 @@ export async function runCronIsolatedAgentTurn(params: {
   const abortReason = () =>
     resolveCronAbortReasonText(abortSignal?.reason) ?? "cron: job execution timed out";
   const isFastTestEnv = isFastTestRuntimeEnv();
-  const prepared = await prepareCronRunContext({
-    input: { ...params, abortSignal },
-    isFastTestEnv,
-    onLifecycleInterrupt: () => lifecycleAbortController.abort(createAgentRunRestartAbortError()),
-  });
+  let prepared: Awaited<ReturnType<typeof prepareCronRunContext>>;
+  try {
+    prepared = await prepareCronRunContext({
+      input: { ...params, abortSignal },
+      isFastTestEnv,
+      onLifecycleInterrupt: () => lifecycleAbortController.abort(createAgentRunRestartAbortError()),
+    });
+  } catch (err) {
+    if (err instanceof CronSessionLifecycleClaimError) {
+      return {
+        status: "error",
+        error: err.message,
+        admissionDisposition: err.admissionDisposition,
+      };
+    }
+    throw err;
+  }
   if (!prepared.ok) {
-    return prepared.result;
+    return { ...prepared.result, admissionDisposition: "rejected" };
   }
   // Capture the stable run id before execution can rotate its persisted session.
   const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
@@ -209,7 +224,6 @@ export async function runCronIsolatedAgentTurn(params: {
       resolvedDeliveryOk: prepared.context.resolvedDelivery.ok,
       deliveryRequested: prepared.context.deliveryRequested,
       sourceDelivery: prepared.context.sourceDelivery,
-      messageToolPromptEnabled: prepared.context.messageToolPromptEnabled,
       skillsSnapshot: prepared.context.skillsSnapshot,
       agentPayload: prepared.context.agentPayload,
       useSubagentFallbacks: prepared.context.useSubagentFallbacks,
@@ -230,15 +244,19 @@ export async function runCronIsolatedAgentTurn(params: {
       onLaneWait: params.onLaneWait,
       abortReason,
       isAborted,
-      thinkLevel: prepared.context.thinkLevel,
-      thinkingCatalog: prepared.context.thinkingCatalog,
+      immutableThinkLevel: prepared.context.thinkingSelection.immutableThinkLevel,
+      thinkingCatalog: prepared.context.thinkingSelection.catalog,
+      loadThinkingCatalog: prepared.context.thinkingSelection.loadThinkingCatalog,
       timeoutMs: prepared.context.timeoutMs,
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
+      pluginRegistry: prepared.context.pluginRegistry,
     };
     const execution = await prepared.context.sessionWorkAdmission.run(() =>
       withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
-        executeCronRun(executionParams),
+        withPluginRuntimeRegistryScope(prepared.context.pluginRegistry, () =>
+          executeCronRun(executionParams),
+        ),
       ),
     );
     const finalized = await finalizeCronRun({
@@ -271,6 +289,14 @@ export async function runCronIsolatedAgentTurn(params: {
       status: "error",
       error,
       executionStarted,
+      ...(!executionStarted
+        ? {
+            admissionDisposition:
+              err instanceof CronSessionLifecycleClaimError
+                ? err.admissionDisposition
+                : ("rejected" as const),
+          }
+        : {}),
       // Carry the already-resolved run model into the error/timeout row so
       // Task-run history keeps provider/model attribution instead of looking like
       // an un-attributed cron timeout. finalizeCronRun does the same via

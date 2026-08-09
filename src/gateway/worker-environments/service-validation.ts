@@ -5,7 +5,7 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import type { WorkerLease, WorkerLeaseStatus, WorkerSshEndpoint } from "../../plugins/types.js";
 import { normalizeWorkerSshEndpoint } from "./store.js";
 
-export function inspectionStatus(value: unknown): WorkerLeaseStatus["status"] {
+export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
   if (!isRecord(value)) {
     throw new Error("Worker provider returned an invalid inspection result");
   }
@@ -13,7 +13,16 @@ export function inspectionStatus(value: unknown): WorkerLeaseStatus["status"] {
   if (status !== "active" && status !== "destroyed" && status !== "unknown") {
     throw new Error("Worker provider returned an invalid inspection status");
   }
-  return status;
+  if (status === "active") {
+    if (value.sharedHost !== undefined && typeof value.sharedHost !== "boolean") {
+      throw new Error("Worker provider returned an invalid inspection result");
+    }
+    return { status, sharedHost: value.sharedHost === true };
+  }
+  if (value.sharedHost !== undefined) {
+    throw new Error("Worker provider returned an invalid inspection result");
+  }
+  return { status };
 }
 
 export function requireWorkerLease(value: unknown): WorkerLease {
@@ -21,13 +30,15 @@ export function requireWorkerLease(value: unknown): WorkerLease {
     !isRecord(value) ||
     typeof value.leaseId !== "string" ||
     !value.leaseId.trim() ||
-    !isRecord(value.ssh)
+    !isRecord(value.ssh) ||
+    (value.sharedHost !== undefined && typeof value.sharedHost !== "boolean")
   ) {
     throw new Error("Worker provider returned an invalid provision result");
   }
   return {
     leaseId: value.leaseId.trim(),
     ssh: normalizeWorkerSshEndpoint(value.ssh as WorkerSshEndpoint),
+    ...(value.sharedHost === true ? { sharedHost: true } : {}),
   };
 }
 

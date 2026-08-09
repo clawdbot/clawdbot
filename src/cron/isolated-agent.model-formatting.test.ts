@@ -58,8 +58,8 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   }) => {
     for (const candidate of [
       { raw: agentConfigOverride?.subagents?.model, source: "subagent" as const },
-      { raw: agentConfigOverride?.model, source: "agent" as const },
       { raw: cfg?.agents?.defaults?.subagents?.model, source: "default-subagent" as const },
+      { raw: agentConfigOverride?.model, source: "agent" as const },
     ]) {
       if (normalizeModelSelectionMock(candidate.raw)) {
         return candidate;
@@ -205,29 +205,53 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("handles leading/trailing whitespace in model string", async () => {
+    it.each([
+      {
+        title: "handles leading/trailing whitespace in model string",
+        model: "  openai/gpt-4.1-mini  ",
+        expectedProvider: "openai",
+        expectedModel: "gpt-4.1-mini",
+      },
+      {
+        title: "handles openrouter nested provider paths",
+        model: "openrouter/meta-llama/llama-3.3-70b:free",
+        expectedProvider: "openrouter",
+        expectedModel: "meta-llama/llama-3.3-70b:free",
+      },
+      {
+        title: "normalizes provider casing",
+        model: "OpenAI/gpt-4.1-mini",
+        expectedProvider: "openai",
+        expectedModel: "gpt-4.1-mini",
+      },
+      {
+        title: "normalizes anthropic model aliases",
+        model: "anthropic/opus-4.5",
+        expectedProvider: "anthropic",
+        expectedModel: "claude-opus-4-5",
+      },
+      {
+        title: "normalizes bedrock provider alias",
+        model: "bedrock/claude-sonnet-4-6",
+        expectedProvider: "amazon-bedrock",
+        expectedModel: "claude-sonnet-4-6",
+      },
+      {
+        title: "job payload model overrides default (anthropic -> openai)",
+        model: "openai/gpt-4.1-mini",
+        expectedProvider: "openai",
+        expectedModel: "gpt-4.1-mini",
+      },
+    ])("$title", async ({ model, expectedProvider, expectedModel }) => {
       await expectSelectedModel(
         {
           payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
-            model: "  openai/gpt-4.1-mini  ",
+            model,
           },
         },
-        { provider: "openai", model: "gpt-4.1-mini" },
-      );
-    });
-
-    it("handles openrouter nested provider paths", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "openrouter/meta-llama/llama-3.3-70b:free",
-          },
-        },
-        { provider: "openrouter", model: "meta-llama/llama-3.3-70b:free" },
+        { provider: expectedProvider, model: expectedModel },
       );
     });
 
@@ -238,7 +262,7 @@ describe("cron model formatting and precedence edge cases", () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        error: "cron payload.model 'openai/' rejected: invalid model",
+        error: "automation model override 'openai/' rejected: invalid model",
       });
     });
 
@@ -249,7 +273,7 @@ describe("cron model formatting and precedence edge cases", () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        error: "cron payload.model '/gpt-4.1-mini' rejected: invalid model",
+        error: "automation model override '/gpt-4.1-mini' rejected: invalid model",
       });
     });
 
@@ -269,7 +293,7 @@ describe("cron model formatting and precedence edge cases", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [(none configured)]",
+          "automation model override 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [(none configured)]",
       });
     });
 
@@ -291,7 +315,7 @@ describe("cron model formatting and precedence edge cases", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          "cron payload.model 'openai/gpt-5.5' rejected by agents.entries.*.modelPolicy.allow: openai/gpt-5.5 is not in [anthropic/*]",
+          "automation model override 'openai/gpt-5.5' rejected by agents.entries.*.modelPolicy.allow: openai/gpt-5.5 is not in [anthropic/*]",
       });
     });
 
@@ -358,7 +382,7 @@ describe("cron model formatting and precedence edge cases", () => {
       expect(loadModelCatalogMock).toHaveBeenCalledOnce();
       expect(loadModelCatalogMock).toHaveBeenCalledWith({
         config: callerConfig,
-        readOnly: true,
+        allowGatewaySubagentBinding: true,
       });
       expect(resolveConfiguredModelRefMock).toHaveBeenCalledWith(
         expect.objectContaining({ cfg: expect.objectContaining(ownerConfig) }),
@@ -384,61 +408,9 @@ describe("cron model formatting and precedence edge cases", () => {
         },
       });
     });
-
-    it("normalizes provider casing", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "OpenAI/gpt-4.1-mini",
-          },
-        },
-        { provider: "openai", model: "gpt-4.1-mini" },
-      );
-    });
-
-    it("normalizes anthropic model aliases", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "anthropic/opus-4.5",
-          },
-        },
-        { provider: "anthropic", model: "claude-opus-4-5" },
-      );
-    });
-
-    it("normalizes bedrock provider alias", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "bedrock/claude-sonnet-4-6",
-          },
-        },
-        { provider: "amazon-bedrock", model: "claude-sonnet-4-6" },
-      );
-    });
   });
 
   describe("model precedence isolation", () => {
-    it("job payload model overrides default (anthropic -> openai)", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "openai/gpt-4.1-mini",
-          },
-        },
-        { provider: "openai", model: "gpt-4.1-mini" },
-      );
-    });
-
     it("session override applies when no job payload model is present", async () => {
       await expectSelectedModel(
         {
@@ -802,7 +774,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("falls through fallback-only subagents.model to the agent model", async () => {
+    it("falls through fallback-only subagents.model to the global subagent default", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -818,7 +790,7 @@ describe("cron model formatting and precedence edge cases", () => {
             subagents: { model: { fallbacks: [] } },
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "ollama", model: "llama3.2:3b" },
       );
     });
 
@@ -843,7 +815,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("prefers the agent model over agents.defaults.subagents.model", async () => {
+    it("prefers agents.defaults.subagents.model over the agent model", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -858,7 +830,7 @@ describe("cron model formatting and precedence edge cases", () => {
             model: { primary: "anthropic/claude-opus-4-6" },
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "ollama", model: "llama3.2:3b" },
       );
     });
   });

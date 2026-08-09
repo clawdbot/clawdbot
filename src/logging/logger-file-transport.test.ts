@@ -31,6 +31,26 @@ afterAll(async () => {
 });
 
 describe("async logger file transport", () => {
+  it("installs process hooks only while file logging is active", () => {
+    const beforeExitListeners = process.listenerCount("beforeExit");
+    const exitListeners = process.listenerCount("exit");
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", file: logPath });
+
+    expect(process.listenerCount("beforeExit")).toBe(beforeExitListeners);
+    expect(process.listenerCount("exit")).toBe(exitListeners);
+
+    getLogger().info("install-file-transport-hooks");
+
+    expect(process.listenerCount("beforeExit")).toBe(beforeExitListeners + 1);
+    expect(process.listenerCount("exit")).toBe(exitListeners + 1);
+
+    testApi.resetFileLogTransportForTests();
+
+    expect(process.listenerCount("beforeExit")).toBe(beforeExitListeners);
+    expect(process.listenerCount("exit")).toBe(exitListeners);
+  });
+
   it("writes queued records in order and byte-identically to the synchronous drain", async () => {
     const syncPath = logPathTracker.nextPath();
     const asyncPath = logPathTracker.nextPath();

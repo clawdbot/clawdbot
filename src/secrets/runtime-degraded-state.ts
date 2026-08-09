@@ -8,6 +8,7 @@ import {
 
 export type SecretDegradationReason =
   | SecretResolutionFailureReason
+  | "secret provider is not configured"
   | "resolved secret value was invalid"
   | "secret reference is not allowed for this provider"
   | "secret reference was not materialized by the active runtime"
@@ -108,6 +109,7 @@ export function classifySecretResolutionErrorDegradations(error: unknown): Secre
 export function redactSecretDegradationReason(reason: string): SecretDegradationReason {
   switch (reason) {
     case "secret provider failed":
+    case "secret provider is not configured":
     case "secret provider policy denied resolution":
     case "secret provider response violated its contract":
     case "secret reference is not allowed for this provider":
@@ -122,6 +124,7 @@ export function redactSecretDegradationReason(reason: string): SecretDegradation
 }
 
 const SECRET_SURFACE_UNAVAILABLE_ERROR_CODE = "SECRET_SURFACE_UNAVAILABLE";
+const trustedSecretSurfaceUnavailableErrors = new WeakSet<object>();
 
 /** Runtime error returned when a request targets an isolated SecretRef owner. */
 export class SecretSurfaceUnavailableError extends Error {
@@ -138,7 +141,17 @@ export class SecretSurfaceUnavailableError extends Error {
     this.ownerKind = owner.ownerKind;
     this.ownerId = owner.ownerId;
     this.paths = [...owner.paths];
+    trustedSecretSurfaceUnavailableErrors.add(this);
   }
+}
+
+/** Authenticates owner-created failures without trusting forgeable error names or prototypes. */
+export function isTrustedSecretSurfaceUnavailableError(
+  error: unknown,
+): error is SecretSurfaceUnavailableError {
+  return (
+    typeof error === "object" && error !== null && trustedSecretSurfaceUnavailableErrors.has(error)
+  );
 }
 
 let activeDegradedOwners: DegradedSecretOwner[] = [];

@@ -12,6 +12,7 @@ import { resolveGithubCopilotDomain } from "./domain.js";
 import {
   PROVIDER_ID,
   fetchCopilotModelCatalog,
+  isCopilotCatalogModelVisible,
   resolveCopilotForwardCompatModel,
 } from "./models.js";
 
@@ -96,7 +97,14 @@ export function createGithubCopilotDynamicModelHooks(params: {
 
   async function runCatalog(ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> {
     const catalog = await resolveCatalog(ctx);
-    return catalog ? { provider: catalog } : null;
+    return catalog
+      ? {
+          provider: {
+            ...catalog,
+            models: catalog.models.filter(isCopilotCatalogModelVisible),
+          },
+        }
+      : null;
   }
 
   async function prepareDynamicModel(ctx: ProviderPrepareDynamicModelContext): Promise<void> {

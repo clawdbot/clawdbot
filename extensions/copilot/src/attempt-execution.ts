@@ -2,6 +2,7 @@ import type { Tool as SdkTool } from "@github/copilot-sdk";
 import type {
   AgentHarnessAttemptParams,
   AgentMessage,
+  AnyAgentTool,
   SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -107,12 +108,13 @@ export async function runCopilotExecution(context: {
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
   let transcriptJournal: AttemptTranscriptJournal | undefined;
+  let initialSdkUserValidated = false;
   const nativeSubagentTaskMirror = createCopilotNativeSubagentTaskMirror({
     agentId: sessionAgentId,
     now,
     scope: input.agentHarnessTaskRuntimeScope,
   });
-  let activeRunHandleRef: Parameters<typeof clearActiveEmbeddedRun>[1] | undefined;
+  let activeRunHandleRef: ReturnType<typeof registerCopilotActiveRun> | undefined;
   let userInputBridgeRef: CopilotUserInputBridge | undefined;
   let cleanupToolBridge: (() => void) | undefined;
   let releaseError: Error | undefined;
@@ -248,8 +250,13 @@ export async function runCopilotExecution(context: {
     frameToolCallId?: string;
     frameImageIdentity?: string;
   } = { value: 0 };
+  let codeModeEngaged: boolean | undefined;
   try {
     let sdkTools: SdkTool[] = [];
+    let resultContentSourceByToolName = new Map<
+      string,
+      NonNullable<AnyAgentTool["resultContentSource"]>
+    >();
     if (!settledToolFinalization) {
       try {
         const toolBridge = await createToolBridge({
@@ -287,7 +294,13 @@ export async function runCopilotExecution(context: {
             }),
         });
         cleanupToolBridge = toolBridge.cleanup;
+        codeModeEngaged = toolBridge.codeModeEngaged;
         sdkTools = toolBridge.sdkTools;
+        resultContentSourceByToolName = new Map(
+          toolBridge.sourceTools.flatMap((tool) =>
+            tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
+          ),
+        );
       } catch (error: unknown) {
         const result = createResult(input, {
           messagesSnapshot: messages,
@@ -391,6 +404,15 @@ export async function runCopilotExecution(context: {
         });
       } catch {}
     }
+    transcriptJournal = createAttemptTranscriptJournal({
+      abortSession: () => session?.abort() ?? Promise.resolve(),
+      attempt: input,
+      messages,
+      onInitialSdkUserValidated: () => {
+        initialSdkUserValidated = true;
+      },
+      sdkSessionId,
+    });
     bridge = attachEventBridge(session, {
       onAssistantDelta: settledToolFinalization ? undefined : input.onAssistantDelta,
       onAgentEvent: settledToolFinalization ? undefined : input.onAgentEvent,
@@ -430,22 +452,21 @@ export async function runCopilotExecution(context: {
       getSdkSessionId: () => sdkSessionId,
       isAborted: () => aborted || transcriptJournal?.hasFailed() === true,
       transcriptProjection: {
-        journal: (transcriptJournal = createAttemptTranscriptJournal({
-          abortSession: () => session?.abort() ?? Promise.resolve(),
-          attempt: input,
-          messages,
-          sdkSessionId,
-        })),
+        journal: transcriptJournal,
         modelRef,
         now,
+        resultContentSourceByToolName,
       },
     });
     activeRunHandleRef = registerCopilotActiveRun({
       abortActiveSession,
       bridge,
+      canAcceptSteering: () => initialSdkUserValidated,
       input,
       isAborted: () => aborted,
       isSettled: () => settled,
+      session,
+      transcriptJournal,
       userInputBridge,
     });
     const messageOptions = await createMessageOptions(attemptInput, {
@@ -518,6 +539,7 @@ export async function runCopilotExecution(context: {
     }
     userInputBridgeRef?.cancelPending();
     if (activeRunHandleRef) {
+      input.replyOperation?.detachBackend(activeRunHandleRef);
       clearActiveEmbeddedRun(
         input.sessionId,
         activeRunHandleRef,
@@ -609,6 +631,7 @@ export async function runCopilotExecution(context: {
     aborted,
     attemptStartedAt,
     bridge,
+    codeModeEngaged,
     downgradedFromResume,
     externalAbort,
     hookContext,

@@ -127,6 +127,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
+    name: "resume",
+    description: "Resume a recent Gateway session in the TUI",
+    hasSubcommands: false,
+  },
+  {
     name: "terminal",
     description: "Open a local terminal UI (alias for tui --local)",
     hasSubcommands: false,
@@ -138,7 +143,14 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "cron",
-    description: "Manage cron jobs (via Gateway)",
+    description: "Manage automations (via Gateway)",
+    hasSubcommands: true,
+    machineOutput: ({ argv }) => isCronMachineOutput(argv),
+    parentDefaultHelp: true,
+  },
+  {
+    name: "automations",
+    description: "Manage automations (alias for cron)",
     hasSubcommands: true,
     machineOutput: ({ argv }) => isCronMachineOutput(argv),
     parentDefaultHelp: true,

@@ -3,8 +3,6 @@ summary: "Migrate from the legacy backwards-compatibility layer to the modern pl
 title: "Plugin SDK migration"
 sidebarTitle: "Migrate to SDK"
 read_when:
-  - You see the OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED warning
-  - You see the OPENCLAW_EXTENSION_API_DEPRECATED warning
   - You used api.registerEmbeddedExtensionFactory before OpenClaw 2026.4.25
   - You are updating a plugin to the modern plugin architecture
   - You maintain an external OpenClaw plugin
@@ -84,6 +82,23 @@ External-plugin compatibility work follows this order:
 5. Document the deprecation and migration path.
 6. Remove only after the announced migration window, usually in a major
    release.
+
+### Channel state migration declarations
+
+Channel plugins should declare `doctorContract.stateMigrations: true` in
+`openclaw.plugin.json` and export `stateMigrations` from their doctor-contract
+artifact. Plan-based migrations can use
+`definePluginDoctorMigrationFromPlans(...)` from
+`openclaw/plugin-sdk/runtime-doctor` to preserve existing move, copy, preview,
+and plugin-state import behavior.
+
+The setup-entry `legacyStateMigrations` option and feature flag,
+`setupFeatures.legacyStateMigrations`,
+`BundledChannelLegacyStateMigrationDetector`, and
+`ChannelPlugin.lifecycle.detectLegacyStateMigrations` remain supported through
+one doctor-pipeline adapter for external plugins, but are deprecated. Removal
+plan: remove that adapter after OpenClaw 2027.1 only when a published-plugin
+reader sweep finds no remaining users.
 
 ### AuthStorage SQLite migration
 
@@ -443,12 +458,12 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
 
   <Step title="Replace broad infra-runtime imports">
     `openclaw/plugin-sdk/infra-runtime` still exists for external
-    compatibility, but new code should import the focused surface it actually
+    compatibility, but new code should use the supported surface it actually
     needs:
 
-    | Need | Import |
+    | Need | Replacement |
     | --- | --- |
-    | System event queue helpers | `openclaw/plugin-sdk/system-event-runtime` |
+    | New system event producers | `api.runtime.system.enqueueSystemEvent` |
     | Heartbeat wake, event, and visibility helpers | `openclaw/plugin-sdk/heartbeat-runtime` |
     | Pending delivery queue drain | `openclaw/plugin-sdk/delivery-queue-runtime` |
     | Channel activity telemetry | `openclaw/plugin-sdk/channel-activity-runtime` |
@@ -467,6 +482,14 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
     | Numeric coercion | `openclaw/plugin-sdk/number-runtime` |
     | Process-local async lock | `openclaw/plugin-sdk/async-lock-runtime` |
     | File locks | `openclaw/plugin-sdk/file-lock` |
+
+    System event snapshot inspection and consume helpers remain available only
+    through the deprecated `openclaw/plugin-sdk/infra-runtime` compatibility
+    surface; there is no modern public replacement. Current snapshots carry an
+    opaque `id` for one queued occurrence. Preserve it through copies and
+    serialization when returning a snapshot to consume. Legacy ID-less callers
+    retain structural matching, which can be ambiguous after queue churn. Do
+    not treat the ID as persistent or valid across restarts.
 
     File-lock nesting is owner-scoped. Pass the same `reentrantOwner` only for
     nested acquisitions in one logical operation; omit it for ordinary locking.
@@ -1046,15 +1069,6 @@ bundled-only modules were demoted to private-local build mappings.
 All core plugins have already migrated. External plugins should migrate
 before the next major release. Run `pnpm plugins:boundary-report` to see which
 compat records are due soonest for the surfaces your plugin uses.
-
-## Suppressing the warnings temporarily
-
-```bash
-OPENCLAW_SUPPRESS_PLUGIN_SDK_COMPAT_WARNING=1 openclaw gateway run
-OPENCLAW_SUPPRESS_EXTENSION_API_WARNING=1 openclaw gateway run
-```
-
-This is a temporary escape hatch, not a permanent solution.
 
 ## Related
 

@@ -76,7 +76,7 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:rename-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open thread menu" }).click();
+      await row.getByRole("button", { name: "Open session menu" }).click();
       page.once("dialog", (dialog) => void dialog.accept("Rejected rename"));
       await page.getByRole("menuitem", { name: "Rename…" }).click();
       await gateway.waitForRequest("sessions.patch");
@@ -218,12 +218,12 @@ suite.define(() => {
 
       // Hover-revealed management actions on sidebar rows.
       const sidebarResearch = sidebarRows.filter({ hasText: "Research notes" });
-      const sidebarResearchPin = sidebarResearch.getByRole("button", { name: "Pin thread" });
+      const sidebarResearchPin = sidebarResearch.getByRole("button", { name: "Pin session" });
       await page.mouse.move(900, 500);
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("0");
       const sidebarReleasePin = sidebarRows
         .filter({ hasText: "Release planning" })
-        .getByRole("button", { name: "Unpin thread" });
+        .getByRole("button", { name: "Unpin session" });
       await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("0");
       await sidebarResearch.hover();
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("1");
@@ -244,14 +244,14 @@ suite.define(() => {
       // The current-main full context menu remains intact: active rows cannot
       // archive, while an idle row can.
       await sidebarMigration.hover();
-      await sidebarMigration.getByRole("button", { name: "Open thread menu" }).click();
+      await sidebarMigration.getByRole("button", { name: "Open session menu" }).click();
       await expect
-        .poll(() => page.getByRole("menuitem", { name: "Archive thread" }).isDisabled())
+        .poll(() => page.getByRole("menuitem", { name: "Archive session" }).isDisabled())
         .toBe(true);
       await page.keyboard.press("Escape");
       await sidebarResearch.hover();
-      await sidebarResearch.getByRole("button", { name: "Open thread menu" }).click();
-      await activateMenuItem(page.getByRole("menuitem", { name: "Archive thread" }));
+      await sidebarResearch.getByRole("button", { name: "Open session menu" }).click();
+      await activateMenuItem(page.getByRole("menuitem", { name: "Archive session" }));
       const archivePatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -331,6 +331,64 @@ suite.define(() => {
     }
   });
 
+  it("sorts threads from the keyboard and identifies destructive selection targets", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:alpha", "Alpha thread", 1),
+          sessionRow("agent:main:zulu", "Zulu thread", 2),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const table = page.locator(".sessions-table");
+      const rowNames = () =>
+        table.locator("tbody .session-data-row .session-label-chip").allTextContents();
+      await expect.poll(rowNames).toEqual(["Zulu thread", "Alpha thread"]);
+
+      for (const name of ["Key", "Kind", "Updated", "Tokens"]) {
+        await table.getByRole("columnheader", { name }).getByRole("button", { name }).waitFor();
+      }
+
+      const updatedHeader = table.getByRole("columnheader", { name: "Updated" });
+      expect(await updatedHeader.getAttribute("aria-sort")).toBe("descending");
+      await updatedHeader.getByRole("button", { name: "Updated" }).press("Space");
+      await expect.poll(rowNames).toEqual(["Alpha thread", "Zulu thread"]);
+      expect(await updatedHeader.getAttribute("aria-sort")).toBe("ascending");
+
+      const keyHeader = table.getByRole("columnheader", { name: "Key" });
+      await keyHeader.getByRole("button", { name: "Key" }).press("Enter");
+      await expect.poll(rowNames).toEqual(["Zulu thread", "Alpha thread"]);
+      expect(await keyHeader.getAttribute("aria-sort")).toBe("descending");
+      expect(await updatedHeader.getAttribute("aria-sort")).toBeNull();
+
+      const keyHeaderBounds = await keyHeader.boundingBox();
+      if (!keyHeaderBounds) {
+        throw new Error("Expected visible session sort header");
+      }
+      await page.mouse.click(
+        keyHeaderBounds.x + keyHeaderBounds.width - 2,
+        keyHeaderBounds.y + keyHeaderBounds.height / 2,
+      );
+      await expect.poll(rowNames).toEqual(["Alpha thread", "Zulu thread"]);
+      expect(await keyHeader.getAttribute("aria-sort")).toBe("ascending");
+
+      await table.getByRole("checkbox", { name: "Select session: agent:main:alpha" }).waitFor();
+      await table.getByRole("checkbox", { name: "Select session: agent:main:zulu" }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows a rejected Sessions-page custom group instead of leaking a page error", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -340,7 +398,12 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.put"],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+      ],
       methodResponses: {
         "sessions.list": sessionsListResponse([]),
       },
@@ -360,7 +423,7 @@ suite.define(() => {
         message: "group name exceeds 512 characters",
       });
 
-      const error = page.locator(".sessions-error");
+      const error = page.getByRole("alert");
       await error.waitFor({ state: "visible" });
       await expect.poll(() => error.textContent()).toContain("group name exceeds 512 characters");
       expect(pageErrors).toEqual([]);
@@ -409,7 +472,13 @@ suite.define(() => {
         },
         "sessions.patch": {},
       },
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.delete",
+        "sessions.groups.list",
+        "sessions.groups.rename",
+      ],
       sessionKey: "agent:main:main",
       sessionGroups: ["Apps", "Research"],
     });
@@ -524,7 +593,12 @@ suite.define(() => {
     );
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.rename"],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.rename",
+      ],
       methodResponses: {
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", baseTime),
@@ -597,7 +671,13 @@ suite.define(() => {
         "sessions.list": sessionsListResponse(sessions),
         "sessions.patch": {},
       },
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+        "sessions.patch",
+      ],
       sessionKey: "agent:main:session-0",
       sessionGroups: ["Alpha", "Beta"],
     });
@@ -610,7 +690,7 @@ suite.define(() => {
       await expect.poll(() => sidebarRows.count()).toBe(12);
       await page.getByRole("button", { name: "Show more" }).click();
       await expect.poll(() => sidebarRows.count()).toBe(13);
-      await expect.poll(() => page.getByText("All threads", { exact: true }).count()).toBe(0);
+      await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
       await captureUiProof(page, "sidebar-all-sessions.png");
 
       // New groups are created from a session's menu (Move to group → New group…),
@@ -619,7 +699,7 @@ suite.define(() => {
         '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
       );
       await sessionTen.hover();
-      await sessionTen.getByRole("button", { name: "Open thread menu" }).click();
+      await sessionTen.getByRole("button", { name: "Open session menu" }).click();
       const moveToGroup = page.getByRole("menuitem", { name: "Move to group" });
       await expect.poll(() => moveToGroup.getAttribute("aria-haspopup")).toBe("menu");
       const moveToGroupIndex = await moveToGroup.evaluate((element) =>
@@ -735,7 +815,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
-      const sortSessionsButton = page.getByRole("button", { name: "Sort threads" });
+      const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
       await sortSessionsButton.locator("..").hover();
       await sortSessionsButton.click();
       await activateMenuItem(page.getByRole("menuitemradio", { name: "None" }));
@@ -760,7 +840,12 @@ suite.define(() => {
       methodResponses: {
         "sessions.list": sessionsListResponse([]),
       },
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+      ],
       sessionKey: "agent:main:main",
       // Stored-but-empty catalog groups stay visible as sections/move targets.
       sessionGroups: ["First group"],

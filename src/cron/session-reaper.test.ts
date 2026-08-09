@@ -1,7 +1,9 @@
 // Cron session reaper tests cover cleanup of sessions created by scheduled runs.
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
@@ -106,6 +108,7 @@ describe("sweepCronRunSessions", () => {
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     cleanupTempDirs(tempDirs);
@@ -174,6 +177,54 @@ describe("sweepCronRunSessions", () => {
       sessionId: "regular-session",
       updatedAt: now - 100 * 3_600_000,
     });
+  });
+
+  it("commits expired rows and warns when transcript archive retention cleanup fails", async () => {
+    const now = Date.now();
+    const sessionKey = "agent:main:cron:job1:run:cleanup-failure";
+    const sessionId = "cleanup-failure";
+    const staleArchive = path.join(tmpDir, "older.jsonl.deleted.2026-01-01T00-00-00.000Z");
+    const cleanupError = Object.assign(new Error("archive cleanup denied"), { code: "EACCES" });
+    const warn = vi.fn();
+    const failingLog: Logger = { ...log, warn };
+
+    await seedSessionEntries(storePath, {
+      [sessionKey]: { sessionId, updatedAt: now - 25 * 3_600_000 },
+    });
+    await sessionAccessor.appendTranscriptMessage(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      { cwd: tmpDir, message: { role: "user", content: "archive me" } },
+    );
+    await fsPromises.writeFile(staleArchive, "stale archive", "utf8");
+    setRuntimeConfigSnapshot({
+      session: {
+        maintenance: {
+          maxDiskBytes: false,
+          resetArchiveRetention: "1ms",
+        },
+      },
+    });
+    const rmSpy = vi.spyOn(fsPromises, "rm").mockRejectedValueOnce(cleanupError);
+
+    try {
+      const result = await sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: now,
+        log: failingLog,
+        force: true,
+      });
+
+      expect(result).toEqual({ swept: true, pruned: 1 });
+      expect(readSessionEntries(storePath)[sessionKey]).toBeUndefined();
+      await expect(fsPromises.access(staleArchive)).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        { err: expect.stringContaining("archive cleanup denied") },
+        "cron-reaper: transcript cleanup failed",
+      );
+    } finally {
+      rmSpy.mockRestore();
+    }
   });
 
   it("discovers, accesses, and reaps a logical owner in one shared exact store", async () => {
@@ -475,6 +526,32 @@ describe("sweepCronRunSessions", () => {
     expect(result.swept).toBe(false);
     expect(result.pruned).toBe(0);
   });
+
+  it.each([["0h"], ["0s"], ["0"]])(
+    "treats a zero retention (%s) as disabled instead of pruning everything",
+    async (sessionRetention) => {
+      const now = Date.now();
+      const store: Record<string, SessionEntry> = {
+        "agent:main:cron:job1:run:run1": {
+          sessionId: "run1",
+          updatedAt: now - 100 * 3_600_000,
+        },
+      };
+      await seedSessionEntries(storePath, store);
+
+      const result = await sweepCronRunSessions({
+        cronConfig: { sessionRetention },
+        sessionStorePath: storePath,
+        nowMs: now,
+        log,
+        force: true,
+      });
+
+      expect(result.swept).toBe(false);
+      expect(result.pruned).toBe(0);
+      expect(readSessionEntries(storePath)).toHaveProperty("agent:main:cron:job1:run:run1");
+    },
+  );
 
   it("sweeps immediately when disabled retention is enabled again", async () => {
     const now = Date.now();

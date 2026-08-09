@@ -15,6 +15,7 @@ import { registerCodexCliMetadata } from "./cli-metadata.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { readCodexPluginConfig } from "./src/app-server/config.js";
+import { createCodexAppServerConnectionHealthService } from "./src/app-server/connection-health.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -90,6 +91,15 @@ export default definePluginEntry({
       return livePluginConfig;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
+    const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
+    if (appServerConfig?.transport === "websocket") {
+      api.registerService(
+        createCodexAppServerConnectionHealthService({
+          getPluginConfig: resolveCurrentPluginConfig,
+          getRuntimeConfig: resolveCurrentConfig,
+        }),
+      );
+    }
     let bindingStateStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> | undefined;
     const openBindingStateStore = () =>
       (bindingStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
@@ -123,9 +133,13 @@ export default definePluginEntry({
         api,
         bindingStore,
         control: sessionCatalogControl,
+        getPluginConfig: resolveCurrentPluginConfig,
         getRuntimeConfig: resolveCurrentConfig,
       });
-      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
+      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl, {
+        getPluginConfig: resolveCurrentPluginConfig,
+        getRuntimeConfig: resolveCurrentConfig,
+      })) {
         api.registerNodeHostCommand(command);
       }
     }
@@ -319,15 +333,21 @@ export default definePluginEntry({
         return;
       }
       const config = resolveCurrentConfig();
-      const { sessionBindingIdentity } = await import("./src/app-server/session-binding.js");
-      await bindingStore.retireSessionGeneration(
-        sessionBindingIdentity({
+      const [{ sessionBindingIdentity }, { retireCodexAppServerSessionGeneration }] =
+        await Promise.all([
+          import("./src/app-server/session-binding.js"),
+          import("./src/app-server/session-retirement.js"),
+        ]);
+      await retireCodexAppServerSessionGeneration({
+        bindingStore,
+        identity: sessionBindingIdentity({
           sessionId: event.sessionId,
           ...(sessionKey ? { sessionKey } : {}),
           ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
           ...(config ? { config } : {}),
         }),
-      );
+        mode: "retire",
+      });
     });
   },
 });

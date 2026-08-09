@@ -8,17 +8,21 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
+import { encodeSessionArchiveContent } from "../../../../src/config/sessions/archive-compression.js";
 import {
   appendTranscriptMessage,
   persistSessionTranscriptTurn,
-  replaceSessionEntry,
+  resetSessionEntryLifecycle,
   upsertSessionEntry,
 } from "../../../../src/config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
   listSessionTranscriptCorpusEntriesForAgent,
   loadSessionTranscriptClassificationForAgent,
+  normalizeSessionTranscriptPathForComparison,
   parseCanonicalSessionSyncTargetFromPath,
   resolveSessionIdentityForTranscriptFile,
   resolveSessionFileForSyncTarget,
@@ -69,10 +73,15 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Agent close releases leases through shared state; close agent handles first while the fixture
+  // env is active, then close shared state before removing the Windows-owned directory.
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   envSnapshot?.restore();
   envSnapshot = undefined;
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  fsSync.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
@@ -135,14 +144,12 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       { agentId: "main", sessionId: "retained-old", sessionKey, storePath },
       { message: { role: "assistant", content: "retained transcript" } },
     );
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId: "retained-old", updatedAt: 15 },
-    );
-    await upsertSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId: "retained-new", updatedAt: 20 },
-    );
+    await resetSessionEntryLifecycle({
+      agentId: "main",
+      buildNextEntry: () => ({ sessionId: "retained-new", updatedAt: 20 }),
+      storePath,
+      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+    });
     await appendTranscriptMessage(
       { agentId: "main", sessionId: "retained-new", sessionKey, storePath },
       { message: { role: "assistant", content: "current transcript" } },
@@ -222,7 +229,9 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
 
     const classification = loadSessionTranscriptClassificationForAgent("main");
 
-    expect(classification.cronRunTranscriptPaths).toEqual(new Set([path.resolve(archivePath)]));
+    expect(classification.cronRunTranscriptPaths).toEqual(
+      new Set([normalizeSessionTranscriptPathForComparison(archivePath)]),
+    );
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual({
       agentId: "main",
       artifactKind: "archive-artifact",
@@ -448,7 +457,9 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const expectedArchivePath = archivePath;
     const classification = loadSessionTranscriptClassificationForAgent("main");
 
-    expect(classification.cronRunTranscriptPaths).toEqual(new Set([expectedArchivePath]));
+    expect(classification.cronRunTranscriptPaths).toEqual(
+      new Set([normalizeSessionTranscriptPathForComparison(expectedArchivePath)]),
+    );
     await expect(listSessionFilesForAgent("main")).resolves.toEqual([expectedArchivePath]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual(
       expect.arrayContaining([
@@ -482,22 +493,30 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
-  it("omits active session entries whose transcript path is a symlink", async () => {
+  it("omits symlinked archive artifacts from the session corpus", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     const targetPath = path.join(tmpDir, "external.jsonl");
-    const symlinkPath = path.join(sessionsDir, "linked.jsonl");
+    const symlinkPath = path.join(sessionsDir, "linked.jsonl.deleted.2026-02-16T22-27-33.000Z");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(targetPath, "");
-    fsSync.symlinkSync(targetPath, symlinkPath);
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:linked": {
-          sessionFile: "linked.jsonl",
-          sessionId: "linked",
-        },
+    fsSync.writeFileSync(symlinkPath, "");
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([symlinkPath]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
+      expect.objectContaining({
+        artifactKind: "archive-artifact",
+        sessionFile: symlinkPath,
+        sessionId: "linked",
       }),
     );
+    fsSync.unlinkSync(symlinkPath);
+
+    if (process.platform === "win32") {
+      fsSync.mkdirSync(targetPath);
+      fsSync.symlinkSync(targetPath, symlinkPath, "junction");
+    } else {
+      fsSync.writeFileSync(targetPath, "");
+      fsSync.symlinkSync(targetPath, symlinkPath);
+    }
+    expect(fsSync.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
 
     await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
@@ -899,6 +918,24 @@ describe("buildSessionEntry", () => {
     expect(bakEntry.lineMap).toStrictEqual([]);
     expect(checkpointEntry.content).toBe("");
     expect(checkpointEntry.lineMap).toStrictEqual([]);
+  });
+
+  it("indexes compressed session archives through their materialized content", async () => {
+    const content = JSON.stringify({
+      type: "message",
+      message: { role: "user", content: "Compressed archive memory" },
+    });
+    const encoded = encodeSessionArchiveContent(content);
+    const archivePath = path.join(
+      tmpDir,
+      `compressed.jsonl.deleted.2026-07-11T00-00-00.000Z${encoded.suffix}`,
+    );
+    fsSync.writeFileSync(archivePath, encoded.bytes);
+
+    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
+
+    expect(entry.content).toBe("User: Compressed archive memory");
+    expect(entry.lineMap).toStrictEqual([1]);
   });
 
   it.each([

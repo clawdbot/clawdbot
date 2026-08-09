@@ -1,13 +1,7 @@
 import type { LiveTransportQaCommandOptions } from "openclaw/plugin-sdk/qa-runtime";
 import { runQaSuiteCommand } from "../../cli.runtime.js";
-import {
-  resolveQaExecutionShard,
-  selectQaExecutionShardScenarioIds,
-} from "../../execution-sharding.js";
 import type { QaProviderMode } from "../../providers/index.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "../../run-config.js";
-
-const QA_EXECUTION_SHARD_ENV = "OPENCLAW_QA_EXECUTION_SHARD";
 
 type LiveTransportScenarioSelection = (params: {
   profile?: string;
@@ -26,10 +20,11 @@ export async function runLiveTransportQaSuiteCommand(params: {
   selectScenarioIds: LiveTransportScenarioSelection;
 }) {
   const options = params.options;
+  const credentialSource =
+    options.credentialSource?.trim() || process.env.OPENCLAW_QA_CREDENTIAL_SOURCE?.trim();
   if (params.credentialMode === "env-only") {
     const laneLabel = params.laneLabel ?? params.channelId;
-    const credentialSource = options.credentialSource?.trim().toLowerCase();
-    if (credentialSource && credentialSource !== "env") {
+    if (credentialSource && credentialSource.toLowerCase() !== "env") {
       throw new Error(
         `QA Lab ${laneLabel} supports only --credential-source env${params.envCredentialReason ? ` because ${params.envCredentialReason}` : "."}`,
       );
@@ -50,7 +45,6 @@ export async function runLiveTransportQaSuiteCommand(params: {
     providerMode,
     scenarioIds: options.scenarioIds,
   });
-  const executionShard = resolveQaExecutionShard(process.env[QA_EXECUTION_SHARD_ENV]);
   return runQaSuiteCommand({
     repoRoot: options.repoRoot,
     outputDir: options.outputDir,
@@ -63,14 +57,13 @@ export async function runLiveTransportQaSuiteCommand(params: {
     channelDriver: "live",
     channel: params.channelId,
     concurrency: 1,
-    scenarioIds: executionShard
-      ? selectQaExecutionShardScenarioIds(selectedScenarioIds, executionShard)
-      : selectedScenarioIds,
+    scenarioIds: selectedScenarioIds,
     sutAccountId: options.sutAccountId,
+    ...(options.credentialFile ? { credentialFile: options.credentialFile } : {}),
     ...(params.credentialMode === "env-only"
       ? {}
       : {
-          credentialSource: options.credentialSource?.trim(),
+          credentialSource,
           credentialRole: options.credentialRole?.trim(),
         }),
     explicitScenarioSelection: Boolean(options.scenarioIds?.length),

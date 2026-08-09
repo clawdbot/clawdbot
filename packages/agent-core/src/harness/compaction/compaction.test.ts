@@ -178,6 +178,38 @@ describe("calculateContextTokens", () => {
     expect(estimate.lastUsageIndex).toBe(0);
   });
 
+  it("does not scan past a zero unavailable context marker", () => {
+    const messages: AgentMessage[] = [
+      createAssistant("old cumulative turn", createUsage(950), 0),
+      {
+        ...createAssistant("usage unavailable", createUsage(0), 1),
+        usage: {
+          ...createUsage(0),
+          contextUsage: { state: "unavailable" },
+        },
+      },
+    ];
+    const estimate = estimateContextTokens(messages);
+
+    expect(estimate.usageTokens).toBe(0);
+    expect(estimate.lastUsageIndex).toBeNull();
+    expect(estimate.tokens).toBeGreaterThan(0);
+    expect(estimate.tokens).toBeLessThan(950);
+    expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBeUndefined();
+  });
+
+  it("treats legacy CLI usage without context provenance as a barrier", () => {
+    const legacyCli = {
+      ...createAssistant("legacy CLI", createUsage(950), 1),
+      api: "cli",
+      usage: { ...createUsage(950), contextUsage: undefined },
+    };
+    const messages = [createAssistant("old", createUsage(900), 0), legacyCli];
+
+    expect(estimateContextTokens(messages).usageTokens).toBe(0);
+    expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBeUndefined();
+  });
+
   it("ignores an all-zero terminal usage block", () => {
     const validUsage = createUsage(20);
     const messages: AgentMessage[] = [
@@ -400,6 +432,56 @@ describe("session-entry compaction budgeting", () => {
     expect(["entry-5", "entry-6"]).toContain(result.value.firstKeptEntryId);
   });
 
+  it("retains only occurrence-paired reset tool results in compaction input", () => {
+    const assistantToolCall = (timestamp: number): AssistantMessage => ({
+      ...createAssistant("", createUsage(2), timestamp),
+      content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+      stopReason: "toolUse",
+    });
+    const toolResult = (timestamp: number, text: string): AgentMessage => ({
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "read",
+      content: [{ type: "text", text }],
+      isError: false,
+      timestamp,
+    });
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "discarded", timestamp: 1 }, 0),
+      createMessageEntry({ role: "user", content: "kept", timestamp: 2 }, 1),
+      createMessageEntry(assistantToolCall(3), 2),
+      createMessageEntry(toolResult(4, "first result"), 3),
+      createMessageEntry(assistantToolCall(5), 4),
+      createMessageEntry(toolResult(6, "second result"), 5),
+      createMessageEntry(toolResult(7, "orphan result"), 6),
+      {
+        type: "reset",
+        id: "entry-7",
+        parentId: "entry-6",
+        timestamp: new Date(8).toISOString(),
+        reason: "new",
+        firstKeptEntryId: "entry-1",
+      },
+      createMessageEntry({ role: "user", content: "post reset", timestamp: 9 }, 8),
+      createMessageEntry(createAssistant("new answer", createUsage(2), 10), 9),
+    ];
+
+    const result = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 0,
+      keepRecentTokens: 1,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok || !result.value) {
+      throw new Error("expected reset transcript to be compactable");
+    }
+    const summarized = JSON.stringify(result.value.messagesToSummarize);
+    expect(summarized).toContain("first result");
+    expect(summarized).toContain("second result");
+    expect(summarized).not.toContain("orphan result");
+  });
+
   it("moves the cut earlier when a reset kept-tail prelude consumes the compaction budget", () => {
     const largePrelude = "kept context ".repeat(4_000);
     const postResetEntries: SessionTreeEntry[] = [
@@ -498,6 +580,67 @@ describe("generateSummary thinking options", () => {
 
     expect(result).toEqual({ ok: true, value: "summary" });
     expect(streamFn).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["empty", []],
+    ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
+    ["reasoning-only", [{ type: "thinking" as const, thinking: "internal summary reasoning" }]],
+  ])("rejects %s compaction output", async (_name, content) => {
+    const model: Model = {
+      id: "summary-model",
+      name: "Summary Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 100_000,
+      maxTokens: 8_000,
+    };
+    const streamFn = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content,
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: createUsage(1),
+          stopReason: "stop",
+          timestamp: 1,
+        },
+      });
+      stream.end();
+      return stream;
+    });
+
+    const result = await generateSummary(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      model,
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "low",
+      streamFn,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected empty compaction output to fail");
+    }
+    expect(result.error).toMatchObject({
+      name: "CompactionError",
+      code: "summarization_failed",
+      message: "Summarization failed: model returned no summary text",
+    });
   });
 });
 

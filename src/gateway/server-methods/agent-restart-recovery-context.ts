@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionEntry } from "../../config/sessions.js";
+import { parseExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { resolveRestartRecoveryChannelAuthority } from "../../config/sessions/restart-recovery-state.js";
 
 type AgentRestartRecoveryChannelContext = {
@@ -11,6 +12,32 @@ type AgentRestartRecoveryChannelContext = {
   sameChannelThreadRequired: boolean;
   sourceTurnId: string;
 };
+
+/** Resolve only the private token durably owned by the admitted recovery cycle. */
+export function resolveAgentRestartRecoveryExecutionIdentityAdmission(params: {
+  collectionEnabled: boolean;
+  isRestartRecoveryResumeRun: boolean;
+  retryOnly?: boolean;
+  runId: string;
+  sessionEntry?: SessionEntry;
+}) {
+  if (!params.isRestartRecoveryResumeRun || !params.collectionEnabled) {
+    return undefined;
+  }
+  if (params.retryOnly === undefined) {
+    throw new Error("restart recovery execution identity admission mode is unavailable");
+  }
+  const stored = (params.sessionEntry as InternalSessionEntry | undefined)?.mainRestartRecovery
+    ?.executionIdentity;
+  if (!stored) {
+    throw new Error("restart recovery execution identity token is unavailable");
+  }
+  const token = parseExecutionIdentityAdmissionToken(stored);
+  if (!params.retryOnly && token.runId !== params.runId) {
+    throw new Error("restart recovery execution identity token disagrees with the admitted run");
+  }
+  return { token, retryOnly: params.retryOnly };
+}
 
 /** Rehydrates durable channel authority only for the exact host-owned recovery run. */
 export function resolveAgentRestartRecoveryChannelContext(params: {

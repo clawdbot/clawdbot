@@ -28,6 +28,7 @@ const threadingContractPluginIds = new Set<ChannelId>([
 ]);
 
 const directoryContractPluginIds = new Set<ChannelId>([
+  "buzz",
   "discord",
   "feishu",
   "googlechat",

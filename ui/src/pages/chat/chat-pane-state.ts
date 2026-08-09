@@ -22,6 +22,7 @@ export function applySelectedSessionProjection(
 }
 
 const MAX_TRACKED_SESSION_ROWS = 256;
+const CHAT_ARTIFACT_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 export class SessionParticipationTracker {
   private readonly lastBlocked = new Map<string, boolean>();
@@ -94,6 +95,7 @@ export async function resolveChatArtifactDownload(
   const result = await state.client.request<ArtifactDownloadResult | null>(
     "artifacts.download",
     params,
+    { timeoutMs: CHAT_ARTIFACT_DOWNLOAD_TIMEOUT_MS },
   );
   const url = typeof result?.url === "string" ? result.url.trim() : "";
   if (!url) {

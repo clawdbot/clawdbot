@@ -1,7 +1,7 @@
 /**
  * @deprecated Compatibility shim only. Keep old plugins working, but do not
  * add new imports here and do not use this subpath from repo code.
- * Prefer focused openclaw/plugin-sdk/<domain> runtime subpaths instead.
+ * Prefer injected runtime APIs or documented typed-public subpaths instead.
  */
 
 export * from "./delivery-queue-runtime.js";
@@ -18,7 +18,17 @@ export {
 } from "../infra/diagnostic-events.js";
 export * from "../infra/diagnostic-flags.js";
 export * from "../infra/env.js";
-export * from "../infra/errors.js";
+export {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  formatUncaughtError,
+  hasErrnoCode,
+  isErrno,
+  readErrorName,
+  stringifyNonErrorCause,
+  toErrorObject,
+} from "../infra/errors.js";
 import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 
 /** @deprecated Shipped compat only (removed from core in #104546); no core caller. Removal with the next plugin-SDK major. */

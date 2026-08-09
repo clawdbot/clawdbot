@@ -1,14 +1,15 @@
 // Telegram plugin module implements sent message cache behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { getTelegramRuntime } from "./runtime.js";
 
 const TTL_MS = 24 * 60 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 export const TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE = "telegram.sent-messages";
 export const TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES = 10_000;
 const TELEGRAM_SENT_MESSAGES_STATE_KEY = Symbol.for("openclaw.telegramSentMessagesState");
@@ -26,6 +27,7 @@ type SentMessagePersistentStore = PluginStateSyncKeyedStore<PersistedSentMessage
 type SentMessageBucket = {
   scopeKey: string;
   store: SentMessageStore;
+  nextCleanupAt: number;
 };
 
 type SentMessageState = {
@@ -170,6 +172,7 @@ function getSentMessageBucket(cfg?: SentMessageConfig): SentMessageBucket {
   const bucket = {
     scopeKey,
     store: readPersistedSentMessages(scopeKey),
+    nextCleanupAt: Date.now() + CLEANUP_INTERVAL_MS,
   };
   state.bucketsByScope.set(scopeKey, bucket);
   return bucket;
@@ -208,7 +211,10 @@ export function recordSentMessage(
     store.set(scopeKey, entry);
   }
   entry.set(idKey, now);
-  cleanupExpiredSentMessages(store, now);
+  if (now >= bucket.nextCleanupAt) {
+    cleanupExpiredSentMessages(store, now);
+    bucket.nextCleanupAt = now + CLEANUP_INTERVAL_MS;
+  }
   try {
     persistSentMessage(bucket, scopeKey, idKey, now);
   } catch (error) {

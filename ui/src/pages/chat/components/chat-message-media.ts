@@ -2,18 +2,15 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
-import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
+import {
+  getMediaFileExtension,
+  hasVideoMediaFileExtension,
+} from "../../../lib/media-file-extension.ts";
 
 export type PairingQrExpiryNotice = {
   title: string;
   reason: string;
 };
-type PairingQrExpiryRefreshTimer = {
-  expiresAtMs: number;
-  onRequestUpdate: () => void;
-  timer: ReturnType<typeof setTimeout>;
-};
-const pairingQrExpiryRefreshTimers = new Map<string, PairingQrExpiryRefreshTimer>();
 
 export type ImageBlock = {
   url: string;
@@ -45,7 +42,11 @@ export type RenderableImageBlock = ImageBlock & {
 
 export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
 
-type ChatMediaResourceKind = "assistant-attachment" | "managed-image";
+type ChatMediaResourceKind =
+  | "assistant-attachment"
+  | "managed-image"
+  | "managed-media"
+  | "pairing-qr";
 
 export type ChatMediaResource<Value> = {
   kind: ChatMediaResourceKind;
@@ -356,12 +357,24 @@ function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("video/")) {
     return true;
   }
-  const ext = getMediaFileExtension(path);
-  return ext !== undefined && ["m4v", "mov", "mp4", "webm"].includes(ext);
+  return hasVideoMediaFileExtension(path);
 }
+
+// Collision-safe managed inbound URIs store the original filename plus a
+// terminal "---<uuid>" storage suffix in the basename
+// (e.g. media://inbound/report---<uuid>.pdf). Restore the original filename by
+// removing only that final generated segment, so an original name that itself
+// contains a "---<uuid>"-shaped part is preserved; the stored URI is unchanged.
+const MANAGED_INBOUND_MEDIA_PREFIX = "media://inbound/";
+const MANAGED_INBOUND_UUID_SUFFIX_PATTERN =
+  /---[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\.[^./]*$|$)/i;
 
 function labelForMediaPath(mediaPath: string): string {
   const trimmed = mediaPath.trim();
+  if (trimmed.startsWith(MANAGED_INBOUND_MEDIA_PREFIX)) {
+    const basename = trimmed.split("/").pop()?.trim() || trimmed;
+    return basename.replace(MANAGED_INBOUND_UUID_SUFFIX_PATTERN, "") || basename;
+  }
   try {
     if (/^https?:\/\//i.test(trimmed)) {
       const parsed = new URL(trimmed);
@@ -528,46 +541,35 @@ function resolveNearestFuturePairingQrExpiresAtMs(
   return nearestExpiresAtMs;
 }
 
-function clearPairingQrExpiryRefreshTimer(messageKey: string) {
-  const existing = pairingQrExpiryRefreshTimers.get(messageKey);
-  if (!existing) {
-    return;
-  }
-  clearTimeout(existing.timer);
-  pairingQrExpiryRefreshTimers.delete(messageKey);
-}
-
 export function schedulePairingQrExpiryRefresh(
   messageKey: string,
   message: unknown,
   onRequestUpdate: (() => void) | undefined,
 ) {
-  const nowMs = Date.now();
-  const expiresAtMs = resolveNearestFuturePairingQrExpiresAtMs(message, nowMs);
-  const existing = pairingQrExpiryRefreshTimers.get(messageKey);
-  if (!expiresAtMs || !onRequestUpdate) {
-    if (existing) {
-      clearPairingQrExpiryRefreshTimer(messageKey);
+  if (!onRequestUpdate) {
+    return;
+  }
+  const refreshAt = resolveNearestFuturePairingQrExpiresAtMs(message);
+  if (refreshAt === undefined) {
+    const subscriber = chatMediaSubscribers.get(onRequestUpdate);
+    const resourceKey = chatMediaResourceKey("pairing-qr", messageKey);
+    const resource = subscriber?.resources.get(resourceKey);
+    if (subscriber && resource) {
+      subscriber.resources.delete(resourceKey);
+      detachChatMediaResourceSubscriber(resource, onRequestUpdate);
+      pruneChatMediaSubscriber(onRequestUpdate, subscriber);
     }
     return;
   }
-  if (existing?.expiresAtMs === expiresAtMs && existing.onRequestUpdate === onRequestUpdate) {
-    return;
-  }
-  clearPairingQrExpiryRefreshTimer(messageKey);
-  const timer = setTimeout(
-    () => {
-      pairingQrExpiryRefreshTimers.delete(messageKey);
-      onRequestUpdate();
-    },
-    Math.max(0, expiresAtMs - nowMs),
+  const resource = observeChatMediaResource<void>("pairing-qr", messageKey, onRequestUpdate);
+  scheduleChatMediaResourceRefresh(resource, refreshAt, () =>
+    notifyChatMediaResourceSubscribers(resource),
   );
-  pairingQrExpiryRefreshTimers.set(messageKey, { expiresAtMs, onRequestUpdate, timer });
 }
 
 export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
   const attachments: AttachmentItem[] = [];
-  for (const { path: mediaPath, mediaType } of readTranscriptMediaEntries(message)) {
+  for (const { path: mediaPath, mediaType, fileName } of readTranscriptMediaEntries(message)) {
     if (isImageTranscriptMediaPath(mediaPath, mediaType)) {
       continue;
     }
@@ -581,7 +583,7 @@ export function extractTranscriptAttachments(message: unknown): AttachmentItem[]
       attachment: {
         url: mediaPath,
         kind,
-        label: labelForMediaPath(mediaPath),
+        label: fileName?.trim() || labelForMediaPath(mediaPath),
         ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
       },
     });

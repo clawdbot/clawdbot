@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
+import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   makeAgentAssistantMessage,
@@ -11,8 +14,19 @@ import {
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   type AgentEventPayload,
+  getAgentEventLifecycleGeneration,
   onAgentEvent as subscribeAgentEvent,
+  rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  readAgentRunIndexVersion,
+  registerAgentRunContext,
+  retainQueuedAgentRunContext,
+  sweepStaleRunContexts,
+} from "../../infra/agent-run-registry.js";
+import { getCommandLaneSnapshot, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { createDeferred } from "../../shared/deferred.js";
 import {
@@ -24,6 +38,7 @@ import {
   parseWorkerLaunchDescriptor,
   type WorkerLaunchDescriptor,
 } from "../../worker/launch-descriptor.js";
+import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import {
   createWorkerSessionPlacementStore,
@@ -240,6 +255,7 @@ describe("worker turn launcher", () => {
       profileId: "development",
       profileSnapshot: { settings: { region: "test" } },
       provisionOperationId: "provision-worker-turn",
+      sharedHost: false,
       bootstrapReceipt: {
         bundleHash: BUNDLE_HASH,
         openclawVersion: "2026.7.2",
@@ -636,6 +652,7 @@ describe("worker turn launcher", () => {
           ownerEpoch: OWNER_EPOCH,
         });
         descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
+        expect(command.transportRetry).toBe("never");
         expect(command.argv).toEqual([
           "sh",
           "-c",
@@ -1046,7 +1063,7 @@ describe("worker turn launcher", () => {
         output: 40,
         cacheRead: 60,
         cacheWrite: 5,
-        total: 270,
+        total: 405,
       },
       lastCallUsage: {
         input: 200,
@@ -1095,6 +1112,86 @@ describe("worker turn launcher", () => {
       ),
     ).rejects.toThrow("tunnel unavailable");
 
+    expect(runLocal).not.toHaveBeenCalled();
+    expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();
+    expect(stopTunnel).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+  });
+
+  it("fails impossible replay before handoff and keeps the active placement reusable", async () => {
+    seedActivePlacement();
+    const manager = openSessionManager();
+    manager.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "call-replay", name: "read", arguments: {} }],
+        model: "gpt-test",
+        providerReplay: {
+          v: 1,
+          type: "openai-responses-compaction",
+          data: "gAAAAlauncherReplayCiphertext",
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-test",
+          baseUrlHash: "ozhevd1smnk8s",
+        },
+        stopReason: "toolUse",
+        timestamp: 1,
+      }),
+    );
+    manager.appendMessage({
+      role: "toolResult",
+      toolCallId: "call-replay",
+      toolName: "read",
+      content: [{ type: "text", text: "result" }],
+      details: { payload: "x".repeat(WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES) },
+      isError: false,
+      timestamp: 2,
+    });
+    const runWorkspaceCommand = vi.fn(async (): Promise<SpawnResult> => {
+      throw new Error("unexpected worker handoff");
+    });
+    const acknowledgeCredentialDelivery = vi.fn(() => true);
+    const startTunnel = vi.fn(
+      async (): Promise<WorkerTunnelHandle> => ({
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        remoteSocketPath: "/worker/gateway.sock",
+        quiesceWorkspace: vi.fn(),
+        runWorkspaceCommand,
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(async () => {}),
+      }),
+    );
+    const stopTunnel = vi.fn(async () => {});
+    const destroy = vi.fn(async () => attachedEnvironment());
+    const environments: WorkerTurnEnvironmentService = {
+      get: vi.fn(() => attachedEnvironment()),
+      acquireTurnCredential: vi.fn(async () => credential()),
+      acknowledgeCredentialDelivery,
+      startTunnel,
+      stopTunnel,
+      destroy,
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-replay-local-fallback",
+        },
+        turn("run-replay-local-fallback"),
+        runLocal,
+      ),
+    ).rejects.toThrow(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
+
+    expect(startTunnel).toHaveBeenCalledOnce();
+    expect(runWorkspaceCommand).not.toHaveBeenCalled();
     expect(runLocal).not.toHaveBeenCalled();
     expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();
     expect(stopTunnel).not.toHaveBeenCalled();
@@ -1791,6 +1888,21 @@ describe("worker turn launcher", () => {
   it("redispatches a reclaimed placement before launching the worker turn", async () => {
     const reclaimed = seedReclaimedPlacement();
     const runId = "run-reclaimed-worker";
+    const contextTtlMs = 30 * 60 * 1000;
+    const registeredAt = Date.now();
+    const admissionAt = registeredAt + contextTtlMs + 1;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    registerAgentRunContext(runId, {
+      lifecycleGeneration,
+      registeredAt,
+      sessionKey: SESSION_KEY,
+    });
+    const releaseQueuedContext = retainQueuedAgentRunContext(runId, lifecycleGeneration);
+    const redispatchEntered = createDeferred();
+    const resumeRedispatch = createDeferred();
+    const workerStarted = createDeferred();
+    const resumeWorker = createDeferred();
     let redispatchCalls = 0;
     const redispatchReclaimed: NonNullable<
       WorkerTurnLauncherOptions["redispatchReclaimed"]
@@ -1798,6 +1910,8 @@ describe("worker turn launcher", () => {
       redispatchCalls += 1;
       expect(placement).toEqual(reclaimed);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      redispatchEntered.resolve();
+      await resumeRedispatch.promise;
       seedActivePlacement();
       const active = placements.get(SESSION_ID);
       if (active?.state !== "active") {
@@ -1806,6 +1920,8 @@ describe("worker turn launcher", () => {
       return active;
     };
     const runWorkspaceCommand = vi.fn(async (): Promise<SpawnResult> => {
+      workerStarted.resolve();
+      await resumeWorker.promise;
       expect(placements.get(SESSION_ID)).toMatchObject({
         state: "active",
         turnClaim: { owner: "worker", runId },
@@ -1874,15 +1990,53 @@ describe("worker turn launcher", () => {
       redispatchReclaimed,
     });
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const onAdmitted = vi.fn(() => {
+      expect(placements.get(SESSION_ID)).toMatchObject({
+        state: "active",
+        turnClaim: { owner: "worker", runId },
+      });
+      releaseQueuedContext?.("admitted");
+    });
     const events: AgentEventPayload[] = [];
     const unsubscribe = subscribeAgentEvent((event) => events.push(event));
-    const result = await provider
-      .executeTurn(
-        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
-        turn(runId),
-        runLocal,
-      )
-      .finally(unsubscribe);
+    const pending = provider.executeTurn(
+      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
+      turn(runId),
+      runLocal,
+      onAdmitted,
+    );
+    const result = await (async () => {
+      try {
+        await redispatchEntered.promise;
+        clock.mockReturnValue(admissionAt);
+        expect(sweepStaleRunContexts()).toBe(0);
+        expect(getAgentRunContext(runId)).toMatchObject({ lifecycleGeneration, registeredAt });
+        expect(onAdmitted).not.toHaveBeenCalled();
+
+        resumeRedispatch.resolve();
+        await workerStarted.promise;
+        expect(onAdmitted).toHaveBeenCalledOnce();
+        expect(getAgentRunContext(runId)?.lastActiveAt).toBe(admissionAt);
+        expect(runLocal).not.toHaveBeenCalled();
+
+        clock.mockReturnValue(admissionAt + contextTtlMs + 1);
+        expect(sweepStaleRunContexts()).toBe(1);
+        expect(getAgentRunContext(runId)).toBeUndefined();
+        expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({ owner: "worker", runId });
+
+        clock.mockReturnValue(admissionAt);
+        resumeWorker.resolve();
+        return await pending;
+      } finally {
+        resumeRedispatch.resolve();
+        resumeWorker.resolve();
+        await pending.catch(() => {});
+        unsubscribe();
+        releaseQueuedContext?.("abandoned");
+        clearAgentRunContext(runId);
+        clock.mockRestore();
+      }
+    })();
 
     expect(events).toContainEqual(
       expect.objectContaining({
@@ -1898,6 +2052,190 @@ describe("worker turn launcher", () => {
     expect(runWorkspaceCommand).toHaveBeenCalledOnce();
     expect(runLocal).not.toHaveBeenCalled();
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+  });
+
+  it("releases a claimed worker turn when its admission callback fails", async () => {
+    seedActivePlacement();
+    const environments = unusedEnvironments();
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const runId = "run-admission-failed";
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const onAdmitted = vi.fn(() => {
+      expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({ owner: "worker", runId });
+      throw new Error("worker admission callback failed");
+    });
+
+    await expect(
+      provider.executeTurn(
+        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
+        turn(runId),
+        runLocal,
+        onAdmitted,
+      ),
+    ).rejects.toThrow("worker admission callback failed");
+
+    expect(onAdmitted).toHaveBeenCalledOnce();
+    expect(runLocal).not.toHaveBeenCalled();
+    expect(environments.startTunnel).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+  });
+
+  it("reclaims a rotated foreground run before an actual remote worker starts", async () => {
+    seedActivePlacement();
+    const runId = "run-rotated-worker";
+    const sessionLane = `session:${runId}`;
+    const globalLane = `global:${runId}`;
+    const registeredAt = Date.now();
+    const admissionAt = registeredAt + 30 * 60 * 1000 + 1;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
+    let lifecycleGeneration = getAgentEventLifecycleGeneration();
+    let params = { ...turn(runId), lifecycleGeneration, trigger: "user" as const };
+    registerAgentRunContext(runId, { lifecycleGeneration, registeredAt, sessionKey: SESSION_KEY });
+
+    const remoteStarted = createDeferred();
+    const finishRemote = createDeferred();
+    const environments = unusedEnvironments();
+    environments.get = vi.fn(() => attachedEnvironment());
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      workspaceOperations: {
+        async run<T>(_environmentId: string, _operation: () => Promise<T>): Promise<T> {
+          remoteStarted.resolve();
+          await finishRemote.promise;
+          throw new Error("remote lifecycle proof completed");
+        },
+      },
+    });
+    const uninstallPlacement = installSessionPlacementAdmissionProvider(provider);
+    const controller = createEmbeddedRunLaneController({
+      getLifecycleGeneration: () => lifecycleGeneration,
+      getParams: () => params,
+      globalLane,
+      initialQueuedLifecycleGeneration: lifecycleGeneration,
+      sessionLane,
+      setLifecycleGeneration: (generation) => {
+        lifecycleGeneration = generation;
+      },
+      setParams: (next) => {
+        params = next;
+      },
+    });
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    setCommandLaneConcurrency(globalLane, 0);
+    const pending = controller.enqueueSession(() => controller.enqueueGlobal(runLocal));
+
+    try {
+      for (
+        let attempt = 0;
+        attempt < 10 && getCommandLaneSnapshot(globalLane).queuedCount === 0;
+        attempt++
+      ) {
+        await Promise.resolve();
+      }
+      expect(getCommandLaneSnapshot(globalLane).queuedCount).toBe(1);
+
+      clock.mockReturnValue(admissionAt);
+      const replacementGeneration = rotateAgentEventLifecycleGeneration();
+      expect(sweepStaleRunContexts()).toBe(1);
+      expect(getAgentRunContext(runId)).toBeUndefined();
+      const versionBeforeAdmission = readAgentRunIndexVersion();
+
+      setCommandLaneConcurrency(globalLane, 1);
+      await remoteStarted.promise;
+      expect(getAgentRunContext(runId)).toMatchObject({
+        lifecycleGeneration: replacementGeneration,
+        lastActiveAt: admissionAt,
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+      });
+      expect(readAgentRunIndexVersion()).toBe(versionBeforeAdmission + 1);
+      expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({ owner: "worker", runId });
+      expect(runLocal).not.toHaveBeenCalled();
+
+      finishRemote.resolve();
+      await expect(pending).rejects.toThrow("remote lifecycle proof completed");
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+    } finally {
+      setCommandLaneConcurrency(globalLane, 1);
+      finishRemote.resolve();
+      uninstallPlacement();
+      await pending.catch(() => {});
+      clearAgentRunContext(runId);
+      clock.mockRestore();
+    }
+  });
+
+  it("rejects an actual worker turn when its lifecycle rotates during placement admission", async () => {
+    seedActivePlacement();
+    const runId = "run-worker-rotated-during-admission";
+    const registeredAt = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
+    let lifecycleGeneration = getAgentEventLifecycleGeneration();
+    let params = { ...turn(runId), lifecycleGeneration, trigger: "user" as const };
+    registerAgentRunContext(runId, { lifecycleGeneration, registeredAt, sessionKey: SESSION_KEY });
+
+    const workspaceResolutionStarted = createDeferred();
+    const resumeWorkspaceResolution = createDeferred();
+    const environments = unusedEnvironments();
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      resolveWorkspacePath: async () => {
+        workspaceResolutionStarted.resolve();
+        await resumeWorkspaceResolution.promise;
+        return root;
+      },
+    });
+    const uninstallPlacement = installSessionPlacementAdmissionProvider(provider);
+    const controller = createEmbeddedRunLaneController({
+      getLifecycleGeneration: () => lifecycleGeneration,
+      getParams: () => params,
+      globalLane: `global:${runId}`,
+      initialQueuedLifecycleGeneration: lifecycleGeneration,
+      sessionLane: `session:${runId}`,
+      setLifecycleGeneration: (generation) => {
+        lifecycleGeneration = generation;
+      },
+      setParams: (next) => {
+        params = next;
+      },
+    });
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const pending = controller.enqueueSession(() => controller.enqueueGlobal(runLocal));
+
+    try {
+      await workspaceResolutionStarted.promise;
+      clock.mockReturnValue(registeredAt + 30 * 60 * 1000 + 1);
+      const replacementGeneration = rotateAgentEventLifecycleGeneration();
+      expect(sweepStaleRunContexts()).toBe(1);
+      registerAgentRunContext(runId, {
+        lifecycleGeneration: replacementGeneration,
+        registeredAt: Date.now(),
+        sessionId: "replacement-session",
+        sessionKey: "agent:main:replacement",
+      });
+      const versionBeforeRejectedAdmission = readAgentRunIndexVersion();
+
+      resumeWorkspaceResolution.resolve();
+      await expect(pending).rejects.toThrow("stale gateway lifecycle");
+      expect(getAgentRunContext(runId)).toMatchObject({
+        lifecycleGeneration: replacementGeneration,
+        sessionId: "replacement-session",
+        sessionKey: "agent:main:replacement",
+      });
+      expect(readAgentRunIndexVersion()).toBe(versionBeforeRejectedAdmission);
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+      expect(environments.get).not.toHaveBeenCalled();
+      expect(environments.startTunnel).not.toHaveBeenCalled();
+      expect(runLocal).not.toHaveBeenCalled();
+    } finally {
+      resumeWorkspaceResolution.resolve();
+      uninstallPlacement();
+      await pending.catch(() => {});
+      clearAgentRunContext(runId);
+      clock.mockRestore();
+    }
   });
 
   it("rejects a reclaimed placement when redispatch is unavailable", async () => {
