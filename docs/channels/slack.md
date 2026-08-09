@@ -73,8 +73,8 @@ One Slack account can receive messages from every workspace covered by an
 Enterprise Grid org-wide installation. Choose direct Socket Mode or HTTP
 Request URLs; relay mode is not supported for enterprise accounts. Both
 least-privilege manifests below enable the V1 message, mention, membership,
-reaction, and pin event paths, immediate replies, and listener-owned status
-reactions.
+reaction, and pin event paths, immediate replies, listener-owned status
+reactions, and Slack interactivity for Block Kit actions and modal submissions.
 
 #### Socket Mode
 
@@ -112,6 +112,7 @@ reactions.
   "settings": {
     "org_deploy_enabled": true,
     "socket_mode_enabled": true,
+    "interactivity": { "is_enabled": true },
     "event_subscriptions": {
       "bot_events": [
         "app_mention",
@@ -197,6 +198,10 @@ Socket Mode connection. Replace the example URL with the Gateway's public
   },
   "settings": {
     "org_deploy_enabled": true,
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://gateway-host.example.com/slack/events"
+    },
     "event_subscriptions": {
       "request_url": "https://gateway-host.example.com/slack/events",
       "bot_events": [
@@ -258,12 +263,14 @@ bot-authored `message` and `app_mention` events before dispatch, regardless of
 bot identity for loop prevention.
 
 Enterprise support accepts direct Socket Mode or HTTP message, mention,
-membership, reaction, and pin events plus workspace-qualified outbound
-messages. Relay mode, slash commands, channel lifecycle events, interactions,
-App Home, Agent and Assistant lifecycle events, Slack-native approvals, and
-bindings remain unavailable for an enterprise account. Slack action tools
-remain unavailable except for file uploads and adding or removing emoji
-reactions. Inbound membership, reaction, and pin notifications use the
+membership, reaction, pin, Block Kit action, modal, and configured shortcut
+payloads plus workspace-qualified outbound messages. Add any shortcuts to the
+app manifest's `features.shortcuts` list; OpenClaw accepts their callback IDs
+through the same interaction path. Relay mode, slash commands, channel
+lifecycle events, App Home, Agent and Assistant lifecycle events, Slack-native
+approvals, and bindings remain unavailable for an enterprise account. Slack
+action tools remain unavailable except for file uploads and adding or removing
+emoji reactions. Inbound membership, reaction, and pin notifications use the
 listener-owned, workspace-scoped Slack client. Outbound acknowledgment, typing,
 and status reactions are also supported through that client and require
 `reactions:write`.

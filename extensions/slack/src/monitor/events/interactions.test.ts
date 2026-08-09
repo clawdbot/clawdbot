@@ -213,6 +213,7 @@ vi.mock("../conversation.runtime.js", () => {
 
 type RegisteredHandler = (args: {
   ack: () => Promise<void>;
+  client?: { chat: { update: ReturnType<typeof vi.fn> } };
   context?: { teamId?: string };
   body: {
     user: { id: string; team_id?: string };
@@ -229,6 +230,7 @@ type RegisteredHandler = (args: {
 
 type RegisteredViewHandler = (args: {
   ack: () => Promise<void>;
+  client?: { chat: { update: ReturnType<typeof vi.fn> } };
   context?: { teamId?: string };
   body: {
     user?: { id?: string; team_id?: string };
@@ -251,6 +253,7 @@ type RegisteredViewHandler = (args: {
 
 type RegisteredShortcutHandler = (
   args: Pick<SlackShortcutMiddlewareArgs, "ack" | "body"> & {
+    client?: { chat: { update: ReturnType<typeof vi.fn> } };
     context?: { teamId?: string };
   },
 ) => Promise<void>;
@@ -283,10 +286,33 @@ function createContext(overrides?: {
   let viewHandler: RegisteredViewHandler | null = null;
   let viewClosedHandler: RegisteredViewHandler | null = null;
   let shortcutHandler: RegisteredShortcutHandler | null = null;
+  const listenerClient = {
+    chat: {
+      update: vi.fn().mockResolvedValue(undefined),
+    },
+  };
+  const withBoltScope = <
+    Args extends { body: unknown; context?: { teamId?: string }; client?: typeof listenerClient },
+  >(
+    args: Args,
+  ) => {
+    const body = args.body as {
+      team?: { id?: string };
+      user?: { team_id?: string };
+      view?: { app_installed_team_id?: string };
+    };
+    return {
+      ...args,
+      context: args.context ?? {
+        teamId: body.view?.app_installed_team_id ?? body.team?.id ?? body.user?.team_id,
+      },
+      client: args.client ?? listenerClient,
+    };
+  };
   const app = {
     action: vi.fn((matcher: RegExp, next: RegisteredHandler) => {
       actionMatcher = matcher;
-      handler = next;
+      handler = async (args) => await next(withBoltScope(args));
     }),
     view: vi.fn(
       (
@@ -294,20 +320,16 @@ function createContext(overrides?: {
         next: RegisteredViewHandler,
       ) => {
         if (matcher.type === "view_submission") {
-          viewHandler = next;
+          viewHandler = async (args) => await next(withBoltScope(args));
         } else {
-          viewClosedHandler = next;
+          viewClosedHandler = async (args) => await next(withBoltScope(args));
         }
       },
     ),
     shortcut: vi.fn((_matcher: RegExp, next: RegisteredShortcutHandler) => {
-      shortcutHandler = next;
+      shortcutHandler = async (args) => await next(withBoltScope(args));
     }),
-    client: {
-      chat: {
-        update: vi.fn().mockResolvedValue(undefined),
-      },
-    },
+    client: listenerClient,
   };
   const runtimeLog = vi.fn();
   const resolveSessionKey = vi.fn().mockReturnValue("agent:ops:slack:channel:C1");
@@ -333,13 +355,26 @@ function createContext(overrides?: {
     .mockImplementation(
       (channelId) => overrides?.resolveChannelName?.(channelId) ?? Promise.resolve({}),
     );
+  const installationIdentity = overrides?.installationIdentity ?? {
+    kind: "workspace" as const,
+    teamId: "T_TEST",
+  };
+  const resolveEventScope = vi.fn(
+    (args: { context?: { teamId?: string }; client?: typeof app.client }) => {
+      if (installationIdentity.kind !== "enterprise") {
+        return undefined;
+      }
+      const teamId = args.context?.teamId;
+      if (!teamId) {
+        return null;
+      }
+      return { teamId, client: args.client ?? app.client };
+    },
+  );
   const ctx = {
     app,
     accountId: "default",
-    installationIdentity: overrides?.installationIdentity ?? {
-      kind: "workspace" as const,
-      teamId: "T_TEST",
-    },
+    installationIdentity,
     cfg: overrides?.cfg ?? {
       channels: {
         slack: {
@@ -362,6 +397,7 @@ function createContext(overrides?: {
     defaultRequireMention: true,
     shouldDropMismatchedSlackEvent: (body: unknown) =>
       overrides?.shouldDropMismatchedSlackEvent?.(body) ?? false,
+    resolveEventScope,
     isChannelAllowed,
     resolveUserName,
     resolveChannelName,
@@ -600,7 +636,7 @@ describe("registerSlackInteractionEvents", () => {
       channelType: "im",
       senderId: "U123",
       threadTs: undefined,
-      teamId: "T9",
+      eventScope: expect.objectContaining({ teamId: "T9" }),
     });
     expect(slackInteractionPayload()).toMatchObject({
       interactionType: "global_shortcut",
@@ -659,7 +695,7 @@ describe("registerSlackInteractionEvents", () => {
       channelType: "channel",
       senderId: "U123",
       threadTs: "200.100",
-      teamId: "T9",
+      eventScope: expect.objectContaining({ teamId: "T9" }),
     });
     expect(slackInteractionPayload()).toMatchObject({
       interactionType: "message_shortcut",
@@ -814,7 +850,7 @@ describe("registerSlackInteractionEvents", () => {
       channelType: "channel",
       senderId: "U123",
       threadTs: "100.100",
-      teamId: "T9",
+      eventScope: expect.objectContaining({ teamId: "T9" }),
     });
     expect(mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1)).toMatchObject({
       deliveryContext: { to: "team:T9:channel:C1" },
@@ -1261,7 +1297,6 @@ describe("registerSlackInteractionEvents", () => {
       channelType: "channel",
       senderId: "U123",
       threadTs: "100.100",
-      teamId: undefined,
     });
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
       source: "hook",
@@ -2624,7 +2659,6 @@ describe("registerSlackInteractionEvents", () => {
       channelType: "channel",
       senderId: "U111",
       threadTs: "222.111",
-      teamId: "T111",
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const eventText = enqueueSystemEventText();
@@ -2685,7 +2719,6 @@ describe("registerSlackInteractionEvents", () => {
       channelType: "channel",
       senderId: "U333",
       threadTs: "333.111",
-      teamId: "T333",
     });
     expectRecordFields(slackInteractionPayload(), {
       channelId: "C333",
@@ -3117,7 +3150,7 @@ describe("registerSlackInteractionEvents", () => {
       channelId: "D123",
       channelType: "im",
       senderId: "U777",
-      teamId: "T1",
+      eventScope: expect.objectContaining({ teamId: "T1" }),
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     expect(mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1)).toMatchObject({

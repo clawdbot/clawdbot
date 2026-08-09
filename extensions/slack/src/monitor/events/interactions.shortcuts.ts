@@ -12,7 +12,8 @@ import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
 
 type SlackShortcutBody = GlobalShortcut | MessageShortcut;
-type SlackShortcutHandlerArgs = SlackShortcutMiddlewareArgs & Pick<AllMiddlewareArgs, "context">;
+type SlackShortcutHandlerArgs = SlackShortcutMiddlewareArgs &
+  Pick<AllMiddlewareArgs, "context" | "client">;
 
 function resolveMessageThreadTs(body: MessageShortcut): string | undefined {
   const threadTs = body.message.thread_ts;
@@ -27,6 +28,10 @@ async function handleSlackShortcut(params: {
 }): Promise<void> {
   const { ack, body } = params.args;
   await ack();
+  const eventScope = params.ctx.resolveEventScope(params.args);
+  if (eventScope === null) {
+    return;
+  }
   if (params.ctx.shouldDropMismatchedSlackEvent?.(body)) {
     params.ctx.runtime.log?.("slack:interaction drop shortcut payload (mismatched app/team)");
     return;
@@ -52,6 +57,7 @@ async function handleSlackShortcut(params: {
   const threadTs = messageBody ? resolveMessageThreadTs(messageBody) : undefined;
   const auth = await authorizeSlackSystemEventSender({
     ctx: params.ctx,
+    eventScope,
     senderId: userId,
     channelId,
     channelType: isMessageShortcut ? undefined : "im",
@@ -67,10 +73,9 @@ async function handleSlackShortcut(params: {
 
   const interactionType = isMessageShortcut ? "message_shortcut" : "global_shortcut";
   const messageTs = messageBody?.message.ts || messageBody?.message_ts;
-  const teamId = params.args.context?.teamId ?? body.team?.id ?? body.user.team_id;
+  const teamId = params.args.context.teamId;
   const deferredTarget = resolveSlackDeferredActionTarget({
-    installationIdentity: params.ctx.installationIdentity,
-    teamId,
+    eventScope,
     kind: auth.channelType === "im" ? "user" : "channel",
     id: auth.channelType === "im" ? userId : (channelId ?? ""),
   });
@@ -95,11 +100,12 @@ async function handleSlackShortcut(params: {
     channelType: auth.channelType,
     senderId: userId,
     threadTs,
-    teamId,
+    ...(eventScope ? { eventScope } : {}),
   });
   const contextKey = [
     "slack:interaction:shortcut",
     interactionType,
+    teamId,
     callbackId,
     channelId,
     messageTs,
@@ -143,7 +149,8 @@ export function registerSlackShortcutHandler(params: {
   params.ctx.app.shortcut(
     /.+/,
     async (
-      args: SlackShortcutMiddlewareArgs<SlackShortcutBody> & Pick<AllMiddlewareArgs, "context">,
+      args: SlackShortcutMiddlewareArgs<SlackShortcutBody> &
+        Pick<AllMiddlewareArgs, "context" | "client">,
     ) => {
       await handleSlackShortcut({
         ctx: params.ctx,

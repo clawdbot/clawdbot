@@ -1,9 +1,8 @@
 // Slack plugin module owns workspace-qualified routing for deferred actions.
-import { formatSlackTarget, type SlackTargetKind } from "../target-parsing.js";
-import type { SlackInstallationIdentity } from "./enterprise-install.js";
+import type { SlackTargetKind } from "../target-parsing.js";
+import type { SlackEventScope } from "./event-scope.js";
 
 export type SlackDeferredActionTarget = {
-  teamId?: string;
   peerId: string;
   target: string;
 };
@@ -15,31 +14,22 @@ export type SlackDeferredActionSessionTarget = SlackDeferredActionTarget & {
 };
 
 export function resolveSlackDeferredActionTarget(params: {
-  installationIdentity?: SlackInstallationIdentity;
-  teamId?: string | null;
+  eventScope?: SlackEventScope;
   kind: SlackTargetKind;
   id: string;
 }): SlackDeferredActionTarget {
-  const id = params.id;
-  if (!id) {
+  if (!params.id) {
     throw new Error("Slack deferred action is missing a target ID");
   }
-
-  const teamId = resolveSlackDeferredActionTeamId(params);
-  if (!teamId) {
-    return {
-      peerId: id,
-      target: `${params.kind}:${id}`,
-    };
+  if (!params.eventScope) {
+    return { peerId: params.id, target: `${params.kind}:${params.id}` };
   }
-
-  const target = formatSlackTarget({ teamId, kind: params.kind, id });
-  return { teamId, peerId: target, target };
+  const target = `team:${encodeURIComponent(params.eventScope.teamId)}:${params.kind}:${encodeURIComponent(params.id)}`;
+  return { peerId: target, target };
 }
 
 export function resolveSlackDeferredActionSessionTarget(params: {
-  installationIdentity?: SlackInstallationIdentity;
-  teamId?: string | null;
+  eventScope?: SlackEventScope;
   channelId: string;
   senderId: string;
   isDirectMessage: boolean;
@@ -49,18 +39,17 @@ export function resolveSlackDeferredActionSessionTarget(params: {
   const rawPeerId = params.isDirectMessage ? params.senderId || params.channelId : params.channelId;
   const targetKind = params.isDirectMessage && params.senderId ? "user" : "channel";
   const target = resolveSlackDeferredActionTarget({
-    installationIdentity: params.installationIdentity,
-    teamId: params.teamId,
+    eventScope: params.eventScope,
     kind: targetKind,
     id: rawPeerId,
   });
   const from = params.isDirectMessage
-    ? `slack:${target.teamId ? target.peerId : params.channelId || params.senderId}`
+    ? `slack:${params.eventScope ? target.peerId : params.channelId || params.senderId}`
     : `slack:${params.isGroup ? "group" : "channel"}:${target.peerId}`;
-  const baseConversationId = target.teamId
+  const baseConversationId = params.eventScope
     ? params.isDirectMessage
       ? target.target
-      : `team:${encodeURIComponent(target.teamId)}:${params.channelId}`
+      : `team:${encodeURIComponent(params.eventScope.teamId)}:${params.channelId}`
     : params.isDirectMessage && params.senderId
       ? `user:${params.senderId}`
       : params.channelId;
@@ -69,25 +58,16 @@ export function resolveSlackDeferredActionSessionTarget(params: {
 
 export function partitionSlackDeferredActionDmRoute<
   Route extends { dmScope?: string; sessionKey: string; mainSessionKey: string },
->(params: { route: Route; accountId: string; teamId?: string; isDirectMessage: boolean }): Route {
-  if (!params.teamId || !params.isDirectMessage || params.route.dmScope !== "main") {
+>(params: {
+  route: Route;
+  accountId: string;
+  eventScope?: SlackEventScope;
+  isDirectMessage: boolean;
+}): Route {
+  if (!params.eventScope || !params.isDirectMessage || params.route.dmScope !== "main") {
     return params.route;
   }
-  const partition = `account:${encodeURIComponent(params.accountId).toLowerCase()}:team:${encodeURIComponent(params.teamId).toLowerCase()}`;
+  const partition = `account:${encodeURIComponent(params.accountId).toLowerCase()}:team:${encodeURIComponent(params.eventScope.teamId).toLowerCase()}`;
   const sessionKey = `${params.route.sessionKey}:${partition}`;
   return { ...params.route, sessionKey, mainSessionKey: sessionKey };
-}
-
-export function resolveSlackDeferredActionTeamId(params: {
-  installationIdentity?: SlackInstallationIdentity;
-  teamId?: string | null;
-}): string | undefined {
-  if (params.installationIdentity?.kind !== "enterprise") {
-    return undefined;
-  }
-  const teamId = params.teamId;
-  if (!teamId) {
-    throw new Error("Slack Enterprise Grid deferred action is missing a workspace team ID");
-  }
-  return teamId;
 }

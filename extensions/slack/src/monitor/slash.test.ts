@@ -418,7 +418,6 @@ async function runArgMenuAction(
     channelName?: string;
     respond?: ReturnType<typeof vi.fn>;
     includeRespond?: boolean;
-    contextTeamId?: string;
   },
 ) {
   const includeRespond = params.includeRespond ?? true;
@@ -426,7 +425,6 @@ async function runArgMenuAction(
   const payload: Record<string, unknown> = {
     ack: vi.fn().mockResolvedValue(undefined),
     action: params.action,
-    context: params.contextTeamId ? { teamId: params.contextTeamId } : undefined,
     body: {
       user: { id: params.userId ?? "U1", name: params.userName ?? "Ada" },
       channel: { id: params.channelId ?? "C1", name: params.channelName ?? "directmessage" },
@@ -986,35 +984,6 @@ describe("Slack native command argument menus", () => {
     expect(call.ctx?.Body).toBe("/tools compact");
   });
 
-  it("keeps the Enterprise Grid team on deferred argument-menu actions", async () => {
-    const enterpriseHarness = createArgMenusHarness();
-    Object.assign(enterpriseHarness.ctx as object, {
-      teamId: "",
-      installationIdentity: { kind: "enterprise", enterpriseId: "EGRID" },
-    });
-    await registerCommands(enterpriseHarness.ctx, enterpriseHarness.account);
-    const enterpriseArgMenuHandler = requireHandler(
-      enterpriseHarness.actions,
-      /^openclaw_cmdarg/,
-      "Enterprise arg-menu action",
-    );
-
-    await runArgMenuAction(enterpriseArgMenuHandler, {
-      action: {
-        value: encodeValue({ command: "tools", arg: "mode", value: "compact", userId: "U1" }),
-      },
-      contextTeamId: "TGRID1",
-    });
-
-    expect(getSlackSlashMocks().resolveAgentRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        teamId: "TGRID1",
-        peer: { kind: "direct", id: "team:TGRID1:user:U1" },
-      }),
-    );
-    expect(firstDispatchArg().ctx?.OriginatingTo).toBe("team:TGRID1:user:U1");
-  });
-
   it("does not apply the response_url call cap to Web API action replies", async () => {
     mockSixDispatchedReplies();
 
@@ -1316,10 +1285,6 @@ function createPolicyHarness(overrides?: {
   slashEphemeral?: boolean;
   slashCommandEnabled?: boolean;
   slashCommandName?: string;
-  teamId?: string;
-  installationIdentity?:
-    | { kind: "workspace"; teamId: string }
-    | { kind: "enterprise"; enterpriseId: string };
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
 }) {
@@ -1340,11 +1305,7 @@ function createPolicyHarness(overrides?: {
     runtime: {},
     botToken: "bot-token",
     botUserId: "bot",
-    teamId: overrides?.teamId ?? "T1",
-    installationIdentity: overrides?.installationIdentity ?? {
-      kind: "workspace" as const,
-      teamId: overrides?.teamId ?? "T1",
-    },
+    teamId: "T1",
     allowFrom: overrides?.allowFrom ?? ["*"],
     dmEnabled: true,
     dmPolicy: "open",
@@ -1378,7 +1339,6 @@ function createPolicyHarness(overrides?: {
 async function runSlashHandler(params: {
   commands: Map<unknown, (args: unknown) => Promise<void>>;
   body?: unknown;
-  contextTeamId?: string;
   command: Partial<{
     user_id: string;
     user_name: string;
@@ -1386,7 +1346,6 @@ async function runSlashHandler(params: {
     channel_name: string;
     text: string;
     trigger_id: string;
-    team_id: string;
   }> &
     Pick<{ channel_id: string; channel_name: string }, "channel_id" | "channel_name">;
 }): Promise<{ respond: ReturnType<typeof vi.fn>; ack: ReturnType<typeof vi.fn> }> {
@@ -1400,7 +1359,6 @@ async function runSlashHandler(params: {
 
   await handler({
     body: params.body,
-    context: params.contextTeamId ? { teamId: params.contextTeamId } : undefined,
     command: {
       user_id: "U1",
       user_name: "Ada",
@@ -1753,35 +1711,6 @@ describe("slack slash command session metadata", () => {
     expect(call.ctx?.GroupSpace).toBe("T1");
     expect(call.sessionKey).toBeTypeOf("string");
     expect(call.sessionKey).not.toBe("");
-  });
-
-  it("qualifies Enterprise Grid slash routing and deferred reply targets with the event team", async () => {
-    const harness = createPolicyHarness({
-      groupPolicy: "open",
-      slashEphemeral: false,
-      teamId: "",
-      installationIdentity: { kind: "enterprise", enterpriseId: "E_GRID" },
-      channelId: "CGRID1",
-      channelName: "grid",
-    });
-    await registerCommands(harness.ctx, harness.account);
-
-    await runSlashHandler({
-      commands: harness.commands,
-      contextTeamId: "TGRID1",
-      command: {
-        channel_id: harness.channelId,
-        channel_name: harness.channelName,
-      },
-    });
-
-    expect(resolveAgentRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        teamId: "TGRID1",
-        peer: { kind: "channel", id: `team:TGRID1:channel:${harness.channelId}` },
-      }),
-    );
-    expect(firstDispatchArg().ctx?.OriginatingTo).toBe(`team:TGRID1:channel:${harness.channelId}`);
   });
 
   it("passes canonical hook correlation to slash reply delivery", async () => {

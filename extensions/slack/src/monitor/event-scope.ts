@@ -19,13 +19,11 @@ type SlackEventScopeResolution =
       ok: false;
       reason:
         | "enterprise_event_for_workspace_account"
-        | "missing_api_app_id"
         | "wrong_app"
         | "not_enterprise_install"
         | "missing_enterprise_id"
         | "wrong_enterprise"
         | "missing_team_id"
-        | "invalid_team_id"
         | "missing_listener_client";
     };
 
@@ -49,10 +47,7 @@ export function resolveSlackEventScope(params: {
   const body =
     params.body && typeof params.body === "object" ? (params.body as { api_app_id?: unknown }) : {};
   const apiAppId = normalizeOptionalString(body.api_app_id);
-  if (!apiAppId) {
-    return { ok: false, reason: "missing_api_app_id" };
-  }
-  if (params.identity.apiAppId && apiAppId !== params.identity.apiAppId) {
+  if (apiAppId && params.identity.apiAppId && apiAppId !== params.identity.apiAppId) {
     return { ok: false, reason: "wrong_app" };
   }
   if (context.isEnterpriseInstall !== true) {
@@ -65,12 +60,9 @@ export function resolveSlackEventScope(params: {
   if (enterpriseId !== params.identity.enterpriseId) {
     return { ok: false, reason: "wrong_enterprise" };
   }
-  const teamId = normalizeOptionalString(context.teamId);
-  if (!teamId) {
+  const teamId = context.teamId;
+  if (typeof teamId !== "string" || teamId.length === 0) {
     return { ok: false, reason: "missing_team_id" };
-  }
-  if (!/^T[A-Z0-9]+$/i.test(teamId)) {
-    return { ok: false, reason: "invalid_team_id" };
   }
   if (!params.client) {
     return { ok: false, reason: "missing_listener_client" };

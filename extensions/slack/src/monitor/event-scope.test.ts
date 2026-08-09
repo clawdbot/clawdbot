@@ -6,30 +6,33 @@ const identity = { kind: "enterprise", apiAppId: "A123", enterpriseId: "E123" } 
 const client = new WebClient("listener-token");
 
 describe("resolveSlackEventScope", () => {
-  it.each(["T111", "T222"])("accepts authorized workspace %s in the same org", (teamId) => {
-    const listenerClient = new WebClient(`listener-token-${teamId.toLowerCase()}`);
+  it.each(["T111", "workspace/Mixed Case"])(
+    "preserves authorized workspace %s in the same org",
+    (teamId) => {
+      const listenerClient = new WebClient(`listener-token-${teamId.toLowerCase()}`);
+      const result = resolveSlackEventScope({
+        identity,
+        body: { api_app_id: "A123" },
+        context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId },
+        client: listenerClient,
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        scope: {
+          teamId,
+          client: listenerClient,
+        },
+      });
+      expect(result.ok && result.scope?.client).toBe(listenerClient);
+      expect(result.ok && result.scope?.uploadCompletionClient).toBeInstanceOf(WebClient);
+      expect(result.ok && result.scope?.uploadCompletionClient).not.toBe(listenerClient);
+    },
+  );
+
+  it("accepts a Bolt-authenticated payload that does not carry api_app_id", () => {
     const result = resolveSlackEventScope({
       identity,
-      body: { api_app_id: "A123" },
-      context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId },
-      client: listenerClient,
-    });
-    expect(result).toMatchObject({
-      ok: true,
-      scope: {
-        teamId,
-        client: listenerClient,
-      },
-    });
-    expect(result.ok && result.scope?.client).toBe(listenerClient);
-    expect(result.ok && result.scope?.uploadCompletionClient).toBeInstanceOf(WebClient);
-    expect(result.ok && result.scope?.uploadCompletionClient).not.toBe(listenerClient);
-  });
-
-  it("accepts a signed enterprise event when startup auth.test omitted app_id", () => {
-    const result = resolveSlackEventScope({
-      identity: { kind: "enterprise", enterpriseId: "E123" },
-      body: { api_app_id: "A123" },
+      body: {},
       context: { isEnterpriseInstall: true, enterpriseId: "E123", teamId: "T111" },
       client,
     });

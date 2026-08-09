@@ -16,7 +16,7 @@ import { noteSlackDraftConversationMessage } from "../../draft-message-boundarie
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
-import { resolveSlackEventScope, type SlackEventScope } from "../event-scope.js";
+import type { SlackEventScope } from "../event-scope.js";
 import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
@@ -211,25 +211,6 @@ export function registerSlackMessageEvents(params: {
     });
   };
 
-  const resolveEventScope = (args: {
-    body: unknown;
-    context: AllMiddlewareArgs["context"];
-    client: AllMiddlewareArgs["client"];
-  }): SlackEventScope | null | undefined => {
-    const resolved = resolveSlackEventScope({
-      identity: ctx.installationIdentity,
-      body: args.body,
-      context: args.context,
-      client: args.client,
-      clientOptions: ctx.app.webClientOptions,
-    });
-    if (!resolved.ok) {
-      logVerbose(`slack: drop event (${resolved.reason})`);
-      return null;
-    }
-    return resolved.scope;
-  };
-
   const handleIncomingMessageEvent = async ({
     event,
     body,
@@ -243,7 +224,7 @@ export function registerSlackMessageEvents(params: {
   }) => {
     const turnAdoptionLifecycle = resolveSlackIngressTurnLifecycle(context);
     try {
-      const eventScope = resolveEventScope({ body, context, client });
+      const eventScope = ctx.resolveEventScope({ body, context, client });
       if (eventScope === null) {
         return;
       }
@@ -346,7 +327,7 @@ export function registerSlackMessageEvents(params: {
       const { event, body, context, client } = args;
       const turnAdoptionLifecycle = resolveSlackIngressTurnLifecycle(context);
       try {
-        const eventScope = resolveEventScope({ body, context, client });
+        const eventScope = ctx.resolveEventScope({ body, context, client });
         if (eventScope === null) {
           return;
         }
