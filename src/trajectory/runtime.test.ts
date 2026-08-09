@@ -82,6 +82,78 @@ describe("trajectory runtime", () => {
     expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
+  it("does not write a debug capture file by default", () => {
+    const captureDir = tempDirs.make("openclaw-trajectory-debug-off-");
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      env: { ...process.env, OPENCLAW_TRAJECTORY_DEBUG_CAPTURE_DIR: captureDir },
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", {
+      systemPrompt: "x".repeat(32_768 + 1),
+    });
+
+    expect(writes).toHaveLength(1);
+    expect(fs.existsSync(captureDir) ? fs.readdirSync(captureDir) : []).toEqual([]);
+  });
+
+  it("writes the untruncated prompt to a debug capture file when enabled", () => {
+    const captureDir = tempDirs.make("openclaw-trajectory-debug-on-");
+    const writes: string[] = [];
+    const oversizedSystemPrompt = "x".repeat(32_768 + 1);
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      sessionFile: "/tmp/session.jsonl",
+      env: {
+        ...process.env,
+        OPENCLAW_TRAJECTORY_DEBUG_CAPTURE: "1",
+        OPENCLAW_TRAJECTORY_DEBUG_CAPTURE_DIR: captureDir,
+      },
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    // The stored trajectory row still truncates the oversized field.
+    runtimeRecorder.recordEvent("context.compiled", { systemPrompt: oversizedSystemPrompt });
+    // Non-prompt events are not captured.
+    runtimeRecorder.recordEvent("model.completed", { usage: { input: 1, output: 2, total: 3 } });
+
+    const stored = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    expect(stored.data.systemPrompt.truncated).toBe(true);
+
+    const captureFiles = fs.readdirSync(captureDir);
+    expect(captureFiles).toHaveLength(1);
+    const capture = JSON.parse(
+      fs.readFileSync(
+        path.join(captureDir, expectDefined(captureFiles[0], "capture file")),
+        "utf8",
+      ),
+    );
+    expect(capture.sessionId).toBe("session-1");
+    expect(capture.sessionKey).toBe("agent:main:session-1");
+    expect(capture.runId).toBe("run-1");
+    expect(capture.type).toBe("context.compiled");
+    expect(capture.data.systemPrompt).toBe(oversizedSystemPrompt);
+  });
+
   it("records SQLite marker runtime events without active JSONL sidecars", async () => {
     const tempDir = tempDirs.make("openclaw-trajectory-runtime-");
     const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");

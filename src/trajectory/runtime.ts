@@ -1,4 +1,6 @@
 // Trajectory runtime records bounded session events into SQLite-backed storage.
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
@@ -10,7 +12,9 @@ import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-m
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { redactSecrets } from "../logging/redact.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
@@ -18,9 +22,12 @@ import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+  safeTrajectorySessionFileName,
 } from "./paths.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
+
+const log = createSubsystemLogger("trajectory/runtime");
 
 type TrajectoryRuntimeInit = {
   cfg?: OpenClawConfig;
@@ -60,6 +67,65 @@ const TRAJECTORY_RUNTIME_OVERSIZE_DROP_FIRST_DATA_KEYS = [
   "systemPrompt",
 ] as const;
 const OVERSIZE_PRESERVED_DATA_KEYS = ["stopReason", "usage", "promptCache", "prompt"] as const;
+
+// On-demand debug capture: OPENCLAW_TRAJECTORY_DEBUG_CAPTURE writes the fully
+// assembled prompt for one "context.compiled" event per recorder (i.e. one
+// turn) to a side JSON file, unaffected by the 32,768-char field limit above.
+// Off by default; does not change stored trajectory rows or their size caps.
+const TRAJECTORY_DEBUG_CAPTURE_EVENT_TYPE = "context.compiled";
+const TRAJECTORY_DEBUG_CAPTURE_DEFAULT_DIR = path.join(os.tmpdir(), "openclaw-trajectory-debug");
+
+function resolveTrajectoryDebugCaptureDir(env: NodeJS.ProcessEnv): string {
+  const override = env.OPENCLAW_TRAJECTORY_DEBUG_CAPTURE_DIR?.trim();
+  return override
+    ? resolveHomeRelativePath(override, { env })
+    : TRAJECTORY_DEBUG_CAPTURE_DEFAULT_DIR;
+}
+
+function writeTrajectoryDebugCapture(params: {
+  data: Record<string, unknown>;
+  env: NodeJS.ProcessEnv;
+  runId?: string;
+  seq: number;
+  sessionId: string;
+  sessionKey?: string;
+  type: string;
+}): void {
+  if (
+    params.type !== TRAJECTORY_DEBUG_CAPTURE_EVENT_TYPE ||
+    !parseBooleanValue(params.env.OPENCLAW_TRAJECTORY_DEBUG_CAPTURE)
+  ) {
+    return;
+  }
+  try {
+    const dir = resolveTrajectoryDebugCaptureDir(params.env);
+    fs.mkdirSync(dir, { recursive: true });
+    const fileName = `${safeTrajectorySessionFileName(params.sessionId)}-${params.runId ?? "no-run"}-${params.seq}.json`;
+    const filePath = path.join(dir, fileName);
+    // Secrets are still redacted; only the field/array/depth truncation from
+    // limitTrajectoryPayloadValue is skipped so the capture stays complete.
+    const capturedData = redactSecrets(sanitizeDiagnosticPayload(params.data));
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify(
+        {
+          capturedAt: new Date().toISOString(),
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          runId: params.runId,
+          seq: params.seq,
+          type: params.type,
+          data: capturedData,
+        },
+        null,
+        2,
+      ),
+    );
+    log.warn(`trajectory debug capture written: ${filePath}`);
+  } catch (err) {
+    log.warn(`trajectory debug capture failed: ${String(err)}`);
+  }
+}
 
 type TrajectoryRuntimeWriterDiagnostics = QueuedFileWriterDiagnostics;
 
@@ -442,6 +508,17 @@ export function createTrajectoryRuntimeRecorder(
   ): { event: TrajectoryEvent; line: string } | undefined => {
     const nextSeq = seq + 1;
     const sourceSeq = sink.nextSourceSeq?.() ?? nextSeq;
+    if (data) {
+      writeTrajectoryDebugCapture({
+        data,
+        env,
+        runId: params.runId,
+        seq: nextSeq,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        type,
+      });
+    }
     const event: TrajectoryEvent = {
       traceSchema: "openclaw-trajectory",
       schemaVersion: 1,

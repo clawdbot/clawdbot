@@ -150,6 +150,27 @@ continues; it does not change the trajectory size caps. To tune all agent
 cleanup steps that do not pass an explicit timeout, set
 `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`.
 
+## Debug-capture the full prompt for one turn
+
+Stored `context.compiled` trajectory rows bound each string field to 32,768
+characters, so a long system prompt or tool list reads back truncated. To
+audit the exact prompt a run submitted, capture it unbounded, one turn at a
+time, without changing default storage:
+
+```bash
+export OPENCLAW_TRAJECTORY_DEBUG_CAPTURE=1
+```
+
+While set, the next `context.compiled` event on each new recorder (one per
+run/attempt, i.e. one turn) is also written, secrets redacted but otherwise
+untruncated, as its own JSON file under `$TMPDIR/openclaw-trajectory-debug/`
+(override with `OPENCLAW_TRAJECTORY_DEBUG_CAPTURE_DIR`). The file name and its
+`sessionId`/`sessionKey`/`runId` fields identify which session and turn
+produced it. Unset the variable to go back to the default, always-bounded
+behavior; the stored trajectory row is unaffected either way. This applies to
+every agent runtime that goes through the embedded run attempt path,
+including `claude-cli`/CLI-backed sessions.
+
 ## Privacy and limits
 
 Trajectory bundles are for support and debugging, not public posting. OpenClaw
