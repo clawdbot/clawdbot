@@ -70,7 +70,6 @@ function createOps(params: {
   Object.assign(chatRunState.getOrCreate(runId), {
     ...(buffer !== undefined ? { buffer, deltaLastBroadcastText: buffer } : {}),
     deltaSentAt: Date.now(),
-    deltaLastBroadcastLen: buffer?.length ?? 0,
     agentText: {
       assistant: {
         lastSentAt: Date.now(),
@@ -485,7 +484,6 @@ describe("abortChatRunById", () => {
     expectRunAborted({ result, entry, ops, runId });
     expect(ops.chatRunState.runs.get(runId)?.buffer).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.deltaSentAt).toBeUndefined();
-    expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastLen).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastText).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);

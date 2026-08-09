@@ -822,7 +822,6 @@ describe("createGatewayCloseHandler", () => {
     const run = chatRunState.getOrCreate("run-1");
     run.buffer = "partial reply";
     run.deltaSentAt = Date.now();
-    run.deltaLastBroadcastLen = 3;
     run.deltaLastBroadcastText = "par";
     run.agentText = {
       assistant: {
@@ -885,7 +884,6 @@ describe("createGatewayCloseHandler", () => {
     expect(chatAbortControllers.has("agent-run-1")).toBe(false);
     expect(chatRunState.runs.get("run-1")?.buffer).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.deltaSentAt).toBeUndefined();
-    expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastLen).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastText).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expect(
