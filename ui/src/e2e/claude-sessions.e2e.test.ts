@@ -294,12 +294,14 @@ suite.define(() => {
         await expect
           .poll(() =>
             header.evaluate((element) => {
-              const toggle = element.querySelector<HTMLElement>(".sidebar-session-group-toggle");
+              const focusedToggle = element.querySelector<HTMLElement>(
+                ".sidebar-session-group-toggle",
+              );
               return {
                 focusWithin: element.matches(":focus-within"),
                 hovered: element.matches(":hover"),
-                toggleFocusVisible: toggle?.matches(":focus-visible") ?? false,
-                toggleFocused: document.activeElement === toggle,
+                toggleFocusVisible: focusedToggle?.matches(":focus-visible") ?? false,
+                toggleFocused: document.activeElement === focusedToggle,
               };
             }),
           )
