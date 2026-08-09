@@ -58,7 +58,11 @@ export async function execDockerRaw(
 import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
-import { DEFAULT_SANDBOX_IMAGE, SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
+import {
+  DEFAULT_SANDBOX_IMAGE,
+  DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
+  SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+} from "./constants.js";
 import { handleHotSandboxConfigMismatch } from "./current-config.js";
 import { readRegistryEntry, removeRegistryEntry, updateRegistry } from "./registry.js";
 import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
@@ -106,7 +110,7 @@ export async function readContainerLabel(
   const result = await execContainer(
     engine,
     ["inspect", "-f", `{{ index .Config.Labels "${label}" }}`, containerName],
-    { allowFailure: true },
+    { allowFailure: true, timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS },
   );
   if (result.code !== 0) {
     return null;
@@ -124,7 +128,7 @@ export async function readDockerContainerEnvVar(
 ): Promise<string | null> {
   const result = await execDocker(
     ["inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", containerName],
-    { allowFailure: true },
+    { allowFailure: true, timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS },
   );
   if (result.code !== 0) {
     return null;
@@ -140,6 +144,7 @@ export async function readDockerContainerEnvVar(
 export async function readDockerPort(containerName: string, port: number) {
   const result = await execDocker(["port", containerName, `${port}/tcp`], {
     allowFailure: true,
+    timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
   });
   if (result.code !== 0) {
     return null;
@@ -181,6 +186,7 @@ async function inspectContainerImage(
 ): Promise<"exists" | "missing"> {
   const result = await execContainer(engine, ["image", "inspect", image], {
     allowFailure: true,
+    timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
   });
   if (result.code === 0) {
     return "exists";
@@ -236,6 +242,7 @@ export async function dockerContainerState(name: string) {
 export async function containerState(engine: SandboxContainerEngine, name: string) {
   const result = await execContainer(engine, ["inspect", "-f", "{{.State.Running}}", name], {
     allowFailure: true,
+    timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
   });
   if (result.code !== 0) {
     return { exists: false, running: false };
@@ -256,6 +263,7 @@ function isPodmanContainerNotFound(stderr: string): boolean {
 async function recordedPodmanContainerState(engine: SandboxContainerEngine, name: string) {
   const result = await execContainer(engine, ["inspect", "-f", "{{.State.Running}}", name], {
     allowFailure: true,
+    timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
   });
   if (result.code === 0) {
     return { exists: true, running: result.stdout.trim() === "true" };
@@ -527,9 +535,10 @@ async function createSandboxContainer(params: {
   });
   args.push(cfg.image, "sleep", "infinity");
 
-  await execContainer(engine, args);
-  await execContainer(engine, ["start", name]);
+  await execContainer(engine, args, { timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS });
+  await execContainer(engine, ["start", name], { timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS });
 
+  // setupCommand runs operator-owned workload inside the container; it stays unbounded.
   if (cfg.setupCommand?.trim()) {
     await execContainer(engine, ["exec", "-i", name, "/bin/sh", "-lc", cfg.setupCommand]);
   }
@@ -664,7 +673,10 @@ async function ensureSandboxContainerLifecycle(
             : {}),
         });
       } else {
-        await execContainer(engine, ["rm", "-f", containerName], { allowFailure: true });
+        await execContainer(engine, ["rm", "-f", containerName], {
+          allowFailure: true,
+          timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
+        });
         hasContainer = false;
         running = false;
       }
@@ -686,7 +698,9 @@ async function ensureSandboxContainerLifecycle(
       podmanRuntimeInfo,
     });
   } else if (!running) {
-    await execContainer(engine, ["start", containerName]);
+    await execContainer(engine, ["start", containerName], {
+      timeoutMs: DEFAULT_SANDBOX_PROVISION_TIMEOUT_MS,
+    });
   }
   await updateRegistry({
     containerName,
