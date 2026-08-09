@@ -241,7 +241,7 @@ export function resolveSandboxFsPathWithMounts(params: {
   defaultContainerRoot: string;
   mounts: SandboxFsMount[];
 }): SandboxResolvedFsPath {
-  const mountsByContainer = [...params.mounts].toSorted(compareMountsByContainerPath);
+  const mountsByContainer = [...params.mounts].toSorted(compareSandboxFsMountsByContainerPath);
   const mountsByHost = [...params.mounts].toSorted(compareMountsByHostPath);
   const input = params.filePath;
   const inputPosix = normalizePosixInput(input);
@@ -374,7 +374,10 @@ function shortenHomePath(value: string): string {
   return shortenPathWithHome(value, { home: os.homedir(), prefix: "~" });
 }
 
-function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): number {
+export function compareSandboxFsMountsByContainerPath(
+  a: SandboxFsMount,
+  b: SandboxFsMount,
+): number {
   const byLength = b.containerRoot.length - a.containerRoot.length;
   if (byLength !== 0) {
     return byLength;

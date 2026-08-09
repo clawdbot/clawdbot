@@ -13,6 +13,7 @@ import {
   findCallByDockerArg,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
+  mockedOpenRootFile,
   withTempDir,
 } from "./fs-bridge.test-helpers.js";
 
@@ -59,6 +60,35 @@ describe("sandbox fs bridge boundary validation", () => {
       });
     },
   );
+
+  it("uses a writable custom bind that overrides the read-only workspace root", async () => {
+    await withTempDir("openclaw-fs-bridge-workspace-override-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const bindRoot = path.join(stateDir, "override");
+      await fs.mkdir(workspaceDir);
+      await fs.mkdir(bindRoot);
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          workspaceAccess: "ro",
+          docker: {
+            ...createSandbox().docker,
+            binds: [`${bindRoot}:/workspace:rw`],
+          },
+        }),
+      });
+
+      await expect(bridge.mkdirp({ filePath: "/workspace/attachments" })).resolves.toBeUndefined();
+      expect(mockedOpenRootFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          absolutePath: path.join(bindRoot, "attachments"),
+          rootPath: bindRoot,
+        }),
+      );
+      expect(findCallByDockerArg(1, "mkdirp")).toBeDefined();
+    });
+  });
 
   it("allows mkdirp for existing in-boundary subdirectories", async () => {
     await expectMkdirpAllowsExistingDirectory();

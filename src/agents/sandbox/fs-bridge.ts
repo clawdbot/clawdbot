@@ -26,6 +26,7 @@ import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   buildSandboxFsMounts,
+  compareSandboxFsMountsByContainerPath,
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
@@ -54,11 +55,9 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   constructor(sandbox: SandboxFsBridgeContext) {
     this.sandbox = sandbox;
     this.mounts = buildSandboxFsMounts(sandbox);
-    const mountsByContainer = [...this.mounts].toSorted(
-      (a, b) => b.containerRoot.length - a.containerRoot.length,
-    );
-    // Longest mount first keeps nested agent/skill mounts from being claimed by
-    // the broader workspace root during symlink and mutation safety checks.
+    // Resolver and guard must agree on equal-root overlays or they can authorize
+    // one mount and validate the path against another mount's policy.
+    const mountsByContainer = [...this.mounts].toSorted(compareSandboxFsMountsByContainerPath);
     this.pathGuard = new SandboxFsPathGuard({
       mountsByContainer,
       runCommand: (script, options) => this.runCommand(script, options),
