@@ -1,8 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  GATEWAY_CLIENT_CAPS,
-  hasGatewayClientCap,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
@@ -58,6 +54,7 @@ export async function resolveAgentDeliveryPhase(params: {
   context: AgentTurnContext;
   respond: GatewayRequestHandlerOptions["respond"];
   isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
+  onRunObserved?: (runId: string) => void;
 }): Promise<AgentDeliveryPhaseResult | undefined> {
   const activeSessionAgentId =
     params.resolvedSessionKey === "global" && params.resolvedSessionAgentId
@@ -66,18 +63,14 @@ export async function resolveAgentDeliveryPhase(params: {
         ? resolveAgentIdFromSessionKey(params.resolvedSessionKey)
         : (params.agentId ?? resolveDefaultAgentId(params.cfgForAgent ?? params.cfg));
 
-  const connId = typeof params.client?.connId === "string" ? params.client.connId : undefined;
-  if (
-    connId &&
-    hasGatewayClientCap(params.client?.connect?.caps, GATEWAY_CLIENT_CAPS.TOOL_EVENTS)
-  ) {
-    params.context.registerToolEventRecipient(params.runId, connId);
+  if (params.onRunObserved) {
+    params.onRunObserved(params.runId);
     for (const [activeRunId, active] of params.context.chatAbortControllers) {
       const sameSession = active.sessionKey === params.resolvedSessionKey;
       const sameSelectedGlobalAgent =
         params.resolvedSessionKey === "global" ? active.agentId === activeSessionAgentId : true;
       if (activeRunId !== params.runId && sameSession && sameSelectedGlobalAgent) {
-        params.context.registerToolEventRecipient(activeRunId, connId);
+        params.onRunObserved(activeRunId);
       }
     }
   }
