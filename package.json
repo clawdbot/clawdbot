@@ -2099,6 +2099,7 @@
     "shiki": "4.3.1",
     "signal-utils": "0.21.1",
     "sigstore": "5.0.0",
+    "string-width": "8.2.2",
     "stylelint": "17.14.1",
     "stylelint-config-recommended": "18.0.0",
     "tsdown": "0.22.1",

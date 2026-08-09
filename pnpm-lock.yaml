@@ -347,6 +347,9 @@ importers:
       sigstore:
         specifier: 5.0.0
         version: 5.0.0(supports-color@10.2.2)
+      string-width:
+        specifier: 8.2.2
+        version: 8.2.2
       stylelint:
         specifier: 17.14.1
         version: 17.14.1(supports-color@10.2.2)(typescript@6.0.3)
