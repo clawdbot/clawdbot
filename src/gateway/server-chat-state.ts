@@ -2,6 +2,7 @@ import type { AgentPlanStep } from "../channels/streaming.js";
 // Gateway chat run state registries.
 // Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import type { LiveAssistantMedia } from "./live-chat-projector.js";
 import {
   normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
@@ -110,6 +111,7 @@ type ChatRunRecord = {
   buffer?: string;
   /** Projection stays valid only while source matches rawBuffer; readers refresh it lazily. */
   bufferProjection?: { source: string; suppress: boolean };
+  media?: LiveAssistantMedia[];
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
@@ -118,6 +120,7 @@ type ChatRunRecord = {
   /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
   deltaLastBroadcastLen?: number;
   deltaLastBroadcastText?: string;
+  deltaLastBroadcastMediaCount?: number;
   agentText?: {
     assistant?: ChatRunAgentTextState;
     thinking?: ChatRunAgentTextState;
@@ -268,12 +271,14 @@ export function createChatRunState(): ChatRunState {
     delete record.rawBuffer;
     delete record.buffer;
     delete record.bufferProjection;
+    delete record.media;
     delete record.planSnapshot;
     delete record.progressSnapshot;
     delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
     delete record.deltaLastBroadcastLen;
     delete record.deltaLastBroadcastText;
+    delete record.deltaLastBroadcastMediaCount;
     delete record.agentText;
     store.releaseIfEmpty(runId);
   };

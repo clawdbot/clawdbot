@@ -557,9 +557,138 @@ describe("agent event handler", () => {
     };
     expect(payload.state).toBe("delta");
     expect(payload.deltaText).toBe("Hello world");
-    expect(payload.message?.content?.[0]?.text).toBe("Hello world");
+    expect(payload.message?.content).toEqual([{ type: "text", text: "Hello world" }]);
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
+  });
+
+  it("projects media-only assistant events into chat delta and final messages", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 1_000,
+    });
+    registerNamedChatRun(chatRunState, "media-only");
+
+    emitAgentEvent(handler, "run-media-only", "assistant", {
+      mediaUrls: [" https://example.test/one.png ", "", "https://example.test/one.png"],
+    });
+
+    const liveChatCalls = chatBroadcastCalls(broadcast);
+    expect(liveChatCalls).toHaveLength(1);
+    expect(liveChatCalls[0]?.[1]).toMatchObject({
+      state: "delta",
+      deltaText: "",
+      message: {
+        content: [{ type: "image", url: "https://example.test/one.png" }],
+      },
+    });
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+
+    emitLifecycleEnd(handler, "run-media-only");
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    expect(chatCalls[1]?.[1]).toMatchObject({
+      state: "final",
+      message: {
+        content: [{ type: "image", url: "https://example.test/one.png" }],
+      },
+    });
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(2);
+    nowSpy?.mockRestore();
+  });
+
+  it("retains deduplicated assistant media through throttled flush and final delivery", () => {
+    let now = 10_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "media-flush");
+
+    emitAgentEvent(handler, "run-media-flush", "assistant", { text: "Look", delta: "Look" });
+    now = 10_050;
+    emitAgentEvent(
+      handler,
+      "run-media-flush",
+      "assistant",
+      {
+        text: "Look",
+        mediaUrls: [
+          "https://example.test/one.png",
+          "https://example.test/two.png",
+          "https://example.test/one.png",
+        ],
+      },
+      { seq: 2 },
+    );
+    now = 10_090;
+    emitAgentEvent(
+      handler,
+      "run-media-flush",
+      "assistant",
+      { text: "Look again", delta: " again" },
+      { seq: 3 },
+    );
+    emitLifecycleEnd(handler, "run-media-flush", 4);
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(4);
+    expect(chatCalls[1]?.[1]).toMatchObject({
+      state: "delta",
+      deltaText: "",
+      message: {
+        content: [
+          { type: "text", text: "Look" },
+          { type: "image", url: "https://example.test/one.png" },
+          { type: "image", url: "https://example.test/two.png" },
+        ],
+      },
+    });
+    for (const callIndex of [2, 3]) {
+      expect(chatCalls[callIndex]?.[1]).toMatchObject({
+        message: {
+          content: [
+            { type: "text", text: "Look again" },
+            { type: "image", url: "https://example.test/one.png" },
+            { type: "image", url: "https://example.test/two.png" },
+          ],
+        },
+      });
+    }
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(4);
+    nowSpy.mockRestore();
+  });
+
+  it("preserves mixed assistant media types in live chat events", () => {
+    const { broadcast, chatRunState, handler } = createHarness({ now: 1_000 });
+    registerNamedChatRun(chatRunState, "audio-media");
+
+    emitAgentEvent(handler, "run-audio-media", "assistant", {
+      media: [
+        { type: "image", url: "https://example.test/image.png" },
+        { type: "audio", url: "https://example.test/voice.ogg" },
+      ],
+    });
+    emitLifecycleEnd(handler, "run-audio-media");
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    expect(chatCalls[0]?.[1]).toMatchObject({
+      state: "delta",
+      message: {
+        content: [
+          { type: "image", url: "https://example.test/image.png" },
+          { type: "audio", url: "https://example.test/voice.ogg" },
+        ],
+      },
+    });
+    expect(chatCalls[1]?.[1]).toMatchObject({
+      state: "final",
+      message: {
+        content: [
+          { type: "image", url: "https://example.test/image.png" },
+          { type: "audio", url: "https://example.test/voice.ogg" },
+        ],
+      },
+    });
   });
 
   it("keeps internal context private when it spans delta-only events", () => {

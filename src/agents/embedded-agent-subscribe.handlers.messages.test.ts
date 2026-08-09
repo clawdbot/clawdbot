@@ -249,22 +249,33 @@ describe("hasAssistantVisibleReply", () => {
 });
 
 describe("buildAssistantStreamData", () => {
-  it("normalizes media payloads for assistant stream events", () => {
+  it("keeps mixed media independently typed without relabeling extensionless attachments", () => {
     expect(
       buildAssistantStreamData({
         text: "hello",
         delta: "he",
         replace: true,
-        mediaUrl: "https://example.com/a.png",
+        mediaUrls: ["https://example.com/generated-image", "https://example.com/voice.ogg"],
+        mediaFallbackType: "audio",
         phase: "final_answer",
       }),
     ).toEqual({
       text: "hello",
       delta: "he",
       replace: true,
-      mediaUrls: ["https://example.com/a.png"],
+      mediaUrls: ["https://example.com/generated-image", "https://example.com/voice.ogg"],
+      media: [
+        { type: "image", url: "https://example.com/generated-image" },
+        { type: "audio", url: "https://example.com/voice.ogg" },
+      ],
       phase: "final_answer",
     });
+    expect(
+      buildAssistantStreamData({
+        mediaUrl: "https://example.com/voice",
+        mediaFallbackType: "audio",
+      }),
+    ).toMatchObject({ media: [{ type: "audio", url: "https://example.com/voice" }] });
   });
 });
 

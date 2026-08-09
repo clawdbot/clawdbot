@@ -17,20 +17,70 @@ import {
 
 const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
-/** Normalizes assistant event payloads that contain a snapshot, a delta, or both. */
+export type LiveAssistantMedia = {
+  type: "image" | "audio" | "video" | "file";
+  url: string;
+};
+
+/** Normalizes assistant event payloads that contain text, media, or both. */
 export function resolveAssistantLiveChatInput(
   data: unknown,
-): { text: string; delta: string } | undefined {
+): { text: string; delta: string; media: LiveAssistantMedia[] } | undefined {
   if (!data || typeof data !== "object") {
     return undefined;
   }
-  const record = data as { text?: unknown; delta?: unknown };
-  if (typeof record.text !== "string" && typeof record.delta !== "string") {
+  const record = data as {
+    text?: unknown;
+    delta?: unknown;
+    mediaUrl?: unknown;
+    mediaUrls?: unknown;
+    media?: unknown;
+  };
+  const media: LiveAssistantMedia[] = [];
+  const seenMedia = new Set<string>();
+  const appendMediaUrl = (value: unknown, type: LiveAssistantMedia["type"] = "image") => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const trimmed = value.trim();
+    const key = `${type}\u0000${trimmed}`;
+    if (!trimmed || seenMedia.has(key)) {
+      return;
+    }
+    seenMedia.add(key);
+    media.push({ type, url: trimmed });
+  };
+  if (Array.isArray(record.media)) {
+    for (const entry of record.media) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const typed = entry as { type?: unknown; url?: unknown };
+      const type =
+        typed.type === "audio" ||
+        typed.type === "video" ||
+        typed.type === "file" ||
+        typed.type === "image"
+          ? typed.type
+          : "image";
+      appendMediaUrl(typed.url, type);
+    }
+  }
+  if (media.length === 0 && Array.isArray(record.mediaUrls)) {
+    for (const mediaUrl of record.mediaUrls) {
+      appendMediaUrl(mediaUrl);
+    }
+  }
+  if (media.length === 0) {
+    appendMediaUrl(record.mediaUrl);
+  }
+  if (typeof record.text !== "string" && typeof record.delta !== "string" && media.length === 0) {
     return undefined;
   }
   return {
     text: typeof record.text === "string" ? record.text : "",
     delta: typeof record.delta === "string" ? record.delta : "",
+    media,
   };
 }
 

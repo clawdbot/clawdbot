@@ -53,12 +53,18 @@ export type ToolCallSummary = {
   fileTarget?: import("./tool-mutation.js").FileTarget;
 };
 
+type AssistantStreamMedia = {
+  type: "image" | "audio" | "video" | "file";
+  url: string;
+};
+
 /** User-visible assistant stream payload emitted to subscribers. */
 type AssistantStreamData = {
   text: string;
   delta: string;
   replace?: true;
   mediaUrls?: string[];
+  media?: AssistantStreamMedia[];
   phase?: AssistantPhase;
 };
 
