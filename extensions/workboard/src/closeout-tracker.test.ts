@@ -6,6 +6,26 @@ import {
   type ConversationSend,
 } from "./closeout-tracker.js";
 
+function assertPlainJsonValue(value: unknown, path = "value"): void {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertPlainJsonValue(entry, `${path}[${index}]`));
+    return;
+  }
+  if (typeof value === "object" && value !== null) {
+    for (const [key, entry] of Object.entries(value)) {
+      assertPlainJsonValue(entry, `${path}.${key}`);
+    }
+    return;
+  }
+  throw new Error(`${path} must be JSON-serializable`);
+}
+
 function createMemoryStore(): CloseoutTrackerStore & { records: Map<string, CloseoutRecord> } {
   const records = new Map<string, CloseoutRecord>();
   const key = (agentId: string, closeoutId: string) => `${agentId}:${closeoutId}`;
@@ -15,6 +35,7 @@ function createMemoryStore(): CloseoutTrackerStore & { records: Map<string, Clos
       return records.get(key(agentId, closeoutId));
     },
     async create(record) {
+      assertPlainJsonValue(record);
       const recordKey = key(record.agentId, record.closeoutId);
       if (records.has(recordKey)) {
         return false;
@@ -23,6 +44,7 @@ function createMemoryStore(): CloseoutTrackerStore & { records: Map<string, Clos
       return true;
     },
     async put(record) {
+      assertPlainJsonValue(record);
       records.set(key(record.agentId, record.closeoutId), record);
     },
     async list(agentId, limit) {
@@ -105,6 +127,7 @@ describe("closeout tracker", () => {
     const confirmed = await tracker.reconcile("main", "NAC-78");
 
     expect(queued).toMatchObject({ status: "queued", queueId: "queue-1", attemptCount: 1 });
+    expect(queued).not.toHaveProperty("lastError");
     expect(confirmed).toMatchObject({
       status: "confirmed",
       messageId: "telegram-456",
@@ -114,6 +137,35 @@ describe("closeout tracker", () => {
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls[0]?.[0].operationId).toBe("closeout:NAC-78");
     expect(send.mock.calls[1]?.[0].operationId).toBe("closeout:NAC-78");
+  });
+
+  it("removes a stale request error when reconciliation obtains a platform receipt", async () => {
+    const store = createMemoryStore();
+    const send = vi
+      .fn<ConversationSend>()
+      .mockRejectedValueOnce(new Error("gateway unavailable"))
+      .mockResolvedValueOnce({
+        status: "sent",
+        conversationRef: input.conversationRef,
+        channel: "telegram",
+        messageId: "telegram-reconciled",
+        messageIdSource: "platform",
+      });
+    const tracker = createCloseoutTracker({ store, send, now: () => 2_500 });
+
+    await expect(tracker.send(input)).resolves.toMatchObject({
+      status: "uncertain",
+      lastError: "gateway_request_failed",
+    });
+    const confirmed = await tracker.reconcile("main", "NAC-78");
+
+    expect(confirmed).toMatchObject({
+      status: "confirmed",
+      messageId: "telegram-reconciled",
+      messageIdSource: "platform",
+      attemptCount: 2,
+    });
+    expect(confirmed).not.toHaveProperty("lastError");
   });
 
   it("fails uncertain, blocks completion, and permits explicit manual confirmation", async () => {
@@ -152,8 +204,38 @@ describe("closeout tracker", () => {
       manualConfirmedBy: "user:kevin",
       manualConfirmedAt: 3_000,
     });
+    expect(manuallyConfirmed).not.toHaveProperty("lastError");
     expect(repeatedManualConfirmation).toEqual(manuallyConfirmed);
     expect(completed.status).toBe("completed");
+  });
+
+  it("does not relabel a post-send state write failure as a gateway request failure", async () => {
+    const store = createMemoryStore();
+    const originalPut = store.put;
+    let putCount = 0;
+    store.put = async (record) => {
+      putCount += 1;
+      if (putCount === 1) {
+        throw new Error("state write failed");
+      }
+      await originalPut(record);
+    };
+    const send = vi.fn<ConversationSend>(async () => ({
+      status: "sent",
+      conversationRef: input.conversationRef,
+      channel: "telegram",
+      messageId: "telegram-persist-failure",
+      messageIdSource: "platform",
+    }));
+    const tracker = createCloseoutTracker({ store, send, now: () => 3_500 });
+
+    await expect(tracker.send(input)).rejects.toThrow("state write failed");
+    expect(send).toHaveBeenCalledOnce();
+    expect(putCount).toBe(1);
+    await expect(tracker.get("main", "NAC-78")).resolves.toMatchObject({
+      status: "recorded",
+      attemptCount: 0,
+    });
   });
 
   it("marks thrown delivery outcomes uncertain and rejects closeout id reuse with different input", async () => {
