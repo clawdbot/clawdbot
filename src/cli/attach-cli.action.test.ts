@@ -180,7 +180,7 @@ describe("openclaw attach (action)", () => {
       token: "explicit-token",
       useStoredDeviceAuth: true,
       requiredStoredDeviceAuthScopes: ["operator.admin"],
-      params: { sessionKey: "global" },
+      params: { sessionKey: "global", agentId: "ops" },
     });
   });
 
