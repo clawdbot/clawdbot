@@ -50,8 +50,6 @@ type ModelCallDiagnosticContext = {
   model: string;
   api?: string;
   transport?: string;
-  /** Resolved provider request allowance (models.providers.<id>.timeoutSeconds). */
-  requestTimeoutMs?: number;
   contextTokenBudget?: number;
   contextWindowSource?: PluginHookContextWindowSource;
   contextWindowReferenceTokens?: number;
@@ -450,6 +448,7 @@ function baseModelCallEvent(
   callId: string,
   trace: DiagnosticTraceContext,
   promptStats: ModelCallPromptStats | undefined,
+  requestTimeoutMs: number | undefined,
 ): ModelCallEventBase {
   return {
     runId: ctx.runId,
@@ -461,7 +460,7 @@ function baseModelCallEvent(
     ...(ctx.api && { api: ctx.api }),
     ...(ctx.transport && { transport: ctx.transport }),
     observationUnit: "request",
-    ...(ctx.requestTimeoutMs !== undefined ? { requestTimeoutMs: ctx.requestTimeoutMs } : {}),
+    ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
     ...(ctx.contextTokenBudget ? { contextTokenBudget: ctx.contextTokenBudget } : {}),
     ...(ctx.contextWindowSource ? { contextWindowSource: ctx.contextWindowSource } : {}),
     ...(ctx.contextWindowReferenceTokens
@@ -940,6 +939,14 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
   return ((model, streamContext, options) => {
     const callId = ctx.nextCallId();
     const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(ctx.trace));
+    // The per-call resolved model carries the provider request allowance
+    // (models.providers.<id>.timeoutSeconds). Reading it here — not from caller
+    // context — covers every wrapper caller (run attempts, compaction, gateway
+    // worker inference) and mid-attempt fallback models with their own
+    // allowance, so stuck-session recovery sees the authoritative deadline.
+    // Optional chaining: interceptor harnesses may invoke the stream without a
+    // model argument; no model object simply means no recorded allowance.
+    const requestTimeoutMs = (model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs;
     // Prompt stats JSON-stringify the input messages and tool definitions; only
     // the diagnostic events consume them (plugin hooks never receive prompt
     // stats), so skip the work when diagnostics are disabled and those events
@@ -947,7 +954,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     const promptStats = areDiagnosticsEnabledForProcess()
       ? streamContextModelPromptStats(streamContext)
       : undefined;
-    const eventBase = baseModelCallEvent(ctx, callId, trace, promptStats);
+    const eventBase = baseModelCallEvent(ctx, callId, trace, promptStats, requestTimeoutMs);
     const modelContent = streamContextModelContentFields(ctx.contentCapture, streamContext);
     emitModelCallStarted(eventBase, modelContent, ctx.suppressPluginHooks === true);
     ctx.onStarted?.();
