@@ -2,7 +2,7 @@ import { lstat, mkdir, readdir, realpath, rmdir, unlink, writeFile } from "node:
 import { basename, dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { readClawManifestFile } from "./reader.js";
-import { isCanonicalClawHubPackageName } from "./schema-portability.js";
+import { isCanonicalClawHubPackageName, portableClawPathKey } from "./schema-portability.js";
 import type { ClawDiagnostic, ClawReadResult } from "./types.js";
 
 export const CLAW_PROJECT_RESULT_SCHEMA_VERSION = "openclaw.clawProject.v1" as const;
@@ -362,13 +362,33 @@ export async function validateClawProject(
       ],
     };
   }
-  const selectedPaths = new Set([
+  const selectedPathList = [
     "package.json",
     "CLAW.md",
     ...(claw.packageBootstrap ? ["BOOTSTRAP.md"] : []),
     ...(claw.snapshot.openClawProfile ? [claw.snapshot.openClawProfile.sourcePath] : []),
     ...claw.snapshot.workspaceSources.map((source) => source.sourcePath),
-  ]);
+  ];
+  const portableSelectedPaths = new Map<string, string>();
+  for (const path of selectedPathList) {
+    const key = portableClawPathKey(path);
+    const existing = portableSelectedPaths.get(key);
+    if (existing && existing !== path) {
+      return {
+        ok: false,
+        root,
+        diagnostics: [
+          diagnostic(
+            "project_path_collision",
+            "$",
+            `Selected project paths ${JSON.stringify(existing)} and ${JSON.stringify(path)} collide on portable filesystems.`,
+          ),
+        ],
+      };
+    }
+    portableSelectedPaths.set(key, path);
+  }
+  const selectedPaths = new Set(selectedPathList);
   let excludedPaths: string[];
   try {
     excludedPaths = await collectExcludedPaths(root, selectedPaths);

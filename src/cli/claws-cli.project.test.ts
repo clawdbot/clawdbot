@@ -26,12 +26,17 @@ vi.mock("../runtime.js", async () => ({
 
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
-  getRuntimeConfig: () => ({}),
-}));
-
-vi.mock("../config/mcp-config.js", async () => ({
-  ...(await vi.importActual<typeof import("../config/mcp-config.js")>("../config/mcp-config.js")),
-  listConfiguredMcpServers: async () => ({ ok: true, mcpServers: {} }),
+  readConfigFileSnapshot: async () => ({
+    exists: true,
+    valid: true,
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+    path: "/tmp/openclaw.json",
+    raw: {},
+    sourceConfig: {},
+    resolved: {},
+  }),
 }));
 
 const { runClawsBuildCommand, runClawsCreateCommand, runClawsDevCommand, runClawsValidateCommand } =
@@ -73,11 +78,54 @@ describe("Claw project CLI", () => {
       integrityKind: "artifact",
       integrity: (payloads[2] as { integrity: string }).integrity,
     });
+    expect(dev.plan.claw.packageRoot).toBe(
+      `claw-artifact:${(payloads[2] as { integrity: string }).integrity}`,
+    );
+  });
+
+  it("emits stable dev plans without deleted extraction paths", async () => {
+    const root = join(tempDirs.make("openclaw-claw-dev-stable-"), "stable-dev");
+    await runClawsCreateCommand(root, { json: true });
+    const options = {
+      agentId: "stable-dev-preview",
+      workspace: join(root, "preview-workspace"),
+      json: true,
+    };
+
+    await runClawsDevCommand(root, options);
+    await runClawsDevCommand(root, options);
+
+    const payloads = mocks.payloads as Array<Record<string, unknown>>;
+    const first = payloads[1] as { plan: ClawPlan };
+    const second = payloads[2] as { plan: ClawPlan };
+    expect(first.plan).toEqual(second.plan);
+    expect(first.plan.planIntegrity).toBe(second.plan.planIntegrity);
+    expect(JSON.stringify(first.plan)).not.toContain("openclaw-claw-artifact-");
+    expect(first.plan.claw.packageRoot).toMatch(/^claw-artifact:sha256:/u);
+  });
+
+  it("uses command-specific schemas for build and dev failures", async () => {
+    const missing = join(tempDirs.make("openclaw-claw-errors-"), "missing");
+
+    await expect(
+      runClawsBuildCommand(missing, {
+        out: join(tempDirs.make("openclaw-claw-error-output-"), "missing.tgz"),
+        json: true,
+      }),
+    ).rejects.toThrow("__exit__:1");
+    await expect(runClawsDevCommand(missing, { json: true })).rejects.toThrow("__exit__:1");
+
+    const payloads = mocks.payloads as Array<Record<string, unknown>>;
+    expect(payloads).toMatchObject([
+      { schemaVersion: "openclaw.clawBuild.v1", ok: false },
+      { schemaVersion: "openclaw.clawDev.v1", ok: false },
+    ]);
   });
 });
 
 type ClawPlan = {
   mutationAllowed: boolean;
+  planIntegrity: string;
   blockers: unknown[];
-  claw: { integrityKind: string; integrity: string };
+  claw: { integrityKind: string; integrity: string; packageRoot: string };
 };

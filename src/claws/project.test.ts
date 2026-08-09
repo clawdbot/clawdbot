@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { lstat, mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as tar from "tar";
@@ -44,13 +45,47 @@ async function writeRichProject(root: string): Promise<void> {
 describe("Claw projects", () => {
   it("matches the cross-platform golden artifact digest", async () => {
     const output = join(tempDirs.make("openclaw-claw-golden-"), "golden.tgz");
-
     const result = await buildClawProject(
       join(process.cwd(), "test", "fixtures", "claws", "project-v1"),
       output,
     );
 
     expect(result.integrity).toBe(
+      "sha256:f7377ae66679a8d1088ac2d259b8567d19f584dbc4357949d3d4e0cc09d05874",
+    );
+  });
+
+  it("matches the golden artifact digest under a restrictive umask", () => {
+    const output = join(tempDirs.make("openclaw-claw-umask-"), "golden.tgz");
+    const project = join(process.cwd(), "test", "fixtures", "claws", "project-v1");
+    const script = [
+      "process.umask(0o077);",
+      'const { buildClawProject } = await import("./src/claws/project-build.ts");',
+      `const result = await buildClawProject(${JSON.stringify(project)}, ${JSON.stringify(output)});`,
+      "process.stdout.write(result.integrity);",
+    ].join("\n");
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          NODE_OPTIONS: undefined,
+          VITEST: undefined,
+          VITEST_POOL_ID: undefined,
+          VITEST_WORKER_ID: undefined,
+        },
+        timeout: 60_000,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(
       "sha256:f7377ae66679a8d1088ac2d259b8567d19f584dbc4357949d3d4e0cc09d05874",
     );
   });
@@ -284,6 +319,83 @@ describe("Claw projects", () => {
       diagnostics: [expect.objectContaining({ code: "project_not_found" })],
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a workspace source that portably collides with CLAW.md",
+    async () => {
+      const project = tempDirs.make("openclaw-claw-manifest-case-collision-");
+      await writeRichProject(project);
+      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+      await writeFile(
+        join(project, "CLAW.md"),
+        manifest.replace("workspace/reference.md", "claw.md"),
+      );
+      await writeFile(join(project, "claw.md"), "# Conflicting source\n");
+
+      await expect(validateClawProject(project)).resolves.toMatchObject({
+        ok: false,
+        diagnostics: [expect.objectContaining({ code: "project_path_collision" })],
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a workspace source that portably collides with a custom profile",
+    async () => {
+      const project = tempDirs.make("openclaw-claw-profile-case-collision-");
+      await writeRichProject(project);
+      await rename(
+        join(project, "profiles", "openclaw.yml"),
+        join(project, "profiles", "custom.yaml"),
+      );
+      await writeFile(join(project, "profiles", "CUSTOM.yaml"), "schemaVersion: 1\nagent: {}\n");
+      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+      await writeFile(
+        join(project, "CLAW.md"),
+        manifest
+          .replace(
+            "agent:\n  id: demo-claw",
+            "agent:\n  id: demo-claw\nmetadata:\n  openclaw.config: profiles/custom.yaml",
+          )
+          .replace("workspace/reference.md", "profiles/CUSTOM.yaml"),
+      );
+
+      await expect(validateClawProject(project)).resolves.toMatchObject({
+        ok: false,
+        diagnostics: [expect.objectContaining({ code: "project_path_collision" })],
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects Unicode-normalization collisions between workspace sources",
+    async () => {
+      const project = tempDirs.make("openclaw-claw-unicode-collision-");
+      await writeRichProject(project);
+      const composed = "workspace/caf\u00e9.md";
+      const decomposed = "workspace/cafe\u0301.md";
+      const manifest = await readFile(join(project, "CLAW.md"), "utf8");
+      await writeFile(
+        join(project, "CLAW.md"),
+        manifest.replace(
+          "    - source: workspace/reference.md\n      path: reference.md",
+          [
+            `    - source: ${JSON.stringify(composed)}`,
+            "      path: composed.md",
+            `    - source: ${JSON.stringify(decomposed)}`,
+            "      path: decomposed.md",
+          ].join("\n"),
+        ),
+      );
+      await writeFile(join(project, composed), "# Composed\n");
+      await writeFile(join(project, decomposed), "# Decomposed\n");
+
+      await expect(validateClawProject(project)).resolves.toMatchObject({
+        ok: false,
+        diagnostics: [expect.objectContaining({ code: "project_path_collision" })],
+      });
+    },
+  );
 
   it("preserves an existing build destination", async () => {
     const project = tempDirs.make("openclaw-claw-build-existing-");

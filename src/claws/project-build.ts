@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import {
-  constants,
-  copyFile,
+  chmod,
   link,
   lstat,
   mkdir,
@@ -26,8 +25,6 @@ import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
 
 export const CLAW_BUILD_RESULT_SCHEMA_VERSION = "openclaw.clawBuild.v1" as const;
 
-const HARD_LINK_UNSUPPORTED_CODES = new Set(["ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EPERM"]);
-
 export type ClawBuildResult = {
   schemaVersion: typeof CLAW_BUILD_RESULT_SCHEMA_VERSION;
   projectSchemaVersion: typeof CLAW_PROJECT_RESULT_SCHEMA_VERSION;
@@ -49,6 +46,7 @@ async function writeStagedFile(stagingRoot: string, path: string, content: Buffe
   }
   await mkdir(dirname(target), { recursive: true, mode: 0o755 });
   await writeFile(target, content, { flag: "wx", mode: 0o644 });
+  await chmod(target, 0o644);
 }
 
 async function readSelectedProjectFile(projectRoot: string, path: string): Promise<Buffer> {
@@ -235,20 +233,10 @@ export async function buildClawProject(
           `Refusing to overwrite existing artifact ${JSON.stringify(artifact)}.`,
         );
       }
-      if (!code || !HARD_LINK_UNSUPPORTED_CODES.has(code)) {
-        throw error;
-      }
-      try {
-        await copyFile(temporaryArtifact, artifact, constants.COPYFILE_EXCL);
-      } catch (copyError) {
-        if ((copyError as NodeJS.ErrnoException).code === "EEXIST") {
-          throw new ClawProjectError(
-            "artifact_exists",
-            `Refusing to overwrite existing artifact ${JSON.stringify(artifact)}.`,
-          );
-        }
-        throw copyError;
-      }
+      throw new ClawProjectError(
+        "artifact_atomic_publish_failed",
+        `Could not atomically publish artifact ${JSON.stringify(artifact)}: ${(error as Error).message}`,
+      );
     }
     return {
       schemaVersion: CLAW_BUILD_RESULT_SCHEMA_VERSION,
