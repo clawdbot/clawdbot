@@ -917,6 +917,7 @@ export function createCopilotAgentHarness(
     id: options?.id ?? "copilot",
     label: options?.label ?? "GitHub Copilot agent runtime",
     autoSelection: { providerIds: [] },
+    conversationToolPolicySupport: "exact",
 
     supports(ctx) {
       const requestedRuntime = String(ctx.requestedRuntime ?? "")

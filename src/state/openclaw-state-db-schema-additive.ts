@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "./openclaw-state-db-additive-columns.js";
 import {
   backfillAcpReplayEstimatedBytes,
   backfillCronJobsFromJobJson,
@@ -94,8 +95,9 @@ function backfillLegacyManagedImageRoots(db: DatabaseSync): void {
 }
 
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
-  ensureColumn(db, "claw_installs", "bootstrap_source_path TEXT");
-  ensureColumn(db, "claw_installs", "bootstrap_content_digest TEXT");
+  for (const { columnName, dataType, tableName } of CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+    ensureColumn(db, tableName, `${columnName} ${dataType}`);
+  }
   if (ensureColumn(db, "claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0")) {
     db.exec("UPDATE claw_package_refs SET updated_at_ms = installed_at_ms;");
   }
@@ -104,12 +106,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "claw_package_refs",
     "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
   );
-  ensureColumn(db, "claw_package_refs", "extension_id TEXT");
-  ensureColumn(db, "claw_package_refs", "extension_format TEXT");
-  ensureColumn(db, "claw_package_refs", "extension_detected_format TEXT");
-  ensureColumn(db, "claw_package_refs", "extension_mapped_json TEXT");
-  ensureColumn(db, "claw_package_refs", "extension_unavailable_json TEXT");
-  ensureColumn(db, "claw_package_refs", "extension_adapter_identity TEXT");
   const addedDiagnosticEventSequence = ensureColumn(
     db,
     "diagnostic_events",
@@ -138,7 +134,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   }
   db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
   ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
-  ensureColumn(db, "worktrees", "run_end_cleanup_json TEXT");
   ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
   ensureColumn(db, "node_host_config", "installed_apps_sharing INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "apns_registrations", "relay_origin TEXT");
@@ -363,7 +358,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0)",
   );
   ensureColumn(db, "worker_environments", "ssh_host_key TEXT");
-  ensureColumn(db, "worker_environments", "shared_host INTEGER CHECK (shared_host IN (0, 1))");
   ensureColumn(db, "worker_workspace_pending_results", "staged_result_ref TEXT");
   ensureColumn(
     db,

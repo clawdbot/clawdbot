@@ -1878,7 +1878,7 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   idle_since_at_ms INTEGER,
   destroy_requested_at_ms INTEGER,
   last_error TEXT,
-  shared_host INTEGER CHECK (shared_host IN (0, 1))
+  shared_host INTEGER
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease

@@ -191,7 +191,7 @@ const readBoundedResponseText = (
   maxBytes = FETCH_RESPONSE_MAX_BYTES,
 ): Promise<string> =>
   readBoundedResponseTextWithLimit(response, label, maxBytes, {
-    createTooLargeError: (message) => new Error(message),
+    createTooLargeError: (message: string) => new Error(message),
     signal,
   });
 

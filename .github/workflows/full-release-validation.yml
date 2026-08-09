@@ -1626,7 +1626,7 @@ jobs:
       - name: Write release validation manifest
         if: ${{ success() }}
         env:
-          TARGET_REF: ${{ inputs.ref }}
+          TARGET_REF: ${{ startsWith(github.ref, 'refs/heads/release-ci/') && needs.resolve_target.outputs.sha || inputs.ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}

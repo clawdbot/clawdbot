@@ -10,12 +10,12 @@ import {
   parseLaneSelection,
   requiredPrepublishPluginPackagesForLanes,
   resolveDockerE2ePlan,
-} from "../../scripts/lib/docker-e2e-plan.mjs";
+} from "../../scripts/lib/docker-e2e-plan.mts";
 import {
   allReleasePathLanes,
   BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS,
   mainLanes,
-} from "../../scripts/lib/docker-e2e-scenarios.mjs";
+} from "../../scripts/lib/docker-e2e-scenarios.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -252,7 +252,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ".release-harness",
       "scripts",
       "lib",
-      "docker-e2e-scenarios.mjs",
+      "docker-e2e-scenarios.mts",
     );
 
     expect(sourceLanes).toHaveLength(trustedScripts.size);
@@ -263,7 +263,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     }
 
     mkdirSync(dirname(nestedModule), { recursive: true });
-    copyFileSync("scripts/lib/docker-e2e-scenarios.mjs", nestedModule);
+    copyFileSync("scripts/lib/docker-e2e-scenarios.mts", nestedModule);
 
     const laneJson = execFileSync(
       process.execPath,

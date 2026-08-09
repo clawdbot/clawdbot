@@ -1,6 +1,9 @@
 /**
  * Knip configuration for OpenClaw root and bundled plugin dependency hygiene.
  */
+import fs from "node:fs";
+import path from "node:path";
+
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 
 function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""): string {
@@ -16,13 +19,14 @@ const repositoryScriptEntries = [
   ".github/actions/register-bind-mount-cleanup/main.cjs!",
   ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
-  "scripts/build-discord-activity-sdk.mjs!",
+  "scripts/bundle-a2ui.mts!",
+  "scripts/build-discord-activity-sdk.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
   "scripts/dev/ios-node-e2e.ts!",
   "scripts/diffs-shiki-curated.ts!",
   // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
-  "scripts/docker-e2e.mjs!",
+  "scripts/docker-e2e.mts!",
   "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs!",
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs!",
@@ -40,7 +44,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",
   "scripts/e2e/lib/fixtures/workspace.mjs!",
-  "scripts/e2e/lib/npm-telegram-live/prepare-package.mjs!",
+  "scripts/e2e/lib/npm-telegram-live/prepare-package.mts!",
   "scripts/e2e/lib/onboard/assert-config.mjs!",
   "scripts/e2e/lib/onboard/write-config.mjs!",
   "scripts/e2e/lib/openai-chat-tools/client.mjs!",
@@ -61,9 +65,9 @@ const repositoryScriptEntries = [
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
   "scripts/ios-release-cut.ts!",
   "scripts/ios-release-plan.ts!",
-  "scripts/ios-release-signing.mjs!",
+  "scripts/ios-release-signing.mts!",
   "scripts/lib/docker-plugin-selection.mjs!",
-  "scripts/lib/openclaw-test-state.mjs!",
+  "scripts/lib/openclaw-test-state.mts!",
   "scripts/list-prod-store-packages.mjs!",
   // Invoked by scripts/lib/live-docker-stage.sh during container validation.
   "scripts/live-docker-normalize-config.ts!",
@@ -73,10 +77,10 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
-  "scripts/plugin-prerelease-liveish-matrix.mjs!",
+  "scripts/plugin-prerelease-liveish-matrix.mts!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
-  "scripts/pr-gates-lock.mjs!",
+  "scripts/pr-gates-lock.mts!",
   "scripts/pr-lib/ci-dispatch.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
@@ -87,7 +91,7 @@ const repositoryScriptEntries = [
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sqlite-session-entry-cache-lifetime-proof.ts!",
   "scripts/sync-labels.ts!",
-  "scripts/test-built-bundled-channel-entry-smoke.mjs!",
+  "scripts/test-built-bundled-channel-entry-smoke.mts!",
   "scripts/update-clawtributors.ts!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
@@ -97,8 +101,25 @@ const repositoryScriptEntries = [
   "skills/meme-maker/scripts/meme.mjs!",
 ] as const;
 
+// Compatibility shims are executable roots and load their typed implementations by computed URL,
+// which Knip cannot follow in either direction.
+function listScriptShimEntries(dir = "scripts"): string[] {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      return listScriptShimEntries(entryPath);
+    }
+    if (!entry.isFile() || (!entry.name.endsWith(".mjs") && !entry.name.endsWith(".js"))) {
+      return [];
+    }
+    const implementationPath = entryPath.replace(/\.(?:mjs|js)$/u, ".mts");
+    return fs.existsSync(implementationPath) ? [`${entryPath}!`, `${implementationPath}!`] : [];
+  });
+}
+
 const rootEntries = [
   ...repositoryScriptEntries,
+  ...listScriptShimEntries(),
   // Knip loads these audit configurations directly by command-line path.
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",
@@ -161,7 +182,7 @@ const rootEntries = [
   // Package-script owners invoke these generated-artifact modules directly.
   "src/config/doc-baseline.ts!",
   "src/plugins/runtime-sidecar-paths-baseline.ts!",
-  // Imported by scripts/tsdown-build.mjs as the AI package build configuration.
+  // Imported by scripts/tsdown-build.mts as the AI package build configuration.
   "tsdown.ai.config.ts!",
   // Maintainer-owned compatibility data referenced by release/docs workflows.
   "src/commands/doctor/shared/deprecation-compat.ts!",
@@ -266,7 +287,7 @@ const rootToolingAndWorkspaceDependencies = [
   "@lit-labs/signals",
   "@lit/context",
   "@lit/task",
-  // scripts/ui.js anchors these lookups at ui/package.json before invoking the UI workspace.
+  // scripts/ui.mts anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",
   // Root typecheck/test projects compile @openclaw/net-policy source directly.
@@ -691,7 +712,7 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/deepinfra`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/discord`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/diffs`]: bundledPluginWorkspace([
-      // scripts/build-diffs-viewer-runtime.mjs bundles this browser entry.
+      // scripts/build-diffs-viewer-runtime.mts bundles this browser entry.
       "src/viewer-client.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/elevenlabs`]: bundledPluginWorkspace(),

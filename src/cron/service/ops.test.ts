@@ -11,6 +11,7 @@ import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createCronExecutionId } from "../run-id.js";
 import * as cronSchedule from "../schedule.js";
+import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
@@ -835,6 +836,84 @@ describe("cron service ops seam coverage", () => {
       });
     },
   );
+
+  it("prunes scratch when startup deletes a finalized delete-after-run one-shot", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const startedAt = now - 30_000;
+    const endedAt = startedAt + 4_000;
+
+    await withStateDirForStorePath(storePath, async () => {
+      const job = createDueIsolatedJob(now);
+      job.id = "startup-finalized-delete-after-run";
+      job.name = "startup finalized delete after run";
+      job.deleteAfterRun = true;
+      job.schedule = { kind: "at", at: new Date(startedAt).toISOString() };
+      job.state = { runningAtMs: startedAt, nextRunAtMs: startedAt };
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      expect(
+        writeCronJobScratch({
+          storePath,
+          jobId: job.id,
+          content: "completed one-shot scratch",
+          nowMs: startedAt,
+        }),
+      ).toMatchObject({ ok: true, currentRevision: 1 });
+
+      const events: CronEvent[] = [];
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        onEvent: (event) => events.push(structuredClone(event)),
+      });
+      const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+      if (!taskRunId) {
+        throw new Error("expected cron task run");
+      }
+      tryFinishCronTaskRun(state, {
+        taskRunId,
+        job,
+        event: {
+          jobId: job.id,
+          action: "finished",
+          job,
+          status: "ok",
+          summary: "completed before restart",
+          runAtMs: startedAt,
+          durationMs: endedAt - startedAt,
+        },
+      });
+
+      try {
+        await start(state);
+
+        expect((await loadCronStore(storePath)).jobs).toEqual([]);
+        expect(readCronJobScratchState(storePath, job.id)).toEqual({ currentRevision: 0 });
+        expect(
+          events.filter((event) => event.action === "finished" || event.action === "removed"),
+        ).toEqual([]);
+
+        const replacement = await add(state, {
+          id: job.id,
+          name: "same-id replacement",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "replacement work" },
+        });
+        expect(replacement.id).toBe(job.id);
+        expect(readCronJobScratchState(storePath, job.id)).toEqual({ currentRevision: 0 });
+      } finally {
+        stop(state);
+      }
+    });
+  });
 
   it("keeps a finalized one-shot disabled when startup restores its stale marker", async () => {
     const { storePath } = await makeStorePath();
@@ -2027,6 +2106,16 @@ describe("cron service ops persist rollback", () => {
         ...makeCreateInput("deleted agent job"),
         agentId: "doomed",
       });
+      expect(
+        writeCronJobScratch({
+          storePath,
+          jobId: removed.id,
+          content: "deleted agent scratch",
+          sourceSha256: "deleted-agent-source",
+          nowMs: now - 1,
+        }),
+      ).toMatchObject({ ok: true, currentRevision: 1 });
+      const scratchBefore = readCronJobScratchState(storePath, removed.id);
       const malformed = await add(state, {
         ...makeCreateInput("malformed surviving job"),
         agentId: "survivor",
@@ -2085,6 +2174,21 @@ describe("cron service ops persist rollback", () => {
       const persisted = await loadCronStore(storePath);
       expect(persisted.jobs.some((job) => job.id === removed.id)).toBe(rolledBack);
       expect(persisted.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(rolledBack);
+      expect(readCronJobScratchState(storePath, removed.id)).toEqual(
+        rolledBack ? scratchBefore : { currentRevision: 0 },
+      );
+      if (!rolledBack) {
+        const replacement = await add(state, {
+          ...makeCreateInput("same-id replacement"),
+          id: removed.id,
+          agentId: "survivor",
+        });
+        expect(replacement.id).toBe(removed.id);
+        expect(readCronJobScratchState(storePath, removed.id)).toEqual({ currentRevision: 0 });
+        if (state.timer) {
+          clearTimeout(state.timer);
+        }
+      }
     },
   );
 

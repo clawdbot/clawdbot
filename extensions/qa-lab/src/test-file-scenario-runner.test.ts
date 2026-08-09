@@ -262,7 +262,7 @@ describe("qa test file scenario runner", () => {
 
     expect(result.executionKind).toBe("playwright");
     expect(commands.map((command) => command.args)).toEqual([
-      ["scripts/ensure-playwright-chromium.mjs"],
+      ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"],
       [
         "scripts/run-vitest.mjs",
         "run",

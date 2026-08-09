@@ -1,8 +1,8 @@
 // Extension import boundary tests enforce extension/core import rules.
 import { describe, expect, it } from "vitest";
-import { main as extensionPluginSdkMain } from "../scripts/check-extension-plugin-sdk-boundary.mjs";
-import { main as sdkPackageMain } from "../scripts/check-sdk-package-extension-import-boundary.mjs";
-import { main as srcExtensionMain } from "../scripts/check-src-extension-import-boundary.mjs";
+import { main as extensionPluginSdkMain } from "../scripts/check-extension-plugin-sdk-boundary.mts";
+import { main as sdkPackageMain } from "../scripts/check-sdk-package-extension-import-boundary.mts";
+import { main as srcExtensionMain } from "../scripts/check-src-extension-import-boundary.mts";
 import { collectModuleReferencesFromSource } from "../scripts/lib/guard-inventory-utils.mjs";
 import { createCapturedIo } from "./helpers/captured-io.js";
 

@@ -117,7 +117,7 @@ targets:
           resource_bundle="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/OpenClawKit_OpenClawKit.bundle"
           test -d "$resource_product"
           test -d "$resource_bundle"
-          node "$repo_root/scripts/sync-native-a2ui.mjs" \
+          node --import tsx "$repo_root/scripts/sync-native-a2ui.mts" \
             --write \
             --output "$resource_product/CanvasA2UI"
           rm -rf "$resource_bundle/CanvasA2UI"

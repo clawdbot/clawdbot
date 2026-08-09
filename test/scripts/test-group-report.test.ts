@@ -12,7 +12,7 @@ import {
   renderGroupedTestComparison,
   resolveGroupKey,
   resolveTestArea,
-} from "../../scripts/lib/test-group-report.mjs";
+} from "../../scripts/lib/test-group-report.mts";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   parseTestGroupReportArgs,
@@ -25,11 +25,12 @@ import {
   runReportPlans,
   signalTestGroupReportChild,
   spawnText,
-} from "../../scripts/test-group-report.mjs";
+} from "../../scripts/test-group-report.mts";
 import { withEnv } from "../../src/test-utils/env.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs = new Set<string>();
+const tsxImport = import.meta.resolve("tsx");
 
 afterAll(() => {
   cleanupTempDirs(tempDirs);
@@ -213,7 +214,15 @@ describe("scripts/test-group-report aggregation", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["scripts/test-group-report.mjs", "--report", missingReport, "--output", output],
+        [
+          "--import",
+          tsxImport,
+          "scripts/test-group-report.mts",
+          "--report",
+          missingReport,
+          "--output",
+          output,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -239,7 +248,15 @@ describe("scripts/test-group-report aggregation", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["scripts/test-group-report.mjs", "--report", reportPath, "--output", output],
+        [
+          "--import",
+          tsxImport,
+          "scripts/test-group-report.mts",
+          "--report",
+          reportPath,
+          "--output",
+          output,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -263,7 +280,9 @@ describe("scripts/test-group-report aggregation", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-group-report.mjs",
+          "--import",
+          tsxImport,
+          "scripts/test-group-report.mts",
           "--config",
           missingConfig,
           "--allow-failures",
@@ -675,7 +694,16 @@ describe("scripts/test-group-report comparison", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["scripts/test-group-report.mjs", "--compare", beforePath, afterPath, "--output", output],
+        [
+          "--import",
+          tsxImport,
+          "scripts/test-group-report.mts",
+          "--compare",
+          beforePath,
+          afterPath,
+          "--output",
+          output,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -711,7 +739,16 @@ describe("scripts/test-group-report comparison", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        ["scripts/test-group-report.mjs", "--compare", beforePath, afterPath, "--output", output],
+        [
+          "--import",
+          tsxImport,
+          "scripts/test-group-report.mts",
+          "--compare",
+          beforePath,
+          afterPath,
+          "--output",
+          output,
+        ],
         {
           cwd: process.cwd(),
           encoding: "utf8",
@@ -1052,7 +1089,7 @@ describe("scripts/test-group-report child process guard", () => {
 
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const childPidPath = path.join(tempDir, "child.pid");
-    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mjs")).href;
+    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mts")).href;
     let childPid: number | undefined;
     try {
       const childScript = [
@@ -1071,11 +1108,15 @@ describe("scripts/test-group-report child process guard", () => {
         ");",
         "process.stdout.write(JSON.stringify(result));",
       ].join("\n");
-      const result = spawnSync(process.execPath, ["--input-type=module", "--eval", runnerScript], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        timeout: 5_000,
-      });
+      const result = spawnSync(
+        process.execPath,
+        ["--import", tsxImport, "--input-type=module", "--eval", runnerScript],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          timeout: 5_000,
+        },
+      );
       if (fs.existsSync(childPidPath)) {
         childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
       }
@@ -1104,7 +1145,7 @@ describe("scripts/test-group-report child process guard", () => {
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const childPidPath = path.join(tempDir, "child.pid");
     const readyPath = path.join(tempDir, "child.ready");
-    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mjs")).href;
+    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mts")).href;
     let childPid: number | undefined;
     let runner: ReturnType<typeof spawn> | undefined;
     try {
@@ -1134,10 +1175,14 @@ describe("scripts/test-group-report child process guard", () => {
         ");",
       ].join("\n");
 
-      runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
-        cwd: process.cwd(),
-        stdio: ["ignore", "ignore", "pipe"],
-      });
+      runner = spawn(
+        process.execPath,
+        ["--import", tsxImport, "--input-type=module", "--eval", runnerScript],
+        {
+          cwd: process.cwd(),
+          stdio: ["ignore", "ignore", "pipe"],
+        },
+      );
       // Generous poll deadlines: spawning the nested runner/parent/child node
       // chain can take multiple seconds on loaded CI runners.
       await waitForFile(readyPath, 10_000);

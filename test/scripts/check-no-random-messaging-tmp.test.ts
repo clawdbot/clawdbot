@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   findMessagingTmpdirCallLines,
   messagingTmpdirGuardSourceRoots,
-} from "../../scripts/check-no-random-messaging-tmp.mjs";
+} from "../../scripts/check-no-random-messaging-tmp.mts";
 
 describe("check-no-random-messaging-tmp", () => {
   it("finds os.tmpdir calls imported from node:os", () => {

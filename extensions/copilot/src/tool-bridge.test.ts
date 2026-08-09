@@ -16,6 +16,7 @@ import {
   type MemoryFlushPlan,
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCopilotToolBridge } from "./tool-bridge.js";
 
@@ -1126,6 +1127,37 @@ describe("createCopilotToolBridge", () => {
   // so a Copilot run cannot expose the SDK any tool that the same
   // OpenClaw attempt would suppress. These tests pin the contract.
   describe("tool-surface gating (PR #86155 [P1] round-6)", () => {
+    it("submits the exact conversation-policy-filtered catalog to the SDK", async () => {
+      await withTempDir("openclaw-copilot-policy-", async (workspaceDir) => {
+        const result = await createCopilotToolBridge({
+          agentId: "agent-1",
+          attemptParams: {
+            conversationToolPolicy: {
+              deny: ["exec", "process", "write", "edit", "ask_user"],
+            },
+            runId: "policy-run",
+            sessionKey: "agent:main:policy-session",
+            workspaceDir,
+          } as never,
+          createOpenClawCodingTools: createRealOpenClawCodingTools,
+          modelId: "gpt-4o",
+          modelProvider: "github-copilot",
+          sessionId: "policy-session",
+          sessionKey: "agent:main:policy-session",
+          workspaceDir,
+        });
+        const names = result.sdkTools.map((tool) => tool.name);
+
+        expect(names).toContain("read");
+        expect(names).toContain("apply_patch");
+        expect(names).not.toContain("exec");
+        expect(names).not.toContain("process");
+        expect(names).not.toContain("write");
+        expect(names).not.toContain("edit");
+        expect(names).not.toContain("ask_user");
+      });
+    });
+
     it("short-circuits when attemptParams.disableTools is true and never calls createOpenClawCodingTools", async () => {
       const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);
       const result = await createCopilotToolBridge({

@@ -37,6 +37,7 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = [
 ] as const;
 
 const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
+  allowCompatibleAdditiveColumns: true,
   allowedMissingTables: LAZY_ADDITIVE_STATE_TABLES,
   allowedMissingColumns: CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
   allowedColumnDefinitions: {
@@ -69,6 +70,7 @@ const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
       "target_agent_id TEXT NOT NULL DEFAULT 'main'",
     ],
     "operator_approvals.resolution_ref": ["resolution_ref TEXT"],
+    "worker_environments.shared_host": ["shared_host INTEGER CHECK (shared_host IN (0, 1))"],
   },
 } satisfies SqliteSchemaCompatibility;
 

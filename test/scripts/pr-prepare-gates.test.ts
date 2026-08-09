@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
-const gateLockHelperPath = join(repoRoot, "scripts", "pr-gates-lock.mjs");
+const gateLockHelperPath = join(repoRoot, "scripts", "pr-gates-lock.mts");
 
 const tempDirs = createTempDirTracker();
 const children: ChildProcess[] = [];
