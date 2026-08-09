@@ -162,3 +162,19 @@ it("preserves active run id ownership across omitted, liveness, and exact states
     session: { hasActiveRun: true, activeRunIds: ["run-1"] },
   });
 });
+
+it.each(["user", null] as const)(
+  "carries model override source %s into session change events",
+  (source) => {
+    expect(
+      buildGatewaySessionEventFields({
+        sessionRow: {
+          key: "agent:main:pinned",
+          kind: "direct",
+          updatedAt: 1,
+          modelOverrideSource: source,
+        },
+      }).modelOverrideSource,
+    ).toBe(source);
+  },
+);

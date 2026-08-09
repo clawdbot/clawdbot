@@ -1403,6 +1403,9 @@ function installControlUiMockGateway(
       patch.lastReadAt = sessionPatchTimestamp;
       patch.markedUnreadAt = undefined;
     }
+    if (hasOwn(params, "model")) {
+      patch.modelOverrideSource = params.model == null ? null : "user";
+    }
     if (scenario.sessionArchiveFiltering && hasOwn(params, "archived")) {
       patch.archived = params.archived;
     }

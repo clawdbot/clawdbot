@@ -324,6 +324,7 @@ function createChatHeaderState(
   overrides: {
     model?: string | null;
     modelProvider?: string | null;
+    modelOverrideSource?: GatewaySessionRow["modelOverrideSource"];
     models?: ModelCatalogEntry[];
     defaultsThinkingDefault?: string;
     thinkingDefault?: string;
@@ -408,6 +409,7 @@ function createChatHeaderState(
       return createSessionsListResult({
         model: currentModel,
         modelProvider: currentModelProvider,
+        modelOverrideSource: overrides.modelOverrideSource,
         defaultsThinkingDefault: overrides.defaultsThinkingDefault,
         thinkingDefault: overrides.thinkingDefault,
         omitSessionFromList,
@@ -434,6 +436,7 @@ function createChatHeaderState(
   const initialSessionsResult = createSessionsListResult({
     model: currentModel,
     modelProvider: currentModelProvider,
+    modelOverrideSource: overrides.modelOverrideSource,
     defaultsThinkingDefault: overrides.defaultsThinkingDefault,
     thinkingDefault: overrides.thinkingDefault,
     omitSessionFromList,
@@ -6425,10 +6428,12 @@ describe("chat model controls", () => {
     expect(onThinkingSelect).not.toHaveBeenCalled();
   });
 
-  it("omits inherited provenance and resets an override from the provenance row", () => {
+  it("hides provenance controls for an inherited default and resets a user pin", () => {
     const { state } = createChatHeaderState({
-      model: null,
-      models: createOpenAiModelCatalog(),
+      model: "gpt-5",
+      modelProvider: "openai",
+      modelOverrideSource: null,
+      models: [{ id: "gpt-5", name: "GPT-5", provider: "openai" }, ...createOpenAiModelCatalog()],
     });
     const onModelSelect = vi.fn(async () => true);
     const container = renderModelControls(state);
@@ -6436,13 +6441,16 @@ describe("chat model controls", () => {
     expect(container.querySelector(".chat-controls__model-provenance")).toBeNull();
     expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
 
-    renderModelControls(
-      state,
-      { modelOverrides: { main: "openai/gpt-5.4" }, onModelSelect },
-      container,
-    );
+    state.sessionsResult = createSessionsListResult({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      modelOverrideSource: "user",
+    });
+    renderModelControls(state, { onModelSelect }, container);
 
-    expect(container.querySelector(".chat-controls__model-provenance")).not.toBeNull();
+    expect(container.querySelector(".chat-controls__model-provenance")?.textContent).toContain(
+      "Only for this session",
+    );
     const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
     const modelSelect = getChatModelSelect(container);
     const details = modelSelect.closest<HTMLDetailsElement>("details");
@@ -6451,7 +6459,7 @@ describe("chat model controls", () => {
       details.open = true;
     }
     expect(reset).toBeInstanceOf(HTMLButtonElement);
-    expect(reset?.textContent?.trim()).toBe("Use default");
+    expect(reset?.textContent?.trim()).toBe("Use default (GPT-5)");
     reset?.focus();
     reset?.click();
     expect(onModelSelect).toHaveBeenCalledWith("", "main");
@@ -6620,13 +6628,18 @@ describe("chat model controls", () => {
     ]);
     expect(visibleOptions[0]?.hasAttribute("data-chat-model-highlighted")).toBe(true);
     expect(
-      visibleOptions[0]
-        ?.querySelector("[data-chat-model-shortcut]")
-        ?.getAttribute("data-chat-model-shortcut-number"),
-    ).toBe("1");
-    expect(
       visibleOptions[0]?.querySelector(".chat-controls__model-option-provider"),
     ).not.toBeNull();
+
+    // A query owns the digit keys, so the keycap promise is withdrawn with it.
+    expect(
+      visibleOptions[0]?.querySelector<HTMLElement>("[data-chat-model-shortcut]")?.hidden,
+    ).toBe(true);
+    expect(visibleOptions[0]?.hasAttribute("aria-keyshortcuts")).toBe(false);
+    const digit = new KeyboardEvent("keydown", { key: "1", bubbles: true, cancelable: true });
+    search!.dispatchEvent(digit);
+    expect(digit.defaultPrevented).toBe(false);
+    expect(onModelSelect).not.toHaveBeenCalled();
 
     search!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     const highlighted = container.querySelector<HTMLButtonElement>("[data-chat-model-highlighted]");

@@ -36,6 +36,7 @@ type ChatModelSelectState = {
   currentOverride: string;
   defaultModel: string;
   defaultLabel: string;
+  isSessionModelPinned: boolean;
   options: ChatModelSelectOption[];
 };
 
@@ -216,6 +217,9 @@ export function resolveChatModelSelectState(
     currentOverride,
     defaultModel,
     defaultLabel: defaultModel ? `Default (${defaultLabel})` : "Default model",
+    // Provenance is a recorded Gateway fact, never inferred from model equality:
+    // a pin whose model matches the agent default is still a pin.
+    isSessionModelPinned: resolveActiveSessionRow(state)?.modelOverrideSource === "user",
     options,
   };
 }

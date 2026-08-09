@@ -684,6 +684,77 @@ describe("chat-model-select-state", () => {
     expect(resolved.options).toEqual([{ value: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol" }]);
   });
 
+  it.each([
+    { name: "inherited default", source: null, expected: false },
+    { name: "user pin equal to default", source: "user" as const, expected: true },
+    { name: "automatic selection", source: "auto" as const, expected: false },
+    { name: "older unsupported gateway", source: undefined, expected: false },
+  ])(
+    "keeps effective model identity separate from provenance for $name",
+    ({ source, expected }) => {
+      const state = createChatModelState({
+        agentDefaultModel: "openai/gpt-5.6-sol",
+        chatModelCatalog: createModelCatalog({
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+        }),
+        sessionsResult: createSessionsListResult({
+          model: "gpt-5.6-sol",
+          modelProvider: "openai",
+          modelOverrideSource: source,
+          defaultsModel: "gpt-5.6-sol",
+          defaultsProvider: "openai",
+        }),
+      });
+
+      const resolved = resolveChatModelSelectState(state);
+      expect(resolved.currentOverride).toBe("openai/gpt-5.6-sol");
+      expect(resolved.isSessionModelPinned).toBe(expected);
+    },
+  );
+
+  it("reads pin provenance from a canonical main row when the route uses the alias key", () => {
+    const state = createChatModelState({
+      sessionsResult: createSessionsListResult({
+        model: "gpt-5-mini",
+        modelProvider: "openai",
+        modelOverrideSource: "user",
+      }),
+    });
+    // Route key stays the `main` alias while the Gateway reports the canonical row.
+    expectDefined(state.sessionsResult?.sessions[0], "main session row").key = "agent:main:main";
+
+    const resolved = resolveChatModelSelectState(state);
+
+    expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
+    expect(resolved.isSessionModelPinned).toBe(true);
+  });
+
+  it("does not replace Gateway provenance with an optimistic model value", () => {
+    const state = createChatModelState({
+      modelOverrides: { main: "openai/gpt-5-mini" },
+      sessionsResult: createSessionsListResult({
+        model: "gpt-5",
+        modelProvider: "openai",
+        modelOverrideSource: null,
+      }),
+    });
+
+    expect(resolveChatModelSelectState(state).isSessionModelPinned).toBe(false);
+    expect(
+      resolveChatModelSelectState({
+        ...state,
+        modelOverrides: { main: null },
+        sessionsResult: createSessionsListResult({
+          model: "gpt-5-mini",
+          modelProvider: "openai",
+          modelOverrideSource: "user",
+        }),
+      }).isSessionModelPinned,
+    ).toBe(true);
+  });
+
   it("disambiguates duplicate friendly names in picker options and default labels", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog(

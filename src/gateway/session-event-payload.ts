@@ -105,6 +105,7 @@ export function buildGatewaySessionEventFields(params: {
     effectiveResponseUsage: sessionRow.effectiveResponseUsage,
     modelProvider: sessionRow.modelProvider,
     model: sessionRow.model,
+    modelOverrideSource: sessionRow.modelOverrideSource,
     agentRuntime: sessionRow.agentRuntime,
     status: params.status ?? sessionRow.status,
     // Explicit null lets subscribed clients clear the previous run's failure reason.

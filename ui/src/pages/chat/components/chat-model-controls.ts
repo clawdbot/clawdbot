@@ -186,6 +186,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     currentOverride,
     defaultModel,
     defaultLabel,
+    isSessionModelPinned,
     options: selectOptions,
   } = resolveChatModelSelectState({
     agentDefaultModel: props.agentDefaultModel,
@@ -276,7 +277,6 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     }
     return pickerOption;
   });
-  const explicitOverride = props.modelOverrides?.[props.sessionKey];
   const currentCatalogEntry = resolveChatModelCatalogEntry(currentOverride, props.modelCatalog);
   if (
     currentOverride &&
@@ -439,6 +439,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
+        sessionModelPinned: isSessionModelPinned,
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerStatusLabel: catalogTriggerStatus,
