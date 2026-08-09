@@ -6,11 +6,28 @@ const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
 ] as const;
 
-const MANAGED_UPDATE_SELECTOR_ENV_KEYS = [
+const MANAGED_SERVICE_SELECTOR_ENV_KEYS = [
   ...SERVICE_REFRESH_PATH_ENV_KEYS,
   "OPENCLAW_PROFILE",
   "OPENCLAW_GATEWAY_PORT",
 ] as const;
+
+function applyManagedServiceSelectorEnv(params: {
+  baseEnv: NodeJS.ProcessEnv;
+  serviceEnv: NodeJS.ProcessEnv;
+  selectorEnv?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv {
+  const resolved = { ...params.baseEnv };
+  const selectorEnv = params.selectorEnv ?? params.serviceEnv;
+  for (const key of MANAGED_SERVICE_SELECTOR_ENV_KEYS) {
+    if (selectorEnv[key]?.trim()) {
+      resolved[key] = params.serviceEnv[key];
+    } else {
+      delete resolved[key];
+    }
+  }
+  return resolved;
+}
 
 function resolveServiceRefreshEnv(
   env: NodeJS.ProcessEnv,
@@ -70,17 +87,22 @@ export function resolveOwnedManagedUpdateEnv(params: {
 }): NodeJS.ProcessEnv {
   const resolved = resolveUpdatedInstallCommandEnv(params);
   const definitionEnv = params.serviceDefinitionEnv ?? params.serviceEnv;
-  for (const key of MANAGED_UPDATE_SELECTOR_ENV_KEYS) {
-    if (!definitionEnv[key]?.trim()) {
-      delete resolved[key];
-    }
-  }
-  return resolved;
+  return applyManagedServiceSelectorEnv({
+    baseEnv: resolved,
+    serviceEnv: resolved,
+    selectorEnv: definitionEnv,
+  });
 }
 
-export function resolveUpdatedServicePathEnv(
-  env: NodeJS.ProcessEnv,
-  invocationCwd?: string,
-): NodeJS.ProcessEnv {
-  return resolveServiceRefreshEnv(env, invocationCwd);
+export function resolvePostInstallDoctorEnv(params?: {
+  baseEnv?: NodeJS.ProcessEnv;
+  serviceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+}): NodeJS.ProcessEnv {
+  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env);
+  if (!params?.serviceEnv) {
+    return resolvedEnv;
+  }
+  const serviceEnv = resolveServiceRefreshEnv(params.serviceEnv, params.invocationCwd);
+  return applyManagedServiceSelectorEnv({ baseEnv: resolvedEnv, serviceEnv });
 }

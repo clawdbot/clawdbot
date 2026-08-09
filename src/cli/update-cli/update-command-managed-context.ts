@@ -1,10 +1,7 @@
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import {
-  loadInstalledPluginIndexInstallRecords,
-  type InstalledPluginIndexRecordStoreOptions,
-} from "../../plugins/installed-plugin-index-records.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { resolveOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   stripGatewayServiceMarkerEnv,
@@ -26,7 +23,7 @@ export async function withOwnedManagedUpdateEnv<T>(
     return await run();
   }
   // Update finalization is a single serialized CLI phase. Some plugin/config owners still read
-  // process.env, so switch the complete phase atomically and restore the caller before restart.
+  // process.env, so switch the complete phase atomically and restore the caller afterward.
   const previousEnv = { ...process.env };
   for (const key of Object.keys(process.env)) {
     delete process.env[key];
@@ -68,8 +65,7 @@ export async function captureOwnedManagedUpdateContext(params: {
   stopState.serviceEnv = env;
   return await withOwnedManagedUpdateEnv(env, async () => {
     const configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-    const pluginStoreOptions: InstalledPluginIndexRecordStoreOptions = { env };
-    const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords(pluginStoreOptions);
+    const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords({ env });
     return { env, configSnapshot, pluginInstallRecords };
   });
 }

@@ -1814,6 +1814,53 @@ describe("update-cli", () => {
     }
   });
 
+  it("keeps post-restart doctor in the stopped service profile", async () => {
+    mockOwnedGitService();
+    mockGitUpdateAfterMutation();
+    pathExists.mockImplementation(
+      async (candidate: string) =>
+        candidate === path.join(process.cwd(), "package.json") ||
+        candidate === path.join(process.cwd(), "openclaw.mjs"),
+    );
+    const managedState = "/tmp/openclaw-update-tests/restart-doctor-managed";
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["node", path.join(process.cwd(), "dist", "index.js"), "gateway", "run"],
+      environment: {
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_STATE_DIR: managedState,
+        OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+        OPENCLAW_GATEWAY_PORT: "19222",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "running", pid: 4242, state: "running" });
+    prepareRestartScript.mockResolvedValue(null);
+    vi.mocked(runDaemonRestart).mockResolvedValue(true);
+    let doctorProfile: string | undefined;
+    vi.mocked(doctorCommand).mockImplementationOnce(async () => {
+      doctorProfile = process.env.OPENCLAW_PROFILE;
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-update-tests/restart-doctor-personal",
+        OPENCLAW_GATEWAY_PORT: "19111",
+      },
+      async () => {
+        await updateCommand({});
+        expect(process.env.OPENCLAW_PROFILE).toBe("personal");
+      },
+    );
+
+    expect(doctorProfile).toBe("work");
+    expect(runDaemonRestart).toHaveBeenCalledOnce();
+    const completionCall = vi
+      .mocked(spawnSync)
+      .mock.calls.find(([, args]) => args[1] === "completion");
+    expect(completionCall?.[2]?.env?.OPENCLAW_PROFILE).toBe("personal");
+  });
+
   it("routes JSON post-core child output to stderr", async () => {
     const { entrypoints } = setupUpdatedRootRefresh();
     const stdoutPipe = vi.fn();

@@ -58,7 +58,6 @@ import { createUpdateConfigSnapshot } from "./update-command-config.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
   resolveUpdatedInstallCommandEnv,
-  resolveUpdatedServicePathEnv,
 } from "./update-command-service-env.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
@@ -74,13 +73,6 @@ const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS = 10;
 const POST_REFRESH_ALREADY_HEALTHY_DELAY_MS = 500;
-const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
-  "OPENCLAW_HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_PROFILE",
-  "OPENCLAW_GATEWAY_PORT",
-] as const;
 const JSON_MODE_SERVICE_STDOUT = new Writable({
   write(_chunk, _encoding, callback) {
     callback();
@@ -757,30 +749,6 @@ export function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.Pro
   delete resolvedEnv.OPENCLAW_SERVICE_MARKER;
   delete resolvedEnv.OPENCLAW_SERVICE_KIND;
   delete resolvedEnv[GATEWAY_SERVICE_RUNTIME_PID_ENV];
-  return resolvedEnv;
-}
-
-export function resolvePostInstallDoctorEnv(params?: {
-  baseEnv?: NodeJS.ProcessEnv;
-  serviceEnv?: NodeJS.ProcessEnv;
-  invocationCwd?: string;
-}): NodeJS.ProcessEnv {
-  const resolvedEnv: NodeJS.ProcessEnv = {
-    ...disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env),
-  };
-  if (!params?.serviceEnv) {
-    return resolvedEnv;
-  }
-
-  const serviceEnv = resolveUpdatedServicePathEnv(params.serviceEnv, params.invocationCwd);
-  for (const key of POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS) {
-    const value = serviceEnv[key]?.trim();
-    if (value) {
-      resolvedEnv[key] = serviceEnv[key];
-    } else {
-      delete resolvedEnv[key];
-    }
-  }
   return resolvedEnv;
 }
 
