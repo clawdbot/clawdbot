@@ -1,6 +1,11 @@
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { SessionArchivedTranscriptCleanupRule } from "./session-accessor.lifecycle-types.js";
 
-export type SessionArchivedTranscriptFileCleanupParams = {
+const loadSessionArchiveRuntime = createLazyRuntimeModule(
+  () => import("../../gateway/session-archive.runtime.js"),
+);
+
+type SessionArchivedTranscriptFileCleanupParams = {
   directories: string[];
   rules: SessionArchivedTranscriptCleanupRule[];
   nowMs?: number;
@@ -9,7 +14,14 @@ export type SessionArchivedTranscriptFileCleanupParams = {
   onRemoveFile?: (canonicalPath: string) => void;
 };
 
-export type SessionArchivedTranscriptFileCleanupResult = {
+type SessionArchivedTranscriptFileCleanupResult = {
   removed: number;
   scanned: number;
 };
+
+export async function cleanupSessionArchivedTranscriptFiles(
+  params: SessionArchivedTranscriptFileCleanupParams,
+): Promise<SessionArchivedTranscriptFileCleanupResult> {
+  const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
+  return await cleanupArchivedSessionTranscripts(params);
+}
