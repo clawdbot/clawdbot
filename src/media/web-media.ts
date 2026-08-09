@@ -36,7 +36,7 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
-import { readRemoteMediaBuffer } from "./fetch.js";
+import { MediaFetchError, readRemoteMediaBuffer } from "./fetch.js";
 import type { OutboundMediaReadFile } from "./load-options.js";
 import {
   assertLocalMediaAllowed,
@@ -51,6 +51,7 @@ import {
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
 } from "./media-services.js";
+import { MediaSizeCapExceededError } from "./media-size-cap-error.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
@@ -1119,7 +1120,9 @@ async function loadWebMediaInternal(
       };
     }
     if (params.buffer.length > cap) {
-      throw new Error(formatCapLimit("Media", cap, params.buffer.length));
+      throw new MediaSizeCapExceededError(formatCapLimit("Media", cap, params.buffer.length), {
+        capBytes: cap,
+      });
     }
     return {
       buffer: params.buffer,
@@ -1148,16 +1151,30 @@ async function loadWebMediaInternal(
           allowPrivateProxy: true,
         }
       : undefined;
-    const fetched = await readRemoteMediaBuffer({
-      url: mediaUrl,
-      fetchImpl,
-      requestInit,
-      readIdleTimeoutMs,
-      maxBytes: sourceReadCap,
-      ssrfPolicy,
-      dispatcherPolicy,
-      trustExplicitProxyDns,
-    });
+    // Normalize the remote byte-cap rejection into the same typed cap error
+    // local loads produce, so owners see one cap-error contract.
+    const fetched = await (async () => {
+      try {
+        return await readRemoteMediaBuffer({
+          url: mediaUrl,
+          fetchImpl,
+          requestInit,
+          readIdleTimeoutMs,
+          maxBytes: sourceReadCap,
+          ssrfPolicy,
+          dispatcherPolicy,
+          trustExplicitProxyDns,
+        });
+      } catch (err) {
+        if (err instanceof MediaFetchError && err.code === "max_bytes") {
+          throw new MediaSizeCapExceededError(err.message, {
+            capBytes: sourceReadCap,
+            cause: err,
+          });
+        }
+        throw err;
+      }
+    })();
     const { buffer, contentType, fileName } = fetched;
     const kind = kindFromMime(contentType);
     return await clampAndFinalize({ buffer, contentType, kind, fileName });
@@ -1214,9 +1231,10 @@ async function loadWebMediaInternal(
     } catch (err) {
       if (err instanceof FsSafeError) {
         if (err.code === "too-large") {
-          throw new Error(`Media exceeds ${formatMb(sourceReadCap, 0)}MB limit`, {
-            cause: err,
-          });
+          throw new MediaSizeCapExceededError(
+            `Media exceeds ${formatMb(sourceReadCap, 0)}MB limit`,
+            { capBytes: sourceReadCap, cause: err },
+          );
         }
         if (err.code === "not-found") {
           throw new LocalMediaAccessError("not-found", `Local media file not found: ${mediaUrl}`, {

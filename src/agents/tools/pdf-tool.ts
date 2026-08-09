@@ -17,6 +17,7 @@ import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
+import { MediaSizeCapExceededError } from "../../media/media-size-cap-error.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
@@ -89,7 +90,11 @@ const PdfToolSchema = Type.Object({
   ),
   password: Type.Optional(Type.String({ description: "Password for encrypted PDFs." })),
   model: Type.Optional(Type.String()),
-  maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
+  maxBytesMb: optionalFiniteNumberSchema({
+    exclusiveMinimum: 0,
+    description:
+      "Per-PDF size cap in MB. When passed, it is also the total byte budget for this request: later PDFs that no longer fit are skipped and reported in the result.",
+  }),
 });
 
 function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
@@ -470,6 +475,14 @@ export function createPdfTool(options?: {
         logWarn(`pdf-tool: maxBytesMb clamped from ${maxBytesMbRaw} to ${MAX_PDF_MB_CAP}`);
       }
       const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
+      // Only a model-supplied maxBytesMb opens an aggregate byte budget for the
+      // whole request: 10 PDFs at the 100 MiB per-PDF cap would otherwise
+      // retain >2 GiB of buffers plus base64 copies before dispatch. Operator
+      // pdfMaxMb keeps its per-file contract and never becomes a request
+      // budget. Each load draws from the remaining budget; exhaustion skips
+      // the rest with a recorded non-outcome.
+      let remainingPdfBudgetBytes = maxBytesMbRaw !== undefined ? maxBytes : undefined;
+      let budgetSkippedPdfCount = 0;
 
       // Parse page range
       const pagesRaw = normalizeOptionalString(record.pages);
@@ -510,6 +523,15 @@ export function createPdfTool(options?: {
         // Stop before starting the next sequential download when the run was
         // aborted, so a dead run cannot keep pulling remote PDFs.
         signal?.throwIfAborted();
+        if (remainingPdfBudgetBytes !== undefined && remainingPdfBudgetBytes <= 0) {
+          // Recorded non-outcome: later PDFs are skipped, not silently
+          // truncated, so the model knows the payload was bounded.
+          budgetSkippedPdfCount = pdfInputs.length - loadedPdfs.length;
+          logWarn(
+            `pdf-tool: request byte budget exhausted; skipping ${budgetSkippedPdfCount} PDF(s)`,
+          );
+          break;
+        }
         const trimmed = normalizeMediaReferenceSource(pdfRaw);
         const refInfo = classifyMediaReferenceSource(trimmed);
         const { isHttpUrl } = refInfo;
@@ -559,21 +581,39 @@ export function createPdfTool(options?: {
           [resolvedPathInfo.resolved],
         );
 
-        const media = sandboxConfig
-          ? await loadWebMediaRaw(resolvedPathInfo.resolved, {
-              maxBytes,
-              sandboxValidated: true,
-              readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
-            })
-          : await loadWebMediaRaw(resolvedPathInfo.resolved, {
-              maxBytes,
-              localRoots,
-              ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
-              ssrfPolicy: remoteMediaSsrfPolicy,
-              // Forward the run abort signal into the fetch layer so an abort
-              // mid-download disconnects the in-flight socket.
-              ...(signal ? { requestInit: { signal } } : {}),
-            });
+        // Remaining model-budget allowance when a budget is active (always ≤
+        // the per-PDF cap), otherwise the plain per-PDF limit.
+        const loadMaxBytes = remainingPdfBudgetBytes ?? maxBytes;
+        let media: Awaited<ReturnType<typeof loadWebMediaRaw>>;
+        try {
+          media = sandboxConfig
+            ? await loadWebMediaRaw(resolvedPathInfo.resolved, {
+                maxBytes: loadMaxBytes,
+                sandboxValidated: true,
+                readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
+              })
+            : await loadWebMediaRaw(resolvedPathInfo.resolved, {
+                maxBytes: loadMaxBytes,
+                localRoots,
+                ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
+                ssrfPolicy: remoteMediaSsrfPolicy,
+                // Forward the run abort signal into the fetch layer so an abort
+                // mid-download disconnects the in-flight socket.
+                ...(signal ? { requestInit: { signal } } : {}),
+              });
+        } catch (err) {
+          // A PDF that only exceeds the remaining model-request budget takes
+          // the same recorded-skip path as budget exhaustion instead of
+          // failing the whole call and discarding already-loaded PDFs.
+          if (remainingPdfBudgetBytes !== undefined && err instanceof MediaSizeCapExceededError) {
+            budgetSkippedPdfCount = pdfInputs.length - loadedPdfs.length;
+            logWarn(
+              `pdf-tool: PDF exceeds remaining request byte budget; skipping ${budgetSkippedPdfCount} PDF(s)`,
+            );
+            break;
+          }
+          throw err;
+        }
 
         if (media.kind !== "document") {
           // Check MIME type more specifically
@@ -581,6 +621,10 @@ export function createPdfTool(options?: {
           if (!ct.includes("pdf") && !ct.includes("application/pdf")) {
             throw new Error(`Expected PDF but got ${media.contentType ?? media.kind}: ${pdfRaw}`);
           }
+        }
+
+        if (remainingPdfBudgetBytes !== undefined) {
+          remainingPdfBudgetBytes = Math.max(0, remainingPdfBudgetBytes - media.buffer.byteLength);
         }
 
         const base64 = media.buffer.toString("base64");
@@ -599,6 +643,26 @@ export function createPdfTool(options?: {
             ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom }
             : {}),
         });
+      }
+
+      // Budget-exhausted skips are a recorded non-outcome: surfaced in result
+      // text (the model must know PDFs are missing) and in details.
+      const budgetSkip =
+        budgetSkippedPdfCount > 0 ? { count: budgetSkippedPdfCount, budgetBytes: maxBytes } : null;
+
+      if (loadedPdfs.length === 0 && budgetSkip) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No PDFs were loaded: every provided PDF exceeds the request byte budget (${maxBytesMb} MB total). Retry with fewer PDFs or a larger maxBytesMb.`,
+            },
+          ],
+          details: {
+            error: "request_budget_exhausted",
+            skippedPdfs: { ...budgetSkip, reason: "request_budget_exhausted" },
+          },
+        };
       }
 
       const getExtractions = async (): Promise<PdfExtractedContent[]> => {
@@ -656,7 +720,21 @@ export function createPdfTool(options?: {
             ),
           };
 
-      return buildTextToolResult(result, { native: result.native, ...pdfDetails });
+      return buildTextToolResult(
+        budgetSkip
+          ? {
+              ...result,
+              text: `${result.text}\n\nSkipped ${budgetSkip.count} PDF(s): the request byte budget (${maxBytesMb} MB total) was exhausted. Resubmit the missing PDF(s) in a separate call.`,
+            }
+          : result,
+        {
+          native: result.native,
+          ...pdfDetails,
+          ...(budgetSkip
+            ? { skippedPdfs: { ...budgetSkip, reason: "request_budget_exhausted" } }
+            : {}),
+        },
+      );
     },
   };
 }

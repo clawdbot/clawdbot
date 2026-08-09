@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { MediaSizeCapExceededError } from "../../media/media-size-cap-error.js";
 import * as webMedia from "../../media/web-media.js";
 import * as modelAuth from "../model-auth.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
@@ -246,6 +247,188 @@ describe("pdf-tool maxBytesMb cap and input validation", () => {
       expectFields(firstMockCall(loadSpy, "loadWebMediaRaw")[1], {
         maxBytes: 50 * 1024 * 1024,
       });
+    });
+  });
+
+  it("keeps operator pdfMaxMb per-file across multiple PDFs (no aggregate budget)", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        mockLoad: false,
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      loadSpy.mockImplementation(async () => ({
+        ...FAKE_PDF_MEDIA,
+        buffer: Buffer.alloc(600_000),
+      }));
+      const analyzePdfSpy = vi
+        .spyOn(pdfNativeProviders, "anthropicAnalyzePdf")
+        .mockResolvedValue("native summary");
+      const cfg = {
+        ...withPdfModel(ANTHROPIC_PDF_MODEL),
+        agents: {
+          defaults: { pdfMaxMb: 1, pdfModel: { primary: ANTHROPIC_PDF_MODEL } },
+        },
+      } as OpenClawConfig;
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      const result = await tool.execute("t1", {
+        prompt: "ocr",
+        pdfs: ["/tmp/a.pdf", "/tmp/b.pdf"],
+      });
+
+      // Per-file semantics: every load gets the full per-file cap, both PDFs load.
+      expect(loadSpy).toHaveBeenCalledTimes(2);
+      for (const call of loadSpy.mock.calls) {
+        expectFields(call[1] as Record<string, unknown>, { maxBytes: 1024 * 1024 });
+      }
+      expect(firstMockCall(analyzePdfSpy, "anthropicAnalyzePdf")[0]).toEqual(
+        expect.objectContaining({
+          pdfs: [expect.objectContaining({}), expect.objectContaining({})],
+        }),
+      );
+      expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+      expect(result.details?.skippedPdfs).toBeUndefined();
+    });
+  });
+
+  it("debits the model request budget across PDFs and records the skip", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        mockLoad: false,
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      // First PDF fits the 1 MB budget; the second exceeds the remainder.
+      loadSpy
+        .mockImplementationOnce(async () => ({
+          ...FAKE_PDF_MEDIA,
+          buffer: Buffer.alloc(600_000),
+        }))
+        .mockRejectedValueOnce(
+          new MediaSizeCapExceededError("Media exceeds 0MB limit (got 1MB)", {
+            capBytes: 1024 * 1024 - 600_000,
+          }),
+        );
+      const analyzePdfSpy = vi
+        .spyOn(pdfNativeProviders, "anthropicAnalyzePdf")
+        .mockResolvedValue("native summary");
+      const tool = requirePdfTool(
+        (await loadCreatePdfTool())({ config: withPdfModel(ANTHROPIC_PDF_MODEL), agentDir }),
+      );
+
+      const result = await tool.execute("t1", {
+        prompt: "ocr",
+        pdfs: ["/tmp/a.pdf", "/tmp/b.pdf", "/tmp/c.pdf"],
+        maxBytesMb: "1",
+      });
+
+      // The second load draws only the remaining budget; the third never starts.
+      expect(loadSpy).toHaveBeenCalledTimes(2);
+      expectFields(loadSpy.mock.calls[0]?.[1] as Record<string, unknown>, {
+        maxBytes: 1024 * 1024,
+      });
+      expectFields(loadSpy.mock.calls[1]?.[1] as Record<string, unknown>, {
+        maxBytes: 1024 * 1024 - 600_000,
+      });
+      expect(firstMockCall(analyzePdfSpy, "anthropicAnalyzePdf")[0]).toEqual(
+        expect.objectContaining({ pdfs: [expect.objectContaining({})] }),
+      );
+      expect(result.content?.[0]?.text).toContain("native summary");
+      expect(result.content?.[0]?.text).toContain(
+        "Skipped 2 PDF(s): the request byte budget (1 MB total) was exhausted.",
+      );
+      expectFields(result.details?.skippedPdfs, {
+        count: 2,
+        budgetBytes: 1024 * 1024,
+        reason: "request_budget_exhausted",
+      });
+    });
+  });
+
+  it("stops loading once the model request budget is fully consumed", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        mockLoad: false,
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      loadSpy.mockImplementation(async () => ({
+        ...FAKE_PDF_MEDIA,
+        buffer: Buffer.alloc(1024 * 1024),
+      }));
+      vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+      const tool = requirePdfTool(
+        (await loadCreatePdfTool())({ config: withPdfModel(ANTHROPIC_PDF_MODEL), agentDir }),
+      );
+
+      const result = await tool.execute("t1", {
+        prompt: "ocr",
+        pdfs: ["/tmp/a.pdf", "/tmp/b.pdf"],
+        maxBytesMb: "1",
+      });
+
+      // The first PDF consumes the whole budget; the second load never starts.
+      expect(loadSpy).toHaveBeenCalledTimes(1);
+      expect(result.content?.[0]?.text).toContain("Skipped 1 PDF(s)");
+      expectFields(result.details?.skippedPdfs, {
+        count: 1,
+        budgetBytes: 1024 * 1024,
+        reason: "request_budget_exhausted",
+      });
+    });
+  });
+
+  it("returns a recorded non-outcome when every PDF exceeds the model request budget", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        mockLoad: false,
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      loadSpy.mockRejectedValue(
+        new MediaSizeCapExceededError("Media exceeds 1MB limit (got 2MB)", {
+          capBytes: 1024 * 1024,
+        }),
+      );
+      const analyzePdfSpy = vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf");
+      const tool = requirePdfTool(
+        (await loadCreatePdfTool())({ config: withPdfModel(ANTHROPIC_PDF_MODEL), agentDir }),
+      );
+
+      const result = await tool.execute("t1", {
+        prompt: "ocr",
+        pdfs: ["/tmp/a.pdf", "/tmp/b.pdf"],
+        maxBytesMb: "1",
+      });
+
+      // No paid model call without loaded PDFs; the skip is recorded instead.
+      expect(analyzePdfSpy).not.toHaveBeenCalled();
+      expect(result.content?.[0]?.text).toContain("No PDFs were loaded");
+      expectFields(result.details, { error: "request_budget_exhausted" });
+      expectFields(result.details?.skippedPdfs, {
+        count: 2,
+        budgetBytes: 1024 * 1024,
+        reason: "request_budget_exhausted",
+      });
+    });
+  });
+
+  it("still throws genuine load failures when a model request budget is active", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        mockLoad: false,
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      loadSpy.mockRejectedValue(new Error("socket hangup"));
+      const tool = requirePdfTool(
+        (await loadCreatePdfTool())({ config: withPdfModel(ANTHROPIC_PDF_MODEL), agentDir }),
+      );
+
+      await expect(
+        tool.execute("t1", { prompt: "ocr", pdf: "/tmp/a.pdf", maxBytesMb: "1" }),
+      ).rejects.toThrow("socket hangup");
     });
   });
 });

@@ -47,7 +47,7 @@ Optional model override in `provider/model` form.
 </ParamField>
 
 <ParamField path="maxBytesMb" type="number">
-Per-PDF size cap in MB. Defaults to `agents.defaults.pdfMaxMb`, or `10` if unset.
+Per-PDF size cap in MB. Defaults to `agents.defaults.pdfMaxMb`, or `10` if unset. When passed at call time, the value is also the total byte budget for the request: later PDFs that no longer fit the remaining budget are skipped and reported in the result (`details.skippedPdfs`).
 </ParamField>
 
 Notes:
