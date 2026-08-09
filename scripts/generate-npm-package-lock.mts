@@ -175,6 +175,36 @@ function readPnpmLockPackages() {
   return lockPackages;
 }
 
+/**
+ * Reads `libc` constraints from pnpm-lock.yaml keyed by `name@version`.
+ * npm only emits `libc` in package-lock.json from npm 11 onward, so the pnpm
+ * lock is the version-independent source of truth for this field.
+ */
+function readPnpmLockPackageLibc() {
+  const lockfile = readPnpmLock();
+  const packages = recordAt(lockfile, "packages") ?? {};
+  const libcByPackageKey = new Map<string, string[]>();
+  for (const [packageKey, metadata] of Object.entries(packages)) {
+    const parsed = parsePnpmPackageKey(packageKey);
+    const libc = isPlainObject(metadata) ? metadata.libc : undefined;
+    if (!parsed || !Array.isArray(libc)) {
+      continue;
+    }
+    const values = libc.filter((entry): entry is string => typeof entry === "string");
+    if (values.length === 0) {
+      continue;
+    }
+    const versions = new Set([parsed.version]);
+    if (isPlainObject(metadata) && typeof metadata.version === "string") {
+      versions.add(metadata.version);
+    }
+    for (const version of versions) {
+      libcByPackageKey.set(`${parsed.name}@${version}`, [...values]);
+    }
+  }
+  return libcByPackageKey;
+}
+
 function readPnpmLockPackageIntegrities() {
   const lockfile = readPnpmLock();
   const packages = recordAt(lockfile, "packages") ?? {};
@@ -906,21 +936,43 @@ function normalizeNpmLockOverrides(
   }
 }
 
-function normalizeNpmVersionDrift<T>(lockfile: T): T {
+function normalizeNpmVersionDrift<T>(
+  lockfile: T,
+  libcByPackageKey?: ReadonlyMap<string, readonly string[]>,
+): T {
   const packages = recordAt(lockfile, "packages");
   if (!packages) {
     return lockfile;
   }
-  for (const metadata of Object.values(packages)) {
+  const libcConstraints = libcByPackageKey ?? readPnpmLockPackageLibc();
+  for (const [lockPath, metadata] of Object.entries(packages)) {
     if (!isPlainObject(metadata)) {
       continue;
     }
     // npm versions and mutable registry metadata disagree on these package-lock
-    // fields. None affect resolution, so keep generated npm locks stable.
+    // fields. Neither affects resolution, so drop them to keep generated npm
+    // locks stable.
     delete metadata.deprecated;
-    delete metadata.libc;
     if (metadata.peer === true) {
       delete metadata.peer;
+    }
+    // `libc` DOES affect resolution: npm uses it alongside `os`/`cpu` to pick
+    // between glibc and musl builds, which are otherwise indistinguishable.
+    // Only npm 11+ emits it, so pin it from the pnpm lock rather than trusting
+    // whichever npm generated this file. Dropping it instead would make every
+    // consumer of the generated lock install both variants of every
+    // libc-specific package.
+    const packageName = metadata.name ?? parseLockPackagePath(lockPath).at(-1)?.name;
+    const libc =
+      typeof packageName === "string" && typeof metadata.version === "string"
+        ? libcConstraints.get(`${packageName}@${metadata.version}`)
+        : undefined;
+    // Delete before assigning so a backfilled `libc` lands in the same key
+    // position as one npm 11 emitted, keeping generated locks byte-identical
+    // across npm versions.
+    delete metadata.libc;
+    if (libc) {
+      metadata.libc = [...libc];
     }
   }
   return lockfile;

@@ -313,33 +313,38 @@ describe("generate-npm-package-lock", () => {
     ]);
   });
 
-  it("normalizes npm patch-version metadata drift", () => {
+  it("normalizes npm patch-version metadata drift while keeping libc", () => {
+    const libcByPackageKey = new Map([["@rollup/rollup-linux-x64-gnu@4.53.5", ["glibc"]]]);
     expect(
-      normalizeNpmVersionDrift({
-        packages: {
-          "node_modules/@rollup/rollup-linux-x64-gnu": {
-            version: "4.53.5",
-            cpu: ["x64"],
-            libc: ["glibc"],
-            optional: true,
-            os: ["linux"],
-          },
-          "node_modules/zod": {
-            version: "4.4.3",
-            deprecated: "Use another package",
-            peer: true,
-          },
-          "node_modules/keeps-peer-false": {
-            version: "1.0.0",
-            peer: false,
+      normalizeNpmVersionDrift(
+        {
+          packages: {
+            "node_modules/@rollup/rollup-linux-x64-gnu": {
+              version: "4.53.5",
+              cpu: ["x64"],
+              libc: ["glibc"],
+              optional: true,
+              os: ["linux"],
+            },
+            "node_modules/zod": {
+              version: "4.4.3",
+              deprecated: "Use another package",
+              peer: true,
+            },
+            "node_modules/keeps-peer-false": {
+              version: "1.0.0",
+              peer: false,
+            },
           },
         },
-      }),
+        libcByPackageKey,
+      ),
     ).toEqual({
       packages: {
         "node_modules/@rollup/rollup-linux-x64-gnu": {
           version: "4.53.5",
           cpu: ["x64"],
+          libc: ["glibc"],
           optional: true,
           os: ["linux"],
         },
@@ -352,6 +357,70 @@ describe("generate-npm-package-lock", () => {
         },
       },
     });
+  });
+
+  it("backfills libc from the pnpm lock when npm omits it", () => {
+    // npm 10 emits no `libc` at all; npm 11 does. Backfilling from the pnpm
+    // lock keeps generated locks byte-identical across both while preserving
+    // the field npm needs to tell glibc and musl builds apart.
+    const libcByPackageKey = new Map([
+      ["@rollup/rollup-linux-x64-gnu@4.53.5", ["glibc"]],
+      ["@rollup/rollup-linux-x64-musl@4.53.5", ["musl"]],
+    ]);
+    expect(
+      normalizeNpmVersionDrift(
+        {
+          packages: {
+            "node_modules/@rollup/rollup-linux-x64-gnu": {
+              version: "4.53.5",
+              cpu: ["x64"],
+              optional: true,
+              os: ["linux"],
+            },
+            "node_modules/@rollup/rollup-linux-x64-musl": {
+              version: "4.53.5",
+              cpu: ["x64"],
+              optional: true,
+              os: ["linux"],
+            },
+          },
+        },
+        libcByPackageKey,
+      ),
+    ).toEqual({
+      packages: {
+        "node_modules/@rollup/rollup-linux-x64-gnu": {
+          version: "4.53.5",
+          cpu: ["x64"],
+          optional: true,
+          os: ["linux"],
+          libc: ["glibc"],
+        },
+        "node_modules/@rollup/rollup-linux-x64-musl": {
+          version: "4.53.5",
+          cpu: ["x64"],
+          optional: true,
+          os: ["linux"],
+          libc: ["musl"],
+        },
+      },
+    });
+  });
+
+  it("drops libc that the pnpm lock does not constrain", () => {
+    expect(
+      normalizeNpmVersionDrift(
+        {
+          packages: {
+            "node_modules/portable": {
+              version: "1.0.0",
+              libc: ["glibc"],
+            },
+          },
+        },
+        new Map(),
+      ),
+    ).toEqual({ packages: { "node_modules/portable": { version: "1.0.0" } } });
   });
 
   it("uses legacy peer resolution when package extensions mark dependency peers optional", () => {
