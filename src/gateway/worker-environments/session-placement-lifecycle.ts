@@ -3,14 +3,12 @@ import type {
   WorkerSessionPlacementRetirement,
   WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import type { WorkerEnvironmentService } from "./service.js";
+import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export type SessionWorkerPlacementContext = {
-  workerEnvironmentService?: Pick<WorkerEnvironmentService, "get">;
-  workerSessionPlacementService?: Pick<
-    WorkerSessionPlacementStore,
-    "getMany" | "retireSessionPlacement"
-  >;
+  workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get">;
+  workerSessionPlacementService?: Pick<WorkerSessionPlacementStore, "getMany"> &
+    Partial<Pick<WorkerSessionPlacementStore, "retireSessionPlacement">>;
 };
 
 type PlacementMutationAction = "delete" | "fork" | "reset" | "restore" | "rewind" | "switch";

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -12,7 +12,11 @@ import {
   workerSshRemoteCommand,
 } from "./ssh.js";
 import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncRequest } from "./tunnel-contract.js";
-import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
+import {
+  REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS,
+  REMOTE_WORKSPACE_MANIFEST_JS,
+  REMOTE_WORKSPACE_RSYNC_RECEIVER_JS,
+} from "./workspace-sync-scripts.js";
 
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 
@@ -70,6 +74,60 @@ export function workerWorkspaceRsyncRemoteCommand(
     "-T",
     "-p",
     String(port),
+  ]);
+}
+
+function workerWorkspaceRsyncReceiverPath(params: {
+  remoteWorkspaceDir: string;
+  canonicalHome: string;
+  remoteRelative: string;
+  remoteTarget: string;
+  nonce: string;
+}): string {
+  return workerSshRemoteCommand([
+    "node",
+    "-e",
+    REMOTE_WORKSPACE_RSYNC_RECEIVER_JS,
+    params.remoteWorkspaceDir,
+    params.canonicalHome,
+    params.remoteRelative,
+    params.nonce,
+    params.remoteTarget,
+  ]);
+}
+
+export function createWorkerWorkspaceRsyncReceiverPathFactory(params: {
+  remoteWorkspaceDir: string;
+  canonicalHome: string;
+  remoteRelative: string;
+}): (remoteTarget: string) => string {
+  return (remoteTarget) =>
+    workerWorkspaceRsyncReceiverPath({
+      ...params,
+      remoteTarget,
+      nonce: randomBytes(16).toString("hex"),
+    });
+}
+
+export function workerAcceptedWorkspaceRsyncReceiverPath(params: {
+  remoteWorkspaceDir: string;
+  nonce: string;
+}): string {
+  const workspaceRootMarker = "/.openclaw-worker/workspaces/";
+  const markerIndex = params.remoteWorkspaceDir.lastIndexOf(workspaceRootMarker);
+  if (markerIndex < 1) {
+    throw new Error("Accepted workspace path is outside the managed workspace root");
+  }
+  const canonicalHome = params.remoteWorkspaceDir.slice(0, markerIndex);
+  const remoteRelative = params.remoteWorkspaceDir.slice(markerIndex + 1);
+  return workerSshRemoteCommand([
+    "node",
+    "-e",
+    REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS,
+    params.remoteWorkspaceDir,
+    canonicalHome,
+    remoteRelative,
+    params.nonce,
   ]);
 }
 

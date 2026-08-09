@@ -157,7 +157,7 @@ class OriginalOrderSshRunner implements WorkerSshRunner {
       return await runCommandWithTimeout(argv, options);
     }
     const port = argvPort(argv);
-    const input = options.input ?? "";
+    const input = typeof options.input === "string" ? options.input : "";
     if (argv[0] === "ssh" && input.includes("expected_receipt=$2")) {
       this.events.push(`bootstrap:preflight:${port}`);
       if (port === PRIMARY_PORT) {
@@ -193,6 +193,10 @@ class OriginalOrderSshRunner implements WorkerSshRunner {
       const remoteShellIndex = localArgv.indexOf("-e");
       if (remoteShellIndex >= 0) {
         localArgv.splice(remoteShellIndex, 2);
+      }
+      const remoteReceiverIndex = localArgv.findIndex((arg) => arg.startsWith("--rsync-path="));
+      if (remoteReceiverIndex >= 0) {
+        localArgv.splice(remoteReceiverIndex, 1);
       }
       for (let index = 1; index < localArgv.length; index += 1) {
         const candidate = localArgv[index];

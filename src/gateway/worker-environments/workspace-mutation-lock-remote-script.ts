@@ -1,9 +1,9 @@
-export const REMOTE_WORKSPACE_ACCEPTED_LOCK_JS = String.raw`const lockRoot = path.join(
+export const REMOTE_WORKSPACE_MUTATION_LOCK_JS = String.raw`const lockRoot = path.join(
   transactionRoot,
   ".openclaw-accepted-lock-" + workspaceKey,
 );
 const lockToken = crypto.randomBytes(16).toString("hex");
-const lockOwner = { action, nonce, pid: process.pid, token: lockToken };
+const lockOwner = { action, nonce, pid: lockOwnerPid, token: lockToken };
 const lockWait = new Int32Array(new SharedArrayBuffer(4));
 const lockDeadlineMs = Date.now() + 9 * 60 * 1000;
 let acquiredLock;
@@ -15,7 +15,7 @@ function parseLockIdentity(parts) {
   const [entryAction, entryNonce, rawPid, token] = parts;
   const pid = Number(rawPid);
   if (
-    !acceptedActions.includes(entryAction) ||
+    !mutationActions.includes(entryAction) ||
     !/^[a-f0-9]{32}$/.test(entryNonce || "") ||
     !/^[1-9][0-9]*$/.test(rawPid || "") ||
     !Number.isSafeInteger(pid) ||
@@ -32,6 +32,30 @@ function sameLockIdentity(left, right) {
     left.pid === right.pid &&
     left.token === right.token
   );
+}
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error && error.code === "EPERM") return true;
+    if (error && error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+function processGroupIsAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    if (error && error.code === "EPERM") return true;
+    if (error && error.code === "ESRCH") return false;
+    throw error;
+  }
+}
+function lockIdentityIsAlive(identity) {
+  return processIsAlive(identity.pid) ||
+    (identity.action === "receiver" && processGroupIsAlive(identity.pid));
 }
 function ownerEntryName(owner) {
   return "owner." + encodeLockIdentity(owner);
@@ -63,16 +87,16 @@ function readLock() {
     throw error;
   }
   if (directoryStats.isSymbolicLink() || !directoryStats.isDirectory()) {
-    throw new Error("unsafe accepted workspace transaction lock");
+    throw new Error("unsafe workspace mutation lock");
   }
-  if (names.length !== 1) throw new Error("invalid accepted workspace transaction lock");
+  if (names.length !== 1) throw new Error("invalid workspace mutation lock");
   const entry = parseLockEntry(names[0]);
-  if (!entry) throw new Error("invalid accepted workspace transaction lock owner");
+  if (!entry) throw new Error("invalid workspace mutation lock owner");
   const entryPath = path.join(lockRoot, names[0]);
   try {
     const entryStats = fs.lstatSync(entryPath);
     if (entryStats.isSymbolicLink() || !entryStats.isFile()) {
-      throw new Error("unsafe accepted workspace transaction lock owner");
+      throw new Error("unsafe workspace mutation lock owner");
     }
     return { ...entry, name: names[0], entryPath, directoryStats, entryStats };
   } catch (error) {
@@ -109,9 +133,9 @@ function restoreOwnerEntry(observed) {
   return true;
 }
 function restoreAbandonedTransition(observed) {
-  if (observed.kind !== "reclaim" || processIsAlive(observed.reclaimer.pid)) return false;
+  if (observed.kind !== "reclaim" || lockIdentityIsAlive(observed.reclaimer)) return false;
   const current = readLock();
-  if (!current || !sameLock(current, observed) || processIsAlive(current.reclaimer.pid)) {
+  if (!current || !sameLock(current, observed) || lockIdentityIsAlive(current.reclaimer)) {
     return false;
   }
   return restoreOwnerEntry(current);
@@ -122,7 +146,7 @@ function reclaimDeadOwner(observed) {
     !current ||
     current.kind !== "owner" ||
     !sameLock(current, observed) ||
-    processIsAlive(current.owner.pid)
+    lockIdentityIsAlive(current.owner)
   ) {
     return false;
   }
@@ -145,14 +169,14 @@ function reclaimDeadOwner(observed) {
     !sameLockIdentity(claimed.owner, current.owner) ||
     !sameLockIdentity(claimed.reclaimer, lockOwner)
   ) {
-    throw new Error("accepted workspace transaction reclaim ownership changed");
+    throw new Error("workspace mutation reclaim ownership changed");
   }
   let quarantined = false;
   const quarantine = lockRoot + ".stale." + process.pid + "." + lockToken;
   try {
-    if (processIsAlive(claimed.owner.pid)) return false;
+    if (lockIdentityIsAlive(claimed.owner)) return false;
     const validated = readLock();
-    if (!validated || !sameLock(validated, claimed) || processIsAlive(validated.owner.pid)) {
+    if (!validated || !sameLock(validated, claimed) || lockIdentityIsAlive(validated.owner)) {
       return false;
     }
     claimed = validated;
@@ -164,7 +188,7 @@ function reclaimDeadOwner(observed) {
       !sameInode(quarantinedDirectory, claimed.directoryStats) ||
       !sameInode(quarantinedEntry, claimed.entryStats)
     ) {
-      throw new Error("accepted workspace transaction lock changed during reclamation");
+      throw new Error("workspace mutation lock changed during reclamation");
     }
     removeTree(quarantine);
     return true;
@@ -193,7 +217,7 @@ function acquireWorkspaceLock() {
           observed.kind !== "owner" ||
           !sameLockIdentity(observed.owner, lockOwner)
         ) {
-          throw new Error("accepted workspace transaction lock acquisition changed");
+          throw new Error("workspace mutation lock acquisition changed");
         }
         acquiredLock = observed;
         return;
@@ -213,13 +237,13 @@ function acquireWorkspaceLock() {
       }
       if (observed.kind !== "owner") {
         if (restoreAbandonedTransition(observed)) continue;
-      } else if (!processIsAlive(observed.owner.pid) && reclaimDeadOwner(observed)) {
+      } else if (!lockIdentityIsAlive(observed.owner) && reclaimDeadOwner(observed)) {
         continue;
       }
       Atomics.wait(lockWait, 0, 0, waitMs);
       waitMs = Math.min(waitMs * 2, 500);
     }
-    throw new Error("timed out waiting for accepted workspace transaction lock");
+    throw new Error("timed out waiting for workspace mutation lock");
   } finally {
     if (!acquired) removeTree(candidate);
   }
@@ -233,11 +257,11 @@ function releaseWorkspaceLock() {
     !sameLock(current, acquiredLock) ||
     !sameLockIdentity(current.owner, lockOwner)
   ) {
-    throw new Error("accepted workspace transaction lock ownership changed");
+    throw new Error("workspace mutation lock ownership changed");
   }
   const validated = readLock();
   if (!validated || !sameLock(validated, current)) {
-    throw new Error("accepted workspace transaction lock changed during release");
+    throw new Error("workspace mutation lock changed during release");
   }
   const quarantine = lockRoot + ".released." + process.pid + "." + lockToken;
   fs.renameSync(lockRoot, quarantine);
@@ -247,7 +271,7 @@ function releaseWorkspaceLock() {
     !sameInode(quarantinedDirectory, validated.directoryStats) ||
     !sameInode(quarantinedEntry, validated.entryStats)
   ) {
-    throw new Error("accepted workspace transaction lock changed during release");
+    throw new Error("workspace mutation lock changed during release");
   }
   removeTree(quarantine);
 }`;

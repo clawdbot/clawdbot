@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -33,6 +34,7 @@ import {
   workerWorkspaceTransferPaths,
 } from "./workspace-result-staging.js";
 import {
+  createWorkerWorkspaceRsyncReceiverPathFactory,
   parseManifestRef,
   parseRemoteWorkspaceSetup,
   probeWorkspaceGitMode,
@@ -277,6 +279,8 @@ export function createWorkerWorkspaceActions(
       path.join(os.tmpdir(), "openclaw-worker-workspace-sync-"),
     );
     try {
+      const receiverContext = { remoteWorkspaceDir, canonicalHome, remoteRelative };
+      const mutationReceiverPath = createWorkerWorkspaceRsyncReceiverPathFactory(receiverContext);
       let prepareGitTransferList: (() => Promise<string>) | undefined;
       if (mode === "git") {
         const [canonicalRequestPath, canonicalGitRoot] = await Promise.all([
@@ -327,6 +331,9 @@ export function createWorkerWorkspaceActions(
           "rsync",
           "--archive",
           "--checksum",
+          `--rsync-path=${mutationReceiverPath(
+            path.posix.join(remoteWorkspaceDir, REMOTE_GIT_PACK_NAME),
+          )}`,
           "-e",
           rsyncSsh,
           "--",
@@ -376,6 +383,7 @@ export function createWorkerWorkspaceActions(
         "--exclude=.git",
         ...DERIVED_WORKSPACE_RSYNC_EXCLUDES.map((pattern) => `--exclude=${pattern}`),
         ...(fileListPath ? ["--recursive", "--from0", `--files-from=${fileListPath}`] : []),
+        `--rsync-path=${mutationReceiverPath(remoteWorkspaceDir)}`,
         "-e",
         rsyncSsh,
         "--",
@@ -395,13 +403,7 @@ export function createWorkerWorkspaceActions(
                   signal: options.ownerSignal,
                 });
               if (retryingGitTransfer) {
-                const probe = await runTask(
-                  workerWorkspaceSshArgv(prepared, ["true"], port),
-                  commandOptions(),
-                );
-                if (!success(probe)) {
-                  return probe;
-                }
+                const resetNonce = randomBytes(16).toString("hex");
                 const reset = await runTask(
                   workerWorkspaceSshArgv(
                     prepared,
@@ -412,6 +414,7 @@ export function createWorkerWorkspaceActions(
                       remoteWorkspaceDir,
                       canonicalHome,
                       remoteRelative,
+                      resetNonce,
                     ],
                     port,
                   ),
@@ -420,6 +423,11 @@ export function createWorkerWorkspaceActions(
                 if (!success(reset)) {
                   // Reset changes remote state, so an ambiguous result must fail closed.
                   throw workspaceSyncError(reset);
+                }
+                if (reset.stdout !== `reset ${resetNonce}\n`) {
+                  throw new Error(
+                    "Worker workspace retry reset returned an invalid acknowledgement",
+                  );
                 }
               }
               const fileListPath = await prepareGitTransferList();

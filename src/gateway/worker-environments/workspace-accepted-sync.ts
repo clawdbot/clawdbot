@@ -17,6 +17,7 @@ import {
 import { changedPaths, manifestNodes } from "./workspace-reconcile.js";
 import {
   parseManifestRef,
+  workerAcceptedWorkspaceRsyncReceiverPath,
   workerWorkspaceCommandSucceeded,
   workspaceSyncError,
 } from "./workspace-sync-helpers.js";
@@ -244,6 +245,10 @@ function createAcceptedWorkspacePublisher(params: {
             "--no-recursive",
             "--from0",
             `--files-from=${transferListPath}`,
+            `--rsync-path=${workerAcceptedWorkspaceRsyncReceiverPath({
+              remoteWorkspaceDir: params.remoteWorkspaceDir,
+              nonce: transactionNonce,
+            })}`,
             "-e",
             rsyncSsh,
             "--",

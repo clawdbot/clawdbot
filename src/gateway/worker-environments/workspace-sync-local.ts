@@ -152,7 +152,7 @@ export async function runLocalCommandToFile(params: {
   }
 }
 
-export async function writeEligibleGitFiles(params: {
+async function writeEligibleGitFiles(params: {
   gitRoot: string;
   eligiblePath: string;
   ignoredPath: string;

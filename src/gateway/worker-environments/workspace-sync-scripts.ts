@@ -2,7 +2,14 @@ import {
   REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS,
   REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS,
 } from "./workspace-manifest-remote-script.js";
-export { REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS } from "./workspace-accepted-remote-script.js";
+export {
+  REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS,
+  REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
+} from "./workspace-accepted-remote-script.js";
+export {
+  REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
+  REMOTE_WORKSPACE_RSYNC_RECEIVER_JS,
+} from "./workspace-mutation-remote-script.js";
 import {
   DERIVED_WORKSPACE_DIRECTORY_NAMES,
   DERIVED_WORKSPACE_FILE_NAMES,
@@ -57,61 +64,6 @@ process.stdin.on("end", () => {
 rm -f -- "$pack"
 if [ -n "$author_name" ]; then git config user.name "$author_name"; fi
 if [ -n "$author_email" ]; then git config user.email "$author_email"; fi
-`;
-
-export const REMOTE_GIT_WORKSPACE_RETRY_RESET_JS = String.raw`const fs = require("node:fs");
-const path = require("node:path");
-const DERIVED_WORKSPACE_DIRECTORY_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_DIRECTORY_NAMES)};
-const DERIVED_WORKSPACE_FILE_NAMES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_NAMES)};
-const DERIVED_WORKSPACE_FILE_SUFFIXES = ${JSON.stringify(DERIVED_WORKSPACE_FILE_SUFFIXES)};
-const isDerivedWorkspacePath = ${isDerivedWorkspacePath.toString()};
-const workspace = process.argv[1];
-const canonicalHome = process.argv[2];
-const remoteRelative = process.argv[3];
-const currentHome = process.env.HOME;
-if (
-  !currentHome ||
-  typeof workspace !== "string" ||
-  typeof canonicalHome !== "string" ||
-  typeof remoteRelative !== "string" ||
-  !path.posix.isAbsolute(canonicalHome) ||
-  path.posix.normalize(canonicalHome) !== canonicalHome ||
-  path.posix.isAbsolute(remoteRelative) ||
-  path.posix.normalize(remoteRelative) !== remoteRelative ||
-  path.posix.join(canonicalHome, remoteRelative) !== workspace ||
-  fs.realpathSync(currentHome) !== canonicalHome
-) {
-  throw new Error("worker workspace retry reset no longer matches its attested owner");
-}
-const workspaceStats = fs.lstatSync(workspace);
-if (
-  !workspaceStats.isDirectory() ||
-  workspaceStats.isSymbolicLink() ||
-  fs.realpathSync(workspace) !== workspace
-) {
-  throw new Error("worker workspace retry reset no longer matches its attested owner");
-}
-const root = workspace;
-function clean(directory, relativeDirectory) {
-  const originalMode = fs.lstatSync(directory).mode & 0o7777;
-  fs.chmodSync(directory, originalMode | 0o700);
-  for (const name of fs.readdirSync(directory)) {
-    const relative = relativeDirectory ? relativeDirectory + "/" + name : name;
-    // Match the initial rsync receiver protections exactly: retry cleanup owns
-    // transferable workspace bytes, never Git metadata or derived scratch state.
-    if (name === ".git" || isDerivedWorkspacePath(relative)) continue;
-    const target = path.join(directory, name);
-    const stats = fs.lstatSync(target);
-    if (stats.isDirectory() && !stats.isSymbolicLink()) {
-      clean(target, relative);
-      if (fs.readdirSync(target).length === 0) fs.rmdirSync(target);
-    } else {
-      fs.unlinkSync(target);
-    }
-  }
-  fs.chmodSync(directory, originalMode);
-}
-clean(root, "");
 `;
 
 export const REMOTE_WORKSPACE_MANIFEST_JS = String.raw`const crypto = require("node:crypto");

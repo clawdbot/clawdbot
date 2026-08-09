@@ -1399,6 +1399,12 @@ export async function performGatewaySessionReset(params: {
         : undefined;
 
       if (incognito) {
+        if (!entry) {
+          return {
+            ok: false,
+            error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.key}`),
+          };
+        }
         await emitGatewayBeforeResetPluginHook({
           cfg,
           key: params.key,

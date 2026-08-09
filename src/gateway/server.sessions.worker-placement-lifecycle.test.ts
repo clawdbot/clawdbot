@@ -18,6 +18,7 @@ import {
 import type { WorkerSessionPlacementReader } from "./worker-environments/placement-projector.js";
 import type {
   WorkerSessionPlacementRecord,
+  WorkerSessionPlacementRetirement,
   WorkerSessionPlacementRetirementService,
   WorkerSessionPlacementStore,
 } from "./worker-environments/placement-store.js";
@@ -251,8 +252,8 @@ test("sessions.delete drains an active local claim before placement retirement",
       {
         context: {
           workerSessionPlacementService: {
-            getMany: placementStore.getMany,
-            retireSessionPlacement: (retirement) => {
+            getMany: (sessionIds: readonly string[]) => placementStore.getMany(sessionIds),
+            retireSessionPlacement: (retirement: WorkerSessionPlacementRetirement) => {
               expect(placementStore.get(sessionId)?.turnClaim).toBeNull();
               events.push("placement:retire");
               placementStore.retireSessionPlacement(retirement);
@@ -397,7 +398,7 @@ test("sessions.delete leaves the session intact when placement retirement fails"
     storePath,
   });
   const placementService = {
-    getMany: placementStore.getMany,
+    getMany: (sessionIds: readonly string[]) => placementStore.getMany(sessionIds),
     retireSessionPlacement: (
       retirement: Parameters<typeof placementStore.retireSessionPlacement>[0],
     ) => {
@@ -480,8 +481,8 @@ test.each([
         {
           context: {
             workerSessionPlacementService: {
-              getMany: placementStore.getMany,
-              retireSessionPlacement: (retirement) => {
+              getMany: (sessionIds: readonly string[]) => placementStore.getMany(sessionIds),
+              retireSessionPlacement: (retirement: WorkerSessionPlacementRetirement) => {
                 expect(placementStore.get(sessionId)?.turnClaim).toBeNull();
                 events.push("placement:retire");
                 placementStore.retireSessionPlacement(retirement);
@@ -520,7 +521,9 @@ test("sessions.reset rechecks lifecycle ownership after draining before placemen
     sessionKey,
     storePath,
   });
-  const retireSessionPlacement = vi.fn(placementStore.retireSessionPlacement);
+  const retireSessionPlacement = vi.fn((retirement: WorkerSessionPlacementRetirement) =>
+    placementStore.retireSessionPlacement(retirement),
+  );
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
 
   try {
@@ -531,7 +534,7 @@ test("sessions.reset rechecks lifecycle ownership after draining before placemen
         commandSource: "gateway:agent",
         workerPlacementContext: {
           workerSessionPlacementService: {
-            getMany: placementStore.getMany,
+            getMany: (sessionIds: readonly string[]) => placementStore.getMany(sessionIds),
             retireSessionPlacement,
           },
         },
@@ -735,7 +738,8 @@ test.each(["generation", "claim"] as const)(
         }
         return placementStore.getMany(sessionIds);
       },
-      retireSessionPlacement: placementStore.retireSessionPlacement,
+      retireSessionPlacement: (retirement: WorkerSessionPlacementRetirement) =>
+        placementStore.retireSessionPlacement(retirement),
     };
 
     const deletion = directSessionReq(

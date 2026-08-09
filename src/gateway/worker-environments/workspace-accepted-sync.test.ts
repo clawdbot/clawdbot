@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { waitForChildClose, waitForFile } from "../../../test/helpers/process-wait.js";
+import { waitForChildClose, waitForDead, waitForFile } from "../../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { createDeferred } from "../../shared/deferred.js";
@@ -66,7 +66,174 @@ function settlement(outcome: "begun" | "rolled-back" | "applied" | "committed"):
   return result({ stdout: `${JSON.stringify({ version: 1, outcome })}\n` });
 }
 
+function shellQuoted(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
 describe("accepted workspace publication", () => {
+  it.skipIf(process.platform === "win32")(
+    "waits for the staging receiver group before promoting its inodes live",
+    async () => {
+      const root = tempDirs.make("openclaw-accepted-receiver-lock-");
+      let home = path.join(root, "home");
+      const local = path.join(root, "local");
+      const workspaceRelative = ".openclaw-worker/workspaces/env/session/1";
+      const bin = path.join(root, "bin");
+      const gate = path.join(root, "receiver-gate");
+      const receiverMarker = path.join(root, "receiver-marker");
+      const applyMarker = path.join(root, "apply-marker");
+      await Promise.all([fs.mkdir(home), fs.mkdir(local), fs.mkdir(bin)]);
+      home = await fs.realpath(home);
+      const workspace = path.join(home, workspaceRelative);
+      await fs.mkdir(workspace, { recursive: true });
+      await Promise.all([
+        fs.writeFile(path.join(local, "result.txt"), "local\n"),
+        fs.writeFile(path.join(workspace, "result.txt"), "worker\n"),
+      ]);
+      expect((await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 })).code).toBe(0);
+      const gateController = await fs.open(gate, "r+");
+      await fs.writeFile(
+        path.join(bin, "rsync"),
+        '#!/bin/sh\nset -eu\nfor destination do :; done\nprintf "staged\\n" > "$destination/result.txt"\n( : > "$OPENCLAW_TEST_RECEIVER_MARKER"; read -r _ < "$OPENCLAW_TEST_RECEIVER_GATE"; printf "local\\n" > "$destination/result.txt" ) </dev/null >/dev/null 2>&1 &\nexit 0\n',
+        { mode: 0o755 },
+      );
+
+      const remote = manifest("worker\n");
+      const accepted = manifest("local\n");
+      const acceptedRef = manifestRef(accepted);
+      const actions: string[] = [];
+      let receiverChild: ReturnType<typeof spawn> | undefined;
+      let receiverExited:
+        | Promise<{ code: number | null; signal: NodeJS.Signals | null; stderr: string }>
+        | undefined;
+      let gateReleased = false;
+      const releaseReceiver = async (message: string) => {
+        if (gateReleased) {
+          return;
+        }
+        gateReleased = true;
+        await gateController.write(`${message}\n`);
+        await gateController.close();
+      };
+      const env = {
+        ...process.env,
+        HOME: home,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        OPENCLAW_TEST_RECEIVER_GATE: gate,
+        OPENCLAW_TEST_RECEIVER_MARKER: receiverMarker,
+      };
+      const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
+        if (command.argv[2] !== REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS) {
+          return result({ stdout: command.argv[5] === "publish" ? "" : `${acceptedRef}\n` });
+        }
+        const action = command.argv[3]!;
+        actions.push(action);
+        if (action === "apply") {
+          await fs.writeFile(applyMarker, "");
+        }
+        return await runCommandWithTimeout([process.execPath, ...command.argv.slice(1)], {
+          timeoutMs: 10_000,
+          baseEnv: env,
+          input: command.input,
+        });
+      };
+      const publisher = createAcceptedWorkspacePublisherFactory({
+        runWorkspaceCommand,
+        runRsync: async (argvForSsh) => {
+          const argv = argvForSsh("ssh");
+          const receiverPath = argv.find((entry) => entry.startsWith("--rsync-path="));
+          if (!receiverPath) {
+            throw new Error("accepted staging transfer is missing its receiver wrapper");
+          }
+          const stagingRoot = argv.at(-1)?.slice("test:".length).replace(/\/$/u, "");
+          if (!stagingRoot) {
+            throw new Error("accepted staging transfer is missing its destination");
+          }
+          receiverChild = spawn(
+            "sh",
+            [
+              "-c",
+              `${receiverPath.slice("--rsync-path=".length)} '--server' '.' ${shellQuoted(
+                stagingRoot,
+              )}`,
+            ],
+            { env, stdio: ["ignore", "ignore", "pipe"] },
+          );
+          const receiverStderr = receiverChild.stderr;
+          if (!receiverStderr) {
+            throw new Error("accepted staging receiver has no stderr pipe");
+          }
+          let stderr = "";
+          receiverStderr.setEncoding("utf8");
+          receiverStderr.on("data", (chunk: string) => {
+            stderr += chunk;
+          });
+          receiverExited = waitForChildClose(receiverChild, 10_000).then(({ code, signal }) => ({
+            code,
+            signal,
+            stderr,
+          }));
+          await Promise.race([
+            waitForFile(receiverMarker, 10_000),
+            receiverExited.then(({ stderr: receiverError }) => {
+              throw new Error(receiverError || "accepted staging receiver exited too early");
+            }),
+          ]);
+          return result();
+        },
+        scpTarget: "test",
+        localPath: local,
+        remoteWorkspaceDir: workspace,
+      })(remote, manifestRef(remote));
+
+      const publishing = publisher.publishAcceptedManifest({
+        manifestRef: acceptedRef,
+        manifest: accepted,
+        conflictPaths: ["result.txt"],
+      });
+      let publishingSettled = false;
+      void publishing.then(
+        () => {
+          publishingSettled = true;
+        },
+        () => {
+          publishingSettled = true;
+        },
+      );
+      try {
+        await waitForFile(applyMarker, 10_000);
+        const workspaceKey = createHash("sha256").update(workspace).digest("hex");
+        const lock = path.join(path.dirname(workspace), `.openclaw-accepted-lock-${workspaceKey}`);
+        const [ownerName] = await fs.readdir(lock);
+        const receiverPid = Number(
+          /^owner\.receiver\.[a-f0-9]{32}\.([1-9][0-9]*)\./u.exec(ownerName!)?.[1],
+        );
+        expect(Number.isSafeInteger(receiverPid)).toBe(true);
+        await waitForDead(receiverPid, 10_000);
+        expect(actions).toEqual(["begin", "apply"]);
+        expect(publishingSettled).toBe(false);
+        await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
+          "worker\n",
+        );
+
+        await releaseReceiver("release");
+        await expect(receiverExited).resolves.toMatchObject({ code: 0, signal: null, stderr: "" });
+        await expect(publishing).resolves.toBeUndefined();
+        expect(actions).toEqual(["begin", "apply", "commit"]);
+        await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
+          "local\n",
+        );
+      } finally {
+        await releaseReceiver("cleanup").catch(() => undefined);
+        await receiverExited?.catch(() => undefined);
+        if (receiverChild?.exitCode === null && receiverChild.signalCode === null) {
+          receiverChild.kill("SIGTERM");
+          await waitForChildClose(receiverChild, 1_000).catch(() => undefined);
+        }
+      }
+    },
+  );
+
   it("settles a still-running apply after SSH loses its exit status", async () => {
     const root = tempDirs.make("openclaw-accepted-ssh-loss-");
     const local = path.join(root, "local");
