@@ -61,11 +61,7 @@ import {
 } from "./inference.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerDesktopObserveResult } from "./service-contract.js";
-import {
-  boundedWorkerError as boundedError,
-  requireWorkerLeaseStatus,
-  requireWorkerLease,
-} from "./service-validation.js";
+import { requireWorkerLeaseStatus, requireWorkerLease } from "./service-validation.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import {
   type WorkerEnvironmentRecord,
@@ -75,6 +71,7 @@ import {
 } from "./store.js";
 import type { WorkerTunnelRequest } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle, WorkerTunnelManager } from "./tunnel.js";
+import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 type WorkerEnvironmentServiceErrorCode =
   | "profile_not_found"

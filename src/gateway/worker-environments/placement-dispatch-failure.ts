@@ -3,8 +3,8 @@ import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
 } from "./placement-store.js";
-import { boundedWorkerError } from "./service-validation.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 export type WorkerDispatchPlacement = WorkerSessionPlacementRecord;
 export type WorkerActiveDispatchPlacement = Extract<

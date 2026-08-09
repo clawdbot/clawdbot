@@ -41,7 +41,7 @@ import {
   createPlacementWorkspaceResultOps,
   hasWorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
-import { boundedWorkerError } from "./service-validation.js";
+import { boundedWorkerError } from "./worker-error.js";
 import { projectWorkspaceResultConflict } from "./workspace-conflicts.js";
 
 const RETIRABLE_PLACEMENT_STATES = ["local", "reclaimed", "failed"] as const;

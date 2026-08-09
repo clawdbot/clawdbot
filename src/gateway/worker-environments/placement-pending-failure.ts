@@ -5,7 +5,7 @@ import { getRequired, query, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { signalTurnClaimRelease } from "./placement-turn-claims.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.js";
-import { boundedWorkerError } from "./service-validation.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime) {
   const { now, path, write } = runtime;
