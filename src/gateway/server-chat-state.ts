@@ -163,7 +163,8 @@ function createChatRunRecordStore(): ChatRunRecordStore {
   return { runs, getOrCreate, releaseIfEmpty };
 }
 
-function internalChatRunRecord(record: ChatRunRecord): InternalChatRunRecord {
+/** Access Gateway-only run fields without widening the exported ChatRunState record shape. */
+export function internalChatRunRecord(record: ChatRunRecord): InternalChatRunRecord {
   return record;
 }
 
@@ -266,29 +267,6 @@ export type ChatRunState = {
   clearRun: (runId: string) => void;
   clear: () => void;
 };
-
-export function getChatRunDeltaFlush(
-  state: Pick<ChatRunState, "runs">,
-  runId: string,
-): PendingChatDeltaFlush | undefined {
-  const record = state.runs.get(runId);
-  return record ? internalChatRunRecord(record).pendingDeltaFlush : undefined;
-}
-
-export function setChatRunDeltaFlush(
-  state: Pick<ChatRunState, "getOrCreate">,
-  runId: string,
-  pending: PendingChatDeltaFlush,
-): void {
-  internalChatRunRecord(state.getOrCreate(runId)).pendingDeltaFlush = pending;
-}
-
-export function cancelChatRunDeltaFlush(state: Pick<ChatRunState, "runs">, runId: string): void {
-  const record = state.runs.get(runId);
-  if (record) {
-    clearPendingChatDeltaFlush(record);
-  }
-}
 
 /** Create the single record map used by Gateway chat-run runtime state. */
 export function createChatRunState(): ChatRunState {

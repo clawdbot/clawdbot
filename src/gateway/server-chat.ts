@@ -43,12 +43,7 @@ import {
   shouldSuppressAssistantEventForLiveChat,
 } from "./live-chat-projector.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
-import {
-  cancelChatRunDeltaFlush,
-  getChatRunDeltaFlush,
-  isChatAbortMarkerCurrent,
-  setChatRunDeltaFlush,
-} from "./server-chat-state.js";
+import { internalChatRunRecord, isChatAbortMarkerCurrent } from "./server-chat-state.js";
 import type {
   BufferedAgentEvent,
   ChatRunEntry,
@@ -426,6 +421,16 @@ export function createAgentEventHandler({
   type AgentTextThrottleStream = "assistant" | "thinking";
 
   const agentTextThrottleStreams = ["assistant", "thinking"] as const;
+
+  const cancelPendingChatDeltaFlush = (clientRunId: string) => {
+    const record = chatRunState.runs.get(clientRunId);
+    const pending = record ? internalChatRunRecord(record).pendingDeltaFlush : undefined;
+    if (!pending || !record) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    delete internalChatRunRecord(record).pendingDeltaFlush;
+  };
 
   const clearBufferedChatState = (clientRunId: string) => {
     chatRunState.clearRun(clientRunId);
@@ -902,7 +907,7 @@ export function createAgentEventHandler({
     text: string,
     opts?: { controlUiVisible?: boolean; firstAssistantTimingEntry?: ChatRunEntry },
   ) => {
-    cancelChatRunDeltaFlush(chatRunState, clientRunId);
+    cancelPendingChatDeltaFlush(clientRunId);
     const run = chatRunState.getOrCreate(clientRunId);
     const broadcastDelta = resolveBroadcastDelta({
       text,
@@ -949,6 +954,7 @@ export function createAgentEventHandler({
     delayMs: number,
     controlUiVisible: boolean | undefined,
   ) => {
+    const run = internalChatRunRecord(chatRunState.getOrCreate(clientRunId));
     const flush = () => {
       const projected = chatRunState.resolveBuffer(clientRunId);
       if (projected.suppress || shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
@@ -958,21 +964,21 @@ export function createAgentEventHandler({
         controlUiVisible,
       });
     };
-    const existing = getChatRunDeltaFlush(chatRunState, clientRunId);
+    const existing = run.pendingDeltaFlush;
     if (existing) {
       existing.flush = flush;
       return;
     }
     const timer = setSafeTimeout(() => {
-      const pending = getChatRunDeltaFlush(chatRunState, clientRunId);
+      const pending = run.pendingDeltaFlush;
       if (!pending || pending.timer !== timer) {
         return;
       }
-      cancelChatRunDeltaFlush(chatRunState, clientRunId);
+      cancelPendingChatDeltaFlush(clientRunId);
       pending.flush();
     }, delayMs);
     timer.unref?.();
-    setChatRunDeltaFlush(chatRunState, clientRunId, { timer, flush });
+    run.pendingDeltaFlush = { timer, flush };
   };
 
   const emitChatDelta = (
@@ -1047,7 +1053,7 @@ export function createAgentEventHandler({
     seq: number,
     opts?: { controlUiVisible?: boolean; firstAssistantTimingEntry?: ChatRunEntry },
   ) => {
-    cancelChatRunDeltaFlush(chatRunState, clientRunId);
+    cancelPendingChatDeltaFlush(clientRunId);
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
       suppressLeadFragments: true,
     });
