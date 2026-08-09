@@ -70,6 +70,12 @@ function hasStaleSqliteSessionEntryCandidate(
   pruneAfterMs: number,
   preserveKeys: ReadonlySet<string> | undefined,
 ): boolean {
+  // Age pruning is disabled for non-positive retention (see pruneStaleEntries):
+  // nothing is stale, and the preflight must not turn `0` into "every row is a
+  // stale candidate", which would force a full-store load on every update.
+  if (pruneAfterMs <= 0) {
+    return false;
+  }
   const cutoffMs = Date.now() - pruneAfterMs;
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(

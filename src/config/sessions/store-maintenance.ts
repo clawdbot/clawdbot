@@ -484,8 +484,12 @@ export function getActiveSessionMaintenanceWarning(params: {
     return null;
   }
   const now = params.nowMs ?? Date.now();
-  const cutoffMs = now - params.pruneAfterMs;
-  const wouldPrune = activeEntry.updatedAt != null ? activeEntry.updatedAt < cutoffMs : false;
+  // A non-positive retention disables age pruning (see pruneStaleEntries), so
+  // the warning must not claim the active session would be pruned by age.
+  const wouldPrune =
+    params.pruneAfterMs > 0 && activeEntry.updatedAt != null
+      ? activeEntry.updatedAt < now - params.pruneAfterMs
+      : false;
   const keys = Object.keys(params.store);
   const wouldCap = wouldCapActiveSession({
     store: params.store,

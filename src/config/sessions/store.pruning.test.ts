@@ -1059,4 +1059,21 @@ describe("getActiveSessionMaintenanceWarning", () => {
 
     expect(warning?.wouldCap).toBe(true);
   });
+
+  it("reports no age-prune warning when retention is non-positive", () => {
+    const now = Date.now();
+    const store = makeStore([["active", makeEntry(now - 365 * DAY_MS)]]);
+
+    const warning = getActiveSessionMaintenanceWarning({
+      store,
+      activeSessionKey: "active",
+      pruneAfterMs: 0,
+      maxEntries: 500,
+      nowMs: now,
+    });
+
+    // Age pruning is disabled at 0 (see pruneStaleEntries): nothing would be
+    // pruned, so the warning must not claim otherwise.
+    expect(warning).toBeNull();
+  });
 });
