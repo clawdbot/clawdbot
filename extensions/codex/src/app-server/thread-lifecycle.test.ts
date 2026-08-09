@@ -120,6 +120,39 @@ describe("Codex ring-zero thread config", () => {
     ).rejects.toThrow(failure);
   });
 
+  it.each([
+    {
+      name: "an empty status inventory",
+      statuses: [],
+      failure: "is missing server inherited",
+    },
+    {
+      name: "one missing server",
+      statuses: [disabledMcpServerStatus("inherited")],
+      failure: "is missing server request",
+    },
+    {
+      name: "a duplicate server",
+      statuses: [disabledMcpServerStatus("inherited"), disabledMcpServerStatus("inherited")],
+      failure: "returned duplicate server inherited",
+    },
+  ])("rejects $name", async ({ statuses, failure }) => {
+    const request = vi.fn(async () => ({ data: statuses, nextCursor: null }));
+
+    await expect(
+      attestCodexRestrictedToolSurfaceMcpServersDisabled(
+        { request } as never,
+        "thread-restricted",
+        {
+          mcp_servers: {
+            inherited: { enabled: false },
+            request: { enabled: false },
+          },
+        },
+      ),
+    ).rejects.toThrow(failure);
+  });
+
   it("applies the restriction to both thread start and resume", () => {
     const params = createAttemptParams({ provider: "openai" });
     params.toolsAllow = ["openclaw"];
