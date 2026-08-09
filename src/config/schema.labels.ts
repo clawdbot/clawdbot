@@ -443,6 +443,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "memory.search.rememberAcrossConversations": "Remember Across Conversations",
   "memory.search.sources": "Memory Search Sources",
   "memory.search.extraPaths": "Extra Memory Paths",
+  "memory.search.extraPaths.*.path": "Extra Memory Path",
+  "memory.search.extraPaths.*.pattern": "Extra Memory Path Pattern",
   "memory.search.multimodal": "Memory Search Multimodal",
   "memory.search.multimodal.enabled": "Enable Memory Search Multimodal",
   "memory.search.multimodal.modalities": "Memory Search Multimodal Modalities",

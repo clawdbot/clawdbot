@@ -332,6 +332,129 @@ function createRequestGatewayMethodRegistry(
   );
 }
 
+type GatewayRequestEnvelopeOptions<T> = Pick<
+  GatewayRequestOptions,
+  "context" | "isWebchatConnect"
+> & {
+  methodRegistry: GatewayMethodRegistry;
+  reject: (error: ReturnType<typeof errorShape>) => T | Promise<T>;
+};
+
+/** Runs admitted Gateway work inside the shared root and plugin request scopes. */
+export async function runWithGatewayRequestEnvelope<T>(
+  method: string,
+  client: GatewayRequestOptions["client"],
+  fn: () => T | Promise<T>,
+  options: GatewayRequestEnvelopeOptions<T>,
+): Promise<T> {
+  const rejectRateLimitedControlPlaneWrite = (): ReturnType<typeof errorShape> | undefined => {
+    if (!options.methodRegistry.isControlPlaneWrite(method)) {
+      return undefined;
+    }
+    const budget = consumeControlPlaneWriteBudget({ client, method });
+    if (budget.allowed) {
+      return undefined;
+    }
+    const actor = resolveControlPlaneActor(client);
+    options.context.logGateway.warn(
+      `control-plane write rate-limited method=${method} ${formatControlPlaneActor(actor)} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
+    );
+    return errorShape(
+      ErrorCodes.UNAVAILABLE,
+      `rate limit exceeded for ${method}; retry after ${Math.ceil(budget.retryAfterMs / 1000)}s`,
+      {
+        retryable: true,
+        retryAfterMs: budget.retryAfterMs,
+        details: {
+          method,
+          limit: `${CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS} per ${CONTROL_PLANE_RATE_LIMIT_WINDOW_MS / 1000}s`,
+        },
+      },
+    );
+  };
+  const isSuspendPrepare = method === "gateway.suspend.prepare";
+  const preAdmissionRateLimitError = isSuspendPrepare
+    ? rejectRateLimitedControlPlaneWrite()
+    : undefined;
+  if (preAdmissionRateLimitError) {
+    // Preparation must stay protected even before it owns the root admission that it closes.
+    return await options.reject(preAdmissionRateLimitError);
+  }
+  const rootWorkAdmission = tryBeginGatewayRootWorkAdmission();
+  if (isSuspendPrepare && rootWorkAdmission && !rootWorkAdmission.ownsRoot) {
+    return await options.reject(
+      errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
+        retryable: true,
+        retryAfterMs: 1_000,
+        details: { method, reason: "nested-gateway-request" },
+      }),
+    );
+  }
+  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(method)) {
+    const restartDraining = isGatewayRestartDraining();
+    return await options.reject(
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${method} unavailable during gateway ${restartDraining ? "restart" : "suspension"}`,
+        {
+          retryable: true,
+          retryAfterMs: 1_000,
+          details: {
+            method,
+            reason: restartDraining ? "gateway-restarting" : "gateway-suspending",
+            phase: getGatewaySuspendAdmissionPhase(),
+          },
+        },
+      ),
+    );
+  }
+  const postAdmissionRateLimitError = isSuspendPrepare
+    ? undefined
+    : rejectRateLimitedControlPlaneWrite();
+  if (postAdmissionRateLimitError) {
+    // A closed admission must reject first so refused writes do not exhaust the controller's
+    // budget and strand it behind rate limiting after suspension resumes.
+    try {
+      return await options.reject(postAdmissionRateLimitError);
+    } finally {
+      rootWorkAdmission?.release();
+    }
+  }
+  const invokeWithRequestScope = async () => {
+    try {
+      const pluginRegistry =
+        (options.methodRegistry.pluginRegistry as
+          | NonNullable<ReturnType<typeof getActivePluginRegistry>>
+          | undefined) ??
+        getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+        getActivePluginRegistry() ??
+        undefined;
+      return await withPluginRuntimeGatewayRequestScope(
+        {
+          context: options.context,
+          client,
+          isWebchatConnect: options.isWebchatConnect,
+          ...(pluginRegistry ? { pluginRegistry } : {}),
+        },
+        fn,
+      );
+    } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        return await options.reject(error.error);
+      }
+      throw error;
+    }
+  };
+  if (!rootWorkAdmission) {
+    return await invokeWithRequestScope();
+  }
+  try {
+    return await rootWorkAdmission.run(invokeWithRequestScope);
+  } finally {
+    rootWorkAdmission.release();
+  }
+}
+
 /** Authorizes and dispatches one gateway JSON-RPC-style request. */
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
@@ -388,41 +511,6 @@ export async function handleGatewayRequest(
     );
     return;
   }
-  const rejectRateLimitedControlPlaneWrite = (): boolean => {
-    if (!methodRegistry.isControlPlaneWrite(req.method)) {
-      return false;
-    }
-    const budget = consumeControlPlaneWriteBudget({ client, method: req.method });
-    if (budget.allowed) {
-      return false;
-    }
-    const actor = resolveControlPlaneActor(client);
-    context.logGateway.warn(
-      `control-plane write rate-limited method=${req.method} ${formatControlPlaneActor(actor)} retryAfterMs=${budget.retryAfterMs} key=${budget.key}`,
-    );
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `rate limit exceeded for ${req.method}; retry after ${Math.ceil(budget.retryAfterMs / 1000)}s`,
-        {
-          retryable: true,
-          retryAfterMs: budget.retryAfterMs,
-          details: {
-            method: req.method,
-            limit: `${CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS} per ${CONTROL_PLANE_RATE_LIMIT_WINDOW_MS / 1000}s`,
-          },
-        },
-      ),
-    );
-    return true;
-  };
-  const isSuspendPrepare = req.method === "gateway.suspend.prepare";
-  if (isSuspendPrepare && rejectRateLimitedControlPlaneWrite()) {
-    // Preparation must stay protected even before it owns the root admission that it closes.
-    return;
-  }
   const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
   if (!handler) {
     respond(
@@ -430,50 +518,6 @@ export async function handleGatewayRequest(
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`),
     );
-    return;
-  }
-  const rootWorkAdmission = tryBeginGatewayRootWorkAdmission();
-  if (
-    req.method === "gateway.suspend.prepare" &&
-    rootWorkAdmission &&
-    !rootWorkAdmission.ownsRoot
-  ) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
-        retryable: true,
-        retryAfterMs: 1_000,
-        details: { method: req.method, reason: "nested-gateway-request" },
-      }),
-    );
-    return;
-  }
-  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(req.method)) {
-    const restartDraining = isGatewayRestartDraining();
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `${req.method} unavailable during gateway ${restartDraining ? "restart" : "suspension"}`,
-        {
-          retryable: true,
-          retryAfterMs: 1_000,
-          details: {
-            method: req.method,
-            reason: restartDraining ? "gateway-restarting" : "gateway-suspending",
-            phase: getGatewaySuspendAdmissionPhase(),
-          },
-        },
-      ),
-    );
-    return;
-  }
-  if (!isSuspendPrepare && rejectRateLimitedControlPlaneWrite()) {
-    // A closed admission must reject first so refused writes do not exhaust the controller's
-    // budget and strand it behind rate limiting after suspension resumes.
-    rootWorkAdmission?.release();
     return;
   }
   const invokeHandler = () =>
@@ -489,43 +533,10 @@ export async function handleGatewayRequest(
         ? { sessionMutationAuthorization: sessionMutation.authorization }
         : {}),
     });
-  // All handlers run inside a request scope so that plugin runtime
-  // subagent methods (e.g. context engine tools spawning sub-agents
-  // during tool execution) can dispatch back into the gateway.
-  // The scope also carries caller identity into plugin-owned gateway methods.
-  const invokeWithRequestScope = async () => {
-    try {
-      const pluginRegistry =
-        (methodRegistry.pluginRegistry as
-          | NonNullable<ReturnType<typeof getActivePluginRegistry>>
-          | undefined) ??
-        getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
-        getActivePluginRegistry() ??
-        undefined;
-      await withPluginRuntimeGatewayRequestScope(
-        {
-          context,
-          client,
-          isWebchatConnect,
-          ...(pluginRegistry ? { pluginRegistry } : {}),
-        },
-        invokeHandler,
-      );
-    } catch (error) {
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        respond(false, undefined, error.error);
-        return;
-      }
-      throw error;
-    }
-  };
-  if (!rootWorkAdmission) {
-    await invokeWithRequestScope();
-    return;
-  }
-  try {
-    await rootWorkAdmission.run(invokeWithRequestScope);
-  } finally {
-    rootWorkAdmission.release();
-  }
+  await runWithGatewayRequestEnvelope(req.method, client, invokeHandler, {
+    context,
+    isWebchatConnect,
+    methodRegistry,
+    reject: (error) => respond(false, undefined, error),
+  });
 }
