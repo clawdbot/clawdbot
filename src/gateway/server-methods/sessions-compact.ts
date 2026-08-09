@@ -10,7 +10,9 @@ import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/l
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   resolveSessionWorkStartError,
+  SESSION_TOTAL_TOKENS_VERSION,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
+  type SessionEntry,
 } from "../../config/sessions.js";
 import {
   applySessionPatchProjection,
@@ -75,14 +77,11 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     const compactRead = await applySessionPatchProjection({
       agentId: target.agentId,
       storePath,
-      resolveTarget: ({ entries }) => {
-        const snapshot = Object.fromEntries(
-          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-        );
+      resolveTarget: ({ store }) => {
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key,
-          store: snapshot,
+          store: store as Record<string, SessionEntry>,
           agentId: requestedAgentId,
         });
         compactPrimaryKey = primaryKey;
@@ -434,9 +433,11 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                   ) {
                     entryToUpdate.totalTokens = result.result.tokensAfter;
                     entryToUpdate.totalTokensFresh = true;
+                    entryToUpdate.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
                   } else {
                     delete entryToUpdate.totalTokens;
                     delete entryToUpdate.totalTokensFresh;
+                    delete entryToUpdate.totalTokensVersion;
                   }
                   return { ok: true, entry: entryToUpdate };
                 },

@@ -4,6 +4,7 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import { runWithCronCreatorAuthority } from "../../agents/cron-creator-authority-context.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
@@ -23,6 +24,7 @@ import {
   tryFinalizeTrackedAgentTask,
   type GatewayAgentTaskTrackingMode,
 } from "./agent-task-tracking.js";
+import type { GatewayCronCreatorAuthorityAdmission } from "./cron-creator-authority-admission.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 function resolveResolvedAgentTimeoutStopReason(
@@ -81,7 +83,11 @@ const RESOLVED_GATEWAY_STATUS_BY_TERMINAL_CLASSIFICATION = {
 function projectRejectedGatewayStatus(outcome: AgentRunTerminalOutcome): "error" | "timeout" {
   // The shipped wire keeps raw provider/AbortError rejections as errors. Only
   // signal-owned cancellation/timeout metadata promotes a rejection to timeout.
-  return outcome.reason === "cancelled" || outcome.stopReason === "timeout" ? "timeout" : "error";
+  return outcome.reason === "cancelled" ||
+    outcome.reason === "superseded" ||
+    outcome.stopReason === "timeout"
+    ? "timeout"
+    : "error";
 }
 
 export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
@@ -100,6 +106,7 @@ export function deleteGatewayDedupeEntries(params: {
 export function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
   runId: string;
+  cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   dedupeKeys: readonly string[];
   /**
    * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
@@ -161,9 +168,18 @@ export function dispatchAgentRunFromGateway(params: {
       return false;
     }
   };
-  void agentCommandFromGatewayIngress(params.ingressOpts, defaultRuntime, params.context.deps, {
-    restoreAdmittedRecovery: params.restoreAdmittedRecovery,
-  })
+  const runAgent = () =>
+    agentCommandFromGatewayIngress(params.ingressOpts, defaultRuntime, params.context.deps, {
+      restoreAdmittedRecovery: params.restoreAdmittedRecovery,
+    });
+  const agentRun = params.cronCreatorAuthority
+    ? runWithCronCreatorAuthority(
+        params.cronCreatorAuthority.runId,
+        runAgent,
+        params.abortController.signal,
+      )
+    : runAgent();
+  void agentRun
     .then(async (result) => {
       const signalStopReason = resolveResolvedAgentTimeoutStopReason(
         result?.meta,

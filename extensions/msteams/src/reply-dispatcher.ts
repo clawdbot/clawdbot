@@ -566,11 +566,11 @@ export function createMSTeamsReplyDispatcher(params: {
         onReasoningStream: async (payload: PipelinePayload) => {
           const text = typeof payload?.text === "string" ? payload.text : undefined;
           if (!text) {
-            return;
+            return false;
           }
           if (payload?.isReasoningSnapshot !== true) {
             await streamController.pushProgressLine(text);
-            return;
+            return false;
           }
           await streamController.pushProgressLine(
             buildChannelProgressDraftLine({
@@ -581,6 +581,7 @@ export function createMSTeamsReplyDispatcher(params: {
               progressText: text,
             }),
           );
+          return false;
         },
         onToolStart: async (payload: PipelinePayload) => {
           const name = typeof payload?.name === "string" ? payload.name : undefined;
@@ -605,6 +606,7 @@ export function createMSTeamsReplyDispatcher(params: {
             ),
             name ? { toolName: name } : undefined,
           );
+          return false;
         },
         onItemEvent: async (payload: PipelinePayload) => {
           await streamController.pushProgressLine(
@@ -626,18 +628,20 @@ export function createMSTeamsReplyDispatcher(params: {
               ...(typeof payload?.meta === "string" ? { meta: payload.meta } : {}),
             }),
           );
+          return false;
         },
         onPlanUpdate: async (payload: PipelinePayload) => {
           if (payload?.phase !== "update") {
-            return;
+            return false;
           }
           await streamController.pushPlanProgress(normalizeAgentPlanSteps(payload.steps), {
             explanation: typeof payload.explanation === "string" ? payload.explanation : undefined,
           });
+          return false;
         },
         onApprovalEvent: async (payload: PipelinePayload) => {
           if (payload?.phase !== "requested") {
-            return;
+            return false;
           }
           await streamController.pushProgressLine(
             buildChannelProgressDraftLine({
@@ -649,10 +653,11 @@ export function createMSTeamsReplyDispatcher(params: {
               ...(typeof payload?.message === "string" ? { message: payload.message } : {}),
             }),
           );
+          return false;
         },
         onCommandOutput: async (payload: PipelinePayload) => {
           if (payload?.phase !== "end") {
-            return;
+            return false;
           }
           await streamController.pushProgressLine(
             buildChannelProgressDraftLine({
@@ -668,10 +673,11 @@ export function createMSTeamsReplyDispatcher(params: {
               ...(typeof payload?.exitCode === "number" ? { exitCode: payload.exitCode } : {}),
             }),
           );
+          return false;
         },
         onPatchSummary: async (payload: PipelinePayload) => {
           if (payload?.phase !== "end") {
-            return;
+            return false;
           }
           await streamController.pushProgressLine(
             buildChannelProgressDraftLine({
@@ -698,6 +704,7 @@ export function createMSTeamsReplyDispatcher(params: {
               ...(typeof payload?.summary === "string" ? { summary: payload.summary } : {}),
             }),
           );
+          return false;
         },
       }
     : {};
@@ -711,8 +718,10 @@ export function createMSTeamsReplyDispatcher(params: {
     replyOptions: {
       ...(streamController.hasStream()
         ? {
-            onPartialReply: (payload: { text?: string }) =>
-              streamController.onPartialReply(payload),
+            onPartialReply: (payload: { text?: string }) => {
+              streamController.onPartialReply(payload);
+              return false;
+            },
           }
         : {}),
       ...progressCallbacks,

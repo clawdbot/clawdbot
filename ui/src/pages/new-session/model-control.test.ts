@@ -9,13 +9,18 @@ import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
-function contextWith(models: ModelCatalogEntry[], runtime = "openclaw") {
+function contextWith(
+  models: ModelCatalogEntry[],
+  runtime = "openclaw",
+  featureMethods: string[] = [],
+) {
   const request = vi.fn().mockResolvedValue({ models });
   const context = {
     gateway: {
       snapshot: {
         phase: "connected",
         client: { request },
+        hello: { features: { methods: featureMethods } },
       },
     },
     sessions: {
@@ -76,6 +81,93 @@ afterEach(() => {
 });
 
 describe("new-session model runtime", () => {
+  it("keeps CLI agents hidden and undiscovered while the Labs gate is off", async () => {
+    const { context, request } = contextWith([
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+
+    control.load(context, "main", true);
+    control.loadCatalogTargets(context, "main", false);
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).not.toHaveBeenCalledWith("sessions.catalog.list", expect.anything());
+    expect(
+      renderControl(control, context).querySelector("[data-chat-model-target-group]"),
+    ).toBeNull();
+  });
+
+  it("lists create-capable CLI agents and selects the canonical catalog target", async () => {
+    const { context, request } = contextWith(
+      [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
+      "openclaw",
+      ["sessions.catalog.list"],
+    );
+    request.mockImplementation((method: string) =>
+      method === "sessions.catalog.list"
+        ? Promise.resolve({
+            catalogs: [
+              {
+                id: "anthropic",
+                label: "Claude Code",
+                capabilities: { createSession: { model: "anthropic/claude-sonnet-4-6" } },
+                hosts: [],
+              },
+              {
+                id: "history-only",
+                label: "History only",
+                capabilities: {},
+                hosts: [],
+              },
+            ],
+          })
+        : Promise.resolve({
+            models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
+          }),
+    );
+    const onCatalogTargetSelect = vi.fn();
+    const control = new NewSessionModelControl(
+      () => undefined,
+      () => undefined,
+      onCatalogTargetSelect,
+    );
+
+    control.load(context, "main", true);
+    control.loadCatalogTargets(context, "main", true);
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "sessions.catalog.list",
+        { agentId: "main", limitPerHost: 1 },
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+    await vi.waitFor(() => {
+      const container = renderControl(control, context);
+      expect(container.querySelector('[data-chat-model-target-group="cliAgents"]')).not.toBeNull();
+      expect(container.querySelector('[data-chat-model-target="anthropic"]')).not.toBeNull();
+      expect(container.textContent).not.toContain("History only");
+    });
+
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-target="anthropic"]')
+      ?.click();
+
+    expect(onCatalogTargetSelect).toHaveBeenCalledExactlyOnceWith("anthropic");
+  });
+
+  it("does not discover CLI agents when the Gateway omits catalog support", async () => {
+    const { context, request } = contextWith([
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+
+    control.loadCatalogTargets(context, "main", true);
+    await Promise.resolve();
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("restores a browser preference only after the model and thinking level validate", async () => {
     const { context } = contextWith([
       {

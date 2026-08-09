@@ -110,7 +110,7 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}chat`);
         expect(response?.status()).toBe(200);
-        const showFiles = page.getByRole("button", { name: "Show thread files", exact: true });
+        const showFiles = page.getByRole("button", { name: "Show session files", exact: true });
         await showFiles.waitFor();
         await showFiles.click();
         const toggle = page.getByRole("button", { name: "Toggle browser panel", exact: true });

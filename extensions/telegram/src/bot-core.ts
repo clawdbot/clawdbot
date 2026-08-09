@@ -13,7 +13,6 @@ import {
 import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeGroupActivation } from "openclaw/plugin-sdk/group-activation";
 import {
-  isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
@@ -313,10 +312,6 @@ export function createTelegramBotCore(
     providerSetting: telegramCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
   });
-  const nativeDisabledExplicit = isNativeCommandsExplicitlyDisabled({
-    providerSetting: telegramCfg.commands?.native,
-    globalSetting: cfg.commands?.native,
-  });
   const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const resolveGroupPolicy = (chatId: string | number, turnCfg: OpenClawConfig) =>
@@ -412,7 +407,6 @@ export function createTelegramBotCore(
     mediaMaxBytes,
     nativeEnabled,
     nativeSkillsEnabled,
-    nativeDisabledExplicit,
     resolveGroupPolicy,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,

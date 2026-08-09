@@ -120,6 +120,8 @@ export function meetBrowserState(overrides: Record<string, unknown> = {}) {
   return {
     inCall: true,
     micMuted: false,
+    audioInputRouted: true,
+    audioOutputRouted: true,
     title: "Meet call",
     url: MEET_URL,
     ...overrides,

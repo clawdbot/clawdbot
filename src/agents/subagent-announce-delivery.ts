@@ -26,7 +26,7 @@ import {
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
-import { sessionDeliveryChannel } from "../utils/delivery-context.js";
+import { sessionDeliveryChannel } from "../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayMessageChannel,
@@ -224,7 +224,7 @@ async function resolveActiveWakeWithRetries(
   message: string,
   wakeOptions: EmbeddedAgentQueueMessageOptions,
   signal?: AbortSignal,
-  isSourceSessionEffectsAllowed?: () => boolean,
+  isAttemptAllowed?: () => boolean,
 ): Promise<EmbeddedAgentQueueMessageOutcome | typeof SOURCE_OWNER_CHANGED> {
   // Bound the whole active wake by the caller's delivery window. Each retry
   // passes only the remaining window into transcript-commit waiting so a
@@ -247,10 +247,13 @@ async function resolveActiveWakeWithRetries(
       deliveryTimeoutMs: remainingDeliveryTimeoutMs,
     };
   };
-  const attemptWake = (options: EmbeddedAgentQueueMessageOptions) =>
-    isSourceSessionEffectsAllowed?.() === false
-      ? SOURCE_OWNER_CHANGED
-      : resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, options);
+  const attemptWake = async (options: EmbeddedAgentQueueMessageOptions) => {
+    if (isAttemptAllowed?.() === false) {
+      return SOURCE_OWNER_CHANGED;
+    }
+    const result = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, options);
+    return isAttemptAllowed?.() === false ? SOURCE_OWNER_CHANGED : result;
+  };
   let outcome = await attemptWake(currentOptions);
   const compactionRetryDelaysMs = resolveCompactionSteerRetryDelaysMs();
   let compactionRetryIndex = 0;
@@ -261,7 +264,7 @@ async function resolveActiveWakeWithRetries(
     if (outcome.queued || signal?.aborted) {
       break;
     }
-    if (isSourceSessionEffectsAllowed?.() === false) {
+    if (isAttemptAllowed?.() === false) {
       outcome = SOURCE_OWNER_CHANGED;
       break;
     }
@@ -923,6 +926,11 @@ async function sendSubagentAnnounceDirectly(params: {
       subagentCompletionEvents[0]?.childSessionKey === params.sourceSessionKey
         ? subagentCompletionEvents[0]
         : undefined;
+    const hasRequiredSubagentNoOutputCompletion =
+      params.expectsCompletionMessage &&
+      isSubagentCompletion &&
+      (trustedCompletionEvent?.result.trim() === "(no output)" ||
+        hasFailedSubagentNoOutputCompletion(params.internalEvents));
     const agentMediatedCompletion =
       params.expectsCompletionMessage && isAgentMediatedCompletionSourceTool(sourceToolId);
     const completionRouteRequiresMessageToolDelivery =
@@ -958,7 +966,10 @@ async function sendSubagentAnnounceDirectly(params: {
         error: "requester session abandoned after timeout",
       };
     }
-    if (params.expectsCompletionMessage && params.isCompletionOwnedByRequesterYield?.()) {
+    const isCompletionDeliveryAllowed = () =>
+      params.isSourceSessionEffectsAllowed?.() !== false &&
+      !(params.expectsCompletionMessage && params.isCompletionOwnedByRequesterYield?.());
+    if (!isCompletionDeliveryAllowed()) {
       // sessions_yield owns the post-turn synthesis. Starting or steering a
       // requester turn here would replay the original fanout during handoff.
       return {
@@ -977,7 +988,7 @@ async function sendSubagentAnnounceDirectly(params: {
         deliveryTarget,
         internalEvents: params.internalEvents,
         onDeliveryResult: params.onDeliveryResult,
-        isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+        isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
@@ -1014,7 +1025,7 @@ async function sendSubagentAnnounceDirectly(params: {
         params.triggerMessage,
         wakeOptions,
         params.signal,
-        params.isSourceSessionEffectsAllowed,
+        isCompletionDeliveryAllowed,
       );
       if (wakeOutcome === SOURCE_OWNER_CHANGED) {
         return sourceOwnerChangedResult();
@@ -1092,9 +1103,9 @@ async function sendSubagentAnnounceDirectly(params: {
           ? "completion direct announce agent call"
           : "direct announce agent call",
         signal: params.signal,
-        isAttemptAllowed: params.isSourceSessionEffectsAllowed,
+        isAttemptAllowed: isCompletionDeliveryAllowed,
         run: async () => {
-          if (params.isSourceSessionEffectsAllowed?.() === false) {
+          if (!isCompletionDeliveryAllowed()) {
             throw new SourceOwnerChangedError();
           }
           return await runAnnounceAgentCall({
@@ -1120,6 +1131,9 @@ async function sendSubagentAnnounceDirectly(params: {
           });
         },
       });
+      if (!isCompletionDeliveryAllowed()) {
+        return sourceOwnerChangedResult();
+      }
     } catch (err) {
       if (err instanceof SourceOwnerChangedError) {
         return sourceOwnerChangedResult();
@@ -1180,21 +1194,34 @@ async function sendSubagentAnnounceDirectly(params: {
       (hasVisibleAgentPayload(directAnnounceResult, completionPayloadVisibility) ||
         hasMessagingToolDelivery),
     );
+    const hasVisibleNonSilentGatewayPayload = Boolean(
+      directAnnounceResult &&
+      hasVisibleAgentPayload(directAnnounceResult, {
+        ...completionPayloadVisibility,
+        includeSilentReplyPayloads: false,
+      }),
+    );
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
     );
+    const hasCompletionSideEffect = Boolean(
+      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
+    );
+    const hasVisibleRequiredCompletionReply =
+      hasMessagingToolDelivery ||
+      (!requiresMessageToolDelivery && hasVisibleNonSilentGatewayPayload);
     if (
       params.expectsCompletionMessage &&
       shouldDeliverAgentFinal &&
       isSubagentCompletion &&
-      !hasVisibleGatewayPayload &&
+      !hasVisibleNonSilentGatewayPayload &&
       !hasMessagingToolDelivery
     ) {
       const textDelivery = await tryTextCompletionDirectDelivery();
       if (textDelivery) {
         return textDelivery;
       }
-      if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
+      if (hasRequiredSubagentNoOutputCompletion && !hasCompletionSideEffect) {
         return {
           delivered: false,
           path: "direct",
@@ -1204,12 +1231,27 @@ async function sendSubagentAnnounceDirectly(params: {
       }
     }
     if (
+      hasRequiredSubagentNoOutputCompletion &&
+      !hasVisibleRequiredCompletionReply &&
+      hasCompletionSideEffect
+    ) {
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+        disposition: "permanent_failure",
+      };
+    }
+    if (
       params.expectsCompletionMessage &&
       requiresMessageToolDelivery &&
       !hasMessagingToolDelivery &&
-      (!hasIntentionalSilentCompletionReply || subagentDirectMessageCompletionRequiresMessageTool)
+      (!hasIntentionalSilentCompletionReply ||
+        subagentDirectMessageCompletionRequiresMessageTool ||
+        hasRequiredSubagentNoOutputCompletion)
     ) {
-      if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
+      if (hasRequiredSubagentNoOutputCompletion) {
         return {
           delivered: false,
           path: "direct",
@@ -1258,9 +1300,6 @@ async function sendSubagentAnnounceDirectly(params: {
         ) &&
           (!params.requireVisibleReply ||
             directAnnounceResult.deliveryStatus?.status !== "suppressed"))),
-    );
-    const hasCompletionSideEffect = Boolean(
-      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
     );
     const acceptsIntentionalSilentCompletion =
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;

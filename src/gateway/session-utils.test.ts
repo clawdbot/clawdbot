@@ -42,7 +42,6 @@ import {
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
-  resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
@@ -1104,6 +1103,7 @@ describe("gateway session utils", () => {
         updatedAt: 1,
         totalTokens: 0,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
 
@@ -1149,6 +1149,113 @@ describe("gateway session utils", () => {
       });
 
       expect(row.totalTokens).toBe(40);
+    });
+  });
+
+  test("SQLite unavailable context blocks old totals until a later valid snapshot", async () => {
+    await withStateDirEnv("session-utils-unavailable-usage-", async ({ stateDir }) => {
+      const sessionId = "unavailable-usage";
+      const sessionKey = "agent:main:main";
+      const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      const entry: SessionEntry = {
+        sessionId,
+        updatedAt: 1,
+        totalTokens: 1_124_767,
+        totalTokensFresh: false,
+      };
+      await seedSessionEntries(storePath, { [sessionKey]: entry });
+      appendTranscriptMessages({
+        sessionId,
+        sessionKey,
+        storePath,
+        messages: [
+          {
+            role: "assistant",
+            api: "cli",
+            content: "old cumulative turn",
+            usage: {
+              input: 128_814,
+              output: 3_000,
+              cacheRead: 992_953,
+              totalTokens: 1_124_767,
+            },
+          },
+        ],
+      });
+
+      const legacyRow = buildGatewaySessionRow({
+        cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-7" }),
+        storePath,
+        store: { [sessionKey]: entry },
+        key: sessionKey,
+        entry,
+      });
+      expect(legacyRow.totalTokens).toBeUndefined();
+      expect(legacyRow.totalTokensFresh).toBe(false);
+
+      appendTranscriptMessages({
+        sessionId,
+        sessionKey,
+        storePath,
+        messages: [
+          {
+            role: "assistant",
+            api: "cli",
+            content: "usage unavailable",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              contextUsage: { state: "unavailable" },
+            },
+          },
+        ],
+      });
+
+      const unavailableRow = buildGatewaySessionRow({
+        cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-7" }),
+        storePath,
+        store: { [sessionKey]: entry },
+        key: sessionKey,
+        entry,
+      });
+      expect(unavailableRow.totalTokens).toBeUndefined();
+      expect(unavailableRow.totalTokensFresh).toBe(false);
+
+      appendTranscriptMessages({
+        sessionId,
+        sessionKey,
+        storePath,
+        messages: [
+          {
+            role: "assistant",
+            api: "cli",
+            content: "valid later turn",
+            usage: {
+              input: 67_932,
+              output: 2_000,
+              cacheRead: 18_944,
+              totalTokens: 88_876,
+              contextUsage: {
+                state: "available",
+                promptTokens: 86_876,
+                totalTokens: 88_876,
+              },
+            },
+          },
+        ],
+      });
+      const validRow = buildGatewaySessionRow({
+        cfg: createModelDefaultsConfig({ primary: "anthropic/claude-opus-4-7" }),
+        storePath,
+        store: { [sessionKey]: entry },
+        key: sessionKey,
+        entry,
+      });
+      expect(validRow.totalTokens).toBe(86_876);
+      expect(validRow.totalTokensFresh).toBe(true);
     });
   });
 
@@ -2963,6 +3070,7 @@ describe("listSessionsFromStore selected model display", () => {
           model: "gpt-5.4",
           totalTokens: 1,
           totalTokensFresh: true,
+          totalTokensVersion: 1,
           contextTokens: 1,
           estimatedCostUsd: 0,
         } as SessionEntry;
@@ -3317,43 +3425,6 @@ describe("listSessionsFromStore selected model display", () => {
 
     expect(result.sessions[0]?.modelProvider).toBe("anthropic");
     expect(result.sessions[0]?.model).toBe("claude-sonnet-4-6");
-  });
-});
-
-describe("resolveSessionDisplayModelIdentityRef", () => {
-  test("canonicalizes CLI runtime provider to the selected model provider", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "anthropic/claude-opus-4-7",
-      agentRuntime: { id: "claude-cli" },
-    });
-
-    expect(
-      resolveSessionDisplayModelIdentityRef({
-        cfg,
-        agentId: "main",
-        provider: "claude-cli",
-        model: "claude-opus-4-7",
-      }),
-    ).toEqual({ provider: "anthropic", model: "claude-opus-4-7" });
-  });
-
-  test("prefers configured provider inference over default-provider parsing for bare CLI models", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "openai/gpt-5.4",
-      models: {
-        "anthropic/claude-opus-4-7": {},
-      },
-      agentRuntime: { id: "claude-cli" },
-    });
-
-    expect(
-      resolveSessionDisplayModelIdentityRef({
-        cfg,
-        agentId: "main",
-        provider: "claude-cli",
-        model: "claude-opus-4-7",
-      }),
-    ).toEqual({ provider: "anthropic", model: "claude-opus-4-7" });
   });
 });
 

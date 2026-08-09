@@ -25,6 +25,10 @@ export type AgentRunSessionTarget = {
   sessionKey?: string;
   storePath?: string;
   threadId?: string | number;
+  /** Internal admission fence paired with sessionId for run-owned transcript writes. */
+  expectedLifecycleRevision?: string;
+  /** Internal durable writer claim installed after session-lane admission. */
+  expectedWriterRunId?: string;
 };
 
 /** Canonical SQLite target resolved from the storage-neutral run identity. */

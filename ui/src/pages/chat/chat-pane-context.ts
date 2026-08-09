@@ -180,6 +180,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }));
     const sourceChanged = connectionLifecycle.transition(snapshot);
     const clientChanged = this.connectedClient !== snapshot.client;
+    if (clientChanged) {
+      this.replaceBrowserAnnotationGatewayOwner(snapshot.client);
+    }
     if (snapshot.phase !== "connected") {
       this.presencePayload = undefined;
     } else if (clientChanged || !wasConnected) {

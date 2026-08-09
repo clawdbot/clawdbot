@@ -19,8 +19,8 @@ import { B3InjectEncoding, B3Propagator } from "@opentelemetry/propagator-b3";
 import { JaegerPropagator } from "@opentelemetry/propagator-jaeger";
 
 const DEFAULT_PROPAGATORS = ["tracecontext", "baggage"];
-const CONTEXT_OWNER_KEY = createContextKey("openclaw.disabled-sdk.context-owner");
-const PROPAGATOR_OWNER_KEY = createContextKey("openclaw.disabled-sdk.propagator-owner");
+const CONTEXT_OWNER_KEY = createContextKey("openclaw.owned-sdk.context-owner");
+const PROPAGATOR_OWNER_KEY = createContextKey("openclaw.owned-sdk.propagator-owner");
 
 class OwnedContextManager extends AsyncLocalStorageContextManager {
   constructor(private readonly owner: object) {
@@ -110,7 +110,7 @@ function createConfiguredPropagator(warn: (message: string) => void): TextMapPro
   return propagators.length === 1 ? propagators[0]! : new CompositePropagator({ propagators });
 }
 
-export function registerDisabledSdkRuntime(warn: (message: string) => void): (() => void) | null {
+export function registerOwnedSdkRuntime(warn: (message: string) => void): (() => void) | null {
   const owner = {};
   const contextManager = new OwnedContextManager(owner).enable();
   const ownsContext = context.setGlobalContextManager(contextManager);

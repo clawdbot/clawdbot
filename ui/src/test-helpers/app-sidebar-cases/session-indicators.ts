@@ -6,6 +6,12 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-r
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 
+function expectEmptyLead(row: Element | null) {
+  const lead = row?.querySelector(".sidebar-session-indicator");
+  expect(lead).not.toBeNull();
+  expect(lead?.childElementCount).toBe(0);
+}
+
 describe("AppSidebar session indicators", () => {
   it("preserves child PR indicators and concurrent pinned run/unread glyph state", async () => {
     const parentKey = "agent:main:parent";
@@ -178,28 +184,28 @@ describe("AppSidebar session indicators", () => {
       expect(sidebar.querySelector('[data-session-pr-state="merged"]')).not.toBeNull();
     });
     const plain = sidebar.querySelector(`[data-session-key="${keys.plain}"]`);
-    expect(plain?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expectEmptyLead(plain);
     expect(plain?.querySelector(".session-row-state")).toBeNull();
 
     const forked = sidebar.querySelector(`[data-session-key="${keys.forked}"]`);
-    expect(forked?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expectEmptyLead(forked);
     expect(
       forked?.querySelector(".session-row-aside > .session-row-state .session-row-fork-indicator"),
     ).not.toBeNull();
     expect(forked?.querySelector(".session-row-fork-indicator")?.getAttribute("aria-label")).toBe(
-      "Forked thread",
+      "Forked session",
     );
     expect(forked?.querySelector(".session-row-fork-indicator")?.hasAttribute("title")).toBe(false);
 
     const unread = sidebar.querySelector(`[data-session-key="${keys.unread}"]`);
-    expect(unread?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expectEmptyLead(unread);
     expect(
       unread?.querySelector(".session-row-aside > .session-row-state .session-unread-dot"),
     ).not.toBeNull();
 
     const runningUnread = sidebar.querySelector(`[data-session-key="${keys.runningUnread}"]`);
     expect(runningUnread?.classList.contains("session-row-host--running")).toBe(true);
-    expect(runningUnread?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expectEmptyLead(runningUnread);
     expect(
       runningUnread?.querySelector(".session-row-aside > .session-row-state .session-run-spinner"),
     ).not.toBeNull();
@@ -213,7 +219,7 @@ describe("AppSidebar session indicators", () => {
       expect(descriptionId).toBe(`sidebar-session-state-${encodeURIComponent(key)}`);
       expect(sidebar.querySelector(`[id="${descriptionId}"]`)).not.toBeNull();
     }
-    expect(forked?.querySelector("a")?.getAttribute("title")).toContain("Forked thread");
+    expect(forked?.querySelector("a")?.getAttribute("title")).toContain("Forked session");
     expect(unread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
     expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Active run");
     expect(runningUnread?.querySelector("a")?.getAttribute("title")).toContain("Unread");
@@ -223,7 +229,7 @@ describe("AppSidebar session indicators", () => {
 
     for (const key of [keys.openPullRequest, keys.mergedPullRequest]) {
       const row = sidebar.querySelector(`[data-session-key="${key}"]`);
-      expect(row?.querySelector(".sidebar-session-indicator")).toBeNull();
+      expectEmptyLead(row);
       expect(row?.querySelector(".session-row-state [data-session-pr-state]")).not.toBeNull();
       expect(row?.querySelector("a")?.getAttribute("title")).toContain(
         key === keys.openPullRequest ? "Open PR" : "Merged",
@@ -239,11 +245,7 @@ describe("AppSidebar session indicators", () => {
     sessions.publishList({ result });
     await waitForFast(() => {
       expect(sidebar.querySelector('[data-session-pr-state="open"]')).toBeNull();
-      expect(
-        sidebar.querySelector(
-          `[data-session-key="${keys.openPullRequest}"] .sidebar-session-indicator`,
-        ),
-      ).toBeNull();
+      expectEmptyLead(sidebar.querySelector(`[data-session-key="${keys.openPullRequest}"]`));
     });
   });
 });

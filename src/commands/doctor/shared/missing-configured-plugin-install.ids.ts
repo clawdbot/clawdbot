@@ -1,8 +1,4 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import {
-  listExplicitlyDisabledChannelIdsForConfig,
-  listPotentialConfiguredChannelIds,
-} from "../../../channels/config-presence.js";
 import { listRawChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel-plugin-ids.js";
@@ -17,6 +13,7 @@ import {
   resolveWebSearchInstallCatalogEntriesForEnv,
   resolveWebSearchInstallCatalogEntry,
 } from "../../../plugins/web-search-install-catalog.js";
+import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-installs.js";
 import { asObjectRecord } from "./object.js";
@@ -160,25 +157,22 @@ export function collectConfiguredChannelIds(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): Set<string> {
-  const ids = new Set<string>();
   if (asObjectRecord(cfg.plugins)?.enabled === false) {
-    return ids;
+    return new Set();
   }
-  const disabled = new Set(listExplicitlyDisabledChannelIdsForConfig(cfg));
   const candidateChannelIds = listRawChannelPluginCatalogEntries({
     env,
     excludeWorkspace: true,
   }).map((entry) => entry.id);
-  for (const channelId of listPotentialConfiguredChannelIds(cfg, env, {
-    channelIds: candidateChannelIds,
-    includePersistedAuthState: false,
-  })) {
-    const normalized = channelId.trim();
-    if (normalized && !disabled.has(normalized.toLowerCase())) {
-      ids.add(normalized);
-    }
-  }
-  return ids;
+  return new Set(
+    listDoctorConfiguredChannelIds(cfg, {
+      configEntryPolicy: "meaningful",
+      env: env ?? process.env,
+      candidateChannelIds,
+      skipWhenPluginsDisabled: true,
+      excludeExplicitlyDisabled: true,
+    }),
+  );
 }
 
 export function collectEffectiveConfiguredChannelOwnerPluginIds(params: {

@@ -4,6 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/command-auth-native";
 // Slack tests cover slash plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -186,17 +187,6 @@ function findFirstActionsBlock(payload: { blocks?: Array<{ type: string }> }) {
   return payload.blocks?.find((block) => block.type === "actions") as
     | { type: string; elements?: Array<{ type?: string; action_id?: string; confirm?: unknown }> }
     | undefined;
-}
-
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected Slack slash deferred resolver to be initialized");
-  }
-  return { promise, resolve };
 }
 
 function createArgMenusHarness(

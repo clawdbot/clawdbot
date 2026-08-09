@@ -1,6 +1,6 @@
 import Darwin
 import Foundation
-@_spi(AgentExecutionAttribution) import OpenClawKit
+import OpenClawKit
 import OSLog
 
 extension Notification.Name {
@@ -16,8 +16,18 @@ struct MacNodeHostManifest: Equatable, Sendable {
     let pathEnv: String
 }
 
+struct MacNodeHostWorkerLaunch: Equatable, Sendable {
+    let command: [String]
+    let currentDirectoryURL: URL?
+
+    init(command: [String], currentDirectoryURL: URL? = nil) {
+        self.command = command
+        self.currentDirectoryURL = currentDirectoryURL
+    }
+}
+
 protocol MacNodeHostWorking: Sendable {
-    func start(command: [String]) async throws -> MacNodeHostManifest
+    func start(launch: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest
     func supports(_ command: String) async -> Bool
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse
     func handleInput(invokeId: String, seq: Int, payloadJSON: String) async
@@ -63,7 +73,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private var stdoutSource: DispatchSourceRead?
     private var stderrSource: DispatchSourceRead?
     private var processGeneration: UUID?
-    private var launchedCommand: [String]?
+    private var launchedWorker: MacNodeHostWorkerLaunch?
     private var stdoutBuffer = Data()
     private var manifest: MacNodeHostManifest?
     private var inventoryData: Data?
@@ -89,12 +99,12 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         self.onUnexpectedExit = onUnexpectedExit
     }
 
-    func start(command: [String]) async throws -> MacNodeHostManifest {
+    func start(launch: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
         try await withCheckedThrowingContinuation { continuation in
             self.queue.async {
                 if let manifest = self.manifest,
                    self.process?.isRunning == true,
-                   self.launchedCommand == command
+                   self.launchedWorker == launch
                 {
                     continuation.resume(returning: manifest)
                     return
@@ -104,7 +114,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                     return
                 }
                 self.startContinuation = continuation
-                self.startLocked(command: command)
+                self.startLocked(launch: launch)
             }
         }
     }
@@ -118,8 +128,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     }
 
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
-        let sessionKeyEnvelope = GatewayNodeInvokeContext.sessionKeyEnvelope
-        return await withCheckedContinuation { continuation in
+        await withCheckedContinuation { continuation in
             self.queue.async {
                 guard self.process?.isRunning == true, self.manifest != nil else {
                     continuation.resume(returning: Self.unavailableResponse(
@@ -135,18 +144,12 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 }
                 self.invokeContinuations[request.id] = continuation
                 do {
-                    var workerRequest: [String: Any] = [
+                    let workerRequest: [String: Any] = [
                         "id": request.id,
                         "nodeId": request.nodeId ?? "",
                         "command": request.command,
                         "paramsJSON": request.paramsJSON ?? NSNull(),
                     ]
-                    switch sessionKeyEnvelope {
-                    case .legacy:
-                        break
-                    case let .authoritative(sessionKey):
-                        workerRequest["sessionKey"] = sessionKey ?? NSNull()
-                    }
                     try self.enqueueWriteLocked([
                         "type": "invoke",
                         "request": workerRequest,
@@ -292,7 +295,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         }
     }
 
-    private func startLocked(command: [String]) {
+    private func startLocked(launch: MacNodeHostWorkerLaunch) {
+        let command = launch.command
         guard let executable = command.first, !executable.isEmpty else {
             self.finishStartLocked(.failure(WorkerError.unavailable("node-host worker command missing")))
             return
@@ -310,6 +314,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         }
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = Array(command.dropFirst())
+        process.currentDirectoryURL = launch.currentDirectoryURL
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         environment["OPENCLAW_NODE_EXEC_HOST"] = "app"
@@ -319,7 +324,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         self.process = process
-        self.launchedCommand = command
+        self.launchedWorker = launch
         self.stdinPipe = stdinPipe
         self.stdoutPipe = stdoutPipe
         self.stderrPipe = stderrPipe
@@ -653,7 +658,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             self.process?.terminate()
         }
         self.process = nil
-        self.launchedCommand = nil
+        self.launchedWorker = nil
         self.stdinPipe = nil
         self.stdoutPipe = nil
         self.stderrPipe = nil

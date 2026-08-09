@@ -1,11 +1,11 @@
 /**
  * Wire protocol between the extension relay server and the OpenClaw Chrome
- * extension. The extension stays a dumb transport: it attaches chrome.debugger,
- * forwards CDP traffic, and manages the OpenClaw tab group. All CDP target
- * semantics (Target.* synthesis for Playwright) live server-side in the bridge.
+ * extension. The extension owns tab eligibility/access, attaches chrome.debugger,
+ * and forwards CDP traffic. All CDP target semantics (Target.* synthesis for
+ * Playwright) live server-side in the bridge.
  */
 
-/** Tab snapshot reported by the extension for tabs shared with OpenClaw. */
+/** Tab snapshot reported by the extension for tabs currently accessible to OpenClaw. */
 export type RelayTabInfo = {
   tabId: number;
   url: string;
@@ -39,7 +39,7 @@ type ExtensionHelloMessage = {
   tabs: RelayTabInfo[];
 };
 
-/** Full refresh of shared tabs; sent on any group membership or tab change. */
+/** Full refresh of accessible tabs; sent on any access-policy or tab change. */
 type ExtensionTabsMessage = {
   type: "tabs";
   tabs: RelayTabInfo[];
@@ -103,15 +103,15 @@ export type ExtensionToRelayMessage =
 export type RelayCommandBody =
   /** Forward a CDP command into an attached tab (or one of its child sessions). */
   | { type: "cdp"; tabId: number; sessionId?: string; method: string; params?: unknown }
-  /** Attach chrome.debugger to a shared tab. Result: { targetId: string }. */
+  /** Attach chrome.debugger to an accessible tab. Result: { targetId: string }. */
   | { type: "attach"; tabId: number }
-  /** Detach chrome.debugger from a tab (tab left the group or client detached). */
+  /** Detach chrome.debugger from a tab (access revoked or client detached). */
   | { type: "detach"; tabId: number }
   /** Open a new tab inside the OpenClaw tab group. Result: { tabId: number }. */
   | { type: "createTab"; url: string; background?: boolean; focus?: boolean }
-  /** Close a shared tab. Result: {}. */
+  /** Close an accessible tab. Result: {}. */
   | { type: "closeTab"; tabId: number }
-  /** Focus a shared tab (window + tab activation). Result: {}. */
+  /** Focus an accessible tab (window + tab activation). Result: {}. */
   | { type: "activateTab"; tabId: number };
 
 /** Keepalive probe; the extension answers with pong. */
@@ -131,6 +131,58 @@ export type RelayToExtensionMessage =
   | RelayPingMessage
   | RelayPageShareResultMessage;
 
+function hasExactOwnKeys(value: object, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+function isRelayTabInfo(value: unknown): value is RelayTabInfo {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  if (!hasExactOwnKeys(value, ["tabId", "url", "title", "active"])) {
+    return false;
+  }
+  const tab = value as Record<string, unknown>;
+  return (
+    Number.isSafeInteger(tab.tabId) &&
+    (tab.tabId as number) >= 0 &&
+    typeof tab.url === "string" &&
+    tab.url.length <= 16_384 &&
+    typeof tab.title === "string" &&
+    tab.title.length <= 4_096 &&
+    typeof tab.active === "boolean"
+  );
+}
+
+function isExtensionHelloMessage(value: object): value is ExtensionHelloMessage {
+  if (
+    !hasExactOwnKeys(value, ["type", "userAgent", "browserVersion", "extensionVersion", "tabs"])
+  ) {
+    return false;
+  }
+  const hello = value as Record<string, unknown>;
+  if (
+    hello.type !== "hello" ||
+    typeof hello.userAgent !== "string" ||
+    hello.userAgent.length === 0 ||
+    hello.userAgent.length > 2_048 ||
+    typeof hello.browserVersion !== "string" ||
+    hello.browserVersion.length === 0 ||
+    hello.browserVersion.length > 512 ||
+    typeof hello.extensionVersion !== "string" ||
+    hello.extensionVersion.length === 0 ||
+    hello.extensionVersion.length > 128 ||
+    !Array.isArray(hello.tabs) ||
+    hello.tabs.length > 1_000 ||
+    !hello.tabs.every(isRelayTabInfo)
+  ) {
+    return false;
+  }
+  const tabIds = new Set(hello.tabs.map((tab) => tab.tabId));
+  return tabIds.size === hello.tabs.length;
+}
+
 /** Parse one extension frame; returns null for malformed input. */
 export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | null {
   let parsed: unknown;
@@ -148,6 +200,7 @@ export function parseExtensionMessage(raw: string): ExtensionToRelayMessage | nu
   }
   switch (type) {
     case "hello":
+      return isExtensionHelloMessage(parsed) ? parsed : null;
     case "tabs":
     case "cdpEvent":
     case "result":

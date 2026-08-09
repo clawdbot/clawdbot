@@ -8,7 +8,6 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -131,14 +130,14 @@ export function registerDirectoryCli(program: Command) {
     const selection = explicitChannel
       ? {
           channel: resolvedExplicit?.channelId,
+          plugin: resolvedExplicit?.plugin,
         }
       : await resolveMessageChannelSelection({
           cfg,
           channel: opts.channel ?? null,
         });
     const channelId = selection.channel;
-    const plugin =
-      resolvedExplicit?.plugin ?? (channelId ? getChannelPlugin(channelId) : undefined);
+    const plugin = selection.plugin;
     if (!plugin) {
       throw new Error(`Unsupported channel: ${String(channelId)}`);
     }

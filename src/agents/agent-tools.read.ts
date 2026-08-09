@@ -8,7 +8,7 @@ import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import { toErrorObject } from "../infra/errors.js";
+import { isMissingPathError, toErrorObject } from "../infra/errors.js";
 import {
   canonicalPathFromExistingAncestor,
   root as fsRoot,
@@ -268,9 +268,10 @@ function normalizeDailyMemoryReadPath(value: unknown): string | undefined {
 }
 
 function isNotFoundError(error: unknown): boolean {
-  if (typeof (error as NodeJS.ErrnoException | undefined)?.code === "string") {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  if (isMissingPathError(error)) {
+    return true;
   }
+  // Injected tool implementations may expose only their legacy human-readable error.
   if (!(error instanceof Error)) {
     return false;
   }

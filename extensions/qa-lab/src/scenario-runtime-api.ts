@@ -94,6 +94,7 @@ export type QaScenarioRuntimeDeps = {
   formatErrorMessage: QaScenarioRuntimeFunction;
   liveTurnTimeoutMs: QaScenarioRuntimeFunction;
   resolveQaLiveTurnTimeoutMs: QaScenarioRuntimeFunction;
+  normalizeModelRef: QaScenarioRuntimeFunction;
   splitModelRef: QaScenarioRuntimeFunction;
   hasDiscoveryLabels: QaScenarioRuntimeFunction;
   reportsDiscoveryScopeLeak: QaScenarioRuntimeFunction;

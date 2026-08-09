@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -38,6 +39,31 @@ export function shouldDeliverDespiteSourceReplySuppression(
     !state.sendPolicyDenied &&
     getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true &&
     (state.ctx.InboundEventKind !== "room_event" || state.explicitCommandTurnCtx)
+  );
+}
+
+export function readAskUserQuestionId(payload: ReplyPayload): string | undefined {
+  const askUser = payload.channelData?.askUser;
+  if (!isRecord(askUser)) {
+    return undefined;
+  }
+  const questionId = askUser.questionId;
+  return typeof questionId === "string" ? questionId : undefined;
+}
+
+export function hasExecApprovalPayload(payload: ReplyPayload): boolean {
+  return isRecord(payload.channelData?.execApproval);
+}
+
+export function hasAskUserPayload(payload: ReplyPayload): boolean {
+  return isRecord(payload.channelData?.askUser);
+}
+
+export function requiresDurableToolResultDelivery(payload: ReplyPayload): boolean {
+  return (
+    resolveSendableOutboundReplyParts(payload).hasMedia ||
+    hasExecApprovalPayload(payload) ||
+    hasAskUserPayload(payload)
   );
 }
 

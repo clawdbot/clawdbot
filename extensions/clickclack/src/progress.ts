@@ -131,7 +131,7 @@ function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string
 
 type ClickClackAgentProgressPublisher = {
   start(): void;
-  onItemEvent(payload: ClickClackItemEventPayload): void;
+  onItemEvent(payload: ClickClackItemEventPayload): false;
   finalize(): Promise<void>;
 };
 
@@ -287,7 +287,7 @@ export function createClickClackAgentProgressPublisher(params: {
     },
     onItemEvent(payload) {
       if (!started || cleared) {
-        return;
+        return false;
       }
       const id = resolveLineId(payload);
       const final = isFinal(payload);
@@ -300,7 +300,7 @@ export function createClickClackAgentProgressPublisher(params: {
       if (retractsExistingCommentary && queuedLines.get(id)?.payload.op === "append") {
         queuedLines.delete(id);
         seenLines.delete(id);
-        return;
+        return false;
       }
       const line: Record<string, unknown> = {
         id,
@@ -316,6 +316,7 @@ export function createClickClackAgentProgressPublisher(params: {
         line,
       });
       seenLines.add(id);
+      return false;
     },
     async finalize() {
       if (!started || cleared) {

@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertTrustedWorkflowHarness,
@@ -11,6 +12,131 @@ import {
   resolveRemoteTargetRefSha,
   shouldDeleteTemporaryWorkflowRef,
 } from "../../scripts/full-release-validation-at-sha.mjs";
+
+const SCRIPT_PATH = resolve("scripts/full-release-validation-at-sha.mjs");
+
+function runGit(cwd: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+}
+
+function createDispatchFixture() {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-"));
+  const origin = join(root, "origin.git");
+  const checkout = join(root, "checkout");
+  const binDir = join(root, "bin");
+  const gitCallsPath = join(root, "git-calls.jsonl");
+  const ghCallsPath = join(root, "gh-calls.jsonl");
+  const releaseRef = "release/2026.8.1";
+  mkdirSync(checkout);
+  mkdirSync(binDir);
+  writeFileSync(gitCallsPath, "");
+  writeFileSync(ghCallsPath, "");
+
+  execFileSync("git", ["init", "--bare", origin], { stdio: "ignore" });
+  execFileSync("git", ["init", "-b", "main"], { cwd: checkout, stdio: "ignore" });
+  runGit(checkout, ["config", "user.email", "release-test@openclaw.invalid"]);
+  runGit(checkout, ["config", "user.name", "OpenClaw Release Test"]);
+  mkdirSync(join(checkout, ".github", "workflows"), { recursive: true });
+  mkdirSync(join(checkout, "scripts"), { recursive: true });
+  writeFileSync(join(checkout, "package.json"), '{"version":"2026.8.1"}\n');
+  writeFileSync(
+    join(checkout, ".github", "workflows", "full-release-validation.yml"),
+    "name: Full Release Validation\n",
+  );
+  writeFileSync(
+    join(checkout, "scripts", "release-ci-summary.mjs"),
+    'console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { runId: "123" }, evidenceReuse: false }));\n',
+  );
+  runGit(checkout, ["add", "."]);
+  runGit(checkout, ["commit", "-m", "test: trusted workflow"]);
+  const workflowSha = runGit(checkout, ["rev-parse", "HEAD"]);
+  runGit(checkout, ["remote", "add", "origin", origin]);
+  runGit(checkout, ["push", "-u", "origin", "main"]);
+  runGit(checkout, ["checkout", "-b", releaseRef]);
+  writeFileSync(join(checkout, "target.txt"), "release target\n");
+  runGit(checkout, ["add", "target.txt"]);
+  runGit(checkout, ["commit", "-m", "test: release target"]);
+  const targetSha = runGit(checkout, ["rev-parse", "HEAD"]);
+  runGit(checkout, ["push", "-u", "origin", releaseRef]);
+  runGit(checkout, ["checkout", "main"]);
+
+  const gitPath = join(binDir, "git");
+  writeFileSync(
+    gitPath,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.MOCK_GIT_CALLS, JSON.stringify(args) + "\\n");
+const result = spawnSync("git", args, {
+  env: { ...process.env, PATH: process.env.MOCK_REAL_PATH },
+  stdio: "inherit",
+});
+process.exit(result.status ?? 1);
+`,
+  );
+  chmodSync(gitPath, 0o755);
+
+  const ghPath = join(binDir, "gh");
+  writeFileSync(
+    ghPath,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.MOCK_GH_CALLS, JSON.stringify(args) + "\\n");
+if (args[0] === "workflow" && args[1] === "run") {
+  console.log("https://github.com/openclaw/openclaw/actions/runs/123");
+} else if (args[0] === "api" && args.at(-1).endsWith("/actions/runs/123")) {
+  console.log(JSON.stringify({ status: "completed", conclusion: "success", head_sha: process.env.MOCK_WORKFLOW_SHA }));
+} else {
+  console.error("unexpected gh call: " + args.join(" "));
+  process.exit(2);
+}
+`,
+  );
+  chmodSync(ghPath, 0o755);
+
+  const run = (extraArgs: string[] = []) =>
+    spawnSync(
+      process.execPath,
+      [SCRIPT_PATH, "--sha", targetSha, "--target-ref", releaseRef, ...extraArgs],
+      {
+        cwd: checkout,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MOCK_GH_CALLS: ghCallsPath,
+          MOCK_GIT_CALLS: gitCallsPath,
+          MOCK_REAL_PATH: process.env.PATH,
+          MOCK_WORKFLOW_SHA: workflowSha,
+          PATH: `${binDir}:${process.env.PATH}`,
+        },
+      },
+    );
+  const readCalls = (path: string): string[][] =>
+    readFileSync(path, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as string[]);
+
+  return {
+    checkout,
+    cleanup: () => rmSync(root, { force: true, recursive: true }),
+    ghCallsPath,
+    gitCallsPath,
+    origin,
+    readCalls,
+    releaseRef,
+    run,
+    targetSha,
+    workflowSha,
+  };
+}
 
 describe("full-release-validation-at-sha", () => {
   it("parses release validation dispatch args", () => {
@@ -66,7 +192,7 @@ describe("full-release-validation-at-sha", () => {
 
   it("keeps release context separate from the exact target SHA", () => {
     const source = readFileSync("scripts/full-release-validation-at-sha.mjs", "utf8");
-    expect(source).toContain("ref: targetSha");
+    expect(source).toContain("ref: targetBranch");
     expect(source).toContain("target_context_ref: targetContextRef");
     expect(source).toContain(
       'args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true"',
@@ -223,6 +349,130 @@ describe("full-release-validation-at-sha", () => {
         parentConclusion: "success",
       }),
     ).toBe(false);
+  });
+
+  it("pushes an exact target ref, dispatches it, prints the run URL, and cleans both refs", () => {
+    const fixture = createDispatchFixture();
+    try {
+      const result = fixture.run();
+      expect(result.status, result.stderr).toBe(0);
+      const gitCalls = fixture.readCalls(fixture.gitCallsPath);
+      const ghCalls = fixture.readCalls(fixture.ghCallsPath);
+      const targetPush = gitCalls.find(
+        (args) => args[0] === "push" && args[2]?.includes(":refs/heads/validation/target-"),
+      );
+      expect(targetPush?.[2]).toMatch(
+        new RegExp(
+          `^${fixture.targetSha}:refs/heads/validation/target-${fixture.targetSha.slice(0, 12)}-[0-9]+$`,
+          "u",
+        ),
+      );
+      const targetBranch = targetPush?.[2]?.split(":refs/heads/")[1];
+      const workflowPush = gitCalls.find(
+        (args) => args[0] === "push" && args[2]?.includes(":refs/heads/release-ci/"),
+      );
+      const workflowBranch = workflowPush?.[2]?.split(":refs/heads/")[1];
+      expect(workflowPush?.[2]).toMatch(
+        new RegExp(
+          `^${fixture.workflowSha}:refs/heads/release-ci/${fixture.workflowSha.slice(0, 12)}-[0-9]+$`,
+          "u",
+        ),
+      );
+      const dispatch = ghCalls.find((args) => args[0] === "workflow" && args[1] === "run");
+      expect(dispatch).toEqual(
+        expect.arrayContaining([
+          "--ref",
+          workflowBranch,
+          "-f",
+          `ref=${targetBranch}`,
+          "-f",
+          `target_context_ref=${fixture.releaseRef}`,
+        ]),
+      );
+      expect(result.stdout).toContain(
+        "Parent run: https://github.com/openclaw/openclaw/actions/runs/123",
+      );
+      expect(result.stdout.indexOf("Parent run:")).toBeLessThan(
+        result.stdout.indexOf("Parent run status:"),
+      );
+      expect(gitCalls).toContainEqual([
+        "push",
+        "origin",
+        `:refs/heads/${workflowBranch}`,
+        `:refs/heads/${targetBranch}`,
+      ]);
+      expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
+        "refs/heads/main\nrefs/heads/release/2026.8.1",
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps both temporary refs with --keep-branch", () => {
+    const fixture = createDispatchFixture();
+    try {
+      const result = fixture.run(["--keep-branch"]);
+      expect(result.status, result.stderr).toBe(0);
+      const gitCalls = fixture.readCalls(fixture.gitCallsPath);
+      expect(
+        gitCalls.some(
+          (args) => args[0] === "push" && args.slice(2).some((value) => value.startsWith(":")),
+        ),
+      ).toBe(false);
+      const remoteRefs = runGit(fixture.origin, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/heads/release-ci",
+        "refs/heads/validation",
+      ]).split("\n");
+      expect(remoteRefs).toHaveLength(2);
+      expect(remoteRefs).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^refs\/heads\/release-ci\//u),
+          expect.stringMatching(/^refs\/heads\/validation\/target-/u),
+        ]),
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("fails clearly before dispatch when the target SHA is absent after the named fetch", () => {
+    const fixture = createDispatchFixture();
+    try {
+      const missingSha = "f".repeat(40);
+      const result = spawnSync(
+        process.execPath,
+        [SCRIPT_PATH, "--sha", missingSha, "--target-ref", fixture.releaseRef],
+        {
+          cwd: fixture.checkout,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            MOCK_GH_CALLS: fixture.ghCallsPath,
+            MOCK_GIT_CALLS: fixture.gitCallsPath,
+            MOCK_REAL_PATH: process.env.PATH,
+            MOCK_WORKFLOW_SHA: fixture.workflowSha,
+            PATH: `${join(fixture.checkout, "..", "bin")}:${process.env.PATH}`,
+          },
+        },
+      );
+      expect(result.status).toBe(1);
+      const failedReasons = result.stderr
+        .trim()
+        .split("\n")
+        .filter((line) => line.startsWith("[full-release-validation] FAILED:"));
+      expect(failedReasons).toEqual([
+        `[full-release-validation] FAILED: Target SHA ${missingSha} is not available locally after fetching ${fixture.releaseRef}`,
+      ]);
+      expect(result.stderr.trim().split("\n").at(-1)).toBe(
+        "[full-release-validation] FAILED (exit 1)",
+      );
+      expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe("");
+    } finally {
+      fixture.cleanup();
+    }
   });
 
   it("supports current and legacy verifier locations in trusted workflow checkouts", () => {

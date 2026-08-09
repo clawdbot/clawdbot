@@ -4,7 +4,6 @@ import {
   ErrorCodes,
   errorShape,
   type SessionOperationEvent,
-  type SessionPlacement,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listConfiguredSessionStoreAgentIds, type SessionEntry } from "../../config/sessions.js";
@@ -27,52 +26,17 @@ import {
   isWorkerPlacementSessionRuntimeSupported,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
+export {
+  resolveSessionWorkerPlacementMutationError,
+  retireSessionWorkerPlacementBeforeMutation,
+  SessionWorkerPlacementMutationError,
+} from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
 
-export class SessionWorkerPlacementMutationError extends Error {
-  constructor(
-    readonly placementState: SessionPlacement["state"],
-    action: "delete" | "fork" | "reset" | "restore" | "rewind" | "switch",
-    key: string,
-  ) {
-    super(`Session ${key} cannot ${action} while cloud worker placement is ${placementState}.`);
-  }
-}
-
-export function resolveSessionWorkerPlacementMutationError(params: {
-  action: "delete" | "fork" | "reset" | "restore" | "rewind" | "switch";
-  context: GatewayRequestContext;
-  key: string;
-  sessionId: string | undefined;
-}): SessionWorkerPlacementMutationError | undefined {
-  if (!params.sessionId) {
-    return undefined;
-  }
-  const placement = params.context.workerSessionPlacementService
-    ?.getMany([params.sessionId])
-    .get(params.sessionId);
-  // Failed placement normally keeps destructive mutation fenced. Missing worker identity or an
-  // authoritative destroyed environment proves cleanup cannot orphan a live worker.
-  const failedPlacementCanDelete =
-    params.action === "delete" &&
-    placement?.state === "failed" &&
-    (placement.environmentId === null ||
-      params.context.workerEnvironmentService?.get(placement.environmentId)?.state === "destroyed");
-  if (
-    !placement ||
-    placement.state === "local" ||
-    (params.action === "delete" && placement.state === "reclaimed") ||
-    failedPlacementCanDelete
-  ) {
-    return undefined;
-  }
-  return new SessionWorkerPlacementMutationError(placement.state, params.action, params.key);
-}
-
 export function respondSessionWorkerPlacementMutationError(
-  error: SessionWorkerPlacementMutationError,
+  error: { message: string },
   respond: RespondFn,
 ): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));

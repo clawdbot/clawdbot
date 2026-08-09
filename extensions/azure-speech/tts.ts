@@ -4,10 +4,9 @@
  */
 import {
   assertOkOrThrowProviderError,
-  assertProviderBinaryResponseContent,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
 import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import {
@@ -222,26 +221,13 @@ export async function azureSpeechTTS(params: {
 
   try {
     await assertOkOrThrowProviderError(response, "Azure Speech TTS API error");
-    try {
-      assertProviderBinaryResponseContent(response, "Azure Speech TTS API error", "audio");
-    } catch (error) {
-      // A debug-capture clone can keep the tee open, so waiting for cancel would hang
-      // before the rejected response and its dispatcher can be released.
-      void response.body?.cancel().catch(() => undefined);
-      throw error;
-    }
-    const audio = await readResponseWithLimit(
-      response,
-      params.maxBytes ?? DEFAULT_AZURE_SPEECH_MAX_BYTES,
-      {
+    return Buffer.from(
+      await readProviderBinaryResponse(response, "Azure Speech TTS API error", "audio", {
+        maxBytes: params.maxBytes ?? DEFAULT_AZURE_SPEECH_MAX_BYTES,
         onOverflow: ({ maxBytes }) =>
           new Error(`Azure Speech TTS audio response exceeds ${maxBytes} bytes`),
-      },
+      }),
     );
-    if (audio.byteLength === 0) {
-      throw new Error("Azure Speech TTS API error: malformed audio response");
-    }
-    return audio;
   } finally {
     await release();
   }

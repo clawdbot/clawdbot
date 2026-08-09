@@ -218,6 +218,28 @@ function leaseLost(sessionKey: string): SessionWriteLockStaleError {
   });
 }
 
+function describeLeaseTimeoutOwner(error: OpenClawStateLeaseError): string {
+  const payload = error.ownerPayload;
+  if (!payload) {
+    return "another OpenClaw process";
+  }
+  if (payload.pid === process.pid) {
+    return `held by this process (pid ${payload.pid}); an earlier run has not released it`;
+  }
+  if (!isPidAlive(payload.pid)) {
+    return "another OpenClaw process";
+  }
+  const observedStartTime = resolveProcessStartTimeForLock(payload.pid);
+  if (
+    payload.starttime !== undefined &&
+    observedStartTime !== null &&
+    payload.starttime !== observedStartTime
+  ) {
+    return "another OpenClaw process";
+  }
+  return `held by OpenClaw process pid ${payload.pid}`;
+}
+
 function createLeaseHandle(sessionKey: string, entry: SessionWriteLeaseEntry) {
   let released = false;
   let releasePromise: Promise<void> | undefined;
@@ -336,7 +358,7 @@ export async function acquireSessionWriteLock(params: {
     if (error instanceof OpenClawStateLeaseError && error.code === "OPENCLAW_STATE_LEASE_TIMEOUT") {
       throw new SessionWriteLockTimeoutError({
         timeoutMs,
-        owner: "another OpenClaw process",
+        owner: describeLeaseTimeoutOwner(error),
         lockPath: leasePath(params.sessionFile),
       });
     }

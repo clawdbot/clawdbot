@@ -37,6 +37,7 @@ class WearProxyControllerTest {
           },
           isGatewayConnected = { false },
           gatewayStatusText = { "Offline" },
+          hasOperatorAdminScope = { true },
         )
 
       val response = controller.handle(request(WearRpcMethod.ProxyStatus))
@@ -56,6 +57,44 @@ class WearProxyControllerTest {
       assertEquals(
         WearProxyCapability.entries.map(WearProxyCapability::wireValue),
         result.getValue("capabilities").jsonArray.map { it.jsonPrimitive.content },
+      )
+    }
+
+  @Test
+  fun statusAdvertisesModelControlsOnlyWithOperatorAdminScope() =
+    runTest {
+      var hasOperatorAdminScope = false
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          hasOperatorAdminScope = { hasOperatorAdminScope },
+        )
+
+      val limitedCapabilities =
+        checkNotNull(controller.handle(request(WearRpcMethod.ProxyStatus)).result)
+          .jsonObject
+          .getValue("capabilities")
+          .jsonArray
+          .map { it.jsonPrimitive.content }
+      hasOperatorAdminScope = true
+      val adminCapabilities =
+        checkNotNull(controller.handle(request(WearRpcMethod.ProxyStatus)).result)
+          .jsonObject
+          .getValue("capabilities")
+          .jsonArray
+          .map { it.jsonPrimitive.content }
+
+      assertEquals(
+        WearProxyCapability.entries
+          .filter { it != WearProxyCapability.ModelControls }
+          .map(WearProxyCapability::wireValue),
+        limitedCapabilities,
+      )
+      assertEquals(
+        WearProxyCapability.entries.map(WearProxyCapability::wireValue),
+        adminCapabilities,
       )
     }
 

@@ -81,6 +81,10 @@ export type PluginPackageInstall = {
 
 type OpenClawPackageSetupFeatures = {
   configPromotion?: boolean;
+  /**
+   * @deprecated Declare doctorContract.stateMigrations in openclaw.plugin.json instead.
+   * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.
+   */
   legacyStateMigrations?: boolean;
   legacySessionSurfaces?: boolean;
 };

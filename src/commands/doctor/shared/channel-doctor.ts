@@ -14,6 +14,7 @@ import type {
 } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isUnresolvedSecretInputError } from "../../../config/types.secrets.js";
+import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 
 type ChannelDoctorEntry = {
   id: string;
@@ -65,34 +66,12 @@ export type ChannelDoctorEmptyAllowlistPolicyHooks = {
 };
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
-  if (cfg.plugins?.enabled === false) {
-    return [];
-  }
-  const channels =
-    cfg.channels && typeof cfg.channels === "object" && !Array.isArray(cfg.channels)
-      ? cfg.channels
-      : null;
-  if (!channels) {
-    return [];
-  }
-  const channelEntries = channels as Record<string, unknown>;
-  return Object.keys(channels)
-    .filter((channelId) => {
-      if (channelId === "defaults") {
-        return false;
-      }
-      if (isChannelDoctorBlockedByConfig(channelId, cfg)) {
-        return false;
-      }
-      const entry = channelEntries[channelId];
-      return (
-        !entry ||
-        typeof entry !== "object" ||
-        Array.isArray(entry) ||
-        (entry as { enabled?: unknown }).enabled !== false
-      );
-    })
-    .toSorted();
+  return listDoctorConfiguredChannelIds(cfg, {
+    configEntryPolicy: "enabled",
+    skipWhenPluginsDisabled: true,
+    excludeExplicitlyDisabled: true,
+    sort: "codepoint",
+  }).filter((channelId) => !isChannelDoctorBlockedByConfig(channelId, cfg));
 }
 
 function isChannelDoctorBlockedByConfig(channelId: string, cfg: OpenClawConfig): boolean {

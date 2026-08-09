@@ -32,7 +32,7 @@ export const jsdomOptimizedDeps = {
   optimizer: {
     web: {
       enabled: true,
-      include: ["lit", "lit-html", "@lit/reactive-element", "marked"] as string[],
+      include: ["lit", "lit-html", "@lit/reactive-element"] as string[],
     },
   },
 };
@@ -160,7 +160,7 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
-  plugins: [createStateSchemaInlinePlugin(repoRoot, { vitestFsModuleCache: true })],
+  plugins: [createStateSchemaInlinePlugin(repoRoot)],
   resolve: {
     alias: [
       {

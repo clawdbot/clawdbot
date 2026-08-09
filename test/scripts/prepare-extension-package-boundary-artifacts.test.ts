@@ -9,6 +9,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  listPluginSdkDeclarationOutputs,
+  pluginSdkEntrypoints,
+} from "../../scripts/lib/plugin-sdk-entries.mjs";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   createPrefixedOutputWriter,
@@ -624,6 +628,13 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     const privateQaOutputs = resolveBoundaryEntryShimRequiredOutputs({
       OPENCLAW_BUILD_PRIVATE_QA: "1",
     });
+
+    expect(productionOutputs.filter((output) => output.startsWith("dist/plugin-sdk/"))).toEqual(
+      listPluginSdkDeclarationOutputs().toSorted((a, b) => a.localeCompare(b)),
+    );
+    expect(privateQaOutputs.filter((output) => output.startsWith("dist/plugin-sdk/"))).toEqual(
+      listPluginSdkDeclarationOutputs(pluginSdkEntrypoints).toSorted((a, b) => a.localeCompare(b)),
+    );
 
     expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
     expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");

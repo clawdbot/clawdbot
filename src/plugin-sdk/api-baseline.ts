@@ -10,6 +10,21 @@ import {
   type PluginSdkDocEntrypoint,
 } from "../../scripts/lib/plugin-sdk-doc-metadata.ts";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import {
+  attachPluginSdkDeclarationClosures,
+  createDeclarationClosureRenderer,
+  formatPluginSdkDiagnostics,
+  type PluginSdkDeclarationClosure,
+} from "./api-baseline-declaration-closure.js";
+import {
+  normalizePluginSdkApiDeclarationText,
+  normalizePluginSdkApiSourcePath as relativePath,
+} from "./api-baseline-normalization.js";
+
+export {
+  normalizePluginSdkApiDeclarationText,
+  normalizePluginSdkApiSourcePath,
+} from "./api-baseline-normalization.js";
 
 /** Declaration kind recorded for each public SDK export in the API baseline. */
 export type PluginSdkApiExportKind =
@@ -102,60 +117,6 @@ function resolveRepoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 }
 
-/** Normalize compiler source paths into stable repo-relative or node_modules-relative paths. */
-export function normalizePluginSdkApiSourcePath(repoRoot: string, filePath: string): string {
-  const resolvedPath = path.resolve(filePath);
-  const relative = path.relative(repoRoot, resolvedPath);
-  const relativePosix = relative.split(path.sep).join(path.posix.sep);
-  if (
-    !relative.startsWith("..") &&
-    !path.isAbsolute(relative) &&
-    !relativePosix.startsWith("node_modules/")
-  ) {
-    return relativePosix;
-  }
-
-  const pathParts = resolvedPath.split(/[\\/]+/);
-  const nodeModulesIndex = pathParts.lastIndexOf("node_modules");
-  if (nodeModulesIndex >= 0 && nodeModulesIndex < pathParts.length - 1) {
-    return ["node_modules", ...pathParts.slice(nodeModulesIndex + 1)].join(path.posix.sep);
-  }
-
-  return relativePosix;
-}
-
-function relativePath(repoRoot: string, filePath: string): string {
-  return normalizePluginSdkApiSourcePath(repoRoot, filePath);
-}
-
-function isAbsoluteImportPath(value: string): boolean {
-  return path.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value);
-}
-
-function normalizeDeclarationImportSpecifier(repoRoot: string, value: string): string {
-  if (!isAbsoluteImportPath(value)) {
-    return value;
-  }
-
-  const resolvedPath = path.resolve(value);
-  const relative = path.relative(repoRoot, resolvedPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return value;
-  }
-  return relative.split(path.sep).join(path.posix.sep);
-}
-
-/** Strip machine-local absolute paths from declaration text before hashing baseline output. */
-export function normalizePluginSdkApiDeclarationText(repoRoot: string, value: string): string {
-  return value.replaceAll(
-    /import\("([^"]+)"((?:\s*,[^)]*)?)\)/g,
-    (match, specifier: string, suffix: string) => {
-      const normalized = normalizeDeclarationImportSpecifier(repoRoot, specifier);
-      return normalized === specifier ? match : `import("${normalized}"${suffix})`;
-    },
-  );
-}
-
 function createCompilerContext(repoRoot: string, entrypoints: readonly string[]) {
   const configPath = ts.findConfigFile(
     repoRoot,
@@ -168,6 +129,9 @@ function createCompilerContext(repoRoot: string, entrypoints: readonly string[])
     throw new Error(ts.flattenDiagnosticMessageText(configFile.error.messageText, "\n"));
   }
   const parsedConfig = ts.parseJsonConfigFileContent(configFile.config, ts.sys, repoRoot);
+  if (parsedConfig.errors.length > 0) {
+    throw new Error(formatPluginSdkDiagnostics(parsedConfig.errors, repoRoot));
+  }
   const fileNames = entrypoints
     .map((entrypoint) => path.join(repoRoot, "src", "plugin-sdk", `${entrypoint}.ts`))
     .toSorted((left, right) =>
@@ -176,10 +140,26 @@ function createCompilerContext(repoRoot: string, entrypoints: readonly string[])
         relativePath(repoRoot, path.resolve(right)),
       ),
     );
-  const program = ts.createProgram(fileNames, parsedConfig.options);
+  const program = ts.createProgram(fileNames, {
+    ...parsedConfig.options,
+    declaration: true,
+    declarationMap: false,
+    emitDeclarationOnly: true,
+    noEmit: false,
+    // Declaration diagnostics are checked explicitly; unrelated untyped external JS stays valid.
+    noEmitOnError: false,
+    removeComments: true,
+    sourceMap: false,
+  });
+  const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed, removeComments: true });
   return {
     checker: program.getTypeChecker(),
-    printer: ts.createPrinter({ newLine: ts.NewLineKind.LineFeed, removeComments: true }),
+    declarationClosure: createDeclarationClosureRenderer({
+      printer,
+      program,
+      repoRoot,
+    }),
+    printer,
     program,
   };
 }
@@ -187,12 +167,6 @@ function createCompilerContext(repoRoot: string, entrypoints: readonly string[])
 /** List canonical public SDK entrypoints included in the API baseline. */
 export function listPluginSdkApiBaselineEntrypoints(): string[] {
   return [...publicPluginSdkEntrypoints];
-}
-
-function buildSourceLink(repoRoot: string, filePath: string): PluginSdkApiSourceLink {
-  return {
-    path: relativePath(repoRoot, filePath),
-  };
 }
 
 function inferExportKind(
@@ -571,20 +545,27 @@ function compareDeclarations(
 
 function buildExportSurface(params: {
   checker: ts.TypeChecker;
+  declarationClosure: (sourceFile: ts.SourceFile) => PluginSdkDeclarationClosure;
   printer: ts.Printer;
   repoRoot: string;
   symbol: ts.Symbol;
-}): PluginSdkApiExport {
-  const { checker, printer, repoRoot, symbol } = params;
+}): { closure: PluginSdkDeclarationClosure; surface: PluginSdkApiExport } {
+  const { checker, declarationClosure, printer, repoRoot, symbol } = params;
   const { declaration, resolvedSymbol } = resolveSymbolAndDeclaration(checker, repoRoot, symbol);
   const exportName = symbol.getName();
+  const declarationText = declaration
+    ? printNode(repoRoot, checker, printer, declaration, exportName)
+    : null;
   return {
-    declaration: declaration
-      ? printNode(repoRoot, checker, printer, declaration, exportName)
-      : null,
-    exportName,
-    kind: inferExportKind(resolvedSymbol, declaration),
-    source: declaration ? buildSourceLink(repoRoot, declaration.getSourceFile().fileName) : null,
+    closure: declaration ? declarationClosure(declaration.getSourceFile()) : { hash: "" },
+    surface: {
+      declaration: declarationText,
+      exportName,
+      kind: inferExportKind(resolvedSymbol, declaration),
+      source: declaration
+        ? { path: relativePath(repoRoot, declaration.getSourceFile().fileName) }
+        : null,
+    },
   };
 }
 
@@ -608,12 +589,13 @@ function sortExports(left: PluginSdkApiExport, right: PluginSdkApiExport): numbe
 
 function buildModuleSurface(params: {
   checker: ts.TypeChecker;
+  declarationClosure: (sourceFile: ts.SourceFile) => PluginSdkDeclarationClosure;
   printer: ts.Printer;
   program: ts.Program;
   repoRoot: string;
   entrypoint: string;
 }): PluginSdkApiModule {
-  const { checker, printer, program, repoRoot, entrypoint } = params;
+  const { checker, declarationClosure, printer, program, repoRoot, entrypoint } = params;
   const metadata = Object.hasOwn(pluginSdkDocMetadata, entrypoint)
     ? pluginSdkDocMetadata[entrypoint as PluginSdkDocEntrypoint]
     : undefined;
@@ -625,25 +607,27 @@ function buildModuleSurface(params: {
   const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
   assert(moduleSymbol, `Unable to resolve module symbol for ${importSpecifier}`);
 
-  const exports = checker
+  const builtExports = checker
     .getExportsOfModule(moduleSymbol)
     .filter((symbol) => symbol.getName() !== "__esModule")
     .map((symbol) =>
       buildExportSurface({
         checker,
+        declarationClosure,
         printer,
         repoRoot,
         symbol,
       }),
     )
-    .toSorted(sortExports);
+    .toSorted((left, right) => sortExports(left.surface, right.surface));
+  const exports = attachPluginSdkDeclarationClosures(builtExports);
 
   return {
     category: metadata?.category ?? null,
     entrypoint,
     exports,
     importSpecifier,
-    source: buildSourceLink(repoRoot, moduleSourcePath),
+    source: { path: relativePath(repoRoot, moduleSourcePath) },
   };
 }
 
@@ -687,10 +671,14 @@ export async function renderPluginSdkApiBaseline(params?: {
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
   const entrypoints = params?.entrypoints ?? listPluginSdkApiBaselineEntrypoints();
   validateMetadata();
-  const { checker, printer, program } = createCompilerContext(repoRoot, entrypoints);
+  const { checker, declarationClosure, printer, program } = createCompilerContext(
+    repoRoot,
+    entrypoints,
+  );
   const modules = entrypoints.map((entrypoint) =>
     buildModuleSurface({
       checker,
+      declarationClosure,
       printer,
       program,
       repoRoot,

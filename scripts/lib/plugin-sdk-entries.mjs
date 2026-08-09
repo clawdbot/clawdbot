@@ -76,6 +76,11 @@ export const productionPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
   (entry) => !nonProductionPluginSdkSubpathSet.has(entry),
 );
 
+/** List flat plugin SDK declaration outputs for the selected entrypoints. */
+export function listPluginSdkDeclarationOutputs(entries = productionPluginSdkEntrypoints) {
+  return entries.map((entry) => `dist/plugin-sdk/${entry}.d.ts`);
+}
+
 const productionPluginSdkEntrypointSet = new Set(productionPluginSdkEntrypoints);
 
 /** Private runtime facades required by bundled or separately published official plugins. */
@@ -83,10 +88,6 @@ export const packagedPrivatePluginSdkRuntimeEntrypoints =
   privateLocalOnlyPluginSdkEntrypoints.filter((entry) =>
     productionPluginSdkEntrypointSet.has(entry),
   );
-
-const ownerRestrictedPrivatePluginSdkRuntimeEntrypointSet = new Set([
-  "agent-harness-tool-authority-runtime",
-]);
 
 /** Private entrypoints reserved for local tests and QA builds. */
 const nonProductionPrivatePluginSdkEntrypoints = privateLocalOnlyPluginSdkEntrypoints.filter(
@@ -135,10 +136,7 @@ export function buildPluginSdkPackageExports() {
           ],
         ];
       }
-      if (
-        packagedPrivatePluginSdkRuntimeEntrypoints.includes(entry) &&
-        !ownerRestrictedPrivatePluginSdkRuntimeEntrypointSet.has(entry)
-      ) {
+      if (packagedPrivatePluginSdkRuntimeEntrypoints.includes(entry)) {
         // Official plugins ship separately but execute against the host's private runtime.
         // Their declarations stay pack-excluded by listUnpackagedPrivatePluginSdkDistArtifacts.
         return [
@@ -181,7 +179,7 @@ export function listPackagedPrivatePluginSdkRuntimeArtifacts() {
 /** List private artifacts that must stay out of package output. */
 export function listUnpackagedPrivatePluginSdkDistArtifacts() {
   return [
-    ...privateLocalOnlyPluginSdkEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.d.ts`),
+    ...listPluginSdkDeclarationOutputs(privateLocalOnlyPluginSdkEntrypoints),
     ...nonProductionPrivatePluginSdkEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`),
   ];
 }

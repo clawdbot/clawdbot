@@ -190,7 +190,7 @@ describe("diagnostics-otel gateway runtime", () => {
       }>;
       const readPlans = scenarioRequests.filter((request) => request.plannedToolName === "read");
       const finalizations = scenarioRequests.filter((request) =>
-        String(request.allInputText ?? "").includes(
+        (request.allInputText ?? "").includes(
           "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
         ),
       );
@@ -206,13 +206,13 @@ describe("diagnostics-otel gateway runtime", () => {
         (item) =>
           item.type === "function_call" &&
           item.name === "exec" &&
-          String(item.arguments ?? "").includes("qa-failed-terminal-missing-file.txt"),
+          JSON.stringify(item.arguments ?? "").includes("qa-failed-terminal-missing-file.txt"),
       );
       const failedExecOutputs = finalizationInput.filter(
         (item) =>
           item.type === "function_call_output" &&
           item.call_id === failedExecCalls[0]?.call_id &&
-          /ENOENT|no such file/iu.test(String(item.output ?? "")),
+          /ENOENT|no such file/iu.test(JSON.stringify(item.output ?? "")),
       );
       expect(failedExecCalls).toHaveLength(1);
       expect(failedExecOutputs).toHaveLength(1);

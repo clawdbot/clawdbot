@@ -120,7 +120,7 @@ export function registerNodesCameraCommands(nodes: Command) {
       .command("snap")
       .description("Capture a photo from a node camera (prints the saved path)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
-      .option("--facing <front|back|both>", "Camera facing", "both")
+      .option("--facing <front|back|both>", "Camera facing")
       .option("--device-id <id>", "Camera device id (from nodes camera list)")
       .option("--max-width <px>", "Max width in px (optional)")
       .option("--quality <0-1>", "JPEG quality (optional; platform-specific default)")
@@ -131,16 +131,18 @@ export function registerNodesCameraCommands(nodes: Command) {
           const node = await resolveNode(opts, normalizeOptionalString(opts.node) ?? "");
           const nodeId = node.nodeId;
           const facingOpt = normalizeLowercaseStringOrEmpty(
-            normalizeOptionalString(opts.facing) ?? "both",
+            normalizeOptionalString(opts.facing) ?? "",
           );
           const facing =
-            facingOpt === "both" || facingOpt === "front" || facingOpt === "back"
-              ? facingOpt
-              : (() => {
-                  throw new Error(
-                    `invalid facing: ${String(opts.facing)} (expected front|back|both)`,
-                  );
-                })();
+            facingOpt === ""
+              ? undefined
+              : facingOpt === "both" || facingOpt === "front" || facingOpt === "back"
+                ? facingOpt
+                : (() => {
+                    throw new Error(
+                      `invalid facing: ${String(opts.facing)} (expected front|back|both)`,
+                    );
+                  })();
 
           const maxWidth = parseOptionalNodePositiveInteger(opts.maxWidth, "--max-width");
           const quality = parseOptionalNodeFiniteNumber(opts.quality, "--quality", {
@@ -174,7 +176,7 @@ export function registerNodesCameraCommands(nodes: Command) {
               nodeId,
               command: "camera.snap",
               params: {
-                facing: target.requestFacing,
+                ...(target.requestFacing ? { facing: target.requestFacing } : {}),
                 maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
                 quality: Number.isFinite(quality) ? quality : undefined,
                 format: "jpg",

@@ -3,6 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginInstallRecordMap,
+  getPluginInstallRecordMapEntry,
+  setPluginInstallRecordMapEntry,
+} from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -278,12 +283,13 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         unsetPaths: [["plugins", "installs"]],
       },
     );
-    expect(result.installRecords).toStrictEqual({
+    expect(result.installRecords).toEqual({
       stale: existingRecords.stale,
       missing: sourceConfig.plugins?.installs?.missing,
       codex: nextConfig.plugins?.installs?.codex,
       concurrent: nextConfig.plugins?.installs?.concurrent,
     });
+    expect(Object.getPrototypeOf(result.installRecords)).toBeNull();
   });
 
   it("preserves source records omitted by a transform callback", async () => {
@@ -367,6 +373,34 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     };
 
     expect(unchangedPendingPluginInstallRecordIds(nextConfig, baseConfig)).toEqual(["legacy"]);
+  });
+
+  it("handles prototype-named pending records with own-key semantics", () => {
+    const constructorRecord = { source: "npm" as const, spec: "constructor@1.0.0" };
+    const toStringRecord = { source: "path" as const };
+    const protoRecord = { source: "git" as const };
+    const baseInstalls = createPluginInstallRecordMap<PluginInstallRecord>();
+    setPluginInstallRecordMapEntry(baseInstalls, "constructor", constructorRecord);
+    setPluginInstallRecordMapEntry(baseInstalls, "toString", toStringRecord);
+    setPluginInstallRecordMapEntry(baseInstalls, "__proto__", protoRecord);
+    const nextInstalls = createPluginInstallRecordMap<PluginInstallRecord>();
+    for (const [pluginId, record] of Object.entries(baseInstalls)) {
+      setPluginInstallRecordMapEntry(nextInstalls, pluginId, record);
+    }
+    const baseConfig = { plugins: { installs: baseInstalls } } satisfies OpenClawConfig;
+    const nextConfig = { plugins: { installs: nextInstalls } } satisfies OpenClawConfig;
+
+    expect(unchangedPendingPluginInstallRecordIds(nextConfig, baseConfig)).toEqual([
+      "constructor",
+      "toString",
+      "__proto__",
+    ]);
+    const stripped = stripPendingPluginInstallRecords(nextConfig, ["__proto__"]);
+    const installs = stripped.plugins?.installs;
+    expect(Object.getPrototypeOf(installs)).toBeNull();
+    expect(Object.hasOwn(installs ?? {}, "__proto__")).toBe(false);
+    expect(getPluginInstallRecordMapEntry(installs, "constructor")).toBe(constructorRecord);
+    expect(getPluginInstallRecordMapEntry(installs, "toString")).toBe(toStringRecord);
   });
 
   it("does not add restart intent when pending records match the plugin index", async () => {

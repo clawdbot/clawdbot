@@ -141,6 +141,12 @@ function setNavigationContext(page: ChatPage) {
   const setAgent = vi.fn((agentId: string) => {
     agentSelectionState.selectedId = agentId;
   });
+  const browserAnnotationHandoff = {
+    prepare: vi.fn(),
+    consume: vi.fn(() => null),
+    clearPane: vi.fn(),
+    dispose: vi.fn(),
+  };
   const context = {
     basePath: "",
     sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
@@ -149,9 +155,10 @@ function setNavigationContext(page: ChatPage) {
     navigate,
     replace,
     agentSelection: { state: agentSelectionState, set: setAgent },
+    browserAnnotationHandoff,
   } as unknown as ApplicationContext;
   (page as unknown as { context: ApplicationContext }).context = context;
-  return { context, navigate, replace, setAgent, patch };
+  return { browserAnnotationHandoff, context, navigate, replace, setAgent, patch };
 }
 
 function setViewerPresenceContext(page: ChatPage) {
@@ -357,6 +364,7 @@ describe("chat page split layout host", () => {
 
   it("retains the classic pane element while split view opens and closes", async () => {
     const page = new ChatPage();
+    setNavigationContext(page);
     page.data = { sessionKey: "main" };
     document.body.append(page);
     await page.updateComplete;
@@ -845,7 +853,7 @@ describe("chat page split layout host", () => {
 
     const paneTitles = () =>
       [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].map((pane) => pane.paneTitle);
-    expect(paneTitles()).toEqual(["Main Thread", "Main Thread"]);
+    expect(paneTitles()).toEqual(["Main Session", "Main Session"]);
 
     // Rows arrive under the canonical agent key while the route still says
     // "main"; hello-default resolution plus equivalence matching must find

@@ -643,8 +643,8 @@ async function handleSlackApprovalInteraction(params: {
       approvalId: params.approval.approvalId,
       approvalKind: params.approval.approvalKind,
       decision: params.approval.decision,
+      channel: "slack",
       senderId: params.parsed.userId,
-      clientDisplayName: `Slack approval (${params.parsed.userId.trim() || "unknown"})`,
     });
     const terminalLabel = resolveSlackApprovalTerminalLabel(result.approval);
     const prefix = result.applied ? "Resolved" : "Already resolved";
@@ -736,9 +736,9 @@ async function handleSlackLegacyApprovalInteraction(params: {
         cfg: params.ctx.cfg,
         approvalId: parsedApproval.approvalId,
         decision: parsedApproval.decision,
+        channel: "slack",
         senderId: params.parsed.userId,
         resolveMethod,
-        clientDisplayName: `Slack approval (${params.parsed.userId.trim() || "unknown"})`,
       });
       try {
         await updateSlackInteractionMessage({

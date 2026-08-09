@@ -18,11 +18,7 @@ import {
 } from "./chat-attachments.ts";
 import type { ChatRunControlsProps } from "./chat-composer-controls.ts";
 import { renderChatPrimaryActions } from "./chat-composer-controls.ts";
-import {
-  disconnectQuestionDock,
-  focusComposerFromChrome,
-  observeQuestionDock,
-} from "./chat-composer-dom.ts";
+import { focusComposerFromChrome } from "./chat-composer-dom.ts";
 import { renderChatGoal } from "./chat-composer-goal.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
@@ -47,7 +43,6 @@ type ChatComposerViewContext = {
   showAbortableUi: boolean;
   activeSession: GatewaySessionRow | undefined;
   visibleDraft: string;
-  tokens: string | null;
   contextNotice: TemplateResult | typeof nothing;
   composerControls: TemplateResult | typeof nothing;
   runStatusAnnouncement: string;
@@ -83,7 +78,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     showAbortableUi,
     activeSession,
     visibleDraft,
-    tokens,
     contextNotice,
     composerControls,
     runStatusAnnouncement,
@@ -110,7 +104,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     slashMenuAnnouncementId,
     composerRunStatus,
   } = context;
-  let questionDock: HTMLElement | null = null;
   const disabledBanner = props.disabledBanner
     ? html`
         <div class="agent-chat__disabled-banner callout info callout--action" role="status">
@@ -159,19 +152,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     <div class="agent-chat__composer-shell">
       ${questionPanelProps
         ? html`
-            <div
-              class="agent-chat__question-dock"
-              ${ref((element) => {
-                const nextDock = element instanceof HTMLElement ? element : null;
-                if (questionDock && questionDock !== nextDock) {
-                  disconnectQuestionDock(questionDock);
-                }
-                questionDock = nextDock;
-                if (questionDock) {
-                  observeQuestionDock(questionDock);
-                }
-              })}
-            >
+            <div class="agent-chat__question-dock">
               <openclaw-chat-question-panel
                 .props=${questionPanelProps}
               ></openclaw-chat-question-panel>
@@ -407,13 +388,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   placeholder=${placeholder}
                   rows="1"
                 ></textarea>
-                ${tokens
-                  ? html`
-                      <div class="agent-chat__token-row">
-                        <span class="agent-chat__token-count">${tokens}</span>
-                      </div>
-                    `
-                  : nothing}
                 <span
                   id=${slashMenuAnnouncementId}
                   class="agent-chat__sr-only"

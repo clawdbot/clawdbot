@@ -10,9 +10,8 @@ import {
 } from "./attempt.run-decisions.js";
 
 describe("resolveEmbeddedAttemptSessionWriteLockOptions", () => {
-  it("bounds post-prompt session lock max hold to compaction timeout instead of run timeout", () => {
-    // Cleanup writes should not inherit the full model run timeout; the
-    // compaction window is the larger session-write risk.
+  it("derives the dead-process lease TTL from the compaction timeout", () => {
+    // Live owners renew until explicit release; this only bounds stale metadata after owner death.
     const options = resolveEmbeddedAttemptSessionWriteLockOptions({
       config: {},
       compactionTimeoutMs: 600_000,

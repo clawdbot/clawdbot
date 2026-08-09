@@ -7,11 +7,12 @@ import type {
   SessionPeerKind,
   SessionPlacement,
   SessionRow,
+  SessionRunStatus,
   SessionSharingRole,
   SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import type { QueueMode } from "../auto-reply/reply/queue/types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,
@@ -42,9 +43,6 @@ export type GatewaySessionsDefaults = {
   thinkingOptions?: string[];
   thinkingDefault?: string;
 };
-
-/** Runtime status surfaced for the latest session run. */
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
 type SubagentRunState = "active" | "interrupted" | "historical";
 

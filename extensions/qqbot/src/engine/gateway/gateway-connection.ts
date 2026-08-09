@@ -1,4 +1,6 @@
 // Qqbot plugin module implements gateway connection behavior.
+import { asSafeIntegerInRange, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import WebSocket from "ws";
 import type { EngineAdapters } from "../adapter/index.js";
 import {
@@ -38,6 +40,9 @@ import type {
   WSPayload,
 } from "./types.js";
 import { createQQWSClient } from "./ws-client.js";
+
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 45_000;
+const MIN_HEARTBEAT_INTERVAL_MS = 1_000;
 
 interface GatewayConnectionContext {
   account: GatewayAccount;
@@ -470,6 +475,20 @@ export class GatewayConnection {
   // ============ Protocol handlers ============
 
   private handleHello(ws: WebSocket, d: unknown, accessToken: string): void {
+    const hello = asOptionalRecord(d) ?? {};
+    const receivedInterval = asSafeIntegerInRange(hello.heartbeat_interval, {
+      min: MIN_HEARTBEAT_INTERVAL_MS,
+      max: MAX_TIMER_TIMEOUT_MS,
+    });
+    if (receivedInterval === undefined) {
+      // Do not interpolate hostile input here: diagnostics must not throw while
+      // recovering the heartbeat schedule from a malformed gateway frame.
+      this.ctx.log?.error(
+        `Invalid QQ gateway HELLO heartbeat interval; using default ${DEFAULT_HEARTBEAT_INTERVAL_MS}ms`,
+      );
+    }
+    const interval = receivedInterval ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+
     if (this.sessionId && this.lastSeq !== null) {
       ws.send(
         JSON.stringify({
@@ -494,7 +513,6 @@ export class GatewayConnection {
       );
     }
 
-    const interval = (d as { heartbeat_interval: number }).heartbeat_interval;
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
     }

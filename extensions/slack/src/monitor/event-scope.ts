@@ -4,17 +4,14 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { getSlackListenerUploadCompletionClient } from "../client.js";
 import type { SlackInstallationIdentity } from "./enterprise-install.js";
 
-export type SlackEventScope = {
-  apiAppId: string;
-  enterpriseId: string;
+export type SlackEventScope = Readonly<{
   teamId: string;
-  isEnterpriseInstall: true;
   // Keep Bolt's exact listener client for ordinary reads and writes.
   client: WebClient;
   // Completion is one-shot, so uploads finalize through a team-scoped client
   // that cannot inherit Bolt's normal request retries.
   uploadCompletionClient?: WebClient;
-};
+}>;
 
 type SlackEventScopeResolution =
   | { ok: true; scope?: SlackEventScope }
@@ -86,10 +83,7 @@ export function resolveSlackEventScope(params: {
   return {
     ok: true,
     scope: {
-      apiAppId,
-      enterpriseId,
       teamId,
-      isEnterpriseInstall: true,
       client: params.client,
       ...(uploadCompletionClient ? { uploadCompletionClient } : {}),
     },

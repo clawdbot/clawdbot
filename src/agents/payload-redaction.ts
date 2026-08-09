@@ -129,5 +129,7 @@ function visitDiagnosticPayload(
  * objects before persistence.
  */
 export function sanitizeDiagnosticPayload(value: unknown): unknown {
-  return visitDiagnosticPayload(value, { omitField: isCredentialFieldName });
+  return visitDiagnosticPayload(value, {
+    omitField: (key) => key === "providerReplay" || isCredentialFieldName(key),
+  });
 }

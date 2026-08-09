@@ -239,6 +239,13 @@ describe("agent event handler", () => {
     return broadcast.mock.calls.filter(([event]) => event === "chat");
   }
 
+  function chatDeltaTexts(broadcast: ReturnType<typeof vi.fn>) {
+    return chatBroadcastCalls(broadcast)
+      .map(([, payload]) => payload as { state?: string; deltaText?: string })
+      .filter((payload) => payload.state === "delta")
+      .map((payload) => payload.deltaText);
+  }
+
   function agentBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
     return broadcast.mock.calls.filter(([event]) => event === "agent");
   }
@@ -1437,6 +1444,73 @@ describe("agent event handler", () => {
       "final",
     ]);
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
+  it("delivers a throttled delta when the window expires without another event", () => {
+    vi.useFakeTimers();
+    let now = 12_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "trailing");
+
+    emitAgentEvent(handler, "run-trailing", "assistant", { text: "Hello" });
+    now = 12_020;
+    emitAgentEvent(handler, "run-trailing", "assistant", { text: "Hello world" });
+
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
+    now = 12_150;
+    vi.advanceTimersByTime(130);
+
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello", " world"]);
+    expect(vi.getTimerCount()).toBe(0);
+    nowSpy.mockRestore();
+  });
+
+  it("cancels the trailing delta before the terminal frame", () => {
+    vi.useFakeTimers();
+    let now = 13_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "terminal-trailing");
+
+    emitAgentEvent(handler, "run-terminal-trailing", "assistant", { text: "Hello" });
+    now = 13_020;
+    emitAgentEvent(handler, "run-terminal-trailing", "assistant", { text: "Hello world" });
+    expect(vi.getTimerCount()).toBe(1);
+
+    emitLifecycleEnd(handler, "run-terminal-trailing");
+    expect(vi.getTimerCount()).toBe(0);
+    const statesAtTerminal = chatBroadcastCalls(broadcast).map(
+      ([, payload]) => (payload as { state?: string }).state,
+    );
+    expect(statesAtTerminal).toEqual(["delta", "delta", "final"]);
+
+    now = 13_500;
+    vi.advanceTimersByTime(1_000);
+    expect(
+      chatBroadcastCalls(broadcast).map(([, payload]) => (payload as { state?: string }).state),
+    ).toEqual(statesAtTerminal);
+    nowSpy.mockRestore();
+  });
+
+  it("cancels trailing deltas when gateway chat state is cleared", () => {
+    vi.useFakeTimers();
+    let now = 14_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "shutdown-trailing");
+
+    emitAgentEvent(handler, "run-shutdown-trailing", "assistant", { text: "Hello" });
+    now = 14_020;
+    emitAgentEvent(handler, "run-shutdown-trailing", "assistant", { text: "Hello world" });
+    expect(vi.getTimerCount()).toBe(1);
+
+    chatRunState.clear();
+    expect(vi.getTimerCount()).toBe(0);
+    now = 14_500;
+    vi.advanceTimersByTime(1_000);
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
     nowSpy.mockRestore();
   });
 

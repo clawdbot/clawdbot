@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
   refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
   resolveMessageChannelSelection: vi.fn(),
   resolveInstallableChannelPlugin: vi.fn(),
-  getChannelPlugin: vi.fn(),
 }));
 
 vi.mock("../cli/command-secret-gateway.js", () => ({
@@ -51,10 +50,6 @@ vi.mock("./channel-setup/channel-plugin-resolution.js", () => ({
   resolveInstallableChannelPlugin: mocks.resolveInstallableChannelPlugin,
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: mocks.getChannelPlugin,
-}));
-
 const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireFirstMockArg(
@@ -88,6 +83,7 @@ describe("channelsResolveCommand", () => {
     });
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "telegram",
+      plugin: { id: "telegram" },
       configured: ["telegram"],
       source: "explicit",
     });
@@ -180,12 +176,12 @@ describe("channelsResolveCommand", () => {
     mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "whatsapp",
+      plugin: {
+        id: "whatsapp",
+        resolver: { resolveTargets },
+      },
       configured: ["whatsapp"],
       source: "single-configured",
-    });
-    mocks.getChannelPlugin.mockReturnValue({
-      id: "whatsapp",
-      resolver: { resolveTargets },
     });
 
     await channelsResolveCommand(

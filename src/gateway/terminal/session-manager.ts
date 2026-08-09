@@ -381,6 +381,20 @@ export class TerminalSessionManager {
     return true;
   }
 
+  /** Closes every PTY owned by one exact agent session. */
+  closeAgentSessions(agentSessionKey: string): number {
+    const owned = [...this.sessions.values()].filter(
+      (session) =>
+        !session.closed &&
+        session.owner?.kind === "agent" &&
+        session.owner.agentSessionKey === agentSessionKey,
+    );
+    for (const session of owned) {
+      this.finalize(session, "closed", {});
+    }
+    return owned.length;
+  }
+
   /**
    * Rebinds a connection-owned session, or co-attaches a viewer to an
    * agent-owned session. Operator-to-operator attach remains take-over; only

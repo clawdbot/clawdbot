@@ -1,5 +1,4 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type {
   OpenClawConfig,
   ProviderRuntimeModel,
@@ -11,8 +10,8 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createMoonshotThinkingWrapper,
+  createPayloadPatchStreamWrapper,
   resolveMoonshotThinkingType,
-  streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { shouldWrapOllamaCompatMoonshotThinking } from "./model-behavior.js";
@@ -98,25 +97,21 @@ export function shouldInjectOllamaCompatNumCtx(params: {
 }
 
 export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: number): StreamFn {
-  const streamFn = baseFn ?? streamSimple;
-  return (model, context, options) =>
-    streamWithPayloadPatch(streamFn, model, context, options, (payloadRecord) => {
-      if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
-        payloadRecord.options = {};
-      }
-      (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
-    });
+  return createPayloadPatchStreamWrapper(baseFn, ({ payload }) => {
+    if (!payload.options || typeof payload.options !== "object") {
+      payload.options = {};
+    }
+    (payload.options as Record<string, unknown>).num_ctx = numCtx;
+  });
 }
 
 function createOllamaThinkingWrapper(
   baseFn: StreamFn | undefined,
   think: OllamaThinkValue,
 ): StreamFn {
-  const streamFn = baseFn ?? streamSimple;
-  return (model, context, options) =>
-    streamWithPayloadPatch(streamFn, model, context, options, (payloadRecord) => {
-      payloadRecord.think = think;
-    });
+  return createPayloadPatchStreamWrapper(baseFn, ({ payload }) => {
+    payload.think = think;
+  });
 }
 
 function resolveOllamaThinkValue(thinkingLevel: unknown): OllamaThinkValue | undefined {

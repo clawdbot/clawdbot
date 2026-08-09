@@ -1,4 +1,10 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import {
+  waitForControlUiGatewayReady,
+  waitForControlUiGatewayReconnecting,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   REFRESHED_RESEARCH_WORKSPACE,
   SESSION_LIST_DEFAULTS,
@@ -10,8 +16,117 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const captureCliAgentsProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const cliAgentsProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "cli-agents-picker",
+);
+
+function requestHasParam(request: { params?: unknown }, key: string, value: unknown): boolean {
+  return Boolean(
+    request.params &&
+    typeof request.params === "object" &&
+    !Array.isArray(request.params) &&
+    (request.params as Record<string, unknown>)[key] === value,
+  );
+}
 
 suite.define(() => {
+  it("routes a Labs-enabled CLI agent picker row through catalog-target mode", async () => {
+    if (captureCliAgentsProof) {
+      await mkdir(cliAgentsProofDir, { recursive: true });
+    }
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureCliAgentsProof
+        ? { recordVideo: { dir: cliAgentsProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      cliAgentsEnabled: true,
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.create",
+        "sessions.dispatch",
+        "sessions.catalog.list",
+      ],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: {
+                continueSession: true,
+                archive: false,
+                createSession: { model: "anthropic/claude-opus-4-8" },
+              },
+              hosts: [],
+            },
+            {
+              id: "history-only",
+              label: "History only",
+              capabilities: { continueSession: true, archive: false },
+              hosts: [],
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.catalog.list")).find((request) =>
+            requestHasParam(request, "limitPerHost", 1),
+          ),
+        )
+        .toMatchObject({ params: { agentId: "main", limitPerHost: 1 } });
+
+      await page.locator('[data-chat-model-select="true"]').click();
+      const cliGroup = page.locator('[data-chat-model-target-group="cliAgents"]');
+      await expect.poll(() => cliGroup.isVisible()).toBe(true);
+      await pollLocatorText(cliGroup).toContain("CLI agents");
+      await pollLocatorText(cliGroup).toContain("Claude Code");
+      expect(await cliGroup.textContent()).not.toContain("History only");
+      if (captureCliAgentsProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cliAgentsProofDir, "picker-group.png"),
+        });
+      }
+
+      await cliGroup.getByRole("option", { name: "Claude Code" }).click();
+      await expect.poll(() => new URL(page.url()).searchParams.get("catalog")).toBe("claude");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.catalog.list")).find((request) =>
+            requestHasParam(request, "catalogId", "claude"),
+          ),
+        )
+        .toMatchObject({ params: { agentId: "main", catalogId: "claude" } });
+      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+      expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
+      if (captureCliAgentsProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cliAgentsProofDir, "catalog-target.png"),
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows metadata failure truthfully and recovers the full catalog on retry", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -120,7 +235,6 @@ suite.define(() => {
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
       await modelSelect.click();
-      await page.locator('[data-chat-model-provider="openai"]').click();
       await expect
         .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
         .toContain(recoveredModel.name);
@@ -205,7 +319,7 @@ suite.define(() => {
       expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
 
       await page.locator(".new-session-page__message").fill("use Claude Code");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -280,7 +394,7 @@ suite.define(() => {
         .toBe(listCalls + 1);
 
       await message.fill("create during refresh");
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "main",
@@ -351,7 +465,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new?agent=research`);
       await page.getByRole("heading", { name: "Research" }).waitFor();
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
 
       await page.evaluate(() => {
         history.pushState(null, "", "new?agent=research&catalog=claude");
@@ -362,12 +476,13 @@ suite.define(() => {
       await message.fill("keep this reconnect draft");
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("claude");
       await expect
-        .poll(() => page.getByRole("button", { name: "Start thread" }).isEnabled())
+        .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
         .toBe(false);
       expect(await gateway.getRequests("sessions.catalog.list")).toHaveLength(0);
 
       await gateway.deferNext("sessions.catalog.list");
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
       await gateway.waitForRequest("sessions.catalog.list");
       await gateway.deferNext("sessions.catalog.list");
       await gateway.rejectDeferred("sessions.catalog.list", {
@@ -388,7 +503,7 @@ suite.define(() => {
       await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
       await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
 
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "research",
@@ -459,7 +574,7 @@ suite.define(() => {
       const branchRequestsBefore = (await gateway.getRequests("worktrees.branches")).length;
 
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
       await gateway.setMethodResponse("agents.list", {
         agents: [
           {
@@ -482,6 +597,7 @@ suite.define(() => {
         scope: "agent",
       });
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
 
       await expect
         .poll(async () => (await gateway.getRequests("agents.list")).length)
@@ -512,8 +628,9 @@ suite.define(() => {
       const branchesBeforeSameWorkspaceReconnect = (await gateway.getRequests("worktrees.branches"))
         .length;
       await gateway.setOnline(false);
-      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
+      await waitForControlUiGatewayReconnecting(page);
       await gateway.setOnline(true);
+      await waitForControlUiGatewayReady(page);
 
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
@@ -533,7 +650,7 @@ suite.define(() => {
       });
       await expect.poll(() => baseInput.inputValue()).toBe("feature-choice");
 
-      await page.getByRole("button", { name: "Start thread" }).click();
+      await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "research",

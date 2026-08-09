@@ -6,6 +6,7 @@ import {
   parseMediaContentLength,
   readResponseTextSnippet,
 } from "openclaw/plugin-sdk/media-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -33,17 +34,12 @@ function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
 }
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
-  const bytes = await readResponseWithLimit(response, GOOGLECHAT_JSON_RESPONSE_MAX_BYTES, {
+  return readProviderJsonResponse<T>(response, label, {
+    maxBytes: GOOGLECHAT_JSON_RESPONSE_MAX_BYTES,
     chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`${label}: response body stalled after ${chunkTimeoutMs}ms`),
-    onOverflow: ({ maxBytes }) => new Error(`${label}: JSON response exceeds ${maxBytes} bytes`),
   });
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as T;
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
 }
 
 async function readGoogleChatErrorResponse(response: Response, label: string): Promise<string> {

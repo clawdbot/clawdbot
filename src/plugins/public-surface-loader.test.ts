@@ -1,25 +1,17 @@
 // Verifies plugin public surface loading and fallback behavior.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 
-function createTempDir(): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-public-surface-loader-"));
-  tempDirs.push(tempDir);
-  return tempDir;
-}
-
 afterEach(() => {
-  for (const tempDir of tempDirs.splice(0)) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
@@ -43,7 +35,7 @@ describe("bundled plugin public surface loader", () => {
   it("keeps auto-resolved bundled roots on built public artifacts", async () => {
     // The non-isolated plugin shard may have already imported the native loader.
     vi.resetModules();
-    const tempRoot = createTempDir();
+    const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
     const bundledPluginsDir = path.join(tempRoot, "dist", "extensions");
     const modulePath = path.join(bundledPluginsDir, "demo", "provider-policy-api.js");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
@@ -105,7 +97,7 @@ describe("bundled plugin public surface loader", () => {
       const publicSurfaceLoader = await importFreshModule<
         typeof import("./public-surface-loader.js")
       >(import.meta.url, "./public-surface-loader.js?scope=windows-dist-jiti");
-      const tempRoot = createTempDir();
+      const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
       const bundledPluginsDir = path.join(tempRoot, "dist");
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
 
@@ -146,7 +138,7 @@ describe("bundled plugin public surface loader", () => {
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
     >(import.meta.url, "./public-surface-loader.js?scope=source-require-fast-path");
-    const tempRoot = createTempDir();
+    const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
     const bundledPluginsDir = path.join(tempRoot, "extensions");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
 
@@ -179,7 +171,7 @@ describe("bundled plugin public surface loader", () => {
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
     >(import.meta.url, "./public-surface-loader.js?scope=bundled-native-public-artifacts");
-    const tempRoot = createTempDir();
+    const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
     const bundledPluginsDir = path.join(tempRoot, "dist");
     fs.mkdirSync(bundledPluginsDir, { recursive: true });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
@@ -225,7 +217,7 @@ describe("bundled plugin public surface loader", () => {
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
     >(import.meta.url, "./public-surface-loader.js?scope=source-root-local-dist-public-artifacts");
-    const tempRoot = createTempDir();
+    const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
     const bundledPluginsDir = path.join(tempRoot, "extensions");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
     process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
@@ -259,7 +251,7 @@ describe("bundled plugin public surface loader", () => {
         `./public-surface-loader.js?scope=esm-artifact-relocation-${firstLocation}-${nextLocation}`,
       );
       const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
-      const tempRoot = fs.realpathSync(createTempDir());
+      const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
       const bundledPluginsDir = path.join(tempRoot, "extensions");
       const pluginDir = path.join(bundledPluginsDir, "demo");
       fs.mkdirSync(pluginDir, { recursive: true });
@@ -310,7 +302,7 @@ describe("bundled plugin public surface loader", () => {
       const publicSurfaceLoader = await importFreshModule<
         typeof import("./public-surface-loader.js")
       >(import.meta.url, "./public-surface-loader.js?scope=bundled-hardlink-public-artifacts");
-      const tempRoot = createTempDir();
+      const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
       const bundledPluginsDir = path.join(tempRoot, "dist");
       const sourcePath = path.join(tempRoot, "api-source.js");
       const modulePath = path.join(bundledPluginsDir, "demo", "api.js");
@@ -340,7 +332,7 @@ describe("bundled plugin public surface loader", () => {
         import.meta.url,
         `./public-surface-loader.js?scope=installed-hardlink-${artifact.replace(".js", "")}`,
       );
-      const tempRoot = fs.realpathSync(createTempDir());
+      const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
       const pluginRoot = path.join(tempRoot, "installed-plugin");
       const outsidePath = path.join(tempRoot, "outside.js");
       const artifactPath = path.join(pluginRoot, artifact);
@@ -366,7 +358,7 @@ describe("bundled plugin public surface loader", () => {
       }),
     }));
 
-    const tempRoot = createTempDir();
+    const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
     const bundledPluginsDir = path.join(tempRoot, "dist");
     fs.mkdirSync(bundledPluginsDir, { recursive: true });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
@@ -403,7 +395,7 @@ describe("bundled plugin public surface loader", () => {
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
     >(import.meta.url, "./public-surface-loader.js?scope=post-validation-identity");
-    const tempRoot = createTempDir();
+    const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
     const bundledPluginsDir = path.join(tempRoot, "dist");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
 

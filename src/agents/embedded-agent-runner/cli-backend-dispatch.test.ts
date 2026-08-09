@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { createAgentExecutionAttribution } from "../agent-execution-attribution.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
-import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
+import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn());
@@ -44,9 +43,7 @@ vi.mock("./cli-backend-dispatch-transcript.js", () => ({
   createCliDispatchTranscriptRecorder,
 }));
 
-function baseRunParams(
-  overrides: Partial<RunEmbeddedAgentInternalParams> = {},
-): RunEmbeddedAgentInternalParams {
+function baseRunParams(overrides: Partial<RunEmbeddedAgentParams> = {}): RunEmbeddedAgentParams {
   return {
     sessionId: "recall-session",
     sessionKey: "agent:main:recall",
@@ -213,7 +210,7 @@ describe("resolveEmbeddedCliBackendDispatchEligibility", () => {
 });
 
 describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
-  const runGate = (overrides: Partial<RunEmbeddedAgentInternalParams> = {}) =>
+  const runGate = (overrides: Partial<RunEmbeddedAgentParams> = {}) =>
     runEmbeddedAgentViaCliBackendIfEligible(baseRunParams(overrides));
 
   it("returns undefined without the opt-in", async () => {
@@ -395,7 +392,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
   ] as const)("refuses dispatch for %s", async (_label, overrides) => {
     expect(
       await runEmbeddedAgentViaCliBackendIfEligible(
-        baseRunParams(overrides as Partial<RunEmbeddedAgentInternalParams>),
+        baseRunParams(overrides as Partial<RunEmbeddedAgentParams>),
       ),
     ).toBeUndefined();
     expect(runCliAgent).not.toHaveBeenCalled();
@@ -409,34 +406,6 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     );
     expect(onExecutionStarted).toHaveBeenCalledTimes(1);
     expect(onExecutionStarted).toHaveBeenCalledWith({ lifecycleGeneration: "gen-1" });
-  });
-
-  it("preserves admission attribution through the embedded-to-CLI bridge", async () => {
-    const attribution = createAgentExecutionAttribution({
-      runId: "run-cli-dispatch-test",
-      lifecycleGeneration: "gen-1",
-      sessionKey: "agent:main:recall",
-      sessionId: "recall-session",
-      agentId: "main",
-    });
-    const onExecutionStarted = vi.fn();
-    const onExecutionAttributionChanged = vi.fn();
-
-    await runEmbeddedAgentViaCliBackendIfEligible(
-      baseRunParams({
-        attribution,
-        lifecycleGeneration: "gen-1",
-        onExecutionStarted,
-        onExecutionAttributionChanged,
-      }),
-    );
-
-    expect(runCliAgent.mock.calls[0]?.[0]?.attribution).toBe(attribution);
-    expect(onExecutionStarted).toHaveBeenCalledWith({ lifecycleGeneration: "gen-1" });
-    expect(onExecutionAttributionChanged).toHaveBeenCalledWith({
-      lifecycleGeneration: "gen-1",
-      attribution,
-    });
   });
 
   it("retains prompt media facts through the embedded-to-CLI bridge", async () => {
@@ -453,9 +422,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
   it("forwards execution phases from the CLI backend", async () => {
     const onExecutionPhase = vi.fn();
     runCliAgent.mockImplementation(
-      async (cliParams: {
-        onExecutionPhase?: RunEmbeddedAgentInternalParams["onExecutionPhase"];
-      }) => {
+      async (cliParams: { onExecutionPhase?: RunEmbeddedAgentParams["onExecutionPhase"] }) => {
         cliParams.onExecutionPhase?.({
           phase: "model_call_started",
           provider: "anthropic",

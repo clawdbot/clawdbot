@@ -1,6 +1,8 @@
 /** Builds installed-index records from normalized plugin manifest registry entries. */
 import path from "node:path";
+import { normalizeOptionalString as normalizeStringField } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { getPluginInstallRecordMapEntry } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
@@ -169,14 +171,6 @@ function describePackageInstallSource(
   });
 }
 
-function normalizeStringField(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return normalized ? normalized : undefined;
-}
-
 function normalizePackageChannel(
   channel: PluginPackageChannel | undefined,
 ): InstalledPluginPackageChannelInfo | undefined {
@@ -247,7 +241,7 @@ export function buildInstalledPluginIndexRecords(params: {
   return params.registry.plugins.map((record): InstalledPluginIndexRecord => {
     const candidate = candidateByRootDir.get(record.rootDir);
     const packageJsonPath = resolvePackageJsonPath(candidate, realpathCache);
-    const installRecord = params.installRecords[record.id];
+    const installRecord = getPluginInstallRecordMapEntry(params.installRecords, record.id);
     const packageInstall = describePackageInstallSource(candidate);
     const packageChannel = normalizePackageChannel(
       record.packageChannel ?? candidate?.packageManifest?.channel,

@@ -47,7 +47,6 @@ import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
-import { bindCliRunExecutionAttribution } from "./cli-runner/execution-attribution.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import {
@@ -445,6 +444,12 @@ async function persistCliAssistantTranscript(params: {
       sessionKey: runParams.sessionKey,
       agentId: runParams.agentId,
       expectedSessionId: runParams.sessionId,
+      ...(runParams.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: runParams.expectedLifecycleRevision }
+        : {}),
+      ...(runParams.expectedWriterRunId !== undefined
+        ? { expectedWriterRunId: runParams.expectedWriterRunId }
+        : {}),
       storePath: runParams.storePath,
       idempotencyKey: `cli-assistant:${runParams.runId}`,
       config: runParams.config,
@@ -590,12 +595,10 @@ async function finalizeCliContextEngineTurn(params: {
 
 /** Prepares and runs one CLI-backed agent turn. */
 export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
-  const attributedParams = bindCliRunExecutionAttribution(paramsInput);
   const lifecycleGeneration =
-    attributedParams.lifecycleGeneration ??
-    captureAgentRunLifecycleGeneration(attributedParams.runId);
+    paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
   const params = {
-    ...attributedParams,
+    ...paramsInput,
     lifecycleGeneration,
   };
   // Observability services register before turns and keep subscriptions process-stable.

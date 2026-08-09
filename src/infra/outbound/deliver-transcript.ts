@@ -1,11 +1,11 @@
 // Mirrors successful outbound payloads into the configured session transcript.
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
+import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
 import type { DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
-import type { OutboundChannel } from "./targets.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 const loadTranscriptRuntime = createLazyRuntimeModule(
@@ -15,7 +15,7 @@ const loadTranscriptRuntime = createLazyRuntimeModule(
 export async function mirrorDeliveredPayloads(params: {
   delivery: DeliverOutboundPayloadsCoreParams;
   payloads: readonly NormalizedOutboundPayload[];
-  channel: Exclude<OutboundChannel, "none">;
+  channel: string;
   to: string;
 }): Promise<void> {
   const mirror = params.delivery.mirror;
@@ -40,10 +40,15 @@ export async function mirrorDeliveredPayloads(params: {
   // Keep mirror failures non-fatal so callers do not retry an already-sent payload.
   try {
     const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
+    const writerFence = getOwnedSessionTranscriptWriterFence();
     const mirrorResult = await appendAssistantMessageToSessionTranscript({
       agentId: mirror.agentId,
       sessionKey: mirror.sessionKey,
       expectedSessionId: mirror.expectedSessionId,
+      ...(writerFence?.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
+        : {}),
+      ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
       text: mirrorText,
       idempotencyKey: mirror.idempotencyKey,
       deliveryMirror: mirror.deliveryMirror,

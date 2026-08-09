@@ -86,6 +86,10 @@ vi.mock("./chat.js", () => ({
   },
 }));
 
+vi.mock("./chat-send-handler.js", () => ({
+  handleChatSend: mocks.chatSend,
+}));
+
 const { skillsHandlers } = await import("./skills.js");
 
 function callHandler(method: string, params: Record<string, unknown>) {

@@ -665,9 +665,9 @@ export async function renderBundledRootHelpText(
   });
 }
 
-function renderSourceRootHelpText(renderContext?: RootHelpRenderContext): string {
+async function renderSourceRootHelpText(renderContext?: RootHelpRenderContext): Promise<string> {
   if (!renderContext) {
-    return withIsolatedRootHelpRenderContext(extensionsDir, renderSourceRootHelpText);
+    return await withIsolatedRootHelpRenderContext(extensionsDir, renderSourceRootHelpText);
   }
   const moduleUrl = pathToFileURL(path.join(rootDir, "src/cli/program/root-help.ts")).href;
   const renderOptions = {
@@ -684,28 +684,12 @@ function renderSourceRootHelpText(renderContext?: RootHelpRenderContext): string
     "process.stdout.write(output);",
     "process.exit(0);",
   ].join("\n");
-  const result = spawnSync(
-    process.execPath,
-    ["--import", "tsx", "--input-type=module", "--eval", inlineModule],
-    {
-      cwd: rootDir,
-      encoding: "utf8",
-      env: renderContext.env,
-      killSignal: "SIGKILL",
-      timeout: ROOT_HELP_RENDER_TIMEOUT_MS,
-    },
-  );
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    const stderr = result.stderr?.trim();
-    throw new Error(
-      "Failed to render source root help" +
-        (stderr ? `: ${stderr}` : result.signal ? `: terminated by ${result.signal}` : ""),
-    );
-  }
-  return result.stdout ?? "";
+  return await spawnText(["--import", "tsx", "--input-type=module", "--eval", inlineModule], {
+    cwd: rootDir,
+    env: renderContext.env ?? process.env,
+    failureMessage: "Failed to render source root help",
+    timeoutMs: ROOT_HELP_RENDER_TIMEOUT_MS,
+  });
 }
 
 async function renderSourceBrowserHelpText(renderContext: RootHelpRenderContext): Promise<string> {
@@ -777,7 +761,7 @@ export async function writeCliStartupMetadata(options?: {
   extensionsDir?: string;
   sourceRootDir?: string;
   renderBundledRootHelpText?: typeof renderBundledRootHelpText;
-  renderSourceRootHelpText?: typeof renderSourceRootHelpText;
+  renderSourceRootHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
   renderSourceBrowserHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
   renderSourceSecretsHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
   renderSourceNodesHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
@@ -877,10 +861,11 @@ export async function writeCliStartupMetadata(options?: {
             renderContext,
           );
         } catch {
-          // The spawnSync source fallback blocks the event loop; that is fine for
-          // this rare recovery path (missing/broken bundle) and only delays
-          // draining sibling render output, not its correctness.
-          return (options?.renderSourceRootHelpText ?? renderSourceRootHelpText)(renderContext);
+          // Keep the fallback asynchronous: sibling help renders share this
+          // event loop, so blocking here can turn completed children into false timeouts.
+          return await (options?.renderSourceRootHelpText ?? renderSourceRootHelpText)(
+            renderContext,
+          );
         }
       })();
   const hasCustomCommandRenderer =

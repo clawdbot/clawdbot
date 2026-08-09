@@ -5,6 +5,7 @@ import path from "node:path";
 import { build } from "tsdown";
 import {
   buildPluginSdkEntrySources,
+  listPluginSdkDeclarationOutputs,
   pluginSdkEntrypoints,
   productionPluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mjs";
@@ -56,8 +57,8 @@ const flatDeclarationEntrypoints = shouldBuildPrivateQaEntries
 const flatDeclarationEntrypointSet = new Set(flatDeclarationEntrypoints);
 
 if (USE_CANONICAL_DECLARATIONS) {
-  for (const entry of flatDeclarationEntrypoints) {
-    const declarationPath = path.join(distPluginSdkDir, `${entry}.d.ts`);
+  for (const relativePath of listPluginSdkDeclarationOutputs(flatDeclarationEntrypoints)) {
+    const declarationPath = path.resolve(process.cwd(), relativePath);
     if (!fs.existsSync(declarationPath)) {
       throw new Error(
         `Missing canonical plugin SDK declaration: ${path.relative(process.cwd(), declarationPath)}`,

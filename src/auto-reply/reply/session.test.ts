@@ -134,6 +134,7 @@ vi.mock("../../agents/session-write-lock.js", async () => {
 });
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: vi.fn(async () => [
     { provider: "minimax", id: "m2.7", name: "M2.7" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
@@ -1291,6 +1292,7 @@ describe("initSessionState RawBody", () => {
     await expect(
       drainFormattedSystemEvents({
         cfg,
+        agentId: "main",
         sessionKey,
         isMainSession: false,
         isNewSession: true,
@@ -2141,6 +2143,7 @@ describe("initSessionState reset policy", () => {
     await expect(
       drainFormattedSystemEvents({
         cfg,
+        agentId: "main",
         sessionKey,
         isMainSession: false,
         isNewSession: true,
@@ -4326,6 +4329,7 @@ describe("drainFormattedSystemEvents", () => {
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
@@ -4346,6 +4350,7 @@ describe("drainFormattedSystemEvents", () => {
 
     const result = await drainFormattedSystemEvents({
       cfg: { channels: {} } as OpenClawConfig,
+      agentId: "main",
       sessionKey: "agent:main:main",
       isMainSession: true,
       isNewSession: true,
@@ -4371,6 +4376,7 @@ describe("drainFormattedSystemEvents", () => {
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
@@ -4395,6 +4401,7 @@ describe("drainFormattedSystemEvents", () => {
 
       const result = await drainFormattedSystemEvents({
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         sessionKey: "agent:main:main",
         isMainSession: true,
         isNewSession: false,
@@ -4549,7 +4556,7 @@ describe("persistSessionUsageUpdate", () => {
       update: {
         isHeartbeat: true,
         usage: { input: 1_200, output: 100 },
-        usageIsContextSnapshot: true,
+        lastCallUsage: { input: 1_200, output: 100 },
         providerUsed: "claude-cli",
         modelUsed: "claude-sonnet-4-6",
         cliSessionBinding: {
@@ -4589,7 +4596,7 @@ describe("persistSessionUsageUpdate", () => {
       update: {
         isHeartbeat: true,
         usage: { input: 1_200, output: 100 },
-        usageIsContextSnapshot: true,
+        lastCallUsage: { input: 1_200, output: 100 },
         providerUsed: "claude-cli",
         modelUsed: "claude-sonnet-4-6",
         clearCliSessionBinding: true,
@@ -4604,11 +4611,11 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "treats CLI usage as a fresh context snapshot when requested",
+      name: "treats CLI last-call usage as a fresh context snapshot",
       seed: {},
       update: {
         usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-        usageIsContextSnapshot: true,
+        lastCallUsage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
         providerUsed: "claude-cli",
         cliSessionBinding: {
           sessionId: "cli-session-1",
@@ -4643,7 +4650,7 @@ describe("persistSessionUsageUpdate", () => {
       },
       update: {
         usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
-        usageIsContextSnapshot: true,
+        lastCallUsage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
         providerUsed: "claude-cli",
         clearCliSessionBinding: true,
       },
@@ -4666,7 +4673,6 @@ describe("persistSessionUsageUpdate", () => {
       update: {
         usage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
         lastCallUsage: { input: 20, output: 10_855, cacheRead: 1_761_324, cacheWrite: 33_047 },
-        usageIsContextSnapshot: true,
         providerUsed: "claude-cli",
         contextTokensUsed: 1_048_576,
         compactionTokensAfter: 0,
@@ -4777,7 +4783,7 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "keeps the prior total stale when last-call context is unavailable",
+      name: "clears the prior total when last-call context is unavailable",
       seed: { totalTokens: 148_874, totalTokensFresh: true },
       update: {
         usage: { input: 12, output: 15_104, cacheRead: 819_661, cacheWrite: 93_130 },
@@ -4791,7 +4797,7 @@ describe("persistSessionUsageUpdate", () => {
         },
       },
       expected: {
-        totalTokens: 148_874,
+        totalTokens: undefined,
         totalTokensFresh: false,
         inputTokens: 12,
         cacheRead: 819_661,
@@ -4840,10 +4846,10 @@ describe("persistSessionUsageUpdate", () => {
       expected: { totalTokens: 42_000, totalTokensFresh: true },
     },
     {
-      name: "marks older fresh totalTokens stale when no compaction preservation is requested",
+      name: "clears older totalTokens when no compaction preservation is requested",
       seed: { totalTokens: 42_000, totalTokensFresh: true },
       update: { usage: { input: 50_000, output: 5_000, total: 55_000 } },
-      expected: { totalTokens: 42_000, totalTokensFresh: false },
+      expected: { totalTokens: undefined, totalTokensFresh: false },
     },
     {
       name: "uses promptTokens when available without lastCallUsage",

@@ -19,7 +19,7 @@
    the row's 8px inline inset bleeds left into the avatar gutter (never right,
    which could overflow the thread on narrow panes) so the hover pill keeps
    its inset without indenting the icon/label. Child combinator keeps shells
-   nested in .chat-activity-group__body on the boxed 12px inset. */
+   nested in .chat-activity-group__body on the group's indented rail. */
 .chat-group-messages > .chat-bubble--tool-shell .chat-tool-msg-summary {
   width: calc(100% + 8px);
   margin-left: -8px;
@@ -1078,33 +1078,15 @@
   flex-shrink: 0;
 }
 
-/* Rows live in one bordered card with hairline separators. */
+/* Rows form a flat indented list below the summary. The rail marks the group
+   extent while shared row hover pills remain free of per-row chrome. */
 .chat-activity-group__body {
   display: flex;
   flex-direction: column;
-  gap: 0;
-  margin: 4px 0 0 2px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: var(--radius-md, 10px);
-  background: color-mix(in srgb, var(--card, var(--bg)) 55%, transparent);
-  overflow: hidden;
-}
-
-.chat-activity-group__body > .chat-bubble {
-  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
-}
-
-.chat-activity-group__body > .chat-bubble:first-child {
-  border-top: 0;
-}
-
-.chat-activity-group__body .chat-tool-msg-summary {
-  padding: 7px 12px;
-  border-radius: 0;
-}
-
-.chat-activity-group__body .chat-tool-msg-body {
-  padding: 0 12px 10px 12px;
+  gap: 2px;
+  margin: 4px 0 0 10px;
+  padding-left: 10px;
+  border-left: 2px solid color-mix(in srgb, var(--border) 82%, transparent);
 }
 
 /* Completed-turn work rollup: slim "Worked for X" disclosure standing in for
@@ -1418,6 +1400,54 @@
     chatWorkingClawPeekabooJaw 1.2s ease-out var(--claw-surprise-delay) 1;
 }
 
+.chat-reading-indicator--nodoff svg {
+  animation:
+    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
+    chatWorkingClawNodOff 2.8s ease-out var(--claw-surprise-delay) 1;
+}
+
+.chat-reading-indicator--nodoff svg .claw-icon__jaw {
+  animation:
+    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
+    chatWorkingClawNodOffJaw 2.8s ease-out var(--claw-surprise-delay) 1;
+}
+
+.chat-reading-indicator--curious svg {
+  animation:
+    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
+    chatWorkingClawCurious 1.8s ease-out var(--claw-surprise-delay) 1;
+}
+
+.chat-reading-indicator--curious svg .claw-icon__jaw {
+  animation:
+    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
+    chatWorkingClawCuriousJaw 1.8s ease-out var(--claw-surprise-delay) 1;
+}
+
+.chat-reading-indicator--omnom svg {
+  animation:
+    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
+    chatWorkingClawOmNom 1.8s ease-out var(--claw-surprise-delay) 1;
+}
+
+.chat-reading-indicator--omnom svg .claw-icon__jaw {
+  animation:
+    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
+    chatWorkingClawOmNomJaw 1.8s ease-out var(--claw-surprise-delay) 1;
+}
+
+.chat-reading-indicator--fakeout svg {
+  animation:
+    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
+    chatWorkingClawFakeOut 2.4s ease-out var(--claw-surprise-delay) 1;
+}
+
+.chat-reading-indicator--fakeout svg .claw-icon__jaw {
+  animation:
+    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
+    chatWorkingClawFakeOutJaw 2.4s ease-out var(--claw-surprise-delay) 1;
+}
+
 @keyframes chatWorkingClawSouthpaw {
   0%,
   100% {
@@ -1595,6 +1625,274 @@
   }
 
   86%,
+  100% {
+    transform: rotate(-10deg);
+  }
+}
+
+/* Nodoff body: droop through 60%, jolt awake at 64%, then settle by 70%.
+   Translation stays first so the sleepy dip remains vertical. */
+@keyframes chatWorkingClawNodOff {
+  0%,
+  10% {
+    transform: translateY(0) rotate(0deg);
+  }
+
+  35% {
+    transform: translateY(1px) rotate(10deg);
+  }
+
+  55% {
+    transform: translateY(1.4px) rotate(14deg);
+  }
+
+  60% {
+    transform: translateY(1.5px) rotate(15deg);
+  }
+
+  64% {
+    transform: translateY(-0.5px) rotate(-3deg);
+  }
+
+  70%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+}
+
+/* Nodoff jaw: slackens during the droop, then wakes for guilty snips at
+   74% and 84%. */
+@keyframes chatWorkingClawNodOffJaw {
+  0%,
+  10% {
+    transform: rotate(-10deg);
+  }
+
+  35% {
+    transform: rotate(-16deg);
+  }
+
+  60% {
+    transform: rotate(-21deg);
+  }
+
+  64% {
+    transform: rotate(-6deg);
+  }
+
+  70% {
+    transform: rotate(-24deg);
+  }
+
+  74% {
+    transform: rotate(4deg);
+  }
+
+  80% {
+    transform: rotate(-22deg);
+  }
+
+  84% {
+    transform: rotate(4deg);
+  }
+
+  90%,
+  100% {
+    transform: rotate(-10deg);
+  }
+}
+
+/* Curious body: tilt into the question at 40%, hold through 62%, then
+   spring past center at 70% before settling. */
+@keyframes chatWorkingClawCurious {
+  0%,
+  30% {
+    transform: rotate(0deg);
+  }
+
+  40%,
+  62% {
+    transform: rotate(-14deg);
+  }
+
+  70% {
+    transform: rotate(4deg);
+  }
+
+  76%,
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+/* Curious jaw: tuck at the 40-62% head tilt, then pop open on the 70%
+   overshoot before returning to rest. */
+@keyframes chatWorkingClawCuriousJaw {
+  0%,
+  30% {
+    transform: rotate(-10deg);
+  }
+
+  40%,
+  62% {
+    transform: rotate(-16deg);
+  }
+
+  70% {
+    transform: rotate(-6deg);
+  }
+
+  76%,
+  100% {
+    transform: rotate(-10deg);
+  }
+}
+
+/* Om nom body: three tiny forward lunges land at 36%, 46%, and 56%,
+   then the claw slides home by 64%. */
+@keyframes chatWorkingClawOmNom {
+  0%,
+  30% {
+    transform: translateX(0);
+  }
+
+  36% {
+    transform: translateX(2.5px);
+  }
+
+  40% {
+    transform: translateX(1px);
+  }
+
+  46% {
+    transform: translateX(2.5px);
+  }
+
+  50% {
+    transform: translateX(1px);
+  }
+
+  56% {
+    transform: translateX(2.5px);
+  }
+
+  64%,
+  100% {
+    transform: translateX(0);
+  }
+}
+
+/* Om nom jaw: wide wind-ups at 30%, 42%, and 52% snap into three fast
+   chomps at 36%, 46%, and 56%. */
+@keyframes chatWorkingClawOmNomJaw {
+  0%,
+  26% {
+    transform: rotate(-10deg);
+  }
+
+  30% {
+    transform: rotate(-30deg);
+  }
+
+  36% {
+    transform: rotate(8deg);
+  }
+
+  42% {
+    transform: rotate(-30deg);
+  }
+
+  46% {
+    transform: rotate(8deg);
+  }
+
+  52% {
+    transform: rotate(-30deg);
+  }
+
+  56% {
+    transform: rotate(8deg);
+  }
+
+  64%,
+  100% {
+    transform: rotate(-10deg);
+  }
+}
+
+/* Fakeout body: wind up at 10%, freeze through 55%, then recoil across
+   the triple-snip hits at 58%, 66%, and 74%. */
+@keyframes chatWorkingClawFakeOut {
+  0%,
+  6% {
+    transform: rotate(0deg);
+  }
+
+  10%,
+  55% {
+    transform: rotate(-4deg);
+  }
+
+  58% {
+    transform: rotate(3deg);
+  }
+
+  62% {
+    transform: rotate(-4deg);
+  }
+
+  66% {
+    transform: rotate(3deg);
+  }
+
+  70% {
+    transform: rotate(-4deg);
+  }
+
+  74% {
+    transform: rotate(3deg);
+  }
+
+  80%,
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+/* Fakeout jaw: hold the mid-open wind-up from 10-55%, then fire the
+   accelerated triple snip at 58%, 66%, and 74%. */
+@keyframes chatWorkingClawFakeOutJaw {
+  0%,
+  6% {
+    transform: rotate(-10deg);
+  }
+
+  10%,
+  55% {
+    transform: rotate(-26deg);
+  }
+
+  58% {
+    transform: rotate(4deg);
+  }
+
+  62% {
+    transform: rotate(-24deg);
+  }
+
+  66% {
+    transform: rotate(4deg);
+  }
+
+  70% {
+    transform: rotate(-22deg);
+  }
+
+  74% {
+    transform: rotate(4deg);
+  }
+
+  80%,
   100% {
     transform: rotate(-10deg);
   }

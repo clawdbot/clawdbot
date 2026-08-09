@@ -10,6 +10,12 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { HEARTBEAT_RUN_SCOPE } from "../../infra/heartbeat-run-scope.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
@@ -352,6 +358,7 @@ describe("runPreparedReply media-only handling", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetSystemEventsForTest();
     const paths = cleanupPaths.splice(0);
     return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
   });
@@ -827,7 +834,6 @@ describe("runPreparedReply media-only handling", () => {
       shouldSteer: true,
       shouldFollowup: true,
       isActive: true,
-      isStreaming: true,
       resolvedQueue: expect.objectContaining({ mode: "steer" }),
     });
     expect(call?.followupRun.run.messageProvider).toBe(channel);
@@ -1913,7 +1919,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.shouldSteer).toBe(false);
     expect(call?.shouldFollowup).toBe(true);
     expect(call?.isActive).toBe(true);
-    expect(call?.isStreaming).toBe(true);
   });
 
   it.each([
@@ -1969,7 +1974,6 @@ describe("runPreparedReply media-only handling", () => {
       expect(call.shouldSteer).toBe(false);
       expect(call.shouldFollowup).toBe(true);
       expect(call.isActive).toBe(true);
-      expect(call.isStreaming).toBe(true);
       expect(call.followupRun.originatingThreadId).toBe("501.000");
     },
   );
@@ -2022,7 +2026,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.shouldSteer).toBe(true);
     expect(call.shouldFollowup).toBe(true);
     expect(call.isActive).toBe(true);
-    expect(call.isStreaming).toBe(true);
     expect(call.followupRun.originatingThreadId).toBe(43);
   });
 
@@ -2128,6 +2131,43 @@ describe("runPreparedReply media-only handling", () => {
       expect(operation.sessionId).toBe("session-after-rollover");
       expect(call.replyOperation).toBe(operation);
       expect(call.followupRun.run.sessionId).toBe("session-after-rollover");
+    } finally {
+      operation.complete();
+    }
+  });
+
+  it("rebinds a provisional pre-dispatch operation to a discovered existing session", async () => {
+    const operation = createReplyOperation({
+      sessionId: "provisional-session",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": {
+        sessionId: "existing-session",
+        sessionFile: "/tmp/existing-session.jsonl",
+        updatedAt: 1,
+      },
+    };
+
+    try {
+      await expect(
+        runPreparedReply(
+          baseParams({
+            isNewSession: false,
+            sessionEntry: undefined,
+            sessionId: undefined,
+            sessionStore,
+            storePath: "/tmp/sessions.json",
+            opts: { replyOperation: operation } as never,
+          }),
+        ),
+      ).resolves.toEqual({ text: "ok" });
+
+      const call = requireLastRunReplyAgentCall();
+      expect(operation.sessionId).toBe("existing-session");
+      expect(call.replyOperation).toBe(operation);
+      expect(call.followupRun.run.sessionId).toBe("existing-session");
     } finally {
       operation.complete();
     }
@@ -3706,6 +3746,40 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireRunReplyAgentCall();
     expect(call.followupRun.prompt).toContain("System: [t] Node connected.");
+  });
+
+  it("admits only system events visible to the prepared agent", async () => {
+    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
+      "./session-system-events.js",
+    );
+    vi.mocked(drainFormattedSystemEvents).mockImplementationOnce(
+      actualSystemEvents.drainFormattedSystemEvents,
+    );
+    enqueueSystemEvent(
+      "Alpha hook finished",
+      withSystemEventOwner({ sessionKey: "global" }, "alpha"),
+    );
+    enqueueSystemEvent(
+      "Beta hook finished",
+      withSystemEventOwner({ sessionKey: "global" }, "beta"),
+    );
+    enqueueSystemEvent("Legacy unowned event", { sessionKey: "global" });
+
+    await runPreparedReply(
+      baseParams({
+        agentId: "alpha",
+        sessionKey: "global",
+        opts: { isHeartbeat: true },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.prompt).toContain("Alpha hook finished");
+    expect(call.followupRun.prompt).toContain("Legacy unowned event");
+    expect(call.followupRun.prompt).not.toContain("Beta hook finished");
+    expect(peekSystemEventEntries("global").map((event) => event.text)).toEqual([
+      "Beta hook finished",
+    ]);
   });
 
   it("does not strip think-hint token from deferred queue body", async () => {

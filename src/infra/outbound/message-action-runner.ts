@@ -1,5 +1,6 @@
 // Message-action runner normalizes tool params, resolves channel/target/media,
 // applies policies, and dispatches send/poll/plugin actions.
+import { asOptionalRecord as asResultRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -68,7 +69,6 @@ import {
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
@@ -282,12 +282,6 @@ export function getToolResult(
   result: MessageActionRunResult,
 ): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
-}
-
-function asResultRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function withSendNormalization(
@@ -545,7 +539,7 @@ async function resolveChannel(
   if (selection.source === "tool-context-fallback") {
     params.channel = selection.channel;
   }
-  return selection.channel;
+  return selection;
 }
 
 function enforceCrossProviderEgressPolicyBeforeTargetResolution(params: {
@@ -718,7 +712,7 @@ type ResolvedActionContext = {
   params: Record<string, unknown>;
   idempotencyKey?: string;
   channel: ChannelId;
-  channelPlugin?: ChannelPlugin;
+  channelPlugin: ChannelPlugin;
   mediaAccess: OutboundMediaAccess;
   extraActionMediaSourceParamKeys?: readonly string[];
   accountId?: string | null;
@@ -1062,7 +1056,7 @@ async function handleBroadcastAction(
   }
   const targetChannels =
     channelHint && normalizeOptionalLowercaseString(channelHint) !== "all"
-      ? [await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)]
+      ? [(await resolveChannel(input.cfg, { channel: channelHint }, input.toolContext)).channel]
       : input.broadcastAccountPlan
         ? input.broadcastAccountPlan.candidateChannels
         : await (async () => {
@@ -1635,6 +1629,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     ctx: {
       cfg,
       channel,
+      plugin: channelPlugin,
       params,
       idempotencyKey: ctx.idempotencyKey,
       agentId,
@@ -1802,6 +1797,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     ctx: {
       cfg,
       channel,
+      plugin: channelPlugin,
       params,
       idempotencyKey: ctx.idempotencyKey,
       accountId: accountId ?? undefined,
@@ -2046,9 +2042,9 @@ export async function runMessageAction(
   if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, params)) {
     throw new Error(`Action ${action} requires a target.`);
   }
-  const channel = await resolveChannel(cfg, params, input.toolContext, action);
+  const selection = await resolveChannel(cfg, params, input.toolContext, action);
+  const { channel, plugin: channelPlugin } = selection;
   params.channel = channel;
-  const channelPlugin = resolveOutboundChannelPlugin({ channel, cfg });
   const explicitAccountId = validateExplicitMessageAccountSelection({
     cfg,
     channel,

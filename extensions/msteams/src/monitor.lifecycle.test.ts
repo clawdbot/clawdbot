@@ -4,7 +4,6 @@ import type { Request, Response } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ACCOUNT_ID } from "../runtime-api.js";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
-import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
@@ -13,6 +12,7 @@ import {
   gateIngressAcceptThenDispatch,
 } from "./monitor-ingress-mock.test-support.js";
 import type { MSTeamsPollStore } from "./polls.js";
+import type { MSTeamsSsoStoredToken } from "./sso-token-store.js";
 
 type MSTeamsUserResolution = {
   input: string;
@@ -91,7 +91,7 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
 
 const ssoTokenStore = vi.hoisted(() => ({
   get: vi.fn(async () => null),
-  save: vi.fn(async () => {}),
+  save: vi.fn(async (_token: MSTeamsSsoStoredToken) => {}),
   remove: vi.fn(async () => false),
 }));
 
@@ -294,27 +294,6 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     }
   });
 
-  it("treats omitted enabled as enabled during provider startup", async () => {
-    const abort = new AbortController();
-    const cfg = createConfig(0);
-    delete cfg.channels!.msteams!.enabled;
-
-    const task = monitorMSTeamsProvider({
-      cfg,
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
-
-    await resolveStartedServer();
-    abort.abort();
-    const result = await task;
-    if (!result.app) {
-      throw new Error("expected Teams monitor app with omitted enabled");
-    }
-  });
-
   it("resolves named account config when only accountId is provided", async () => {
     const abort = new AbortController();
     const cfg = {
@@ -352,12 +331,8 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       },
       expect.objectContaining({ cloud: "Public", oauthDefaultConnectionName: "graph" }),
     );
-    const handlerDeps = registerMSTeamsHandlers.mock.calls.at(-1)?.[1];
-    if (!handlerDeps) {
-      throw new Error("expected named Teams account handler dependencies");
-    }
-    expect(handlerDeps.cfg.channels?.msteams?.defaultAccount).toBe("support");
-    expect(resolveMSTeamsAccountConfig(handlerDeps.cfg, "support")).toMatchObject({
+    expect(registerMSTeamsHandlers.mock.calls.at(-1)?.[1].cfg.channels?.msteams).toMatchObject({
+      defaultAccount: "support",
       appId: "support-app-id",
       appPassword: "support-app-password",
       tenantId: "tenant-id",

@@ -1,7 +1,10 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import {
+  resolveDeviceIdentityCoordinatorPath,
+  resolveDeviceIdentityCoordinatorPaths,
+} from "./device-identity-coordinator-paths.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;
@@ -14,35 +17,6 @@ class DeviceIdentityCoordinatorError extends Error {
     super(message);
     this.name = "DeviceIdentityCoordinatorError";
   }
-}
-
-function canonicalizeDatabasePath(databasePath: string): string {
-  const resolved = path.resolve(databasePath);
-  try {
-    return fs.realpathSync.native(resolved);
-  } catch {
-    const missingSegments: string[] = [];
-    let current = resolved;
-    while (true) {
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return resolved;
-      }
-      missingSegments.push(path.basename(current));
-      current = parent;
-      try {
-        return path.join(fs.realpathSync.native(current), ...missingSegments.toReversed());
-      } catch {
-        // Existing ancestors can still contain aliases even when the database is absent.
-      }
-    }
-  }
-}
-
-function resolveDeviceIdentityCoordinatorPath(databasePath: string, lockDir: string): string {
-  const canonicalPath = canonicalizeDatabasePath(databasePath);
-  const databaseHash = crypto.createHash("sha256").update(canonicalPath).digest("hex").slice(0, 8);
-  return path.join(lockDir, `device-identity.${databaseHash}.lock.sqlite`);
 }
 
 function ensurePrivateCoordinatorDirectory(lockDir: string): void {
@@ -84,20 +58,18 @@ function ensurePrivateCoordinatorDirectory(lockDir: string): void {
   }
 }
 
-export function acquireDeviceIdentityCoordinator(params: {
+type DeviceIdentityCoordinatorParams = {
   databasePath: string;
   busyTimeoutMs?: number;
-  env?: NodeJS.ProcessEnv;
-  lockDir?: string;
-}): { release: () => void } {
-  const lockDir =
-    params.lockDir ?? resolveGatewayLockDir(resolveStateDir(params.env ?? process.env));
-  const coordinatorPath = resolveDeviceIdentityCoordinatorPath(params.databasePath, lockDir);
-  ensurePrivateCoordinatorDirectory(path.dirname(coordinatorPath));
+} & ({ stateDir: string; lockDir?: never } | { lockDir: string; stateDir?: never });
+
+function acquireCoordinatorDatabase(
+  coordinatorPath: string,
+  busyTimeoutMs: number,
+): ReturnType<typeof openNodeSqliteDatabase> {
   const database = openNodeSqliteDatabase(coordinatorPath);
   try {
-    const timeout = Math.max(0, Math.trunc(params.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS));
-    database.exec(`PRAGMA busy_timeout = ${timeout}; BEGIN EXCLUSIVE;`);
+    database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; BEGIN EXCLUSIVE;`);
   } catch (error) {
     try {
       database.close();
@@ -105,6 +77,63 @@ export function acquireDeviceIdentityCoordinator(params: {
     throw new DeviceIdentityCoordinatorError(
       "device identity migration or creation already owns this state database",
       error,
+    );
+  }
+  return database;
+}
+
+function releaseCoordinatorDatabase(
+  database: ReturnType<typeof openNodeSqliteDatabase>,
+): unknown[] {
+  const releaseErrors: unknown[] = [];
+  try {
+    database.exec("ROLLBACK");
+  } catch (error) {
+    releaseErrors.push(error);
+  }
+  try {
+    database.close();
+  } catch (error) {
+    releaseErrors.push(error);
+  }
+  return releaseErrors;
+}
+
+export function acquireDeviceIdentityCoordinator(params: DeviceIdentityCoordinatorParams): {
+  release: () => void;
+} {
+  const timeout = Math.max(0, Math.trunc(params.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS));
+  const coordinatorPaths =
+    params.lockDir !== undefined
+      ? [resolveDeviceIdentityCoordinatorPath(params.databasePath, params.lockDir)]
+      : resolveDeviceIdentityCoordinatorPaths({
+          databasePath: params.databasePath,
+          stateDir: params.stateDir,
+          temporaryDirectory: os.tmpdir(),
+          uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+        });
+  for (const coordinatorPath of coordinatorPaths) {
+    ensurePrivateCoordinatorDirectory(path.dirname(coordinatorPath));
+  }
+  const databases: Array<ReturnType<typeof openNodeSqliteDatabase>> = [];
+  try {
+    // v2026.7.2-beta.4 through beta.7 use process temp. Keep it first until
+    // those builds are no longer rolling-upgrade peers.
+    for (const coordinatorPath of coordinatorPaths) {
+      databases.push(acquireCoordinatorDatabase(coordinatorPath, timeout));
+    }
+  } catch (error) {
+    const cleanupErrors = databases.toReversed().flatMap(releaseCoordinatorDatabase);
+    if (cleanupErrors.length === 0) {
+      throw error;
+    }
+    const message =
+      error instanceof DeviceIdentityCoordinatorError
+        ? `${error.message}; failed to clean up a partially acquired coordinator`
+        : "failed to acquire and clean up device identity coordinators";
+    throw new DeviceIdentityCoordinatorError(
+      message,
+      new AggregateError([error, ...cleanupErrors]),
     );
   }
 
@@ -115,21 +144,11 @@ export function acquireDeviceIdentityCoordinator(params: {
         return;
       }
       released = true;
-      let releaseError: unknown;
-      try {
-        database.exec("ROLLBACK");
-      } catch (error) {
-        releaseError = error;
-      }
-      try {
-        database.close();
-      } catch (error) {
-        releaseError ??= error;
-      }
-      if (releaseError) {
+      const releaseErrors = databases.toReversed().flatMap(releaseCoordinatorDatabase);
+      if (releaseErrors.length > 0) {
         throw new DeviceIdentityCoordinatorError(
           "failed to release device identity coordinator",
-          releaseError,
+          releaseErrors.length === 1 ? releaseErrors[0] : new AggregateError(releaseErrors),
         );
       }
     },

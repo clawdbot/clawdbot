@@ -1,6 +1,6 @@
 import type { Message } from "grammy/types";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
-import { buildTelegramThreadParams, resolveTelegramThreadSpec } from "./bot/helpers.js";
+import { buildTelegramThreadParams, resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export type TelegramCallbackButton = {
@@ -35,7 +35,7 @@ export function createTelegramCallbackMessageActions(params: {
   isGroup: boolean;
   isForum: boolean;
 }): TelegramCallbackMessageActions {
-  const { bot, callbackMessage, isGroup, isForum } = params;
+  const { bot, callbackMessage, isForum } = params;
   const callbackBusinessParams =
     callbackMessage.business_connection_id !== undefined
       ? { business_connection_id: callbackMessage.business_connection_id }
@@ -82,22 +82,16 @@ export function createTelegramCallbackMessageActions(params: {
     replyParams?: Parameters<typeof bot.api.sendMessage>[2],
   ) => {
     const threadParams = buildTelegramThreadParams(
-      resolveTelegramThreadSpec({
-        isGroup,
-        isForum,
-        messageThreadId: callbackMessage.message_thread_id,
-      }),
+      resolveTelegramMessageThreadSpec(callbackMessage, isForum),
     );
-    const topicParams = {
-      ...callbackBusinessParams,
-      ...threadParams,
-      ...(callbackMessage.direct_messages_topic?.topic_id != null
-        ? { direct_messages_topic_id: callbackMessage.direct_messages_topic.topic_id }
-        : {}),
-    };
+    const {
+      message_thread_id: _messageThreadId,
+      direct_messages_topic_id: _directMessagesTopicId,
+      ...ordinaryReplyParams
+    } = replyParams ?? {};
     const mergedParams =
-      Object.keys(topicParams).length > 0 || replyParams
-        ? { ...topicParams, ...replyParams }
+      callbackBusinessParams || threadParams || replyParams
+        ? { ...ordinaryReplyParams, ...callbackBusinessParams, ...threadParams }
         : replyParams;
     return await bot.api.sendMessage(callbackMessage.chat.id, text, mergedParams);
   };

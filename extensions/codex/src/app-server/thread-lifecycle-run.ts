@@ -19,6 +19,7 @@ import {
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
+import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import {
   isTransientWebSearchRestriction,
   shouldRecheckRecoverablePluginBinding,
@@ -82,7 +83,9 @@ export async function startOrResumeThread(
     let binding = await lifecycleTiming.measure("read-binding", () =>
       params.bindingStore.read(bindingIdentity),
     );
+    let replacementPredecessor: CodexAppServerThreadBinding | undefined;
     const initialBoundThreadId = binding?.threadId;
+    const initialBoundClientId = binding?.clientId;
     const normalizeBindingModelProvider = (
       authProfileId: string | undefined,
       modelProvider: string | undefined,
@@ -95,13 +98,35 @@ export async function startOrResumeThread(
         config: params.params.config,
       });
     const throwIfAborted = () => throwIfCodexThreadLifecycleAborted(params.signal);
-    const releaseRetainedThread = (threadId: string) =>
-      releaseCodexRetainedLiveThread({
+    const releaseRetainedThread = async (
+      threadId: string,
+      ownerClientId = initialBoundClientId,
+    ) => {
+      if (ownerClientId && ownerClientId !== clientId) {
+        // Auth/runtime rotation selects a new physical client, but its map
+        // cannot release a subscription owned by the previous app-server.
+        const previousClient = retainSharedCodexAppServerClientByInstanceId(ownerClientId);
+        if (!previousClient) {
+          return;
+        }
+        try {
+          await releaseCodexRetainedLiveThread({
+            client: previousClient.client,
+            lifecycleTiming,
+            threadId,
+          });
+        } finally {
+          previousClient.release();
+        }
+        return;
+      }
+      await releaseCodexRetainedLiveThread({
         client: params.client,
         abandonClient: params.abandonClient,
         lifecycleTiming,
         threadId,
       });
+    };
     if (!binding && bindingIdentity.kind === "session" && bindingIdentity.sessionKey) {
       // Reset may rotate the OpenClaw session while this plugin is unloaded. Only
       // the authoritative session store may let its successor displace that stale owner.
@@ -180,6 +205,7 @@ export async function startOrResumeThread(
             params.mcpServersFingerprintEvaluated === true
               ? params.mcpServersFingerprint
               : pendingBinding.mcpServersFingerprint,
+          configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
           networkProxyConfigFingerprint,
           nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
@@ -305,6 +331,29 @@ export async function startOrResumeThread(
       params.persistentWebSearchAllowed !== false &&
       transientWebSearchRestriction;
     const unknownProviderWebSearchSupport = params.nativeProviderWebSearchSupport === "unknown";
+    const configuredMcpOwnershipChanged =
+      binding?.threadId &&
+      ((params.configuredMcpOwnershipVersion === 1 &&
+        (binding.configuredMcpOwnershipVersion !== 1 ||
+          binding.dynamicToolsFingerprint === undefined ||
+          binding.mcpServersFingerprint !== undefined ||
+          binding.userMcpServersFingerprint !== undefined)) ||
+        (params.configuredMcpOwnershipVersion !== 1 &&
+          binding.configuredMcpOwnershipVersion === 1));
+    if (configuredMcpOwnershipChanged && binding?.threadId) {
+      const predecessorBinding = binding;
+      // Scheduled configured MCP moved from Codex-native config to OpenClaw dynamic tools.
+      // A persistent main/named session has one binding: rotate its exact predecessor instead
+      // of retaining native and scheduled variants that could diverge or widen authority.
+      assertCodexBindingMayBeReplaced(predecessorBinding, "changing configured MCP ownership");
+      embeddedAgentLog.debug(
+        "codex app-server configured MCP ownership changed; starting a new thread",
+        { threadId: predecessorBinding.threadId },
+      );
+      replacementPredecessor = predecessorBinding;
+      binding = undefined;
+      preserveExistingBinding = false;
+    }
     if (
       binding?.threadId &&
       params.mcpServersFingerprintEvaluated === true &&
@@ -422,19 +471,6 @@ export async function startOrResumeThread(
       embeddedAgentLog.debug("codex app-server user MCP config changed; starting a new thread", {
         threadId: binding.threadId,
       });
-      await clearCurrentBinding("rotating a stale thread binding");
-      binding = undefined;
-    }
-    if (
-      binding?.threadId &&
-      binding.environmentSelectionFingerprint !== environmentSelectionFingerprint
-    ) {
-      embeddedAgentLog.debug(
-        "codex app-server environment selection changed; starting a new thread",
-        {
-          threadId: binding.threadId,
-        },
-      );
       await clearCurrentBinding("rotating a stale thread binding");
       binding = undefined;
     }
@@ -563,8 +599,8 @@ export async function startOrResumeThread(
           binding,
           bindingIdentity,
           clientId,
-          contextEngineBinding,
           dynamicToolsFingerprint,
+          environmentSelectionFingerprint,
           hostSystemAgentActive,
           lifecycleTiming,
           nativeSkillIsolation,
@@ -621,10 +657,10 @@ export async function startOrResumeThread(
       }
     }
 
-    if (initialBoundThreadId) {
+    if (initialBoundThreadId && !preserveExistingBinding && !replacementPredecessor) {
       await releaseRetainedThread(initialBoundThreadId);
     }
-    return await startFreshCodexThread(params, {
+    const started = await startFreshCodexThread(params, {
       bindingIdentity,
       startModelSelection,
       startModelProvider,
@@ -649,6 +685,13 @@ export async function startOrResumeThread(
       prebuiltPluginThreadConfig,
       preserveExistingBinding,
       rotatedContextEngineBinding,
+      replacementPredecessor,
     });
+    if (replacementPredecessor) {
+      // The predecessor remains authoritative through thread/start and exact-owner CAS.
+      // Release only that prior subscription after the successor has committed.
+      await releaseRetainedThread(replacementPredecessor.threadId, replacementPredecessor.clientId);
+    }
+    return started;
   });
 }

@@ -224,31 +224,36 @@ export function buildCanonicalProtocolSchema(
   schemas: Record<string, unknown> = ProtocolSchemas,
   methodMetadata = listCoreGatewayMethodMetadata(),
 ): ProtocolSchemaDocument {
-  return JSON.parse(
-    JSON.stringify({
-      $schema: "http://json-schema.org/draft-07/schema#",
-      $id: "https://openclaw.ai/protocol.schema.json",
-      title: "OpenClaw Gateway Protocol",
-      description: "Handshake, request/response, and event frames for the Gateway WebSocket.",
-      oneOf: [
-        { $ref: "#/definitions/RequestFrame" },
-        { $ref: "#/definitions/ResponseFrame" },
-        { $ref: "#/definitions/EventFrame" },
-      ],
-      discriminator: {
-        propertyName: "type",
-        mapping: {
-          req: "#/definitions/RequestFrame",
-          res: "#/definitions/ResponseFrame",
-          event: "#/definitions/EventFrame",
-        },
+  return structuredClone({
+    $schema: "http://json-schema.org/draft-07/schema#",
+    $id: "https://openclaw.ai/protocol.schema.json",
+    title: "OpenClaw Gateway Protocol",
+    description: "Handshake, request/response, and event frames for the Gateway WebSocket.",
+    oneOf: [
+      { $ref: "#/definitions/RequestFrame" },
+      { $ref: "#/definitions/ResponseFrame" },
+      { $ref: "#/definitions/EventFrame" },
+    ],
+    discriminator: {
+      propertyName: "type",
+      mapping: {
+        req: "#/definitions/RequestFrame",
+        res: "#/definitions/ResponseFrame",
+        event: "#/definitions/EventFrame",
       },
-      methods: Object.fromEntries(
-        methodMetadata.map(({ name, scope, since }) => [name, { since, scope }]),
-      ),
-      definitions: schemas,
-    }),
-  ) as ProtocolSchemaDocument;
+    },
+    methods: Object.fromEntries(
+      // Omit undefined `since` so structuredClone matches the prior JSON
+      // round-trip byte shape and the document satisfies the schema type.
+      methodMetadata.map(({ name, scope, since }) => [
+        name,
+        { ...(since === undefined ? {} : { since }), scope },
+      ]),
+    ),
+    definitions: schemas,
+    // The runtime consumers validate this JSON document; the literal cannot
+    // structurally satisfy ProtocolSchemaDocument's stricter schema shapes.
+  }) as unknown as ProtocolSchemaDocument;
 }
 
 export function assertPublishedProtocolSchema(params: {
@@ -257,7 +262,7 @@ export function assertPublishedProtocolSchema(params: {
   published: ProtocolSchemaDocument;
 }) {
   assert.deepEqual(
-    JSON.parse(JSON.stringify(params.builtSchemas)),
+    structuredClone(params.builtSchemas),
     params.canonical.definitions,
     "built package schema registry differs from the canonical TypeBox registry",
   );
@@ -534,17 +539,17 @@ async function runGatewayProtocolArtifactsProducer(
   try {
     await runCommand({
       args: ["protocol:check"],
-      appendLog: writer.appendLog,
+      appendLog: (line) => writer.appendLog(line),
       command: "pnpm",
       cwd: options.repoRoot,
     });
     const summary = await packAndInspectProtocol({
-      appendLog: writer.appendLog,
+      appendLog: (line) => writer.appendLog(line),
       artifactBase: options.artifactBase,
       repoRoot: options.repoRoot,
     });
     await compileAndRunSwiftProtocolModels({
-      appendLog: writer.appendLog,
+      appendLog: (line) => writer.appendLog(line),
       artifactBase: options.artifactBase,
       repoRoot: options.repoRoot,
     });

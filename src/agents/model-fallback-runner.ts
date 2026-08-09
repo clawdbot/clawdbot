@@ -430,6 +430,7 @@ async function runWithModelFallbackInternal<T>(
               deferredSuspension.pending = undefined;
               void suspendSession({
                 cfg: params.cfg,
+                agentId: params.agentId,
                 agentDir: params.agentDir,
                 sessionId: params.sessionId,
                 laneId,
@@ -768,6 +769,7 @@ async function runWithModelFallbackInternal<T>(
     }),
     attribution: { sessionId: params.sessionId, lane: resolveTerminalSuspensionLane() },
     cfg: params.cfg,
+    agentId: params.agentId,
     agentDir: params.agentDir,
   });
 }

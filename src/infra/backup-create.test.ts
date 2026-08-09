@@ -372,6 +372,37 @@ describe("writeTarArchiveWithRetry", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
+  it("reports the actual attempt count when bailing out before the retry limit", async () => {
+    const nonEofErr = new Error("permission denied");
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/logs/gateway.jsonl",
+    });
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+
+    const singleAttempt = vi.fn<() => Promise<void>>().mockRejectedValue(nonEofErr);
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar: singleAttempt,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/after 1 attempt\)/);
+    expect(singleAttempt).toHaveBeenCalledOnce();
+
+    const twoAttempts = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(eofErr)
+      .mockRejectedValueOnce(nonEofErr);
+    await expect(
+      writeTarArchiveWithRetry({
+        tempArchivePath: "/tmp/backup.tar.gz.tmp",
+        runTar: twoAttempts,
+        sleepMs: sleep,
+      }),
+    ).rejects.toThrow(/after 2 attempts\)/);
+    expect(twoAttempts).toHaveBeenCalledTimes(2);
+  });
+
   it("retries on EOF-class errors and eventually succeeds", async () => {
     const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
       path: "/state/sessions/s-abc/transcript.jsonl",

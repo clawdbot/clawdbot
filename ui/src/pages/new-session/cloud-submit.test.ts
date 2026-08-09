@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  clearCloudSessionRecovery,
+  readCloudSessionRecovery,
+  writeCloudSessionRecovery,
+} from "./cloud-recovery.ts";
 import { advanceCloudDraftSession } from "./cloud-submit.ts";
 
 function clientWith(request: ReturnType<typeof vi.fn>): Pick<GatewayBrowserClient, "request"> {
@@ -49,7 +54,7 @@ describe("cloud draft advancement", () => {
         recoveryScope: "principal-a",
         recoveryPhase: "sending",
         recovering: true,
-        isCurrent: () => true,
+        isLifecycleCurrent: () => true,
         ownsRecovery: () => true,
         clearRecovery,
         setRecoveryPhase: vi.fn(),
@@ -92,7 +97,7 @@ describe("cloud draft advancement", () => {
         recoveryScope: "principal-a",
         recoveryPhase: "dispatching",
         recovering: false,
-        isCurrent: () => false,
+        isLifecycleCurrent: () => false,
         ownsRecovery: () => false,
         clearRecovery,
         setRecoveryPhase: vi.fn(),
@@ -106,6 +111,83 @@ describe("cloud draft advancement", () => {
       ),
     ).toMatchObject({ sessionKey: "agent:cloud:newer" });
     expect(clearRecovery).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "the page is interrupted after accepted delivery",
+      lifecycleCurrent: false,
+      recoveryOwned: true,
+      status: "interrupted",
+      retirement: "interrupted",
+    },
+    {
+      name: "a newer owner takes over",
+      lifecycleCurrent: true,
+      recoveryOwned: false,
+      status: "ownership-lost",
+      retirement: "resolved",
+    },
+  ] as const)("retires only the completed submission when $name", async (testCase) => {
+    const { lifecycleCurrent, recoveryOwned, retirement, status } = testCase;
+    const gatewayUrl = "ws://gateway.example";
+    const recoveryScope = "principal-a";
+    const sessionKey = "agent:cloud:stale";
+    const newerRecovery = {
+      sessionKey: "agent:cloud:newer",
+      messageId: "message-newer",
+      message: "newer task",
+      profileId: "aws",
+      agentId: "cloud",
+      gatewayUrl,
+      recoveryScope,
+      phase: "dispatching" as const,
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ placement: { state: "active", environmentId: "environment-1" } })
+      .mockImplementationOnce(async () => {
+        if (!recoveryOwned) {
+          expect(writeCloudSessionRecovery(newerRecovery)).toBe(true);
+        }
+        return { runId: "run-stale", status: "started" };
+      });
+    // Both fences stay current through the helper's five safety checks. One
+    // independent fact changes before the caller classifies accepted delivery.
+    let lifecycleChecks = 0;
+    let ownershipChecks = 0;
+    const clearRecovery = vi.fn(() =>
+      clearCloudSessionRecovery(gatewayUrl, recoveryScope, sessionKey),
+    );
+
+    await expect(
+      advanceCloudDraftSession({
+        client: clientWith(request),
+        key: sessionKey,
+        agentId: "cloud",
+        profileId: "aws",
+        message: "interrupted task",
+        messageId: "message-interrupted",
+        gatewayUrl,
+        recoveryScope,
+        recoveryPhase: "dispatching",
+        recovering: false,
+        isLifecycleCurrent: () => {
+          lifecycleChecks += 1;
+          return lifecycleCurrent || lifecycleChecks < 6;
+        },
+        ownsRecovery: () => {
+          ownershipChecks += 1;
+          return recoveryOwned || ownershipChecks < 6;
+        },
+        clearRecovery,
+        setRecoveryPhase: vi.fn(),
+      }),
+    ).resolves.toEqual({ status });
+    expect(clearRecovery).toHaveBeenCalledWith(retirement);
+    expect(readCloudSessionRecovery(gatewayUrl, recoveryScope)).toEqual(
+      recoveryOwned ? null : newerRecovery,
+    );
   });
 
   it("does not persist volatile incognito recovery when submission is cancelled", async () => {
@@ -124,7 +206,7 @@ describe("cloud draft advancement", () => {
         recoveryPhase: "dispatching",
         persistRecovery: false,
         recovering: false,
-        isCurrent: () => false,
+        isLifecycleCurrent: () => false,
         ownsRecovery: () => false,
         clearRecovery: vi.fn(),
         setRecoveryPhase: vi.fn(),
@@ -149,7 +231,7 @@ describe("cloud draft advancement", () => {
         recoveryScope: "principal-a",
         recoveryPhase: "dispatching",
         recovering: false,
-        isCurrent: () => false,
+        isLifecycleCurrent: () => false,
         ownsRecovery: () => false,
         clearRecovery,
         setRecoveryPhase: vi.fn(),
@@ -202,7 +284,7 @@ describe("cloud draft advancement", () => {
         recoveryScope: "principal-a",
         recoveryPhase: "sending",
         recovering: true,
-        isCurrent: () => true,
+        isLifecycleCurrent: () => true,
         ownsRecovery: () => true,
         clearRecovery,
         setRecoveryPhase: vi.fn(),
@@ -265,7 +347,7 @@ describe("cloud draft advancement", () => {
         recoveryScope: "principal-a",
         recoveryPhase: "sending",
         recovering: true,
-        isCurrent: () => true,
+        isLifecycleCurrent: () => true,
         ownsRecovery: () => true,
         clearRecovery,
         setRecoveryPhase: vi.fn(),
@@ -308,7 +390,7 @@ describe("cloud draft advancement", () => {
         recoveryScope: "principal-a",
         recoveryPhase: "sending",
         recovering: true,
-        isCurrent: () => true,
+        isLifecycleCurrent: () => true,
         ownsRecovery: () => true,
         clearRecovery,
         setRecoveryPhase: vi.fn(),
@@ -353,7 +435,7 @@ describe("cloud draft advancement", () => {
         recoveryScope: "principal-a",
         recoveryPhase: "dispatching",
         recovering: true,
-        isCurrent: () => true,
+        isLifecycleCurrent: () => true,
         ownsRecovery: () => true,
         clearRecovery,
         setRecoveryPhase: vi.fn(),

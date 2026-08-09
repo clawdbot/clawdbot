@@ -4,6 +4,7 @@ import { closedObject } from "./closed-object.js";
 import {
   WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
   WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
+  WorkerProviderReplayStateSchema,
 } from "./worker-admission.js";
 import {
   LiveIntegerSchema,
@@ -93,6 +94,7 @@ const WorkerInferenceAssistantMessageProperties = {
   model: WorkerIdentifierSchema,
   responseModel: Type.Optional(WorkerIdentifierSchema),
   responseId: Type.Optional(WorkerIdentifierSchema),
+  providerReplay: Type.Optional(WorkerProviderReplayStateSchema),
   usage: WorkerTranscriptUsageSchema,
   timestamp: LiveIntegerSchema,
 };

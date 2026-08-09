@@ -176,10 +176,11 @@ function readTuiPtyCase(value: unknown, index: number): TuiPtyCase {
     );
   }
   try {
-    new RegExp(testNamePattern);
+    RegExp(testNamePattern);
   } catch (error) {
     throw new Error(
       `execution.config.tuiPtyCases[${index}].testNamePattern is invalid: ${formatErrorMessage(error)}`,
+      { cause: error },
     );
   }
   return { coverageId, testFile, testNamePattern };
@@ -446,8 +447,6 @@ export async function runTuiPtyEvidenceProducer(
     codeRefs: scenario.codeRefs,
     docsRefs: scenario.docsRefs,
     id: scenario.id,
-    primaryCoverageIds: scenario.coverage?.primary ?? [],
-    secondaryCoverageIds: scenario.coverage?.secondary ?? [],
     sourcePath: SOURCE_PATH,
     title: scenario.title,
   };

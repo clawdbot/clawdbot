@@ -5,8 +5,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { errorShape, ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -86,8 +86,8 @@ vi.mock("./chat.js", () => ({
   },
 }));
 
-vi.mock("./chat-send-handler.js", () => ({
-  handleChatSend: (...args: unknown[]) => chatSendWithAdmissionOwnedMock(...args),
+vi.mock("./chat-send-external-entry.js", () => ({
+  handleDirectExternalChatSend: (...args: unknown[]) => chatSendWithAdmissionOwnedMock(...args),
 }));
 
 vi.mock("./chat-abort-handler.js", () => ({
