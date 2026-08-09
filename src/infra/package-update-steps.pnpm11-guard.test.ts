@@ -848,6 +848,8 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
 
       const failed = await runGlobalPackageUpdateSteps(updateParams);
       expect(failed.failedStep?.name).toBe("pnpm package postinstall");
+      // Package tree already mutated before postinstall; recovery must see that.
+      expect(failed.packageReplacementVerified).toBe(true);
       await expect(
         fs.readFile(path.join(packageRoot, ".openclaw-lifecycle-pending"), "utf8"),
       ).resolves.toBe("pending\n");

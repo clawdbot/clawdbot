@@ -52,16 +52,14 @@ function didCompletePackageReplacement(
   if (steps.some((step) => step.name === "global install swap" && step.exitCode === 0)) {
     return true;
   }
-  const installLanded = steps.some(
+  // Record replacement at the mutation boundary. In-place `global update` already
+  // writes the new tree before lifecycle scripts/doctor; a later postinstall
+  // failure must still allow failed-update recovery to start the on-disk unit.
+  return steps.some(
     (step) =>
       (step.name === "global update" || step.name === "global update (omit optional)") &&
       step.exitCode === 0,
   );
-  if (!installLanded) {
-    return false;
-  }
-  // Doctor only runs against the replacement tree after install verification.
-  return steps.some((step) => step.name.startsWith("openclaw doctor"));
 }
 
 /**
