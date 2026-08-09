@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { normalizeRouteBindingChannelId } from "../routing/binding-scope.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -56,11 +57,37 @@ function listUnboundAmbientChannelIds(
 export function materializeLegacyDefaultAgentRoles(
   cfg: OpenClawConfig,
   legacyDefaultAgentId: string,
-  options: { ambientChannelIds?: readonly string[]; materializeSessionStore?: boolean } = {},
+  options: {
+    ambientChannelIds?: readonly string[];
+    env?: NodeJS.ProcessEnv;
+    materializeSessionStore?: boolean;
+    materializeWorkspace?: boolean;
+  } = {},
 ) {
   const agentId = normalizeAgentId(legacyDefaultAgentId);
   let next = cfg;
   const insertedPaths: string[][] = [];
+  if (options.materializeWorkspace) {
+    const entries = { ...next.agents?.entries };
+    const entryKey = Object.keys(entries).find(
+      (candidate) => normalizeAgentId(candidate) === agentId,
+    );
+    const entry = entryKey ? entries[entryKey] : undefined;
+    const workspaceNeedsPin =
+      entry !== undefined &&
+      (!Object.hasOwn(entry, "workspace") ||
+        (typeof entry.workspace === "string" && entry.workspace.trim().length === 0));
+    if (entryKey && entry && workspaceNeedsPin) {
+      entries[entryKey] = {
+        ...entry,
+        workspace:
+          normalizeOptionalString(next.agents?.defaults?.workspace) ??
+          resolveDefaultAgentWorkspaceDir(options.env),
+      };
+      next = { ...next, agents: { ...next.agents, entries } };
+      insertedPaths.push(["agents", "entries", entryKey, "workspace"]);
+    }
+  }
   const channels = listUnboundAmbientChannelIds(cfg, options.ambientChannelIds ?? []);
   if (channels.length > 0) {
     next = {

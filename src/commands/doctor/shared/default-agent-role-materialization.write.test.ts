@@ -25,7 +25,7 @@ describe("default role materialization authored writes", () => {
       `${JSON.stringify(
         {
           agents: {
-            defaults: { model: "${DEFAULT_MODEL}" },
+            defaults: { model: "${DEFAULT_MODEL}", workspace: "/srv/ops" },
             entries: {
               ops: { default: true },
               research: { model: "${RESEARCH_MODEL}" },
@@ -70,6 +70,7 @@ describe("default role materialization authored writes", () => {
 
     const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
     expect(persisted.agents?.defaults?.model).toBe("${DEFAULT_MODEL}");
+    expect(persisted.agents?.entries?.ops?.workspace).toBe("/srv/ops");
     expect(persisted.agents?.ownership).toBe("explicit");
     expect(persisted.agents?.entries?.research?.model).toBe("${RESEARCH_MODEL}");
     expect(persisted.agents?.entries?.ops).not.toHaveProperty("default");

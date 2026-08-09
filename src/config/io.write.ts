@@ -204,7 +204,7 @@ export async function writeConfigFileFromContext(
         ownerAgentId,
         deps.env,
         snapshotRead.pluginMetadataSnapshot?.manifestRegistry.plugins,
-        { materializeSessionStore: sameFixedSessionStore },
+        { materializeSessionStore: sameFixedSessionStore, materializeWorkspace: true },
       )
     : { config: nextConfig, insertedPaths: [] as string[][] };
   nextConfig = ownershipMaterialization.config;
