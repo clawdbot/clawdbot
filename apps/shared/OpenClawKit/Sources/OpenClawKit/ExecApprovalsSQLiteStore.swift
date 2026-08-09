@@ -355,7 +355,8 @@ public enum ExecApprovalsSQLiteStore {
         let currentAgents = current.map { self.projectionDocument($0).agents ?? [:] } ?? [:]
         let nextAgents = self.projectionDocument(next).agents ?? [:]
         for agentID in Set(currentAgents.keys).union(nextAgents.keys)
-        where currentAgents[agentID] != nextAgents[agentID] {
+            where currentAgents[agentID] != nextAgents[agentID]
+        {
             let statement = try database.prepare(
                 "SELECT 1 FROM agent_deletion_journal WHERE agent_id = ? LIMIT 1")
             try statement.bindText(agentID, at: 1)
