@@ -85,7 +85,7 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
   const cardName =
     cardIdentity?.name?.trim() || (cardAgent ? normalizeAgentLabel(cardAgent) : cardAgentId);
   const approvalCount = host.sessionData.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
-  const gateway = host.context?.gateway;
+  const gateway = host.sessionDataContext?.gateway;
   const avatarAuthToken = gateway
     ? resolveControlUiAuthToken({
         hello: gateway.snapshot.hello,
