@@ -77,7 +77,7 @@ function projectExtendedStable2026_6_35QaConfig(cfg: OpenClawConfig): OpenClawCo
         ...defaults,
         ...(mediaModels?.image ? { imageGenerationModel: mediaModels.image } : {}),
       },
-      list: Object.entries(entries ?? {}).map(([id, agent]) => ({ id, ...agent })),
+      list: Object.entries(entries ?? {}).map(([id, agent]) => Object.assign({ id }, agent)),
     },
   } as OpenClawConfig;
 }
