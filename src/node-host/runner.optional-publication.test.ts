@@ -399,18 +399,18 @@ describe("runNodeHost optional publications", () => {
     });
   });
 
-  it("retries unchanged desired inventory after a transient failure without another event", async () => {
+  it("preserves retry backoff across duplicate inventory events", async () => {
     let pluginPublicationCount = 0;
-    let rejectInitialPublication: ((error: Error) => void) | undefined;
+    const rejectPublications: Array<((error: Error) => void) | undefined> = [];
     await withReadyNodeHost(async ({ client, options }) => {
       client.request.mockImplementation((method: string) => {
         if (method !== NODE_PLUGIN_TOOLS_UPDATE_METHOD) {
           return Promise.resolve({});
         }
         pluginPublicationCount += 1;
-        if (pluginPublicationCount === 1) {
+        if (pluginPublicationCount <= 3) {
           return new Promise((_resolve, reject) => {
-            rejectInitialPublication = reject;
+            rejectPublications[pluginPublicationCount - 1] = reject;
           });
         }
         return Promise.resolve({});
@@ -419,27 +419,40 @@ describe("runNodeHost optional publications", () => {
         protocol: 4,
         features: { methods: [], events: [] },
       } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-      await vi.waitFor(() => expect(rejectInitialPublication).toBeDefined());
+      await vi.waitFor(() => expect(rejectPublications[0]).toBeDefined());
 
       vi.useFakeTimers();
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       try {
+        const flushPublicationSettlement = async () => {
+          for (let index = 0; index < 10; index += 1) {
+            await Promise.resolve();
+          }
+        };
         mocks.availabilityChanged?.();
-        rejectInitialPublication?.(new Error("temporary publish failure"));
-        await Promise.resolve();
-        await Promise.resolve();
-        mocks.availabilityChanged?.();
+        rejectPublications[0]?.(new Error("temporary publish failure"));
+        await flushPublicationSettlement();
         expect(pluginPublicationCount).toBe(1);
-
-        await vi.advanceTimersByTimeAsync(249);
-        expect(pluginPublicationCount).toBe(1);
-        await vi.advanceTimersByTimeAsync(1);
+        expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 250);
+        await vi.runOnlyPendingTimersAsync();
+        await flushPublicationSettlement();
         expect(pluginPublicationCount).toBe(2);
-        expect(
-          client.request.mock.calls.filter(
-            ([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD,
-          )[1]?.[1],
-        ).toEqual({ tools: mocks.nodePluginTools });
+        mocks.availabilityChanged?.();
+        rejectPublications[1]?.(new Error("temporary publish failure"));
+        await flushPublicationSettlement();
+        expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 500);
+        await vi.runOnlyPendingTimersAsync();
+        await flushPublicationSettlement();
+        expect(pluginPublicationCount).toBe(3);
+        mocks.availabilityChanged?.();
+        rejectPublications[2]?.(new Error("temporary publish failure"));
+        await flushPublicationSettlement();
+        expect(setTimeoutSpy).toHaveBeenLastCalledWith(expect.any(Function), 1_000);
+        await vi.runOnlyPendingTimersAsync();
+        await flushPublicationSettlement();
+        expect(pluginPublicationCount).toBe(4);
       } finally {
+        setTimeoutSpy.mockRestore();
         vi.useRealTimers();
       }
     });

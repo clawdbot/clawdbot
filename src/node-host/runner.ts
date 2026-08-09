@@ -163,6 +163,8 @@ type NodeOptionalPublicationState = {
   retryDelayMs: number;
   retryPending: boolean;
   retryTimer?: NodeJS.Timeout;
+  hasInFlightParams: boolean;
+  inFlightParams?: unknown;
   inFlight?: Promise<void>;
 };
 
@@ -286,6 +288,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         hasRejectedParams: false,
         retryDelayMs: NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS,
         retryPending: false,
+        hasInFlightParams: false,
       };
       optionalPublicationStates.set(method, state);
     }
@@ -293,6 +296,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       state.status === "unsupported" ||
       (state.hasRejectedParams && isDeepStrictEqual(state.rejectedParams, params)) ||
       (state.hasPending && isDeepStrictEqual(state.pendingParams, params)) ||
+      (state.hasInFlightParams && isDeepStrictEqual(state.inFlightParams, params)) ||
       (!state.inFlight &&
         state.hasPublishedParams &&
         isDeepStrictEqual(state.publishedParams, params))
@@ -330,6 +334,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
           state.hasRejectedParams = false;
           state.rejectedParams = undefined;
         }
+        state.inFlightParams = nextParams;
+        state.hasInFlightParams = true;
         try {
           await client.request(method, nextParams);
           // Request settlement races reconnect teardown. Stale completions must
@@ -378,6 +384,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
               }
             }
           }
+        } finally {
+          state.inFlightParams = undefined;
+          state.hasInFlightParams = false;
         }
       }
     };
