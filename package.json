@@ -426,6 +426,9 @@
     "./plugin-sdk/plugin-state-store-runtime": {
       "default": "./dist/plugin-sdk/plugin-state-store-runtime.js"
     },
+    "./plugin-sdk/runtime-doctor": {
+      "default": "./dist/plugin-sdk/runtime-doctor.js"
+    },
     "./plugin-sdk/runtime-doctor-migrations": {
       "default": "./dist/plugin-sdk/runtime-doctor-migrations.js"
     },
