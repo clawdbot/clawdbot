@@ -373,6 +373,34 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("respects fsPolicy.workspaceOnly for non-sandbox pdf paths", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-"));
+      const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-out-"));
+      try {
+        const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+        const tool = requirePdfTool(
+          (await loadCreatePdfTool())({
+            config: cfg,
+            agentDir,
+            workspaceDir,
+            fsPolicy: { workspaceOnly: true },
+          }),
+        );
+
+        const outsidePdf = path.join(outsideDir, "secret.pdf");
+        await fs.writeFile(outsidePdf, "%PDF-1.4 fake");
+
+        await expect(tool.execute("t1", { prompt: "test", pdf: outsidePdf })).rejects.toThrow(
+          /not under an allowed directory/i,
+        );
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("allows managed inbound absolute PDF paths when workspaceOnly is enabled", async () => {
     await withManagedInboundPdf(async ({ mediaPath }) => {
       await withTempPdfAgentDir(async (agentDir) => {
