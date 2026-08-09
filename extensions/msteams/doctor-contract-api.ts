@@ -181,6 +181,23 @@ function resolveStateFilePath(stateDir: string, filename: string): string {
   return path.join(stateDir, filename);
 }
 
+async function resolveLegacyConversationMigrationSource(stateDir: string): Promise<{
+  filePath: string;
+  state: MSTeamsLegacyConversationStoreData;
+  archived: boolean;
+} | null> {
+  const filePath = resolveStateFilePath(stateDir, MSTEAMS_CONVERSATIONS_LEGACY_FILENAME);
+  const activeState = await readLegacyJsonFile(filePath, parseLegacyConversationStore);
+  if (activeState) {
+    return { filePath, state: activeState, archived: false };
+  }
+  // Broken shipped migrations may have archived the only recoverable source before
+  // canonical rows were visible. Doctor may reread that snapshot, but never removes it.
+  const archivedPath = `${filePath}.migrated`;
+  const archivedState = await readLegacyJsonFile(archivedPath, parseLegacyConversationStore);
+  return archivedState ? { filePath: archivedPath, state: archivedState, archived: true } : null;
+}
+
 async function readLegacyJsonFile<T>(
   filePath: string,
   parse: (value: unknown) => T | null,
@@ -328,23 +345,43 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "msteams-conversations-json-to-plugin-state",
     label: "Microsoft Teams conversations",
     async detectLegacyState(params) {
-      const filePath = resolveStateFilePath(params.stateDir, MSTEAMS_CONVERSATIONS_LEGACY_FILENAME);
-      const state = await readLegacyJsonFile(filePath, parseLegacyConversationStore);
-      if (!state || Object.keys(state.conversations).length === 0) {
+      const source = await resolveLegacyConversationMigrationSource(params.stateDir);
+      if (!source || Object.keys(source.state.conversations).length === 0) {
         return null;
+      }
+      if (source.archived) {
+        const store = params.context.openPluginStateKeyedStore<StoredConversationReference>({
+          namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
+          maxEntries: MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS,
+        });
+        let needsRecovery = false;
+        for (const [rawConversationId, reference] of selectRetainedMSTeamsConversations(
+          source.state.conversations,
+        )) {
+          const conversationId = resolveLegacyConversationId(rawConversationId, reference);
+          if (
+            conversationId &&
+            !(await store.lookup(buildMSTeamsConversationStateKey(conversationId)))
+          ) {
+            needsRecovery = true;
+            break;
+          }
+        }
+        if (!needsRecovery) {
+          return null;
+        }
       }
       return {
         preview: [
-          `- ${MSTEAMS_PLUGIN_ID} conversations: ${Object.keys(state.conversations).length} entries -> plugin state (${MSTEAMS_CONVERSATIONS_NAMESPACE})`,
+          `- ${MSTEAMS_PLUGIN_ID} conversations: ${Object.keys(source.state.conversations).length} entries -> plugin state (${MSTEAMS_CONVERSATIONS_NAMESPACE})`,
         ],
       };
     },
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
-      const filePath = resolveStateFilePath(params.stateDir, MSTEAMS_CONVERSATIONS_LEGACY_FILENAME);
-      const state = await readLegacyJsonFile(filePath, parseLegacyConversationStore);
-      if (!state) {
+      const source = await resolveLegacyConversationMigrationSource(params.stateDir);
+      if (!source) {
         return { changes, warnings };
       }
       const store = params.context.openPluginStateKeyedStore<StoredConversationReference>({
@@ -355,7 +392,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       let imported = 0;
       let present = 0;
       let skipped = 0;
-      const retainedConversations = selectRetainedMSTeamsConversations(state.conversations);
+      const retainedConversations = selectRetainedMSTeamsConversations(source.state.conversations);
       for (const [rawConversationId, reference] of retainedConversations) {
         const conversationId = resolveLegacyConversationId(rawConversationId, reference);
         if (!conversationId) {
@@ -376,7 +413,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
       }
       changes.push(
-        `Migrated ${imported} ${MSTEAMS_PLUGIN_ID} conversation ${imported === 1 ? "entry" : "entries"} -> plugin state`,
+        `${source.archived ? "Recovered" : "Migrated"} ${imported} ${MSTEAMS_PLUGIN_ID} conversation ${imported === 1 ? "entry" : "entries"} -> plugin state`,
       );
       if ((attempted > 0 && present < attempted) || skipped > 0) {
         const retained = retainedConversations.length;
@@ -385,8 +422,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         );
         return { changes, warnings };
       }
+      if (source.archived) {
+        changes.push(
+          `Preserved ${MSTEAMS_PLUGIN_ID} conversation recovery archive ${source.filePath}`,
+        );
+        return { changes, warnings };
+      }
       await archiveLegacyStateSource({
-        filePath,
+        filePath: source.filePath,
         label: `${MSTEAMS_PLUGIN_ID} conversation`,
         changes,
         warnings,
