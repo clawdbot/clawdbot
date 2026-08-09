@@ -218,15 +218,36 @@ describe("configured model list rows", () => {
       routeVariants: [catalogEntry],
     });
     const cfg = {
-      agents: { defaults: { model: { primary: "z.ai/glm-4.7" } } },
+      agents: {
+        defaults: {
+          model: { primary: "z.ai/glm-4.7", fallbacks: ["google/gemini-stale"] },
+          models: { "openai/gpt-stale": {} },
+        },
+      },
       models: {
         mode: "replace" as const,
         providers: {
           "z.ai": {
             baseUrl: "https://api.z.ai/v1",
             models: [
-              { id: "z.ai/glm-4.7", name: "GLM 4.7", input: ["text" as const] },
-              { id: "z.ai/glm-4.8", name: "GLM 4.8", input: ["text" as const] },
+              {
+                id: "z.ai/glm-4.7",
+                name: "GLM 4.7",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+              {
+                id: "z.ai/glm-4.8",
+                name: "GLM 4.8",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
             ],
           },
         },
@@ -254,11 +275,65 @@ describe("configured model list rows", () => {
     });
 
     expect(rows.map((row) => row.key)).toEqual(["zai/glm-4.7", "zai/glm-4.8"]);
+    expect(rows[0]).toMatchObject({ name: "GLM 4.7", available: true });
     expect(rows[1]).toMatchObject({ name: "GLM 4.8", available: true });
+    expect(mocks.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
+    expect(evaluateModelAuth).toHaveBeenCalledWith(
+      "z.ai",
+      expect.objectContaining({ modelId: "glm-4.7" }),
+    );
     expect(evaluateModelAuth).toHaveBeenCalledWith(
       "z.ai",
       expect.objectContaining({ modelId: "glm-4.8" }),
     );
+  });
+
+  it("drops a stale default outside models.providers in replace mode", async () => {
+    const cfg = {
+      agents: { defaults: { model: { primary: "google/gemini-stale" } } },
+      models: {
+        mode: "replace" as const,
+        providers: {
+          xiaomi: {
+            baseUrl: "https://api.xiaomi.example/v1",
+            models: [
+              {
+                id: "mimo-v2.5",
+                name: "MiMo V2.5",
+                reasoning: false,
+                input: ["text" as const],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    };
+    const { entries } = resolveConfiguredEntries(cfg);
+    const rows: ModelRow[] = [];
+
+    await appendConfiguredModelRowSources({
+      rows,
+      entries,
+      context: {
+        cfg,
+        agentDir: "/tmp/openclaw-agent",
+        authIndex: {
+          evaluateModelAuth: () => ({ availability: true, routeResolution: null }),
+        },
+        configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
+        discoveredKeys: new Set(),
+        filter: {},
+        skipRuntimeModelSuppression: true,
+      },
+    });
+
+    expect(rows).toMatchObject([
+      { key: "xiaomi/mimo-v2.5", name: "MiMo V2.5", tags: [], available: true },
+    ]);
+    expect(mocks.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
   });
 
   it("renders plugin-catalog metadata for a fallback ref instead of default placeholders", async () => {

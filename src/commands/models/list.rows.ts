@@ -3,13 +3,17 @@ import {
   normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "@openclaw/model-catalog-core/provider-id";
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   projectModelCatalogEntryForRoute,
   resolveConfiguredModelCatalogOverrides,
 } from "../../agents/model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import { modelKey } from "../../agents/model-ref-shared.js";
+import {
+  modelKey,
+  normalizeConfiguredProviderCatalogModelId,
+} from "../../agents/model-ref-shared.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import {
   shouldSuppressBuiltInModel,
@@ -525,9 +529,15 @@ export async function appendConfiguredProviderRows(params: {
       }
       // Strip a self-prefix against the source provider before display aliasing.
       // Auth stays on the source provider so alias-backed profiles remain valid.
-      const sourceKey = modelKey(provider, configuredModel.id);
-      const sourceSlash = sourceKey.indexOf("/");
-      const modelId = replaceMode ? sourceKey.slice(sourceSlash + 1) : configuredModel.id;
+      const modelId = replaceMode
+        ? normalizeConfiguredProviderCatalogModelId(
+            provider,
+            stripSelfProviderModelPrefix(provider, configuredModel.id),
+            {
+              manifestPlugins: params.context.metadataSnapshot?.manifestRegistry.plugins,
+            },
+          )
+        : configuredModel.id;
       const displayProvider = replaceMode
         ? canonicalizeModelCatalogProviderAlias(provider, {
             cfg: params.context.cfg,

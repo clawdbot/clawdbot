@@ -825,6 +825,22 @@ describe("modelsListCommand forward-compat", () => {
             tags: new Set(["default"]),
             aliases: [],
           },
+          ...(mode === "replace"
+            ? [
+                {
+                  key: "google/gemini-stale",
+                  ref: { provider: "google", model: "gemini-stale" },
+                  tags: new Set(["fallback#1"]),
+                  aliases: [],
+                },
+                {
+                  key: "openai/gpt-stale",
+                  ref: { provider: "openai", model: "gpt-stale" },
+                  tags: new Set(["configured"]),
+                  aliases: [],
+                },
+              ]
+            : []),
         ],
       });
       mocks.loadModelCatalog.mockResolvedValueOnce([
@@ -841,13 +857,17 @@ describe("modelsListCommand forward-compat", () => {
       await modelsListCommand({ json: true }, runtime as never);
 
       expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
-      expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
-        expect.objectContaining({
-          providerDiscoveryProviderIds: ["google", "openai", "xiaomi"],
-          providerRuntimeDiscoveryProviderIds: [],
-          providerManifestFallbackProviderIds: ["google", "openai"],
-        }),
-      );
+      if (mode === "merge") {
+        expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({
+            providerDiscoveryProviderIds: ["google", "openai", "xiaomi"],
+            providerRuntimeDiscoveryProviderIds: [],
+            providerManifestFallbackProviderIds: ["google", "openai"],
+          }),
+        );
+      } else {
+        expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+      }
       const rows = lastPrintedRows<{ key: string; name: string; available: boolean }>();
       expectRowKeys(rows, expectedKeys);
       expectRowFields(rows, "xiaomi/mimo-v2.5-pro", { name: "MiMo V2.5 Pro" });
