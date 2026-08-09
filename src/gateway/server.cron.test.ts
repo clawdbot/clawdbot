@@ -401,14 +401,15 @@ function expectFailureAnnounceCall(params: {
     sessionKey: params.sessionKey,
     ...(params.inheritSessionThread === false ? { inheritSessionThread: false } : {}),
   });
+  const payload = expectDefined(args[5], "failure reply payload");
   if (params.includeRunStarted) {
-    const lines = args[5].text.split("\n");
+    const lines = payload.text.split("\n");
     expect(lines).toEqual([
       params.message,
       expect.stringMatching(/^Run started: \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? \S+$/),
     ]);
   } else {
-    expect(args[5]).toEqual({ text: params.message });
+    expect(payload).toEqual({ text: params.message });
   }
 }
 
