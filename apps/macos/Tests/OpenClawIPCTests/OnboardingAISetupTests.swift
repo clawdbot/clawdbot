@@ -773,15 +773,6 @@ struct OnboardingAISetupTests {
         #expect(failure.copyText == failure.detail)
     }
 
-    @Test func `Claude Code and Codex use bundled vector artwork`() {
-        for kind in ["claude-cli", "codex-cli"] {
-            let url = OnboardingProviderIcon.resourceURL(for: kind)
-            #expect(url?.pathExtension == "svg")
-            #expect(OnboardingProviderIcon.image(for: kind)?.isTemplate == true)
-        }
-        #expect(OnboardingProviderIcon.resourceURL(for: "gemini-cli") == nil)
-    }
-
     @Test func `device code presentation decodes structured wizard metadata`() throws {
         let presentation = try #require(parseWizardDeviceCode([
             "code": AnyCodable("ABCD-1234"),

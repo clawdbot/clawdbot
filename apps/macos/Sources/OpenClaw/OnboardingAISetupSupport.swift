@@ -141,6 +141,7 @@ extension OnboardingAISetupModel {
         let hint: String
         let website: String
         let icon: String
+        let brandId: String?
     }
 
     struct PrepareOption: Identifiable, Equatable, Decodable {
