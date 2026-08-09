@@ -25,6 +25,8 @@ describe("resolveCompactionContextTokenBudget", () => {
       defaults: { contextTokens: 128_000 },
     },
   } as unknown as OpenClawConfig;
+  const modelWithWindow = (contextWindow: number) =>
+    ({ contextWindow }) as Parameters<typeof resolveCompactionContextTokenBudget>[0]["model"];
   it.each([
     { requested: 500_000, modelWindow: 500_000, expected: 200_000 },
     { requested: 100_000, modelWindow: 500_000, expected: 100_000 },
@@ -36,7 +38,7 @@ describe("resolveCompactionContextTokenBudget", () => {
         config: cfg,
         provider: "openai",
         modelId: "mock-model",
-        model: { contextWindow: modelWindow },
+        model: modelWithWindow(modelWindow),
         agentId: "capped",
         requestedTokenBudget: requested,
       });
@@ -49,7 +51,7 @@ describe("resolveCompactionContextTokenBudget", () => {
       config: cfg,
       provider: "openai",
       modelId: "mock-model",
-      model: { contextWindow: 272_000 },
+      model: modelWithWindow(272_000),
       requestedTokenBudget: 200_000,
     });
     expect(budget).toBe(128_000);
