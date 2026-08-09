@@ -286,6 +286,8 @@ function pruneMissingTranscriptEntries(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
   onPruned?: (key: string, entry: SessionEntry) => void;
+  /** Fires when a transcript cannot be read and the entry is kept. */
+  onUnavailable?: (key: string, entry: SessionEntry) => void;
 }): number {
   let removed = 0;
   for (const [key, entry] of Object.entries(params.store)) {
@@ -322,13 +324,12 @@ function pruneMissingTranscriptEntries(params: {
       storePath: params.storePath,
     });
     if (transcriptProbe === "unavailable") {
-      // Unreadable is not "missing": keep the entry and warn instead of
-      // deleting a session whose transcript may still be intact on disk.
-      // Same retain-on-unavailable convention as the sqlite history sweep.
-      getLogger().warn("sessions cleanup --fix-missing: transcript unreadable, keeping entry", {
-        sessionKey: key,
-        sessionId: entry.sessionId,
-      });
+      // Unreadable is not "missing": keep the entry instead of deleting a
+      // session whose transcript may still be intact on disk. Reporting is the
+      // caller's job and only wired on the final (apply) pass — a preview-pass
+      // warning could claim "kept" right before the apply pass reads the
+      // transcript fine and prunes the entry as confirmed-empty.
+      params.onUnavailable?.(key, entry);
       continue;
     }
     if (transcriptProbe === "empty") {
@@ -569,6 +570,16 @@ export async function runSessionsCleanup(params: {
               sessionKey,
               expectedEntry: structuredClone(entry),
             });
+          },
+          // Only the apply pass reports: its keep decision is the final one.
+          onUnavailable: (sessionKey, entry) => {
+            getLogger().warn(
+              "sessions cleanup --fix-missing: transcript unreadable, keeping entry",
+              {
+                sessionKey,
+                sessionId: entry.sessionId,
+              },
+            );
           },
         });
       }

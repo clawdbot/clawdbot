@@ -98,6 +98,30 @@ describe("sessions cleanup --fix-missing unreadable transcripts", () => {
       "sessions cleanup --fix-missing: transcript unreadable, keeping entry",
       expect.objectContaining({ sessionKey, sessionId }),
     );
+    // Exactly once: the preview pass stays silent so the warning can never
+    // pre-empt the apply pass's final keep/prune decision.
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
+  });
+
+  it("keeps the entry silently during a dry-run preview (no premature warning)", async () => {
+    const sessionKey = "agent:main:torn-row-dryrun";
+    const sessionId = "torn-row-dryrun-session";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, [
+      messageEvent("first", "keep me"),
+    ]);
+    tearTranscriptRow(sessionId, 0);
+    const warnSpy = vi.spyOn(getLogger(), "warn");
+
+    await runSessionsCleanup({
+      cfg,
+      opts: { fixMissing: true, dryRun: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({ sessionId });
+    expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
 
