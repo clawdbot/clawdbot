@@ -98,6 +98,25 @@ function makeSettledChild(overrides: SettledChildOverrides): SubagentRunRecord {
   };
 }
 
+function makeYieldedChild(
+  overrides: SettledChildOverrides = {},
+  wakeOverrides: Partial<NonNullable<SubagentRunRecord["requesterSettleWake"]>> = {},
+): SubagentRunRecord {
+  const runId = overrides.runId ?? "run-b";
+  return makeSettledChild({
+    ...overrides,
+    runId,
+    requesterSettleWake: {
+      status: "pending",
+      attemptCount: 0,
+      batchRunIds: [runId],
+      requesterYieldBatch: true,
+      rearmGeneration: 1,
+      ...wakeOverrides,
+    },
+  });
+}
+
 const transitionBatchSpy = vi.fn();
 const completeBatchSpy = vi.fn();
 const completeResolutionSpy = vi.fn();
@@ -154,6 +173,15 @@ function wakeParams(
     completeBatch,
     ...overrides,
   };
+}
+
+function wakeSettledChild(
+  child: SubagentRunRecord,
+  overrides?: Partial<Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0]>,
+) {
+  return maybeWakeRequesterAfterAllChildrenSettled(
+    wakeParams({ settledEntry: child, ...overrides }),
+  );
 }
 
 function deliveredCallArg(): Record<string, unknown> {
@@ -400,23 +428,13 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("fails a yielded batch when its requester session is gone even if child delivery was credited", async () => {
-    const child = makeSettledChild({
-      runId: "run-b",
+    const child = makeYieldedChild({
       delivery: { status: "delivered" },
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds: ["run-b"],
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      },
     });
     sessionStore = {};
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
 
-    await expect(
-      maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-    ).resolves.toBe(false);
+    await expect(wakeSettledChild(child)).resolves.toBe(false);
 
     expect(deliverSpy).not.toHaveBeenCalled();
     expect(completeResolutionSpy).toHaveBeenLastCalledWith({
@@ -446,22 +464,12 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("wakes after a yielded requester's active child completes", async () => {
-    const child = makeSettledChild({
-      runId: "run-b",
+    const child = makeYieldedChild({
       delivery: { status: "delivered" },
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds: ["run-b"],
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      },
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
 
-    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
-      wakeParams({ settledEntry: child }),
-    );
+    const woke = await wakeSettledChild(child);
 
     expect(woke).toBe(true);
     expect(prepareBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-b"], 1);
@@ -478,23 +486,13 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("wakes after a requester yields with one already-delivered completion", async () => {
-    const child = makeSettledChild({
-      runId: "run-b",
-      delivery: { status: "delivered" },
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds: ["run-b"],
-        requesterYieldBatch: true,
-        afterRequesterYield: true,
-        rearmGeneration: 1,
-      },
-    });
+    const child = makeYieldedChild(
+      { delivery: { status: "delivered" } },
+      { afterRequesterYield: true },
+    );
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
 
-    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
-      wakeParams({ settledEntry: child }),
-    );
+    const woke = await wakeSettledChild(child);
 
     expect(woke).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
@@ -512,34 +510,24 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   it("settles a yielded cron run through its base requester and exact origin", async () => {
     const cronRunKey = "agent:main:cron:daily:run:run-123";
     const cronBaseKey = "agent:main:cron:daily";
-    const child = makeSettledChild({
+    const child = makeYieldedChild({
       runId: "run-cron-child",
       requesterSessionKey: cronRunKey,
       delivery: { status: "pending" },
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds: ["run-cron-child"],
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      },
     });
     sessionStore = { [cronBaseKey]: { sessionId: "sess-cron-base" } };
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
 
     await expect(
-      maybeWakeRequesterAfterAllChildrenSettled(
-        wakeParams({
-          requesterSessionKey: cronRunKey,
-          requesterOrigin: {
-            channel: "discord",
-            accountId: "acct-1",
-            to: "dm:U123",
-            threadId: "thread-1",
-          },
-          settledEntry: child,
-        }),
-      ),
+      wakeSettledChild(child, {
+        requesterSessionKey: cronRunKey,
+        requesterOrigin: {
+          channel: "discord",
+          accountId: "acct-1",
+          to: "dm:U123",
+          threadId: "thread-1",
+        },
+      }),
     ).resolves.toBe(true);
 
     expect(deliveredCallArg()).toMatchObject({
@@ -645,16 +633,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("settles a yielded wake after the requester explicitly chooses silence", async () => {
-    const child = makeSettledChild({
-      runId: "run-b",
+    const child = makeYieldedChild({
       delivery: { status: "delivered" },
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds: ["run-b"],
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      },
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
     deliverSpy.mockResolvedValueOnce({
@@ -664,9 +644,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       disposition: "intentional_non_delivery",
     });
 
-    await expect(
-      maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-    ).resolves.toBe(true);
+    await expect(wakeSettledChild(child)).resolves.toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
     expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1);
     expect(completeResolutionSpy).toHaveBeenCalledWith({
@@ -675,22 +653,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("defers requester dispatch until the yielded Task projection is pending", async () => {
-    const child = makeSettledChild({
-      runId: "run-b",
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds: ["run-b"],
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      },
-    });
+    const child = makeYieldedChild();
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
     prepareBatchSpy.mockReturnValueOnce(false);
 
-    await expect(
-      maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-    ).resolves.toBe(false);
+    await expect(wakeSettledChild(child)).resolves.toBe(false);
 
     expect(deliverSpy).not.toHaveBeenCalled();
     expect(completeBatchSpy).not.toHaveBeenCalled();
@@ -703,16 +670,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("replays an accepted requester turn with the same idempotency key until terminal", async () => {
-    const child = makeSettledChild({
-      runId: "run-b",
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds: ["run-b"],
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      },
-    });
+    const child = makeYieldedChild();
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
     deliverSpy
       .mockResolvedValueOnce({
@@ -725,9 +683,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
-      await expect(
-        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-      ).resolves.toBe(false);
+      await expect(wakeSettledChild(child)).resolves.toBe(false);
       expect(child.requesterSettleWake).toMatchObject({
         status: "dispatching",
         attemptCount: 1,
@@ -736,9 +692,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       });
 
       await vi.advanceTimersByTimeAsync(30_000);
-      await expect(
-        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-      ).resolves.toBe(true);
+      await expect(wakeSettledChild(child)).resolves.toBe(true);
       expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
         `announce:requester-settle:${REQUESTER}:run-b:yield-1`,
         `announce:requester-settle:${REQUESTER}:run-b:yield-1`,
@@ -749,24 +703,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("retains the yielded wake when Task projection is not yet available", async () => {
-    const child = makeSettledChild({
-      runId: "run-b",
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds: ["run-b"],
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      },
-    });
+    const child = makeYieldedChild();
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
     deliverSpy.mockResolvedValueOnce({ delivered: true, path: "direct" });
 
-    await expect(
-      maybeWakeRequesterAfterAllChildrenSettled(
-        wakeParams({ settledEntry: child, completeBatch: () => false }),
-      ),
-    ).resolves.toBe(false);
+    await expect(wakeSettledChild(child, { completeBatch: () => false })).resolves.toBe(false);
 
     expect(child.requesterSettleWake).toMatchObject({
       status: "dispatching",
@@ -905,16 +846,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("marks another terminal intentional-nondelivery reason failed for a yielded requester", async () => {
-    const child = makeSettledChild({
-      runId: "run-b",
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds: ["run-b"],
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      },
-    });
+    const child = makeYieldedChild();
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
     deliverSpy.mockResolvedValueOnce({
       delivered: false,
@@ -923,9 +855,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       disposition: "intentional_non_delivery",
     });
 
-    await expect(
-      maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-    ).resolves.toBe(false);
+    await expect(wakeSettledChild(child)).resolves.toBe(false);
 
     expect(completeResolutionSpy).toHaveBeenLastCalledWith({
       status: "failed",

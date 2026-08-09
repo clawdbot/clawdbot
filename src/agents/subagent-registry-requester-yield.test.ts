@@ -29,7 +29,7 @@ function accepted(entry: SubagentRunRecord) {
   return { runId: entry.runId, childSessionKey: entry.childSessionKey };
 }
 
-function markTaskDeliveryPending() {
+function markTaskDeliveryPendingDefault() {
   return true;
 }
 
@@ -150,7 +150,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         runs,
         persistOrThrow,
         schedule,
-        markTaskDeliveryPending,
+        markTaskDeliveryPending: markTaskDeliveryPendingDefault,
       }),
     ).toBe(expected);
     expect(persistOrThrow).toHaveBeenCalledTimes(expected ? 2 : 1);
@@ -179,7 +179,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         runs: new Map([[entry.runId, entry]]),
         persistOrThrow: vi.fn(),
         schedule,
-        markTaskDeliveryPending,
+        markTaskDeliveryPending: markTaskDeliveryPendingDefault,
       }),
     ).toBe(true);
     expect(entry.requesterSettleWake).toMatchObject({
@@ -204,7 +204,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         runs: new Map([[entry.runId, entry]]),
         persistOrThrow: vi.fn(),
         schedule,
-        markTaskDeliveryPending,
+        markTaskDeliveryPending: markTaskDeliveryPendingDefault,
       }),
     ).toBe(true);
     expect(entry.requesterSettleWake).toMatchObject({
@@ -355,7 +355,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           runs,
           persistOrThrow,
           schedule,
-          markTaskDeliveryPending,
+          markTaskDeliveryPending: markTaskDeliveryPendingDefault,
         }),
       ).toBe(true);
       expect(persistOrThrow.mock.calls).toEqual(
@@ -393,7 +393,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         runs,
         persistOrThrow: vi.fn(),
         schedule: vi.fn(),
-        markTaskDeliveryPending,
+        markTaskDeliveryPending: markTaskDeliveryPendingDefault,
       }),
     ).toBe(true);
     expect(runs.get(entry.runId)).toBe(entry);
@@ -418,7 +418,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         runs,
         persistOrThrow: vi.fn(),
         schedule: vi.fn(),
-        markTaskDeliveryPending,
+        markTaskDeliveryPending: markTaskDeliveryPendingDefault,
       }),
     ).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
@@ -441,7 +441,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           throw failure;
         },
         schedule: vi.fn(),
-        markTaskDeliveryPending,
+        markTaskDeliveryPending: markTaskDeliveryPendingDefault,
       }),
     ).toThrow(failure);
     expect(runs.get(entry.runId)).toBe(entry);
