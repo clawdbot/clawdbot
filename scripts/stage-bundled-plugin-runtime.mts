@@ -352,6 +352,11 @@ export function stageBundledPluginRuntime(params: { cwd?: string; repoRoot?: str
   removePathIfExists(runtimeRoot);
   fs.mkdirSync(runtimeExtensionsRoot, { recursive: true });
   ensureOpenClawExtensionAlias({ repoRoot, distExtensionsRoot });
+  // The overlay is a second, independent runtime root: assets copied under
+  // dist-runtime/extensions resolve bare "openclaw/..." specifiers against
+  // dist-runtime/extensions/node_modules, not dist's. Without this alias the
+  // candidate import closure fails at deploy time.
+  ensureOpenClawExtensionAlias({ repoRoot, distExtensionsRoot: runtimeExtensionsRoot });
 
   for (const dirent of fs.readdirSync(distExtensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory() || dirent.name === "node_modules") {

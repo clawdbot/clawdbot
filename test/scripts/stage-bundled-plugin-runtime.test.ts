@@ -65,11 +65,7 @@ describe("stageBundledPluginRuntime", () => {
     });
   });
 
-  // dist-runtime is deliberately NOT asserted here: stageBundledPluginRuntime
-  // creates the node_modules/openclaw alias for dist/extensions only, so overlay
-  // assets cannot resolve bare "openclaw/..." specifiers.
-  // Tracked in karmaterminal/openclaw#1231; restore the second root when fixed.
-  it("resolves plugin SDK imports from copied static assets in the dist runtime root", async () => {
+  it("resolves plugin SDK imports from copied static assets in both runtime roots", async () => {
     await withTempDir(async (repoRoot) => {
       const pluginDir = path.join(repoRoot, "extensions", "onepassword");
       const staticAsset = path.join(pluginDir, "onepassword-op-path.js");
@@ -117,7 +113,7 @@ describe("stageBundledPluginRuntime", () => {
       copyStaticExtensionAssets({ rootDir: repoRoot });
       copyStaticExtensionAssetsToRuntimeOverlay({ rootDir: repoRoot });
 
-      for (const runtimeRoot of ["dist"]) {
+      for (const runtimeRoot of ["dist", "dist-runtime"]) {
         const extensionsRoot = path.join(repoRoot, runtimeRoot, "extensions");
         const emittedAsset = path.join(extensionsRoot, "onepassword", "onepassword-op-path.js");
         const { stdout } = await execFileAsync(process.execPath, [
