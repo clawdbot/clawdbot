@@ -363,6 +363,83 @@ function collectHeavyRuntimeDoctorMigrationImports(): string[] {
   return violations;
 }
 
+const PLUGIN_SDK_SPECIFIER_PREFIX = "openclaw/plugin-sdk/";
+
+function isKyselySpecifier(specifier: string): boolean {
+  return specifier === "kysely" || specifier.startsWith("kysely/");
+}
+
+// The transitive walk follows relative imports (plugin-local, core src, and the
+// deep-relative package bridges) plus openclaw/plugin-sdk/* subpaths. Other bare
+// specifiers are node builtins or npm/workspace packages; only the repo root
+// depends on kysely, so every kysely edge is reachable through this resolution.
+function collectTraversalValueReferences(filePath: string, source: string): ModuleReference[] {
+  const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
+  const staticValueReferenceKeys = collectStaticValueReferenceKeys(sourceFile);
+  return collectModuleReferencesFromSource(source, {
+    fileName: filePath,
+    acceptSpecifier: (specifier) =>
+      isKyselySpecifier(specifier) ||
+      specifier.startsWith(".") ||
+      specifier.startsWith(PLUGIN_SDK_SPECIFIER_PREFIX),
+  }).filter((reference) =>
+    staticValueReferenceKeys.has(`${reference.kind}\0${reference.line}\0${reference.specifier}`),
+  );
+}
+
+function resolveTraversalModule(filePath: string, specifier: string): string | null {
+  if (specifier.startsWith(".")) {
+    return resolveRelativeSourceModule(filePath, specifier);
+  }
+  if (specifier.startsWith(PLUGIN_SDK_SPECIFIER_PREFIX)) {
+    const subpath = specifier.slice(PLUGIN_SDK_SPECIFIER_PREFIX.length);
+    return resolveRelativeSourceModule(
+      path.join(REPO_ROOT, "src/plugin-sdk", "entrypoint-anchor.ts"),
+      `./${subpath}`,
+    );
+  }
+  return null;
+}
+
+// Cached per file: null = kysely unreachable; otherwise the first found import
+// chain from this file to a kysely value import (repo-relative, entry first).
+const kyselyReachabilityByFile = new Map<string, string[] | null>();
+
+function findKyselyChain(filePath: string, inProgress: Set<string>): string[] | null {
+  const cached = kyselyReachabilityByFile.get(filePath);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (inProgress.has(filePath)) {
+    // Cycle back-edge: the ancestor still explores its remaining children, so
+    // skipping here cannot hide a kysely edge.
+    return null;
+  }
+  inProgress.add(filePath);
+  let chain: string[] | null = null;
+  const source = fs.readFileSync(filePath, "utf8");
+  for (const reference of collectTraversalValueReferences(filePath, source)) {
+    if (isKyselySpecifier(reference.specifier)) {
+      chain = [`${formatRepoPath(filePath)}:${reference.line} imports ${reference.specifier}`];
+      break;
+    }
+    const resolvedPath = resolveTraversalModule(filePath, reference.specifier);
+    if (!resolvedPath || !isInsideRoot(REPO_ROOT, resolvedPath)) {
+      continue;
+    }
+    const childChain = findKyselyChain(resolvedPath, inProgress);
+    if (childChain) {
+      chain = [`${formatRepoPath(filePath)}:${reference.line} -> ${reference.specifier}`].concat(
+        childChain,
+      );
+      break;
+    }
+  }
+  inProgress.delete(filePath);
+  kyselyReachabilityByFile.set(filePath, chain);
+  return chain;
+}
+
 describe("doctor contract import closures", () => {
   it("classifies only static value module edges", () => {
     const source = [
@@ -389,5 +466,20 @@ describe("doctor contract import closures", () => {
 
   it("keeps the runtime doctor migration helper off state DB and plugin-state graphs", () => {
     expect(collectHeavyRuntimeDoctorMigrationImports()).toStrictEqual([]);
+  });
+
+  // The exhaustive backstop: no doctor-contract or legacy-setup closure may reach
+  // the kysely package through any static value import chain, regardless of which
+  // barrel introduces the edge. Type-only and dynamic imports stay allowed.
+  it("keeps kysely statically unreachable from every plugin closure", () => {
+    const violations = collectClosureEntries()
+      .flatMap((entry) => {
+        const chain = findKyselyChain(entry.entryPath, new Set());
+        return chain
+          ? [`${entry.pluginId}: closure reaches kysely via\n    ${chain.join("\n    ")}`]
+          : [];
+      })
+      .toSorted();
+    expect(violations).toStrictEqual([]);
   });
 });

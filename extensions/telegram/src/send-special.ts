@@ -19,7 +19,7 @@ import type {
 import { finalizeTelegramOutbound, prepareTelegramOutbound } from "./send-outbound.js";
 import { normalizePollInput, type PollInput } from "./send.runtime.js";
 import { parseTelegramTarget } from "./targets.js";
-import { resolveTelegramBotUserIdFromToken } from "./token.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 type TelegramSendPollParams = Parameters<TelegramApiContext["api"]["sendPoll"]>[3];
 
