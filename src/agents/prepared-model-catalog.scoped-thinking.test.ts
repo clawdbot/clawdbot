@@ -2,15 +2,15 @@
 // static catalog, then scoped live discovery only for runtime-only models (e.g. Ollama).
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const manifestCatalogMock = vi.fn((): Array<Record<string, unknown>> => []);
+const manifestCatalogMock = vi.fn((..._args: unknown[]): Array<Record<string, unknown>> => []);
 const scopedStaticMock = vi.fn(
-  async (): Promise<Record<string, unknown>> => ({
+  async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
     entries: [],
     routeVariants: [],
   }),
 );
 const scopedLiveMock = vi.fn(
-  async (): Promise<Record<string, unknown>> => ({
+  async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
     entries: [],
     routeVariants: [],
   }),

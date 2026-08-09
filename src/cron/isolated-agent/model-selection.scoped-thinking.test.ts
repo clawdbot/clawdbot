@@ -2,7 +2,9 @@
 // never through a full live catalog build.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const scopedThinkingCatalogMock = vi.fn(async (): Promise<Array<Record<string, unknown>>> => []);
+const scopedThinkingCatalogMock = vi.fn(
+  async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => [],
+);
 
 vi.mock("./run-model-selection.runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./run-model-selection.runtime.js")>();
