@@ -426,7 +426,7 @@ export function renderAgentFiles(params: {
   const draft = active ? (params.agentFileDrafts[active] ?? baseContent) : "";
   const isDirty = active ? draft !== baseContent : false;
   const previewHtml = activeEntry
-    ? toSanitizedMarkdownHtml(draft, { codeBlockChrome: "none" })
+    ? toSanitizedMarkdownHtml(draft, { codeBlockChrome: "none", mode: "document" })
     : "";
   const draftByteSize = formatBytes(new TextEncoder().encode(draft).length);
   const draftWordCount = countWords(draft);

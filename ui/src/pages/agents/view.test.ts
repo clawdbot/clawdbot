@@ -933,7 +933,7 @@ describe("renderAgentFiles", () => {
         agentFileActive: "USER.md",
         agentFileContents: {
           "USER.md":
-            "# User Profile\n\nHello world\n\n```ts\nconst answer = 42;\n```\n\n<script>alert('unsafe')</script>",
+            "# User Profile\n\nHello world\n\n```ts\nconst answer = 42;\n```\n\n<script>alert('unsafe')</script>\n\n![Remote](https://e.co/i)",
         },
         agentFileDrafts: {},
         agentFileSaving: false,
@@ -956,7 +956,7 @@ describe("renderAgentFiles", () => {
       "Markdown Preview",
     );
     const reader = container.querySelector(".md-preview-dialog__reader.sidebar-markdown");
-    expect(reader?.querySelector("h1")?.textContent).toBe("User Profile");
+    expect(reader?.querySelector("img")?.getAttribute("src")).toBe("https://e.co/i");
     expect(reader?.querySelector("pre code")?.textContent).toBe("const answer = 42;\n");
     expect(reader?.querySelector(".code-block-copy, script")).toBeNull();
   });
