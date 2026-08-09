@@ -2,7 +2,10 @@
  * Normalizes tool-call names, ids, and standalone text calls for providers.
  */
 import { randomUUID } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "../../../../packages/normalization-core/src/string-coerce.js";
+import {
+  hasNonEmptyString as replayToolCallNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
+} from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../../../packages/normalization-core/src/string-normalization.js";
 import {
   createPromotedPlainTextToolCallEvents,
@@ -105,17 +108,34 @@ function buildStructuredToolNameCandidates(rawName: string): string[] {
 
   addCandidate(trimmed);
   addCandidate(normalizeToolName(trimmed));
+  const structuredSeeds = [trimmed];
 
-  const normalizedDelimiter = trimmed.replace(/\//g, ".");
-  addCandidate(normalizedDelimiter);
-  addCandidate(normalizeToolName(normalizedDelimiter));
+  const xmlFragmentOffset = ['"', "'", "<"]
+    .map((separator) => trimmed.indexOf(separator))
+    .filter((offset) => offset > 0)
+    .reduce<number | undefined>(
+      (earliest, offset) => (earliest === undefined || offset < earliest ? offset : earliest),
+      undefined,
+    );
+  if (xmlFragmentOffset !== undefined) {
+    const prefix = trimmed.slice(0, xmlFragmentOffset);
+    addCandidate(prefix);
+    addCandidate(normalizeToolName(prefix));
+    structuredSeeds.push(prefix);
+  }
 
-  const segments = normalizeStringEntries(normalizedDelimiter.split("."));
-  if (segments.length > 1) {
-    for (let index = 1; index < segments.length; index += 1) {
-      const suffix = segments.slice(index).join(".");
-      addCandidate(suffix);
-      addCandidate(normalizeToolName(suffix));
+  for (const seed of structuredSeeds) {
+    const normalizedDelimiter = seed.replace(/\//g, ".");
+    addCandidate(normalizedDelimiter);
+    addCandidate(normalizeToolName(normalizedDelimiter));
+
+    const segments = normalizeStringEntries(normalizedDelimiter.split("."));
+    if (segments.length > 1) {
+      for (let index = 1; index < segments.length; index += 1) {
+        const suffix = segments.slice(index).join(".");
+        addCandidate(suffix);
+        addCandidate(normalizeToolName(suffix));
+      }
     }
   }
 
@@ -334,10 +354,6 @@ function collectFollowingToolResults(
     sawNonToolResult = true;
   }
   return { ids, displaced };
-}
-
-function replayToolCallNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function resolveReplayToolCallName(

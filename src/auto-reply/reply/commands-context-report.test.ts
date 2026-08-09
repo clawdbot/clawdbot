@@ -32,6 +32,7 @@ function makeParams(
     currentTurn?: NonNullable<SessionEntry["systemPromptReport"]>["currentTurn"];
   },
 ): HandleCommandsParams {
+  const totalTokensFresh = options?.totalTokensFresh ?? true;
   return {
     command: {
       commandBodyNormalized,
@@ -50,7 +51,8 @@ function makeParams(
     sessionEntry: {
       ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
       totalTokens: options?.totalTokens ?? 123,
-      totalTokensFresh: options?.totalTokensFresh ?? true,
+      totalTokensFresh,
+      ...(totalTokensFresh ? { totalTokensVersion: 1 as const } : {}),
       inputTokens: 100,
       outputTokens: 23,
       systemPromptReport: {

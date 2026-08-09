@@ -14,6 +14,7 @@ import type { ControlUiBuildInfo } from "./src/build-info.ts";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const outDir = path.resolve(here, "../dist/control-ui");
+const CONTROL_UI_GIT_READ_TIMEOUT_MS = 2_000;
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
 type ControlUiViteAlias = {
@@ -100,12 +101,19 @@ function readPackageVersion(): string | null {
   }
 }
 
+function readGit(args: string[]): string {
+  return execFileSync("git", ["--no-optional-locks", "-C", repoRoot, ...args], {
+    encoding: "utf8",
+    // Metadata reads need no index lock; disabling it makes the hard startup deadline safe.
+    killSignal: "SIGKILL",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: CONTROL_UI_GIT_READ_TIMEOUT_MS,
+  });
+}
+
 function readGitCommit(): string | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const raw = readGit(["rev-parse", "HEAD"]);
     return raw.trim() || null;
   } catch {
     return null;
@@ -114,10 +122,7 @@ function readGitCommit(): string | null {
 
 function readGitBranch(): string | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--abbrev-ref", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const raw = readGit(["rev-parse", "--abbrev-ref", "HEAD"]);
     return raw.trim() || null;
   } catch {
     return null;
@@ -126,10 +131,7 @@ function readGitBranch(): string | null {
 
 function readGitCommitTimestamp(commit: string): string | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "show", "-s", "--format=%ct", commit], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const raw = readGit(["show", "-s", "--format=%ct", commit]);
     const seconds = Number.parseInt(raw.trim(), 10);
     const date = new Date(seconds * 1000);
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
@@ -140,10 +142,7 @@ function readGitCommitTimestamp(commit: string): string | null {
 
 function readGitDirty(): boolean | null {
   try {
-    const raw = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const raw = readGit(["status", "--porcelain"]);
     return Boolean(raw.trim());
   } catch {
     return null;
@@ -206,9 +205,14 @@ export function resolveControlUiBuildInfo(
   // Commit time is advisory identity like branch/dirty: read from the local
   // object store for the exact embedded commit, null when no checkout has it
   // (e.g. GITHUB_SHA-only builds). It must never block a build.
+  const readCommitTimestamp =
+    sources.readGitCommitTimestamp ??
+    // A caller-provided commit reader can return synthetic or remote identity.
+    // Do not combine it with a filesystem-bound reader from this checkout.
+    (sources.readGitCommit ? () => null : readGitCommitTimestamp);
   const commitAt = commit
     ? normalizeControlUiBuildInfo({
-        commitAt: (sources.readGitCommitTimestamp ?? readGitCommitTimestamp)(commit),
+        commitAt: readCommitTimestamp(commit),
       }).commitAt
     : null;
   const builtAt = normalizeBuildTimestamp(

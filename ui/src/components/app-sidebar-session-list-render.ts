@@ -134,10 +134,12 @@ function renderSessionSection(params: {
             aria-label=${label}
             @click=${() => host.toggleSection(section.id)}
           >
+            <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
+              <span class="sidebar-session-group-toggle__icon"
+                >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+              >
+            </span>
             <span class="sidebar-recent-sessions__label-text">${label}</span>
-            <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
-              >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-            >
             ${collapsed && totalRowCount > 0
               ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
               : nothing}
@@ -248,6 +250,7 @@ function renderDraftSessionRow() {
   return html`
     <div class="sidebar-recent-session sidebar-recent-session--draft">
       <span class="sidebar-recent-session__link">
+        <span class="sidebar-session-indicator"></span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name">${t("newSession.draftRow")}</span>
         </span>

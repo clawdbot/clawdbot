@@ -13,6 +13,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
+import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
 import { loadModelsConfig } from "./load-config.js";
 import { resolveModelsTargetAgent } from "./shared.js";
 
@@ -103,6 +104,7 @@ export async function modelsAuthOrderClearCommand(
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Auth profile order override cleared; ${describeOrderFallback(cfg, provider)}.`);
+  await refreshRunningGatewayAuthState();
 }
 
 /** Sets the provider auth profile priority order after validating each profile id. */
@@ -149,4 +151,5 @@ export async function modelsAuthOrderSetCommand(
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Auth profile order override: ${describeOrder(updated, provider).join(", ")}`);
+  await refreshRunningGatewayAuthState();
 }

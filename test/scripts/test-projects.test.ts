@@ -1302,9 +1302,14 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("keeps CI, dependency, and docs tooling edits on owner tests", () => {
+    const changedScopeTestFamily = fs
+      .readdirSync("src/scripts")
+      .filter((file) => /^ci-changed-scope(?:\.[^/]+)?\.test\.ts$/u.test(file))
+      .map((file) => `src/scripts/${file}`)
+      .toSorted((left, right) => left.localeCompare(right));
     expectChangedTargets(
       ["scripts/ci-changed-scope.mjs"],
-      ["src/scripts/ci-changed-scope.test.ts", "test/scripts/control-ui-i18n.test.ts"],
+      [...changedScopeTestFamily, "test/scripts/control-ui-i18n.test.ts"],
     );
 
     expectChangedTargets(
@@ -1705,6 +1710,8 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/lib/direct-run.mjs": [
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/direct-run-entrypoints.test.ts",
+        "test/scripts/pr-operation-lock.test.ts",
+        "test/scripts/pr-wrappers.test.ts",
       ],
       "scripts/lib/npm-verify-exec.ts": ["test/scripts/npm-verify-exec.test.ts"],
       "scripts/lib/plugin-npm-runtime-build.mjs": [

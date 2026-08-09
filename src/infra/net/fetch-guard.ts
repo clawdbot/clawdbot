@@ -167,6 +167,8 @@ function getRedirectVisitKey(url: string, init: RequestInit | undefined): string
 }
 
 function isTruthyEnvValue(value: string | undefined): boolean {
+  // This flag relaxes an outbound-network security boundary. Keep exact lowercase
+  // tokens so whitespace or case variation cannot accidentally widen access.
   return value === "1" || value === "true" || value === "yes" || value === "on";
 }
 

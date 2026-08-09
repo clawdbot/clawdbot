@@ -99,6 +99,7 @@ export async function runNodePtyCommand(
     file: string;
     args: string[];
     cwd?: string;
+    env?: Record<string, string>;
     pathEnv?: string;
     cols: number;
     rows: number;
@@ -114,6 +115,7 @@ export async function runNodePtyCommand(
       (entry): entry is [string, string] => entry[1] !== undefined,
     ),
   );
+  Object.assign(env, params.env);
   env.TERM ??= "xterm-256color";
   env.OPENCLAW_TERMINAL = "1";
   if (params.pathEnv) {

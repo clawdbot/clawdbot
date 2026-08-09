@@ -3,7 +3,7 @@
  */
 
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asRecord as asMessageRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import {
@@ -16,16 +16,6 @@ import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
-
-// These normalizers take `unknown` gateway/transcript data. A malformed or
-// absent entry can arrive as null/undefined (e.g. a transcript row without a
-// `message`), and `typeof m.role` still throws "reading 'role'" when `m` itself
-// is undefined — the typeof only guards the property, not the object. Coercing
-// a non-object to `{}` keeps every downstream `typeof m.<field>` check working
-// and yields role "unknown" instead of crashing the gateway event handler.
-function asMessageRecord(message: unknown): Record<string, unknown> {
-  return message && typeof message === "object" ? (message as Record<string, unknown>) : {};
-}
 
 // Older gateways baked sender labels as "name (<profile uuid>)" into transcript
 // text. The UUID is machine noise in a human label but it is also the row's
@@ -71,6 +61,8 @@ export function normalizeRoleForGrouping(role: string): string {
 }
 
 export function isToolResultMessage(message: unknown): boolean {
+  // Malformed transcript entries coerce to an empty record so property reads
+  // degrade to role "unknown" instead of crashing the event handler.
   const m = asMessageRecord(message);
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
   return role === "toolresult" || role === "tool_result";

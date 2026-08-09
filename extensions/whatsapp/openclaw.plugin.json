@@ -1,5 +1,9 @@
 {
   "id": "whatsapp",
+  "doctorContract": {
+    "legacyConfigRules": true,
+    "normalizeCompatibilityConfig": true
+  },
   "name": "WhatsApp",
   "description": "OpenClaw WhatsApp channel plugin for WhatsApp Web chats.",
   "icon": "https://cdn.simpleicons.org/whatsapp",

@@ -1,5 +1,6 @@
 // Transcript event helpers serialize and trim session transcript events.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSet } from "../shared/global-singleton.js";
@@ -142,10 +143,21 @@ function projectPublicSessionTranscriptUpdate(
     ...(update.sessionKey ? { sessionKey: update.sessionKey } : {}),
     ...(update.agentId ? { agentId: update.agentId } : {}),
     ...(update.sessionId ? { sessionId: update.sessionId } : {}),
-    ...(update.message !== undefined ? { message: update.message } : {}),
+    ...(update.message !== undefined
+      ? { message: projectPublicSessionTranscriptMessage(update.message) }
+      : {}),
     ...(update.messageId ? { messageId: update.messageId } : {}),
     ...(update.messageSeq !== undefined ? { messageSeq: update.messageSeq } : {}),
   };
+}
+
+function projectPublicSessionTranscriptMessage(message: unknown): unknown {
+  if (!isRecord(message) || !Object.hasOwn(message, "providerReplay")) {
+    return message;
+  }
+  const publicMessage = { ...message };
+  delete publicMessage.providerReplay;
+  return publicMessage;
 }
 
 function normalizeUpdateTarget(update: {

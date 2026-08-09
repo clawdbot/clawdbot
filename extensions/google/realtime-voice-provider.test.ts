@@ -862,11 +862,13 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   it("preserves tool ownership while reusing a resumption handle", async () => {
     vi.useFakeTimers();
     const provider = buildGoogleRealtimeVoiceProvider();
+    const onError = vi.fn();
     const onToolCall = vi.fn();
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "gemini-key" },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
+      onError,
       onToolCall,
     });
 
@@ -879,6 +881,11 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       },
     });
     firstSession.onclose({ code: 1011, reason: "temporary" });
+
+    onError.mockClear();
+    expect(() => bridge.submitToolResult("call-1", { value: 1n })).toThrow(/serializ/i);
+    expect(onError).toHaveBeenCalledOnce();
+
     void bridge.submitToolResult("call-1", { result: "ok" });
     expect(session.sendToolResponse).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(250);
@@ -930,7 +937,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     firstSession.onclose({ code: 1011, reason: "temporary" });
     onError.mockClear();
 
-    void bridge.submitToolResult("call-1", { result: "x".repeat(1024 * 1024) });
+    expect(() => bridge.submitToolResult("call-1", { result: "x".repeat(1024 * 1024) })).toThrow(
+      "Google Live reconnect tool-response buffer limit exceeded",
+    );
 
     expect(requireFirstError(onError).message).toBe(
       "Google Live reconnect tool-response buffer limit exceeded",
@@ -2301,7 +2310,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       },
     });
 
-    void bridge.submitToolResult("consult-call", { status: "working" }, { willContinue: true });
+    expect(() =>
+      bridge.submitToolResult("consult-call", { status: "working" }, { willContinue: true }),
+    ).toThrow("does not support continuing tool responses");
     expect(session.sendToolResponse).not.toHaveBeenCalled();
     expect(requireFirstError(onError).message).toContain(
       "does not support continuing tool responses",
@@ -2332,13 +2343,113 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
     await bridge.connect();
 
-    void bridge.submitToolResult("missing-call", { result: "ok" });
+    expect(() => bridge.submitToolResult("missing-call", { result: "ok" })).toThrow(
+      "Google Live function response is missing a matching function call for missing-call",
+    );
 
     expect(session.sendToolResponse).not.toHaveBeenCalled();
     const error = requireFirstError(onError);
     expect(error.message).toBe(
       "Google Live function response is missing a matching function call for missing-call",
     );
+  });
+
+  it.each([
+    ["undefined", (): undefined => undefined],
+    ["function", () => () => undefined],
+    ["symbol", () => Symbol("invalid-tool-result")],
+    ["bigint", () => ({ value: 1n })],
+    [
+      "circular",
+      () => {
+        const result: { self?: unknown } = {};
+        result.self = result;
+        return result;
+      },
+    ],
+    ["omitted custom serialization", () => ({ toJSON: () => undefined })],
+  ] as const)(
+    "rejects %s Google Live tool results while keeping the call retryable",
+    async (_label, create) => {
+      const onError = vi.fn();
+      const bridge = buildGoogleRealtimeVoiceProvider().createBridge({
+        providerConfig: { apiKey: ["google", "test"].join("-") },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onError,
+        onToolCall: vi.fn(),
+      });
+      await bridge.connect();
+      lastConnectParams().callbacks.onmessage({
+        setupComplete: { sessionId: "session-1" },
+        toolCall: { functionCalls: [{ id: "call-1", name: "lookup", args: {} }] },
+      });
+
+      expect(() => bridge.submitToolResult("call-1", create())).toThrow(/serializ/i);
+      expect(onError).toHaveBeenCalledOnce();
+      expect(session.sendToolResponse).not.toHaveBeenCalled();
+
+      await bridge.submitToolResult("call-1", { recovered: true });
+
+      expect(session.sendToolResponse).toHaveBeenCalledExactlyOnceWith({
+        functionResponses: [{ id: "call-1", name: "lookup", response: { recovered: true } }],
+      });
+    },
+  );
+
+  it("preserves valid Google Live tool results and nested serialization keys", async () => {
+    const bridge = buildGoogleRealtimeVoiceProvider().createBridge({
+      providerConfig: { apiKey: ["google", "test"].join("-") },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onToolCall: vi.fn(),
+    });
+    const objectSerialization = vi.fn((key: string) => ({ key }));
+    const arraySerialization = vi.fn((key: string) => [key]);
+    const customArray: unknown[] & { toJSON?: (key: string) => string[] } = [];
+    customArray.toJSON = arraySerialization;
+    const values: unknown[] = [
+      null,
+      false,
+      0,
+      "",
+      "text",
+      [1],
+      { ok: true },
+      { toJSON: objectSerialization },
+      customArray,
+    ];
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: { sessionId: "session-1" },
+      toolCall: {
+        functionCalls: values.map((_, index) => ({
+          id: `call-${index}`,
+          name: "lookup",
+          args: {},
+        })),
+      },
+    });
+
+    for (const [index, result] of values.entries()) {
+      await bridge.submitToolResult(`call-${index}`, result);
+    }
+
+    expect(
+      session.sendToolResponse.mock.calls.map(([request]) => request.functionResponses[0].response),
+    ).toEqual([
+      { output: null },
+      { output: false },
+      { output: 0 },
+      { output: "" },
+      { output: "text" },
+      { output: [1] },
+      { ok: true },
+      { key: "response" },
+      { output: ["output"] },
+    ]);
+    expect(objectSerialization).toHaveBeenCalledExactlyOnceWith("response");
+    expect(arraySerialization).toHaveBeenCalledExactlyOnceWith("output");
   });
 
   it("reports Google Live tool response send failures without losing the call name", async () => {
@@ -2364,9 +2475,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       throw sendError;
     });
 
-    void bridge.submitToolResult("call-1", ["retryable"]);
+    expect(() => bridge.submitToolResult("call-1", ["retryable"])).toThrow(sendError);
 
-    expect(onError).toHaveBeenCalledWith(sendError);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(sendError);
 
     void bridge.submitToolResult("call-1", { result: "ok" });
 

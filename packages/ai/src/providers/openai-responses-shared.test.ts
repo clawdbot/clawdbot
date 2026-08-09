@@ -6,6 +6,10 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  captureOpenAIResponsesCompaction,
+} from "../transports/openai-responses-compaction-replay.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -967,6 +971,110 @@ describe("processResponsesStream", () => {
 
     expect(requestMaxRetries).toBe(expected);
     expect(output.stopReason).toBe("stop");
+  });
+
+  it("suppresses rejected persisted compaction state on the following turn", async () => {
+    const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+    const prior = createAssistantOutput();
+    captureOpenAIResponsesCompaction(
+      prior,
+      {
+        type: "compaction",
+        id: "cmp_rejected",
+        encrypted_content: "opaque-rejected-compaction",
+      },
+      0,
+      nativeOpenAIModel,
+      buildOpenAIResponsesReasoningReplayMetadata(nativeOpenAIModel, replayIdentity),
+    );
+    const context: Context = {
+      messages: [
+        { role: "user", content: "full history prefix", timestamp: 0 },
+        prior,
+        { role: "user", content: "recover", timestamp: 1 },
+      ],
+    };
+    const requests: ResponseCreateParamsStreaming[] = [];
+    const output = createAssistantOutput();
+    const onPayload = vi.fn((request: unknown) => request);
+
+    await runResponsesStreamLifecycle({
+      stream: new AssistantMessageEventStream(),
+      model: nativeOpenAIModel,
+      output,
+      options: { ...replayIdentity, onPayload },
+      createClient: () => ({
+        responses: {
+          create: (request) => {
+            requests.push(structuredClone(request));
+            const attempt = requests.length;
+            return {
+              withResponse: async () => {
+                if (attempt === 1) {
+                  throw Object.assign(new Error("invalid_encrypted_content"), {
+                    code: "invalid_encrypted_content",
+                    status: 400,
+                  });
+                }
+                return {
+                  data: streamResponsesEvents([
+                    {
+                      type: "response.completed",
+                      sequence_number: 1,
+                      response: { id: "resp_recovered", status: "completed", output: [] },
+                    } as unknown as ResponseStreamEvent,
+                  ]),
+                  response: new Response(null, { status: 200 }),
+                };
+              },
+            };
+          },
+        },
+      }),
+      buildParams: (_model, replayMode) => ({
+        model: nativeOpenAIModel.id,
+        input: convertResponsesMessages(nativeOpenAIModel, context, testAllowedToolCallProviders, {
+          ...replayIdentity,
+          replayMode,
+        }),
+        stream: true,
+      }),
+      formatError: (error) => (error instanceof Error ? error.message : String(error)),
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.input).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "compaction", id: "cmp_rejected" })]),
+    );
+    expect(JSON.stringify(requests[0]?.input)).not.toContain("full history prefix");
+    const retryInput = requests[1]?.input;
+    expect(Array.isArray(retryInput)).toBe(true);
+    const retryItems = Array.isArray(retryInput) ? retryInput : [];
+    expect(retryItems.some((item) => item.type === "compaction")).toBe(false);
+    expect(JSON.stringify(retryInput)).toContain("full history prefix");
+    expect(onPayload).toHaveBeenCalledTimes(2);
+    expect(output.stopReason).toBe("stop");
+    expect(output.providerReplay).toMatchObject({
+      type: "openai-responses-compaction-suppression",
+      data: "rejected",
+      provider: nativeOpenAIModel.provider,
+      api: nativeOpenAIModel.api,
+      model: nativeOpenAIModel.id,
+    });
+
+    const nextInput = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        messages: [
+          ...context.messages,
+          output,
+          { role: "user", content: "next turn", timestamp: 2 },
+        ],
+      },
+      testAllowedToolCallProviders,
+      replayIdentity,
+    );
+    expect(nextInput.some((item) => item.type === "compaction")).toBe(false);
   });
 
   it("records the effective model from the terminal response", async () => {

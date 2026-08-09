@@ -1,16 +1,28 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
-import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../session-icon.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
-import { SessionToolOverridesSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
+export { SessionsResolveParamsSchema, type SessionsResolveParams } from "./sessions-resolve.js";
+export {
+  SESSIONS_PATCH_MANY_MAX_TARGETS,
+  SessionsPatchManyParamsSchema,
+  SessionsPatchManyResultSchema,
+  SessionsPatchManyTargetSchema,
+  SessionsPatchMutationSchema,
+  SessionsPatchParamsSchema,
+  type SessionsPatchManyParams,
+  type SessionsPatchManyResult,
+  type SessionsPatchManyTarget,
+  type SessionsPatchMutation,
+  type SessionsPatchParams,
+} from "./sessions-patch.js";
 export {
   SessionCreatedActorSchema,
   SessionRowSchema,
@@ -419,19 +431,6 @@ export const SessionsDescribeParamsSchema = closedObject({
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
 
-/** Resolves a session by key, raw session id, label, or parent/agent scope. */
-export const SessionsResolveParamsSchema = closedObject({
-  key: Type.Optional(NonEmptyString),
-  sessionId: Type.Optional(NonEmptyString),
-  label: Type.Optional(SessionLabelString),
-  agentId: Type.Optional(NonEmptyString),
-  spawnedBy: Type.Optional(NonEmptyString),
-  includeGlobal: Type.Optional(Type.Boolean()),
-  includeUnknown: Type.Optional(Type.Boolean()),
-  /** Return a successful `{ ok: false }` response when the selector does not match a session. */
-  allowMissing: Type.Optional(Type.Boolean()),
-});
-
 export const SessionWorktreeInfoSchema = closedObject({
   id: NonEmptyString,
   path: NonEmptyString,
@@ -487,69 +486,6 @@ export const SessionsAbortParamsSchema = closedObject({
   /** Also discard followup and lane queues for a key-only non-global session abort. */
   clearQueued: Type.Optional(Type.Boolean()),
 });
-
-/** Mutable per-session preferences and routing metadata. */
-export const SessionsPatchParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  /** Reject the mutation if the session was reset or replaced before it commits. */
-  expectedSessionId: Type.Optional(NonEmptyString),
-  expectedLifecycleRevision: Type.Optional(NonEmptyString),
-  label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
-  /** User-defined organization bucket ("category", not chat-group); null clears it. */
-  category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
-  boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
-  icon: Type.Optional(
-    Type.Union([NonEmptyString, Type.Null()], {
-      description: "Sidebar icon: one emoji, name:<id>, or svg:<svg ...>...</svg>.",
-    }),
-  ),
-  statusNote: Type.Optional(
-    Type.Union([Type.String({ maxLength: 120 }), Type.Null()], {
-      description: "Short expiring sidebar status note; null clears it and any declared attention.",
-    }),
-  ),
-  attention: Type.Optional(
-    Type.Union([Type.String({ enum: [...SESSION_AGENT_ATTENTION_ICON_IDS] }), Type.Null()]),
-  ),
-  ttlMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })),
-  archived: Type.Optional(Type.Boolean()),
-  pinned: Type.Optional(Type.Boolean()),
-  unread: Type.Optional(
-    Type.Boolean({ description: "Set true to mark unread; false records the session as read." }),
-  ),
-  thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
-  toolOverrides: Type.Optional(Type.Union([SessionToolOverridesSchema, Type.Null()])),
-  verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  traceLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  responseUsage: Type.Optional(
-    Type.Union([
-      Type.Literal("off"),
-      Type.Literal("tokens"),
-      Type.Literal("full"),
-      // Backward compat with older clients/stores.
-      Type.Literal("on"),
-      Type.Null(),
-    ]),
-  ),
-  elevatedLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  execHost: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  execSecurity: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  inheritedToolPolicyVersion: Type.Optional(Type.Union([Type.Literal(1), Type.Null()])),
-  inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
-  inheritedToolDeny: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
-  sendPolicy: Type.Optional(Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()])),
-  groupActivation: Type.Optional(
-    Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
-  ),
-});
-export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;
 
 /** Updates or clears one plugin namespace value on a session record. */
 export const SessionsPluginPatchParamsSchema = closedObject({
@@ -826,7 +762,6 @@ export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
 export type SessionsCleanupParams = Static<typeof SessionsCleanupParamsSchema>;
 export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
 export type SessionsDescribeParams = Static<typeof SessionsDescribeParamsSchema>;
-export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
 export type SessionsSearchParams = Static<typeof SessionsSearchParamsSchema>;
 export type SessionsSearchHit = Static<typeof SessionsSearchHitSchema>;
 export type SessionsSearchResult = Static<typeof SessionsSearchResultSchema>;

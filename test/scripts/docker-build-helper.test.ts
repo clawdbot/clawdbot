@@ -115,6 +115,16 @@ const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/test-install-sh-e2e-docker.sh",
   "scripts/test-live-build-docker.sh",
 ] as const;
+
+function extractUpgradeSurvivorPayload(script: string) {
+  const marker = " bash -lc ";
+  const start = script.indexOf(marker);
+  const quoted = script.slice(start + marker.length).trimEnd();
+  if (start < 0 || !quoted.startsWith("'") || !quoted.endsWith("'")) {
+    throw new Error("upgrade survivor bash -lc payload not found");
+  }
+  return quoted.slice(1, -1).replaceAll(`'"'"'`, "'");
+}
 const BOUNDED_CLIENT_LOG_DOCKER_E2E_SCRIPTS = [
   "scripts/e2e/cron-mcp-cleanup-docker.sh",
   "scripts/e2e/mcp-channels-docker.sh",
@@ -2279,14 +2289,19 @@ docker_e2e_docker_run_cmd run demo
     for (const script of [runner, publishedRunner]) {
       expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
       expect(script).toContain("node scripts/e2e/lib/plugins/npm-registry-server.mjs");
+      expect(script).toContain(
+        "read -r plugin_package_name plugin_package_version plugin_package_tarball",
+      );
+      expect(script).not.toContain("read -r package_name package_version package_tarball");
     }
     expect(runner).toContain('OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$package_version"');
     expect(publishedRunner).toContain('OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$candidate_version"');
   });
 
-  it("starts the upgrade survivor plugin registry before updates without ambient Feishu config", () => {
+  it("starts the upgrade survivor plugin registry before updates with scenario-owned config", () => {
     const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const updateRestartAuth = readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8");
 
     expect(runner.indexOf("\nconfigure_plugin_registry\n")).toBeLessThan(
       runner.indexOf('\necho "Running package update against the mounted tarball..."\n'),
@@ -2294,13 +2309,77 @@ docker_e2e_docker_run_cmd run demo
     expect(
       publishedRunner.indexOf("phase configure-plugin-registry configure_plugin_registry"),
     ).toBeLessThan(publishedRunner.indexOf("phase update-candidate update_candidate"));
+    const runnerClawHubIndex = runner.indexOf("\nconfigure_clawhub_fixture\n");
+    const runnerPrepareIndex = runner.indexOf(
+      'prepare_update_restart_probe_current_install "$PORT" "$GATEWAY_LOG"',
+    );
+    const runnerPluginRegistryIndex = runner.indexOf("\nconfigure_plugin_registry\n");
+    expect(runnerClawHubIndex).toBeGreaterThan(-1);
+    expect(runnerClawHubIndex).toBeLessThan(runnerPrepareIndex);
+    expect(runnerPrepareIndex).toBeLessThan(runnerPluginRegistryIndex);
+    expect(runnerPluginRegistryIndex).toBeLessThan(
+      runner.indexOf('\necho "Running package update against the mounted tarball..."\n'),
+    );
+    const publishedClawHubIndex = publishedRunner.indexOf(
+      "phase configure-clawhub-fixture configure_clawhub_fixture",
+    );
+    const publishedPrepareIndex = publishedRunner.indexOf(
+      "phase prepare-update-restart-probe prepare_update_restart_probe",
+    );
+    const publishedPluginRegistryIndex = publishedRunner.indexOf(
+      "phase configure-plugin-registry configure_plugin_registry",
+    );
+    expect(publishedClawHubIndex).toBeGreaterThan(-1);
+    expect(publishedClawHubIndex).toBeLessThan(publishedPrepareIndex);
+    expect(publishedPrepareIndex).toBeLessThan(publishedPluginRegistryIndex);
+    expect(publishedPluginRegistryIndex).toBeLessThan(
+      publishedRunner.indexOf("phase update-candidate update_candidate"),
+    );
+    expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
+      publishedRunner.indexOf("phase assert-prepublish-requests node"),
+    );
+    expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
+      publishedRunner.indexOf("phase doctor run_doctor"),
+    );
+    expect(runner.indexOf('openclaw "${update_args[@]}"')).toBeLessThan(
+      runner.indexOf(
+        'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
+      ),
+    );
+    expect(
+      runner.indexOf(
+        'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "@openclaw/whatsapp" "$package_version"',
+      ),
+    ).toBeLessThan(runner.indexOf("openclaw doctor --fix --non-interactive"));
     expect(runner).toContain(
       'if [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "feishu-channel" ]; then',
     );
     expect(publishedRunner).toContain('if [ "$SCENARIO" = "feishu-channel" ]; then');
+    expect(publishedRunner).toContain(
+      [
+        'if [ "$SCENARIO" = "configured-plugin-installs" ]; then',
+        '  export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"',
+        '  export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"',
+        "fi",
+      ].join("\n"),
+    );
     for (const script of [runner, publishedRunner]) {
+      expectTextToIncludeAll(script, [
+        "prepublish-artifacts",
+        "prepublish-plugin-registry.json",
+        "unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL",
+        'export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"',
+        'openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"',
+        "assert-prepublish-requests",
+      ]);
+      expect(script).not.toContain("CLAWHUB_EXPECTED_VERSION");
+      expect(script).not.toContain("/__fixture__/requests");
+      expect(script).not.toContain("https://clawhub.ai");
       const emptyRegistryGuardIndex = script.indexOf('if [ "${#registry_args[@]}" -eq 0 ]; then');
-      const fixtureDirectoryIndex = script.indexOf('mkdir -p "$fixture_root"');
+      const fixtureDirectoryIndex = script.indexOf(
+        'mkdir -p "$fixture_root"',
+        emptyRegistryGuardIndex,
+      );
       const registryServerIndex = script.indexOf(
         "OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org",
       );
@@ -2311,6 +2390,59 @@ docker_e2e_docker_run_cmd run demo
       expect(fixtureDirectoryIndex).toBeLessThan(registryServerIndex);
       expect(script).not.toContain('\nexport FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"\n');
     }
+    expectTextToIncludeAll(publishedRunner, [
+      "park_prepublish_authored_config",
+      "park-prepublish-auth-config",
+      "assert_prepublish_fixture_idle",
+      "assert-no-requests",
+      "restore_prepublish_authored_config",
+      "restore-prepublish-auth-config",
+      "cmp -s",
+      "'^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL)='",
+      "OPENCLAW_CLAWHUB_URL=%s",
+    ]);
+    expect(publishedRunner.indexOf("park_prepublish_authored_config")).toBeLessThan(
+      publishedRunner.lastIndexOf("assert_prepublish_fixture_idle"),
+    );
+    expect(publishedRunner.lastIndexOf("assert_prepublish_fixture_idle")).toBeLessThan(
+      publishedRunner.lastIndexOf("restore_prepublish_authored_config"),
+    );
+    expect(publishedRunner.lastIndexOf("restore_prepublish_authored_config")).toBeLessThan(
+      publishedRunner.lastIndexOf("write_update_restart_service_env"),
+    );
+    for (const script of [runner, updateRestartAuth]) {
+      expect(script).not.toContain("park-prepublish-auth-config");
+      expect(script).not.toContain("assert-no-requests");
+    }
+    expect(publishedRunner).not.toContain(
+      '\nexport MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"\n',
+    );
+    expect(publishedRunner).not.toContain(
+      '\nexport BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"\n',
+    );
+    expect(
+      runner.match(
+        /-v "\$HARNESS_ROOT_DIR\/scripts\/e2e\/lib\/clawhub-fixture-server\.cjs:\/tmp\/openclaw-clawhub-fixture-server\.cjs:ro"/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=\/tmp\/openclaw-clawhub-fixture-server\.cjs/gu,
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("keeps upgrade survivor wrappers and the embedded payload valid bash", () => {
+    for (const path of [UPGRADE_SURVIVOR_DOCKER_E2E_PATH, UPGRADE_SURVIVOR_RUN_SCRIPT]) {
+      const result = spawnSync("bash", ["-n", path], { encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+    }
+    const wrapper = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const inner = spawnSync("bash", ["-n"], {
+      input: extractUpgradeSurvivorPayload(wrapper),
+      encoding: "utf8",
+    });
+    expect(inner.status, inner.stderr).toBe(0);
   });
 
   it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {
@@ -2768,6 +2900,57 @@ fi
         supervisor.kill("SIGTERM");
         expect(await waitForProcessExit(supervisor)).toBe(0);
         expect(readFileSync(statePath, "utf8")).toBe("ready-graceful");
+      } finally {
+        if (supervisor.exitCode === null && supervisor.signalCode === null) {
+          supervisor.kill("SIGTERM");
+          await waitForProcessExit(supervisor).catch(() => undefined);
+        }
+      }
+    }
+  });
+
+  it("preserves the ClawHub fixture URL across a supervised gateway restart", async () => {
+    const workDir = tempDirs.make("openclaw-update-restart-clawhub-env-");
+    const gatewayPath = join(workDir, "gateway.mjs");
+    writeFileSync(
+      gatewayPath,
+      `import fs from "node:fs";
+fs.appendFileSync(process.env.URLS_FILE, process.env.OPENCLAW_CLAWHUB_URL + "\\n");
+const starts = fs.readFileSync(process.env.URLS_FILE, "utf8").trim().split("\\n").length;
+process.exit(starts === 1 ? 1 : 78);
+`,
+    );
+    const scripts = [
+      readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8"),
+      readFileSync(UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH, "utf8"),
+    ];
+
+    for (const [index, script] of scripts.entries()) {
+      const supervisorPath = join(workDir, `clawhub-env-supervisor-${index}.mjs`);
+      const urlsPath = join(workDir, `clawhub-env-urls-${index}`);
+      const logPath = join(workDir, `clawhub-env-daemon-${index}.log`);
+      const source = extractUpgradeSurvivorSupervisor(script).replace(
+        "const restartDelayMs = 5_000;",
+        "const restartDelayMs = 5;",
+      );
+      writeFileSync(supervisorPath, source);
+
+      const supervisor = spawn(process.execPath, [supervisorPath], {
+        env: {
+          ...process.env,
+          OPENCLAW_CLAWHUB_URL: "http://127.0.0.1:43123",
+          OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
+          URLS_FILE: urlsPath,
+        },
+        stdio: "ignore",
+      });
+      try {
+        expect(await waitForProcessExit(supervisor)).toBe(0);
+        expect(readFileSync(urlsPath, "utf8").trim().split("\n")).toEqual([
+          "http://127.0.0.1:43123",
+          "http://127.0.0.1:43123",
+        ]);
       } finally {
         if (supervisor.exitCode === null && supervisor.signalCode === null) {
           supervisor.kill("SIGTERM");

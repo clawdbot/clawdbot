@@ -165,6 +165,9 @@ type Workflow = {
     workflow_call?: {
       inputs?: Record<string, unknown>;
     };
+    workflow_dispatch?: {
+      inputs?: Record<string, unknown>;
+    };
   };
 };
 
@@ -192,6 +195,78 @@ function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
     throw new Error(`Expected workflow step ${stepName}`);
   }
   return step;
+}
+
+function runFullReleaseInputValidation(releaseProfile: string, skipTelegram: string) {
+  const step = workflowStep(
+    workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
+    "Validate release inputs",
+  );
+  return spawnSync("bash", ["-c", step.run ?? ""], {
+    encoding: "utf8",
+    env: {
+      PATH: process.env.PATH,
+      RELEASE_PROFILE: releaseProfile,
+      SKIP_PACKAGE_TELEGRAM_E2E: skipTelegram,
+    },
+  });
+}
+
+function runReleaseChecksInputValidation(releaseProfile: string, skipTelegram: string) {
+  const step = workflowStep(
+    workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target"),
+    "Capture selected inputs",
+  );
+  const workdir = tempDirs.make("release-checks-input-validation-");
+  const outputPath = resolve(workdir, "github-output");
+  const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
+  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+    encoding: "utf8",
+    env: {
+      ...stepEnv,
+      CANDIDATE_ARTIFACT_JSON_INPUT: "",
+      GITHUB_OUTPUT: outputPath,
+      PATH: process.env.PATH,
+      RELEASE_FAIL_FAST_INPUT: "false",
+      RELEASE_MODE_INPUT: "both",
+      RELEASE_PROFILE_INPUT: releaseProfile,
+      RELEASE_PROVIDER_INPUT: "openai",
+      RELEASE_QA_DISCORD_LIVE_CI_ENABLED: "false",
+      RELEASE_QA_SLACK_LIVE_CI_ENABLED: "false",
+      RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED: "false",
+      RELEASE_REF_INPUT: "main",
+      RELEASE_RERUN_GROUP_INPUT: "all",
+      RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
+      RELEASE_RUN_RELEASE_SOAK_INPUT: "false",
+      RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: skipTelegram,
+    },
+  });
+  return { outputPath, result };
+}
+
+function runFullReleaseTargetSummary(rerunGroup: string, skipTelegram: string) {
+  const step = workflowStep(
+    workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
+    "Summarize target",
+  );
+  const workdir = tempDirs.make("full-release-target-summary-");
+  const summaryPath = resolve(workdir, "github-summary");
+  const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
+  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+    encoding: "utf8",
+    env: {
+      ...stepEnv,
+      GITHUB_STEP_SUMMARY: summaryPath,
+      PATH: process.env.PATH,
+      RELEASE_PROFILE: "beta",
+      RERUN_GROUP: rerunGroup,
+      SKIP_PACKAGE_TELEGRAM_E2E: skipTelegram,
+      TARGET_REF: "main",
+      TARGET_SHA: "a".repeat(40),
+    },
+  });
+  const summary = result.status === 0 ? readFileSync(summaryPath, "utf8") : "";
+  return { result, summary };
 }
 
 function shellFunctionSource(source: string, functionName: string): string {
@@ -368,6 +443,7 @@ if (args[0] === "workflow" && args[1] === "run") {
     RERUN_GROUP: "all",
     RUN_RELEASE_SOAK: "false",
     SCENARIO: "",
+    SKIP_PACKAGE_TELEGRAM_E2E: "false",
     TARGET_CONTEXT_REF: "",
     TARGET_REF: "main",
     TARGET_SHA: "b".repeat(40),
@@ -2461,8 +2537,10 @@ describe("package artifact reuse", () => {
     expect(publishedUpgradeSurvivor).toContain('local shim_dir="$npm_config_prefix/bin"');
     expect(publishedUpgradeSurvivor).toContain("seed_update_restart_probe_device_auth");
     expect(publishedUpgradeSurvivor).toContain("upgrade survivor restart probe");
-    expect(publishedUpgradeSurvivor).toContain("write_update_restart_service_secretref_env");
+    expect(publishedUpgradeSurvivor).toContain("write_update_restart_service_env");
     expect(publishedUpgradeSurvivor).toContain("GATEWAY_AUTH_TOKEN_REF=%s");
+    expect(publishedUpgradeSurvivor).toContain("OPENCLAW_CLAWHUB_URL=%s");
+    expect(publishedUpgradeSurvivor).toContain("assert-no-requests");
     expect(publishedUpgradeSurvivor).toContain(
       "env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw",
     );
@@ -3292,6 +3370,66 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("run_package_telegram_e2e:");
   });
 
+  it.each(["stable", "full"])(
+    "rejects Package Acceptance Telegram deferral for direct %s release checks",
+    (releaseProfile) => {
+      const { result } = runReleaseChecksInputValidation(releaseProfile, "true");
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "skip_package_telegram_e2e is allowed only for release_profile=beta.",
+      );
+    },
+  );
+
+  it.each(["stable", "full"])(
+    "rejects Package Acceptance Telegram deferral for umbrella %s validation",
+    (releaseProfile) => {
+      const result = runFullReleaseInputValidation(releaseProfile, "true");
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "skip_package_telegram_e2e is allowed only for release_profile=beta.",
+      );
+    },
+  );
+
+  it("allows Package Acceptance Telegram deferral only for beta validation", () => {
+    const direct = runReleaseChecksInputValidation("beta", "true");
+    const umbrella = runFullReleaseInputValidation("beta", "true");
+
+    expect(direct.result.status, direct.result.stderr).toBe(0);
+    expect(readFileSync(direct.outputPath, "utf8")).toContain("skip_package_telegram_e2e=true");
+    expect(umbrella.status, umbrella.stderr).toBe(0);
+  });
+
+  it.each(["stable", "full"])(
+    "preserves normal %s validation when Telegram deferral is false",
+    (releaseProfile) => {
+      const direct = runReleaseChecksInputValidation(releaseProfile, "false");
+      const umbrella = runFullReleaseInputValidation(releaseProfile, "false");
+
+      expect(direct.result.status, direct.result.stderr).toBe(0);
+      expect(readFileSync(direct.outputPath, "utf8")).toContain("skip_package_telegram_e2e=false");
+      expect(umbrella.status, umbrella.stderr).toBe(0);
+    },
+  );
+
+  it("summarizes Telegram deferral only when Package Acceptance is scheduled", () => {
+    const scheduled = runFullReleaseTargetSummary("release-checks", "true");
+    const unrelated = runFullReleaseTargetSummary("ci", "true");
+
+    expect(scheduled.result.status, scheduled.result.stderr).toBe(0);
+    expect(scheduled.summary).toContain(
+      "Package Telegram E2E: deferred by `skip_package_telegram_e2e`",
+    );
+    expect(unrelated.result.status, unrelated.result.stderr).toBe(0);
+    expect(unrelated.summary).toContain("Package Telegram E2E: skipped by rerun group");
+    expect(unrelated.summary).not.toContain(
+      "Package Telegram E2E: deferred by `skip_package_telegram_e2e`",
+    );
+  });
+
   it("includes package acceptance in release checks", () => {
     const workflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const packageAcceptanceWorkflow = parse(readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8")) as {
@@ -3302,6 +3440,10 @@ describe("package artifact reuse", () => {
     const packageAcceptanceJob = workflowJob(
       RELEASE_CHECKS_WORKFLOW,
       "package_acceptance_release_checks",
+    );
+    const releaseChecksTargetSummary = workflowStep(
+      workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target"),
+      "Summarize validated ref",
     );
     const dockerAcceptanceJob = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance");
 
@@ -3324,6 +3466,10 @@ describe("package artifact reuse", () => {
       package_version: "${{ needs.prepare_release_package.outputs.package_version }}",
       suite_profile: "custom",
     });
+    expect(releaseChecksTargetSummary.env).toMatchObject({
+      SKIP_PACKAGE_TELEGRAM_E2E: "${{ steps.inputs.outputs.skip_package_telegram_e2e }}",
+    });
+    expect(releaseChecksTargetSummary.run).toContain("Package Acceptance Telegram E2E deferred:");
     expect(dockerAcceptanceJob.with).toMatchObject({
       allow_frozen_target_scenario_omissions:
         "${{ inputs.allow_frozen_target_scenario_omissions || false }}",
@@ -3381,7 +3527,16 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}",
     );
-    expect(workflow).toContain("telegram_mode: mock-openai");
+    expect(readWorkflow(RELEASE_CHECKS_WORKFLOW).on?.workflow_dispatch?.inputs).toMatchObject({
+      skip_package_telegram_e2e: {
+        default: false,
+        type: "boolean",
+      },
+    });
+    expect(packageAcceptanceJob.with).toMatchObject({
+      telegram_mode:
+        "${{ needs.resolve_target.outputs.skip_package_telegram_e2e == 'true' && 'none' || 'mock-openai' }}",
+    });
     expect(packageAcceptanceJob.with).toMatchObject({
       telegram_advisory: "${{ needs.resolve_target.outputs.release_profile == 'beta' }}",
     });
@@ -3410,10 +3565,10 @@ describe("package artifact reuse", () => {
       "live_suite_filter: ${{ needs.resolve_target.outputs.repo_live_suite_filter }}",
     );
     expect(workflow).toContain(
-      "contains(fromJSON('[\"all\",\"cross-os\",\"package\"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.repo_live_suite_filter == '')",
+      "if: needs.resolve_target.outputs.cross_os_scheduled == 'true' || needs.resolve_target.outputs.docker_release_scheduled == 'true' || needs.resolve_target.outputs.rerun_group == 'package'",
     );
     expect(workflow).toContain(
-      "(needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.repo_live_suite_filter == ''",
+      "if: needs.resolve_target.outputs.docker_release_scheduled == 'true'",
     );
     expect(workflow).toContain(
       'if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then\n            run_release_soak=true',
@@ -4007,14 +4162,30 @@ describe("package artifact reuse", () => {
 
   it("runs full release children from the trusted workflow ref", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const workflowInputs = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW).on?.workflow_dispatch
+      ?.inputs;
+    const resolveTargetJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target");
     const evidenceReuseJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "evidence_reuse");
+    const releaseChecksJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "release_checks");
     const npmTelegramJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "npm_telegram");
     const performanceJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance");
     const summaryJob = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary");
+    const targetSummaryStep = workflowStep(resolveTargetJob, "Summarize target");
     const evidenceReuseStep = workflowStep(evidenceReuseJob, "Find reusable validation evidence");
+    const releaseChecksDispatchStep = workflowStep(
+      releaseChecksJob,
+      "Dispatch and monitor release checks",
+    );
     const dispatchStep = workflowStep(npmTelegramJob, "Dispatch and monitor npm Telegram E2E");
+    const verificationStep = workflowStep(summaryJob, "Verify child workflow results");
     const manifestStep = workflowStep(summaryJob, "Write release validation manifest");
 
+    expect(workflowInputs).toMatchObject({
+      skip_package_telegram_e2e: {
+        default: false,
+        type: "boolean",
+      },
+    });
     expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
     expect(workflow).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1');
     expect(npmTelegramJob.name).toBe("Run package Telegram E2E");
@@ -4035,13 +4206,28 @@ describe("package artifact reuse", () => {
       NPM_TELEGRAM_PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
       NPM_TELEGRAM_PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
       NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
+      SKIP_PACKAGE_TELEGRAM_E2E: "${{ inputs.skip_package_telegram_e2e }}",
     });
     expectTextToIncludeAll(evidenceReuseStep.run, [
       "npmTelegramPackageSpec: $npmTelegramPackageSpec",
       "npmTelegramProviderMode: $npmTelegramProviderMode",
       "npmTelegramScenario: $npmTelegramScenario",
+      "skipPackageTelegramE2e: $skipPackageTelegramE2e",
       "allowUnreleasedChangelog: $allowUnreleasedChangelog",
     ]);
+    expect(targetSummaryStep.env).toMatchObject({
+      SKIP_PACKAGE_TELEGRAM_E2E: "${{ inputs.skip_package_telegram_e2e }}",
+    });
+    expectTextToIncludeAll(targetSummaryStep.run, [
+      "Package Acceptance Telegram E2E deferred:",
+      "Package Telegram E2E: deferred by \\`skip_package_telegram_e2e\\`",
+    ]);
+    expect(releaseChecksDispatchStep.env).toMatchObject({
+      SKIP_PACKAGE_TELEGRAM_E2E: "${{ inputs.skip_package_telegram_e2e }}",
+    });
+    expect(releaseChecksDispatchStep.run).toContain(
+      '-f skip_package_telegram_e2e="$SKIP_PACKAGE_TELEGRAM_E2E"',
+    );
     expect(dispatchStep.env).toEqual({
       CHILD_WORKFLOW_KIND: "npm-telegram",
       CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
@@ -4059,13 +4245,19 @@ describe("package artifact reuse", () => {
       NPM_TELEGRAM_PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
       NPM_TELEGRAM_PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
       NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
+      SKIP_PACKAGE_TELEGRAM_E2E: "${{ inputs.skip_package_telegram_e2e }}",
     });
     expectTextToIncludeAll(manifestStep.run, [
       "npmTelegramPackageSpec: $npmTelegramPackageSpec",
       "npmTelegramProviderMode: $npmTelegramProviderMode",
       "npmTelegramScenario: $npmTelegramScenario",
+      "skipPackageTelegramE2e: $skipPackageTelegramE2e",
       "allowUnreleasedChangelog: $allowUnreleasedChangelog",
     ]);
+    expect(verificationStep.env).toMatchObject({
+      SKIP_PACKAGE_TELEGRAM_E2E: "${{ inputs.skip_package_telegram_e2e }}",
+    });
+    expect(verificationStep.run).toContain("Package Telegram E2E deferred:");
     expectTextToIncludeAll(dispatchStep.run, [
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-npm-telegram"',
       'dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"',
@@ -4118,6 +4310,7 @@ describe("package artifact reuse", () => {
 
     expectTextToIncludeAll(workflow, [
       "Published-package Telegram E2E:",
+      "Package Telegram E2E: deferred by \\`skip_package_telegram_e2e\\`",
       "Package Telegram E2E: OpenClaw Release Checks Package Acceptance",
       "Package Telegram E2E: focused rerun requires \\`release_package_spec\\` or \\`npm_telegram_package_spec\\`",
     ]);
@@ -5676,7 +5869,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   it("executes shared release candidate identity validation with its JSON input", () => {
     const selectedSha = "a".repeat(40);
     const candidate = {
-      packageArtifactName: "docker-e2e-package-123-1",
+      packageArtifactName: "docker-e2e-package-456-1",
       packageArtifactId: "123",
       packageArtifactDigest: "b".repeat(64),
       packageArtifactRunId: "456",
@@ -5697,13 +5890,43 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "Validate shared release candidate identity",
     ).run;
     expect(validation).toBeDefined();
+    const binDir = resolve(tempDirs.make("release-candidate-validation-"), "bin");
+    mkdirSync(binDir, { recursive: true });
+    const ghPath = resolve(binDir, "gh");
+    writeFileSync(
+      ghPath,
+      `#!/bin/sh
+if [ "$#" -ne 4 ] || [ "$1" != "api" ] || [ "$2" != "--method" ] || [ "$3" != "GET" ]; then
+  exit 1
+fi
+case "$4" in
+  */actions/artifacts/123)
+    printf '%s\n' '{"id":123,"name":"docker-e2e-package-456-1","expired":false,"digest":"sha256:${"b".repeat(64)}","workflow_run":{"id":456}}'
+    ;;
+  */actions/artifacts/790)
+    printf '%s\n' '{"id":790,"name":"docker-e2e-prepublish-plugin-registry-456-1","expired":false,"digest":"sha256:${"f".repeat(64)}","workflow_run":{"id":456}}'
+    ;;
+  */actions/runs/456/attempts/1)
+    printf '%s\n' '{"id":456,"run_attempt":1}'
+    ;;
+  *) exit 1 ;;
+esac
+`,
+    );
+    chmodSync(ghPath, 0o755);
+    const validationEnv = {
+      ...process.env,
+      GH_TOKEN: "test-token",
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      SELECTED_SHA: selectedSha,
+    };
 
     const valid = spawnSync("bash", ["-c", validation ?? ""], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...validationEnv,
         CANDIDATE_ARTIFACT_JSON: JSON.stringify(candidate),
-        SELECTED_SHA: selectedSha,
       },
     });
     expect(valid.status, valid.stderr).toBe(0);
@@ -5720,9 +5943,8 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const validRegistry = spawnSync("bash", ["-c", validation ?? ""], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...validationEnv,
         CANDIDATE_ARTIFACT_JSON: JSON.stringify(registryCandidate),
-        SELECTED_SHA: selectedSha,
       },
     });
     expect(validRegistry.status, validRegistry.stderr).toBe(0);
@@ -5730,12 +5952,11 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const partialRegistry = spawnSync("bash", ["-c", validation ?? ""], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...validationEnv,
         CANDIDATE_ARTIFACT_JSON: JSON.stringify({
           ...candidate,
           prepublishPluginRegistryArtifactId: "790",
         }),
-        SELECTED_SHA: selectedSha,
       },
     });
     expect(partialRegistry.status).not.toBe(0);
@@ -5743,12 +5964,11 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const mismatchedRegistryName = spawnSync("bash", ["-c", validation ?? ""], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...validationEnv,
         CANDIDATE_ARTIFACT_JSON: JSON.stringify({
           ...registryCandidate,
           prepublishPluginRegistryArtifactName: "docker-e2e-prepublish-plugin-registry-999-1",
         }),
-        SELECTED_SHA: selectedSha,
       },
     });
     expect(mismatchedRegistryName.status).not.toBe(0);
@@ -5756,7 +5976,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const mismatched = spawnSync("bash", ["-c", validation ?? ""], {
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...validationEnv,
         CANDIDATE_ARTIFACT_JSON: JSON.stringify(candidate),
         SELECTED_SHA: "f".repeat(40),
       },

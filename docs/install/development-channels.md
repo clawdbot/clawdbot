@@ -47,6 +47,10 @@ install paths:
 For `dev` git installs, the default checkout is `~/openclaw` (or
 `$OPENCLAW_HOME/openclaw` when `OPENCLAW_HOME` is set); override with
 `OPENCLAW_GIT_DIR`.
+Automatic update campaigns pin the upstream commit they announce, so the
+displayed list previews up to five commits from the exact target installed even
+if `main` advances during the countdown. A manual
+`openclaw update --channel dev` still targets the current upstream `main`.
 
 <Tip>
 To keep stable and dev in parallel, use two separate checkouts and point each gateway at its own.

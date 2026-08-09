@@ -40,8 +40,15 @@ const deviceIdentityState = vi.hoisted(() => ({
     scopes: ["operator.read"],
     updatedAtMs: 1,
   } as Record<string, unknown> | null,
+  cachedOriginToken: {
+    token: "cached-origin-operator-token",
+    role: "operator",
+    scopes: ["operator.read"],
+    updatedAtMs: 1,
+  } as Record<string, unknown> | null,
   identityPaths: [] as unknown[],
   tokenParams: [] as unknown[],
+  originTokenParams: [] as unknown[],
 }));
 
 const eventLoopReadyState = vi.hoisted(() => ({
@@ -185,6 +192,10 @@ vi.mock("../infra/device-auth-store.js", () => ({
     deviceIdentityState.tokenParams.push(params);
     return deviceIdentityState.cachedToken;
   },
+  loadOriginDeviceToken: (params: unknown) => {
+    deviceIdentityState.originTokenParams.push(params);
+    return deviceIdentityState.cachedOriginToken;
+  },
 }));
 
 vi.mock("./event-loop-ready.js", () => ({
@@ -293,8 +304,15 @@ describe("probeGateway", () => {
       scopes: ["operator.read"],
       updatedAtMs: 1,
     };
+    deviceIdentityState.cachedOriginToken = {
+      token: "cached-origin-operator-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 1,
+    };
     deviceIdentityState.identityPaths = [];
     deviceIdentityState.tokenParams = [];
+    deviceIdentityState.originTokenParams = [];
     gatewayClientState.startMode = "hello";
     gatewayClientState.socketOpened = true;
     gatewayClientState.transportValidated = true;
@@ -451,6 +469,16 @@ describe("probeGateway", () => {
     });
 
     expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
+    expect(gatewayClientState.options?.deviceAuthScope).toBe("wss://gateway.example/ws");
+    expect(deviceIdentityState.originTokenParams).toEqual([
+      {
+        gatewayScope: "wss://gateway.example/ws",
+        deviceId: "test-device-identity",
+        role: "operator",
+        env: undefined,
+      },
+    ]);
+    expect(deviceIdentityState.tokenParams).toEqual([]);
   });
 
   it("does not create or attach a device identity for first-time authenticated probes", async () => {

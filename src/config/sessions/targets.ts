@@ -11,7 +11,7 @@ import {
 } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  isSameOpenClawAgentDatabasePath,
+  createOpenClawAgentDatabasePathMatcher,
   listOpenClawRegisteredAgentDatabases,
 } from "../../state/openclaw-agent-db-registry.js";
 import { resolveStateDir } from "../paths.js";
@@ -126,6 +126,7 @@ export function listKnownSessionStoreAgentIds(
 ): string[] {
   const env = params.env ?? process.env;
   const defaultAgentId = resolveDefaultAgentId(cfg);
+  const isSameDatabasePath = createOpenClawAgentDatabasePathMatcher();
   const ids = new Set(listConfiguredSessionStoreAgentIds(cfg));
   if (!isPerAgentSessionStoreConfig(cfg.session?.store)) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: defaultAgentId, env });
@@ -133,6 +134,7 @@ export function listKnownSessionStoreAgentIds(
       agentId: defaultAgentId,
       defaultAgentId,
       env,
+      isSameDatabasePath,
     });
     // Fixed stores can outlive their registry row. Preserve the database-recorded
     // owner so combined views and reapers do not drop a retired agent's live sessions.
@@ -173,8 +175,9 @@ export function listKnownSessionStoreAgentIds(
       agentId,
       defaultAgentId,
       env,
+      isSameDatabasePath,
     }).path;
-    if (isSameOpenClawAgentDatabasePath(registered.path, expectedPath)) {
+    if (isSameDatabasePath(registered.path, expectedPath)) {
       ids.add(agentId);
     }
   }

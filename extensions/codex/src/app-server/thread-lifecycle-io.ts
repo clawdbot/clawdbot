@@ -246,6 +246,9 @@ export async function resumeExistingCodexThread(
         ? params.mcpServersFingerprint
         : resumeBinding.mcpServersFingerprint;
     const resumePatch = {
+      // Resume moves native subscription ownership to this physical client.
+      // Keeping its previous client id disables warm reuse after every restart.
+      clientId: resolveCodexAppServerClientInstanceId(params.client),
       cwd: params.cwd,
       rolloutPath: resolveCodexThreadRolloutPath(response.thread) ?? resumeBinding.rolloutPath,
       authProfileId: boundAuthProfileId,

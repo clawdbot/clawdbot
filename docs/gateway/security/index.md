@@ -483,6 +483,15 @@ Enabling browser control gives the model a real browser. If that profile already
 - Keep Gateway and node hosts tailnet-only; avoid exposing browser control ports to LAN or public internet.
 - Disable browser proxy routing when not needed (`gateway.nodes.browser.mode="off"`).
 - Chrome MCP existing-session mode is not "safer" - it can act as you in whatever that host Chrome profile can reach.
+- Browser Relay Authentication v2 never sends the persistent extension relay
+  key. The extension and external CDP clients verify a signed server challenge
+  before returning a short-lived, one-time, connection-bound HMAC proof. Proofs
+  bind the protocol version, role, transport, method, resource, flow, profile,
+  and relay instance; replay on the same or another socket fails.
+- `browser.extensionRelay.allowLegacyAuth` defaults to `true` for one migration
+  window. This temporarily accepts old Bearer, Basic, and token-subprotocol
+  relay clients. Update every relay client, then set it to `false`. V2 clients
+  never downgrade after a failed proof or unsupported response.
 - Run a **node host** on the browser machine and let the Gateway proxy browser actions when the Gateway is remote from the browser (see [Browser tool](/tools/browser)); treat node pairing like admin access, keep Gateway and node host on the same tailnet, and avoid exposing relay/control ports over LAN, public internet, or Tailscale Funnel.
 
 ### Browser SSRF policy (strict by default)

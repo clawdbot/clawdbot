@@ -30,12 +30,12 @@ vi.mock("./suite-runtime-agent-session.js", () => ({
 }));
 
 import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
+import { runQaCli } from "./qa-cli-process.js";
 import {
   findManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,
-  runQaCli,
   startAgentRun,
   waitForAgentRun,
   waitForAgentHistoryReply,

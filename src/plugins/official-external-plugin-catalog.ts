@@ -5,7 +5,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { isRecord } from "../utils.js";
 import type {
   PluginManifestCatalog,
@@ -1329,9 +1329,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       now: currentTime(),
     });
   } finally {
-    if (response?.bodyUsed !== true) {
-      await response?.body?.cancel().catch(() => undefined);
-    }
+    await cancelUnreadResponseBody(response);
     await release?.().catch(() => undefined);
   }
 }

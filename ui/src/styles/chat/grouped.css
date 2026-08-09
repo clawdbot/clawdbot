@@ -151,7 +151,7 @@
   pointer-events: none;
 }
 
-.chat-group-footer--persistent-identity .chat-delete-wrap,
+.chat-group-footer--persistent-identity .chat-confirm-wrap,
 .chat-group-footer--persistent-identity .chat-group-timestamp,
 .chat-group-footer--persistent-identity .msg-meta,
 .chat-group-footer--persistent-identity .chat-group-footer-actions {
@@ -166,13 +166,13 @@
   pointer-events: auto;
 }
 
-.chat-group:hover .chat-group-footer--persistent-identity .chat-delete-wrap,
+.chat-group:hover .chat-group-footer--persistent-identity .chat-confirm-wrap,
 .chat-group:hover .chat-group-footer--persistent-identity .chat-group-timestamp,
 .chat-group:hover .chat-group-footer--persistent-identity .msg-meta,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-delete-wrap,
+.chat-group:focus-within .chat-group-footer--persistent-identity .chat-confirm-wrap,
 .chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-timestamp,
 .chat-group:focus-within .chat-group-footer--persistent-identity .msg-meta,
-.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-delete-wrap,
+.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-confirm-wrap,
 .chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-group-timestamp,
 .chat-group-footer--persistent-identity:has(details.msg-meta[open]) .msg-meta,
 .chat-group:hover .chat-group-footer--persistent-identity .chat-group-footer-actions,
@@ -334,10 +334,6 @@
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.chat-group-delete:hover {
-  color: var(--danger) !important;
 }
 
 /* Chat divider (e.g., compaction marker) */
@@ -657,7 +653,7 @@ img.chat-avatar.chat-avatar--logo {
     margin-bottom: 14px;
   }
 
-  .chat-group-footer--persistent-identity .chat-delete-wrap,
+  .chat-group-footer--persistent-identity .chat-confirm-wrap,
   .chat-group-footer--persistent-identity .chat-group-timestamp,
   .chat-group-footer--persistent-identity .msg-meta,
   .chat-group-footer--persistent-identity .chat-group-footer-actions {
@@ -680,7 +676,6 @@ img.chat-avatar.chat-avatar--logo {
 
   .chat-group-footer-actions .chat-copy-btn,
   .chat-group-footer-actions .chat-reply-btn,
-  .chat-group-footer-actions .chat-group-delete,
   .chat-message-actions-row .chat-copy-btn,
   .chat-message-actions-row .chat-reply-btn {
     min-width: 44px;
@@ -746,7 +741,8 @@ img.chat-avatar.chat-avatar--logo {
   outline-offset: 2px;
 }
 
-.chat-bubble:hover {
+/* Tool rows own their hover treatment; an accent border reads as an error. */
+.chat-bubble:not(:where(.chat-bubble--tool-shell)):hover {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
 
@@ -927,13 +923,13 @@ details.msg-meta:not([open]) .msg-meta__details {
   color: var(--danger);
 }
 
-/* ── Delete confirmation popover ── */
-.chat-delete-wrap {
+/* ── Confirmed action popover ── */
+.chat-confirm-wrap {
   position: relative;
   display: inline-flex;
 }
 
-.chat-delete-confirm {
+.chat-confirm-popover {
   position: fixed;
   background: var(--card, #1a1a1a);
   border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
@@ -944,24 +940,17 @@ details.msg-meta:not([open]) .msg-meta__details {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   z-index: 100;
   animation: scale-in 0.15s ease-out;
-}
-
-.chat-delete-confirm--left {
   transform-origin: top right;
 }
 
-.chat-delete-confirm--right {
-  transform-origin: top left;
-}
-
-.chat-delete-confirm__text {
+.chat-confirm-popover__text {
   margin: 0 0 8px;
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
 }
 
-.chat-delete-confirm__remember {
+.chat-confirm-popover__remember {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -971,20 +960,20 @@ details.msg-meta:not([open]) .msg-meta__details {
   user-select: none;
 }
 
-.chat-delete-confirm__check {
+.chat-confirm-popover__check {
   width: 14px;
   height: 14px;
   accent-color: var(--accent);
 }
 
-.chat-delete-confirm__actions {
+.chat-confirm-popover__actions {
   display: flex;
   gap: 6px;
   justify-content: flex-end;
 }
 
-.chat-delete-confirm__cancel,
-.chat-delete-confirm__yes {
+.chat-confirm-popover__cancel,
+.chat-confirm-popover__yes {
   border: none;
   border-radius: var(--radius-sm, 4px);
   padding: 4px 12px;
@@ -993,41 +982,41 @@ details.msg-meta:not([open]) .msg-meta__details {
   transition: background 120ms ease-out;
 }
 
-.chat-delete-confirm__cancel {
+.chat-confirm-popover__cancel {
   background: var(--bg-hover, rgba(255, 255, 255, 0.08));
   color: var(--muted, #888);
 }
 
-.chat-delete-confirm__cancel:hover {
+.chat-confirm-popover__cancel:hover {
   background: rgba(255, 255, 255, 0.12);
 }
 
-.chat-delete-confirm__yes {
+.chat-confirm-popover__yes {
   background: var(--danger);
   color: #fff;
 }
 
-:root[data-theme="dark"] .chat-delete-confirm__yes {
+:root[data-theme="dark"] .chat-confirm-popover__yes {
   background: var(--destructive);
   color: var(--destructive-foreground);
 }
 
-:root[data-theme="openknot"] .chat-delete-confirm__yes,
-:root[data-theme="dash"] .chat-delete-confirm__yes {
+:root[data-theme="openknot"] .chat-confirm-popover__yes,
+:root[data-theme="dash"] .chat-confirm-popover__yes {
   background: var(--destructive);
   color: var(--destructive-foreground);
 }
 
-.chat-delete-confirm__yes:hover {
+.chat-confirm-popover__yes:hover {
   background: #dc2626;
 }
 
-:root[data-theme="dark"] .chat-delete-confirm__yes:hover {
+:root[data-theme="dark"] .chat-confirm-popover__yes:hover {
   background: var(--destructive-hover);
 }
 
-:root[data-theme="openknot"] .chat-delete-confirm__yes:hover,
-:root[data-theme="dash"] .chat-delete-confirm__yes:hover {
+:root[data-theme="openknot"] .chat-confirm-popover__yes:hover,
+:root[data-theme="dash"] .chat-confirm-popover__yes:hover {
   background: var(--destructive-hover);
 }
 

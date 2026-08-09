@@ -90,6 +90,20 @@ describe("session list requests", () => {
     sessions.dispose();
   });
 
+  it("discards a list rejection from a retired same-client connection", async () => {
+    let rejectStale!: (error: Error) => void;
+    const staleRequest = new Promise<SessionsListResult>((_resolve, reject) => {
+      rejectStale = reject;
+    });
+    const request = vi.fn(async () => staleRequest);
+    const { sessions, reconnect } = sessionHarness(request);
+    const retiredRequest = sessions.list({ boardFace: "dashboard" });
+    reconnect();
+    rejectStale(new Error("retired connection"));
+    await expect(retiredRequest).resolves.toBeNull();
+    sessions.dispose();
+  });
+
   it("keeps filtered pages scoped without replacing the canonical active roster", async () => {
     const request = vi.fn(async (_method: string, params?: ListParams) => {
       const filter = params?.archived === true ? "archived" : params?.archived || "active";

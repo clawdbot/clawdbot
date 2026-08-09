@@ -14,6 +14,7 @@ import {
 import { handleGatewayRequest } from "./server-methods.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
 const METHOD = "workboard.cards.dispatch";
 const ensureProfileForEmail = vi.hoisted(() => vi.fn());
@@ -336,5 +337,218 @@ describe("gateway method authorization", () => {
       });
       expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty("label");
     });
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
+describe("sessions.patchMany orchestration", () => {
+  it("starts canonical patches concurrently and preserves target order", async () => {
+    const originalPatch = sessionMutationHandlers["sessions.patch"];
+    if (!originalPatch) {
+      throw new Error("sessions.patch handler is not registered");
+    }
+    const releases = Array.from({ length: 3 }, () => deferred<void>());
+    const patch = vi.fn<GatewayRequestHandler>(async ({ params, respond }) => {
+      const index = Number(String(params.key).at(-1));
+      await releases[index]?.promise;
+      if (index === 1) {
+        respond(false, undefined, { code: "INVALID_REQUEST", message: "active run" });
+      } else {
+        respond(true, { ok: true });
+      }
+    });
+    sessionMutationHandlers["sessions.patch"] = patch;
+    const respond = vi.fn();
+    try {
+      const request = sessionMutationHandlers["sessions.patchMany"]!({
+        params: {
+          targets: [0, 1, 2].map((index) => {
+            const key = `agent:main:batch-${index}`;
+            return index === 0
+              ? {
+                  key,
+                  expectedSessionId: "session-0",
+                  expectedLifecycleRevision: "revision-0",
+                }
+              : { key };
+          }),
+          patch: { archived: true, label: "Batch" },
+        },
+        respond,
+        context: { getRuntimeConfig: () => ({}) },
+      } as never);
+      await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(3));
+      releases[2]!.resolve();
+      releases[1]!.resolve();
+      releases[0]!.resolve();
+      await request;
+
+      expect(patch.mock.calls.map(([options]) => options.params)).toEqual([
+        {
+          key: "agent:main:batch-0",
+          expectedSessionId: "session-0",
+          expectedLifecycleRevision: "revision-0",
+          archived: true,
+          label: "Batch",
+        },
+        ...[1, 2].map((index) => ({
+          key: `agent:main:batch-${index}`,
+          archived: true,
+          label: "Batch",
+        })),
+      ]);
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          outcomes: [
+            { ok: true, key: "agent:main:batch-0" },
+            {
+              ok: false,
+              key: "agent:main:batch-1",
+              error: { code: "INVALID_REQUEST", message: "active run" },
+            },
+            { ok: true, key: "agent:main:batch-2" },
+          ],
+        },
+        undefined,
+      );
+    } finally {
+      sessionMutationHandlers["sessions.patch"] = originalPatch;
+    }
+  });
+
+  it("rejects logical aliases before dispatch", async () => {
+    const originalPatch = sessionMutationHandlers["sessions.patch"];
+    if (!originalPatch) {
+      throw new Error("sessions.patch handler is not registered");
+    }
+    const patch = vi.fn<GatewayRequestHandler>();
+    sessionMutationHandlers["sessions.patch"] = patch;
+    const respond = vi.fn();
+    try {
+      await sessionMutationHandlers["sessions.patchMany"]!({
+        params: {
+          targets: [{ key: "agent:main:duplicate" }, { key: "duplicate" }],
+          patch: { archived: true },
+        },
+        respond,
+        context: { getRuntimeConfig: () => ({}) },
+      } as never);
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: "Duplicate target." }),
+      );
+      expect(patch).not.toHaveBeenCalled();
+    } finally {
+      sessionMutationHandlers["sessions.patch"] = originalPatch;
+    }
+  });
+
+  it("isolates a target authorization race from sibling patches", async () => {
+    const originalPatch = sessionMutationHandlers["sessions.patch"]!;
+    const patch = vi.fn<GatewayRequestHandler>(({ sessionMutationAuthorization, respond }) => {
+      sessionMutationAuthorization?.assertCurrent();
+      respond(true, { ok: true });
+    });
+    sessionMutationHandlers["sessions.patch"] = patch;
+    const respond = vi.fn();
+    const assertCurrent = vi.fn(() => {
+      throw new Error("outer all-target guard must not be delegated");
+    });
+    const assertTargetCurrent = vi.fn(({ sessionKey }: { sessionKey: string }) => {
+      if (sessionKey.endsWith("-1")) {
+        throw new SessionMutationAuthorizationChangedError({
+          code: "INVALID_REQUEST",
+          message: "session changed before sessions.patchMany; retry the request",
+        });
+      }
+    });
+    try {
+      await sessionMutationHandlers["sessions.patchMany"]!({
+        params: {
+          targets: [0, 1, 2].map((index) => ({ key: `agent:main:race-${index}` })),
+          patch: { unread: false },
+        },
+        respond,
+        context: { getRuntimeConfig: () => ({}) },
+        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent },
+      } as never);
+
+      expect(assertCurrent).not.toHaveBeenCalled();
+      expect(assertTargetCurrent).toHaveBeenCalledTimes(3);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          outcomes: [
+            { ok: true, key: "agent:main:race-0" },
+            {
+              ok: false,
+              key: "agent:main:race-1",
+              error: {
+                code: "INVALID_REQUEST",
+                message: "session changed before sessions.patchMany; retry the request",
+              },
+            },
+            { ok: true, key: "agent:main:race-2" },
+          ],
+        },
+        undefined,
+      );
+    } finally {
+      sessionMutationHandlers["sessions.patch"] = originalPatch;
+    }
+  });
+
+  it("converts an unexpected delegated exception into an ordered target failure", async () => {
+    const originalPatch = sessionMutationHandlers["sessions.patch"]!;
+    const patch = vi.fn<GatewayRequestHandler>(({ params, respond }) => {
+      if (params.key === "agent:main:throw-1") {
+        throw new Error("private delegated detail");
+      }
+      respond(true, { ok: true });
+    });
+    sessionMutationHandlers["sessions.patch"] = patch;
+    const respond = vi.fn();
+    try {
+      await sessionMutationHandlers["sessions.patchMany"]!({
+        params: {
+          targets: [0, 1, 2].map((index) => ({ key: `agent:main:throw-${index}` })),
+          patch: { category: "Batch" },
+        },
+        respond,
+        context: { getRuntimeConfig: () => ({}) },
+      } as never);
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          outcomes: [
+            { ok: true, key: "agent:main:throw-0" },
+            {
+              ok: false,
+              key: "agent:main:throw-1",
+              error: {
+                code: "UNAVAILABLE",
+                message: "Session patch failed unexpectedly. Retry the request.",
+                retryable: true,
+              },
+            },
+            { ok: true, key: "agent:main:throw-2" },
+          ],
+        },
+        undefined,
+      );
+    } finally {
+      sessionMutationHandlers["sessions.patch"] = originalPatch;
+    }
   });
 });

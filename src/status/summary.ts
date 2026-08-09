@@ -1,6 +1,7 @@
 // Builds the status summary used by human and JSON status output.
 // It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
 
+import { normalizeLowercaseStringOrEmpty as normalizeStatusModelPart } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/config.js";
@@ -11,7 +12,11 @@ import {
 } from "../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
+import {
+  resolveFreshSessionTotalTokens,
+  resolveSessionTotalTokens,
+  type SessionEntry,
+} from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
@@ -146,10 +151,6 @@ function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
     return false;
   }
   return !hasSessionAutoModelFallbackProvenance(entry);
-}
-
-function normalizeStatusModelPart(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function resolveTrustedSessionContextTokens(params: {
@@ -457,13 +458,16 @@ export async function getStatusSummary(
             fallbackContextTokens: configContextTokens ?? undefined,
             allowAsyncLoad: false,
           }) ?? null;
-        const total = resolveFreshSessionTotalTokens(entry);
-        const totalTokensFresh = total !== undefined;
+        const total = resolveSessionTotalTokens(entry);
+        const freshTotal = resolveFreshSessionTotalTokens(entry);
+        const totalTokensFresh = freshTotal !== undefined;
         const remaining =
-          contextTokens != null && total !== undefined ? Math.max(0, contextTokens - total) : null;
+          contextTokens != null && freshTotal !== undefined
+            ? Math.max(0, contextTokens - freshTotal)
+            : null;
         const pct =
-          contextTokens && contextTokens > 0 && total !== undefined
-            ? Math.min(999, Math.round((total / contextTokens) * 100))
+          contextTokens && contextTokens > 0 && freshTotal !== undefined
+            ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
             : null;
         const runtime = resolveSessionRuntimeLabel({
           cfg,

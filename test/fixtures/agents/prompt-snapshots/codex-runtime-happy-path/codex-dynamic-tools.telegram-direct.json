@@ -1130,7 +1130,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
+        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. Files: file_fetch.",
         "inputSchema": {
           "properties": {
             "action": {
@@ -1144,6 +1144,7 @@
                 "camera_snap",
                 "camera_list",
                 "camera_clip",
+                "camera_ptz",
                 "photos_latest",
                 "screen_record",
                 "screen_snapshot",
@@ -1185,6 +1186,7 @@
               "type": "string"
             },
             "deviceId": {
+              "description": "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
               "type": "string"
             },
             "duration": {
@@ -1257,8 +1259,17 @@
             "outPath": {
               "type": "string"
             },
+            "panDegrees": {
+              "description": "camera_ptz pan: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+              "type": "number"
+            },
             "priority": {
               "enum": ["passive", "active", "timeSensitive"],
+              "type": "string"
+            },
+            "ptzOperation": {
+              "description": "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
+              "enum": ["status", "set", "move", "home"],
               "type": "string"
             },
             "quality": {
@@ -1276,12 +1287,20 @@
             "sound": {
               "type": "string"
             },
+            "tiltDegrees": {
+              "description": "camera_ptz tilt: set uses absolute degrees; move uses a degree delta. Omit when unsupported.",
+              "type": "number"
+            },
             "timeoutMs": {
               "minimum": 1,
               "type": "integer"
             },
             "title": {
               "type": "string"
+            },
+            "zoomPercent": {
+              "description": "camera_ptz zoom: set uses absolute percent; move uses a percentage-point delta. Omit when unsupported.",
+              "type": "number"
             }
           },
           "required": ["action"],

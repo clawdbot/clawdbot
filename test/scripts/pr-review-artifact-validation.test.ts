@@ -207,6 +207,7 @@ function runMergeVerification(checks: "api-error" | "invalid-json" | "no-require
       [
         "set -euo pipefail",
         'source "$1"',
+        'script_parent_dir=$(cd "$(dirname "$1")/.." && pwd)',
         'fixture_root="$2"',
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
@@ -214,7 +215,8 @@ function runMergeVerification(checks: "api-error" | "invalid-json" | "no-require
         `pr_meta_json() { printf '%s\\n' '{"isDraft":false,"headRefOid":"${head}"}'; }`,
         "mark_pr_operation_side_effects_started() { :; }",
         "git() { :; }",
-        `gh() { case "$*" in *"--json name,bucket,state"*) ${checksResponse};; *) return 0;; esac; }`,
+        "node() { :; }",
+        `gh_plain() { case "$*" in *"--json name,bucket,state"*) ${checksResponse};; *) return 0;; esac; }`,
         "merge_verify 42",
       ].join("\n"),
       "pr-merge-verification",

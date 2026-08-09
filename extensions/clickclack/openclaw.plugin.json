@@ -1,5 +1,8 @@
 {
   "id": "clickclack",
+  "doctorContract": {
+    "normalizeCompatibilityConfig": true
+  },
   "activation": {
     "onStartup": false
   },
