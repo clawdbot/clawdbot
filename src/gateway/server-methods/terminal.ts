@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -68,11 +69,7 @@ function parseNodePayload(payload: unknown, payloadJSON?: string | null): unknow
   if (!payloadJSON) {
     return payload;
   }
-  try {
-    return JSON.parse(payloadJSON) as unknown;
-  } catch {
-    return undefined;
-  }
+  return safeParseJson(payloadJSON);
 }
 
 async function stageNodeTerminalUpload(
@@ -296,10 +293,13 @@ export const terminalHandlers: GatewayRequestHandlers = {
     }
     const spawnPlan = resolveTerminalOpenSpawnPlan(refreshedLaunch.plan, catalogPlan);
     const terminalEnv = buildTerminalEnv(process.env);
-    if (catalogPlan?.kind === "local" && catalogPlan.pathEnv) {
-      // Preserve the PATH that found a login-shell CLI so env-based shebangs
-      // can resolve their interpreter inside the spawned terminal process.
-      terminalEnv.PATH = catalogPlan.pathEnv;
+    if (catalogPlan?.kind === "local") {
+      Object.assign(terminalEnv, catalogPlan.env);
+      if (catalogPlan.pathEnv) {
+        // Preserve the PATH that found a login-shell CLI so env-based shebangs
+        // can resolve their interpreter inside the spawned terminal process.
+        terminalEnv.PATH = catalogPlan.pathEnv;
+      }
     }
     let openingTerminal: ReturnType<typeof manager.open> | undefined;
     let outcome: Awaited<ReturnType<typeof manager.open>>;

@@ -351,17 +351,6 @@ export function buildCachedChatItems(
   return items;
 }
 
-export function deletedChatItemsSignature(
-  deleted: { has: (key: string) => boolean },
-  chatItems: ReturnType<typeof buildChatItems>,
-): string {
-  const deletedKeys = chatItems
-    .map((item) => item.key)
-    .filter((key) => deleted.has(key))
-    .toSorted();
-  return deletedKeys.length === 0 ? "" : deletedKeys.join("\u0000");
-}
-
 export function getExpansionStateVersion(values: ReadonlyMap<string, boolean>): number {
   return expandedBooleanMapVersions.get(values) ?? 0;
 }

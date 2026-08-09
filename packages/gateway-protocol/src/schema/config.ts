@@ -63,6 +63,117 @@ export const ConfigSchemaLookupParamsSchema = closedObject({
 /** Empty request payload for checking update/restart status. */
 export const UpdateStatusParamsSchema = closedObject({});
 
+const UpdateCommitSchema = closedObject({
+  sha: NonEmptyString,
+  subject: Type.String({ maxLength: 120 }),
+});
+
+/** Backward-compatible update availability metadata. */
+export const UpdateAvailableSchema = closedObject({
+  currentVersion: NonEmptyString,
+  latestVersion: NonEmptyString,
+  channel: NonEmptyString,
+  currentSha: Type.Optional(NonEmptyString),
+  upstreamRef: Type.Optional(NonEmptyString),
+  upstreamSha: Type.Optional(NonEmptyString),
+  commitsBehind: Type.Optional(Type.Integer({ minimum: 0 })),
+  commits: Type.Optional(Type.Array(UpdateCommitSchema, { maxItems: 5 })),
+});
+
+const GitInstallMetadataProperties = {
+  currentSha: Type.Optional(NonEmptyString),
+  commitAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  installedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+} as const;
+
+const GitUpdateStatusSchema = Type.Union([
+  closedObject({ ...GitInstallMetadataProperties, status: Type.Literal("current") }),
+  closedObject({
+    ...GitInstallMetadataProperties,
+    status: Type.Literal("behind"),
+    commitsBehind: Type.Integer({ minimum: 1 }),
+  }),
+  closedObject({
+    ...GitInstallMetadataProperties,
+    status: Type.Literal("ahead"),
+    commitsAhead: Type.Integer({ minimum: 1 }),
+  }),
+  closedObject({
+    ...GitInstallMetadataProperties,
+    status: Type.Literal("diverged"),
+    commitsAhead: Type.Integer({ minimum: 1 }),
+    commitsBehind: Type.Integer({ minimum: 1 }),
+  }),
+  closedObject({
+    ...GitInstallMetadataProperties,
+    status: Type.Literal("unavailable"),
+    reason: Type.Union([
+      Type.Literal("fetch-failed"),
+      Type.Literal("no-upstream"),
+      Type.Literal("no-upstream-sha"),
+      Type.Literal("comparison-failed"),
+      Type.Literal("git-unavailable"),
+    ]),
+  }),
+]);
+
+/** Authoritative automatic-update schedule and in-memory campaign state. */
+export const UpdateScheduleStateSchema = closedObject({
+  channel: NonEmptyString,
+  autoEnabled: Type.Boolean(),
+  install: Type.Optional(
+    closedObject({
+      kind: Type.Union([Type.Literal("package"), Type.Literal("git"), Type.Literal("unknown")]),
+      git: Type.Optional(GitUpdateStatusSchema),
+    }),
+  ),
+  target: Type.Optional(
+    Type.Union([
+      closedObject({
+        kind: Type.Literal("package"),
+        version: NonEmptyString,
+      }),
+      closedObject({
+        kind: Type.Literal("git"),
+        upstreamRef: NonEmptyString,
+        upstreamSha: NonEmptyString,
+        commitsBehind: Type.Integer({ minimum: 0 }),
+      }),
+    ]),
+  ),
+  campaign: Type.Optional(
+    closedObject({
+      id: NonEmptyString,
+      state: Type.Union([
+        Type.Literal("waiting-for-idle"),
+        Type.Literal("countdown"),
+        Type.Literal("applying"),
+      ]),
+      announcedAtMs: Type.Integer({ minimum: 0 }),
+      applyAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+      holdUntilMs: Type.Optional(Type.Integer({ minimum: 0 })),
+      forceAtMs: Type.Integer({ minimum: 0 }),
+      updatedAtMs: Type.Integer({ minimum: 0 }),
+    }),
+  ),
+});
+
+/** Validated response payload for update.status. */
+export const UpdateStatusResultSchema = closedObject({
+  sentinel: Type.Unknown(),
+  updateAvailable: Type.Union([UpdateAvailableSchema, Type.Null()]),
+  schedule: Type.Optional(UpdateScheduleStateSchema),
+});
+
+/** Empty request payload for deferring the active update campaign. */
+export const UpdateHoldParamsSchema = closedObject({});
+
+/** Result of attempting to defer the active update campaign. */
+export const UpdateHoldResultSchema = closedObject({
+  ok: Type.Boolean(),
+  schedule: Type.Optional(UpdateScheduleStateSchema),
+});
+
 /** Request payload for running an update/restart flow with optional channel delivery context. */
 export const UpdateRunParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
@@ -133,4 +244,9 @@ export type ConfigSchemaLookupParams = Static<typeof ConfigSchemaLookupParamsSch
 export type ConfigSchemaResponse = Static<typeof ConfigSchemaResponseSchema>;
 export type ConfigSchemaLookupResult = Static<typeof ConfigSchemaLookupResultSchema>;
 export type UpdateStatusParams = Static<typeof UpdateStatusParamsSchema>;
+export type UpdateAvailable = Static<typeof UpdateAvailableSchema>;
+export type UpdateScheduleState = Static<typeof UpdateScheduleStateSchema>;
+export type UpdateStatusResult = Static<typeof UpdateStatusResultSchema>;
+export type UpdateHoldParams = Static<typeof UpdateHoldParamsSchema>;
+export type UpdateHoldResult = Static<typeof UpdateHoldResultSchema>;
 export type UpdateRunParams = Static<typeof UpdateRunParamsSchema>;

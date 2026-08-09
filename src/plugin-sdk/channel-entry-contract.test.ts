@@ -619,7 +619,7 @@ describe("loadBundledEntryExportSync", () => {
     expect(result.stderr).toMatch(/sourceLoaderCallMs=0(?:\.0+)?(?:\s|$)/u);
   });
 
-  it("can disable source-tree fallback for dist bundled entry checks", () => {
+  it("preserves presence-based source fallback disable semantics and cache modes", () => {
     stubPluginModuleLoaderJitiFactory(
       vi.fn(() => vi.fn(() => ({ sentinel: 42 }))) as unknown as PluginModuleLoaderFactory,
     );
@@ -639,20 +639,29 @@ describe("loadBundledEntryExportSync", () => {
       "utf8",
     );
 
-    expect(
+    const loadSecretContract = () =>
       loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
         specifier: "./src/secret-contract.js",
         exportName: "sentinel",
-      }),
-    ).toBe(42);
+      });
 
-    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK", "1");
+    expect(loadSecretContract()).toBe(42);
 
-    expect(() =>
-      loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
-        specifier: "./src/secret-contract.js",
-        exportName: "sentinel",
-      }),
-    ).toThrow(`resolved "${path.join(pluginRoot, "src", "secret-contract.js")}"`);
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK", "enabled");
+    expect(loadSecretContract).toThrow(
+      `resolved "${path.join(pluginRoot, "src", "secret-contract.js")}"`,
+    );
+
+    for (const value of ["", "   ", "off", "no", " ON ", "arbitrary"]) {
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK", value);
+      expect(loadSecretContract).toThrow(
+        `resolved "${path.join(pluginRoot, "src", "secret-contract.js")}"`,
+      );
+    }
+
+    for (const value of ["0", " 0 ", "false", " FALSE "]) {
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK", value);
+      expect(loadSecretContract()).toBe(42);
+    }
   });
 });

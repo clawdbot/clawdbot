@@ -20,19 +20,22 @@ import {
 } from "../providers/openai-responses-tool-call-tracker.js";
 import type { Api, AssistantMessage, Model, TextContent, ToolCall, Usage } from "../types.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   type FirstStreamEventInternalOptions,
   withFirstStreamEventTimeout,
 } from "../utils/stream-first-event-timeout.js";
+import { createCompactionTracker } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   type OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
-import { normalizeResponsesFailedEvent } from "./openai-responses-debug.js";
+import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-responses-debug.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import { adaptResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
   appendResponsesPendingTextDelta,
+  createResponsesOutputContentIndex,
   createResponsesOutputSlotTracker,
   readResponsesOutputIndex,
   type ResponsesStreamOutputSlot,
@@ -109,20 +112,6 @@ type ResponsesStreamOptions = FirstStreamEventInternalOptions & {
   reasoningReplayMetadata?: OpenAIResponsesReasoningReplayMetadata;
 };
 
-export class ResponsesStreamFailure extends Error {
-  readonly responseId?: string;
-  readonly response: unknown;
-  readonly observation: ReturnType<typeof normalizeResponsesFailedEvent>["observation"];
-
-  constructor(failure: ReturnType<typeof normalizeResponsesFailedEvent>, response: unknown) {
-    super(failure.message);
-    this.name = "ResponsesStreamFailure";
-    this.responseId = failure.responseId;
-    this.response = response;
-    this.observation = failure.observation;
-  }
-}
-
 export async function processResponsesStream<TApi extends Api>(
   openaiStream: AsyncIterable<unknown>,
   output: AssistantMessage,
@@ -142,12 +131,12 @@ export async function processResponsesStream<TApi extends Api>(
   const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
   const outputSlots = createResponsesOutputSlotTracker<ResponsesOutputSlot>();
   const reasoningBlocksById = new Map<string, ResponsesThinkingBlock>();
-  const completedOutputItemIdentities = new Set<string>();
+  const outputItemContentIndexes = createResponsesOutputContentIndex();
   const startedTextBlocksByItemId = new Map<string, TextBlockReference>();
   let terminalResponseEvent: "finalized" | "failed" | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
-  const blockIndex = () => blocks.length - 1;
+  const compactionTracker = createCompactionTracker(output, model, options);
   const createOutputSlot = (
     event: object,
     item: ResponseOutputItem | ResponsesStreamOutputMessage,
@@ -162,6 +151,7 @@ export async function processResponsesStream<TApi extends Api>(
       } satisfies ResponsesOutputSlot;
       blocks.push(block);
       reasoningBlocksById.set(item.id, block);
+      outputItemContentIndexes.set(item, slot.contentIndex);
       outputSlots.register(event, slot);
       stream.push({ type: "thinking_start", contentIndex: slot.contentIndex, partial: output });
       return slot;
@@ -188,6 +178,7 @@ export async function processResponsesStream<TApi extends Api>(
       } satisfies ResponsesOutputSlot;
       if (block) {
         blocks.push(block);
+        outputItemContentIndexes.set(messageItem, slot.contentIndex ?? blocks.length - 1);
         startedTextBlocksByItemId.set(messageItem.id, {
           block,
           index: slot.contentIndex ?? blocks.length - 1,
@@ -235,7 +226,8 @@ export async function processResponsesStream<TApi extends Api>(
         : {}),
     };
     blocks.push(slot.block);
-    slot.contentIndex = blockIndex();
+    slot.contentIndex = blocks.length - 1;
+    outputItemContentIndexes.set(slot.item, slot.contentIndex);
     startedTextBlocksByItemId.set(slot.item.id, {
       block: slot.block,
       index: slot.contentIndex,
@@ -268,8 +260,8 @@ export async function processResponsesStream<TApi extends Api>(
     model,
     options,
     reasoningBlocksById,
-    completedOutputItemIdentities,
     startedTextBlocksByItemId,
+    outputItemContentIndexes,
     getLastTextBlock: () => lastTextBlock,
     setLastTextBlock: (block) => {
       lastTextBlock = block;
@@ -294,11 +286,16 @@ export async function processResponsesStream<TApi extends Api>(
   );
   try {
     for await (const event of guardedStream) {
+      // Bookkeeping-only SSE events (in_progress, *.done echoes) are still
+      // provider progress; keep the idle watchdog alive without exposing them,
+      // matching the completions and anthropic transports.
+      notifyLlmRequestActivity(options?.signal);
       if (event.type === "response.created") {
         output.responseId = event.response.id;
       } else if (event.type === "response.output_item.added") {
         materializeDeferredTextSlots();
         const item = event.item;
+        compactionTracker.added(item, blocks.length);
         if (item.type !== "message") {
           // Snapshot collapse only applies to back-to-back message items; any
           // other item is a real boundary (see resolveResponsesMessageSnapshotCollapse).
@@ -326,6 +323,7 @@ export async function processResponsesStream<TApi extends Api>(
             outputSlots.register(event, { type: "toolCall", toolCall: toolCallState });
           }
           output.content.push(toolCallBlock);
+          outputItemContentIndexes.set(item, contentIndex);
           stream.push({ type: "toolcall_start", contentIndex, partial: output });
         }
       } else if (event.type === "response.reasoning_summary_part.added") {
@@ -515,6 +513,7 @@ export async function processResponsesStream<TApi extends Api>(
         const existingOutputSlot = resolveOutputItemSlot(event, item);
         materializeDeferredTextSlots(existingOutputSlot);
         const outputSlot = existingOutputSlot ?? getOrCreateOutputSlot(event, item);
+        compactionTracker.completed(item, blocks.length);
         if (item.type === "reasoning" && outputSlot?.type === "thinking") {
           const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
           const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
@@ -574,6 +573,7 @@ export async function processResponsesStream<TApi extends Api>(
               partial: output,
             });
             lastTextBlock = outputSlot.collapseCandidate;
+            outputItemContentIndexes.set(item, outputSlot.collapseCandidate.index);
           } else {
             if (!outputSlot.block) {
               // Deferred distinct message: open its block now, balanced with the
@@ -584,7 +584,7 @@ export async function processResponsesStream<TApi extends Api>(
                 ...(phase ? { textSignature: encodeTextSignatureV1(item.id, phase) } : {}),
               };
               blocks.push(outputSlot.block);
-              outputSlot.contentIndex = blockIndex();
+              outputSlot.contentIndex = blocks.length - 1;
               stream.push({
                 type: "text_start",
                 contentIndex: outputSlot.contentIndex,
@@ -598,6 +598,7 @@ export async function processResponsesStream<TApi extends Api>(
               throw new Error("Responses stream finalized text without a content index");
             }
             lastTextBlock = { block: outputSlot.block, index: contentIndex, phase };
+            outputItemContentIndexes.set(item, contentIndex);
             stream.push({
               type: "text_end",
               contentIndex,
@@ -607,7 +608,6 @@ export async function processResponsesStream<TApi extends Api>(
           }
           outputSlots.forget(outputSlot);
           startedTextBlocksByItemId.delete(item.id);
-          completedOutputItemIdentities.add(`message:${item.id}`);
         } else if (item.type === "function_call") {
           const streamingToolCall = streamingToolCalls.resolve(
             event,
@@ -663,7 +663,7 @@ export async function processResponsesStream<TApi extends Api>(
             // Some compatible streams only send the completed item. Preserve
             // the normal balanced lifecycle and persist the call for replay.
             blocks.push(toolCall);
-            contentIndex = blockIndex();
+            contentIndex = blocks.length - 1;
             stream.push({ type: "toolcall_start", contentIndex, partial: output });
           }
 
@@ -681,7 +681,7 @@ export async function processResponsesStream<TApi extends Api>(
             toolCall,
             partial: output,
           });
-          completedOutputItemIdentities.add(`function_call:${item.call_id}`);
+          outputItemContentIndexes.set(item, contentIndex);
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         if (streamingToolCalls.hasActive()) {

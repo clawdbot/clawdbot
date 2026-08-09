@@ -461,9 +461,22 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
+    const fallbackReply = failedTerminalOutcome
+      ? undefined
+      : normalizeOptionalString(params.fallbackReply);
+    const hasVisibleFallback =
+      Boolean(fallbackReply) &&
+      !(isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
+    const cleanedFallbackReply = hasVisibleFallback
+      ? (stripAndClassifyReply(fallbackReply ?? "") ?? undefined)
+      : undefined;
+
     if (!childCompletionFindings) {
       if (params.terminalReply?.disposition === "silent") {
-        return true;
+        if (!hasVisibleFallback && (isAnnounceSkip(fallbackReply) || !expectsCompletionMessage)) {
+          return true;
+        }
+        reply = cleanedFallbackReply;
       }
       if (params.terminalReply?.disposition === "empty" && outcome.status === "timeout") {
         const timeoutProgress = await readSubagentTimeoutProgress(
@@ -478,13 +491,6 @@ export async function runSubagentAnnounceFlow(params: {
         }
       }
       if (!params.terminalReply) {
-        const fallbackReply = failedTerminalOutcome
-          ? undefined
-          : normalizeOptionalString(params.fallbackReply);
-        const fallbackIsSilent =
-          Boolean(fallbackReply) &&
-          (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
-
         if (childSessionEffectsAllowed() && !reply && allowFailedOutputCapture) {
           reply = await readSubagentOutput(params.childSessionKey, outcome);
         }
@@ -497,7 +503,7 @@ export async function runSubagentAnnounceFlow(params: {
           });
         }
 
-        if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
+        if (!reply?.trim() && hasVisibleFallback) {
           reply = fallbackReply;
         }
 
@@ -523,44 +529,32 @@ export async function runSubagentAnnounceFlow(params: {
           }
         }
 
-        if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
-          if (fallbackReply && !fallbackIsSilent) {
-            const cleaned = stripAndClassifyReply(fallbackReply);
-            if (cleaned === null) {
-              if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
-                logWarn(
-                  `cron job completion for session=${targetRequesterSessionKey} ` +
-                    `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
-                    `the agent replied with the skip sentinel instead of delivering a result`,
-                );
-              }
-              return true;
-            }
-            reply = cleaned;
+        const replyIsAnnounceSkip = isAnnounceSkip(reply);
+        if (replyIsAnnounceSkip || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
+          if (hasVisibleFallback && cleanedFallbackReply) {
+            reply = cleanedFallbackReply;
           } else {
-            if (isAnnounceSkip(reply) && isCronSessionKey(targetRequesterSessionKey)) {
+            if (replyIsAnnounceSkip && isCronSessionKey(targetRequesterSessionKey)) {
               logWarn(
                 `cron job completion for session=${targetRequesterSessionKey} ` +
                   `run=${params.childRunId} suppressed by ANNOUNCE_SKIP; ` +
                   `the agent replied with the skip sentinel instead of delivering a result`,
               );
             }
-            return true;
-          }
-        } else if (reply) {
-          const cleaned = stripAndClassifyReply(reply);
-          if (cleaned === null) {
-            if (fallbackReply && !fallbackIsSilent) {
-              const cleanedFallback = stripAndClassifyReply(fallbackReply);
-              if (cleanedFallback === null) {
-                return true;
-              }
-              reply = cleanedFallback;
-            } else {
+            if (
+              replyIsAnnounceSkip ||
+              isAnnounceSkip(fallbackReply) ||
+              !expectsCompletionMessage ||
+              hasVisibleFallback
+            ) {
               return true;
             }
-          } else {
-            reply = cleaned;
+            reply = undefined;
+          }
+        } else if (reply) {
+          reply = stripAndClassifyReply(reply) ?? cleanedFallbackReply;
+          if (!reply) {
+            return true;
           }
         }
       }
@@ -573,6 +567,13 @@ export async function runSubagentAnnounceFlow(params: {
     if (!childSessionEffectsAllowed()) {
       childCompletionFindings = undefined;
       reply = params.roundOneReply ?? params.fallbackReply;
+      if (
+        expectsCompletionMessage &&
+        (params.terminalReply?.disposition === "silent" ||
+          isSilentReplyText(reply, SILENT_REPLY_TOKEN))
+      ) {
+        reply = hasVisibleFallback ? cleanedFallbackReply : undefined;
+      }
       outcome = params.outcome ?? { status: "unknown" };
     }
 

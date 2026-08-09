@@ -52,7 +52,6 @@ type ChatPaneHeaderProps = {
   presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
-  boardDockAction?: TemplateResult | typeof nothing;
   nativeGateways?: NativeGatewaysCapability | null;
   gatewaysSnapshot?: NativeGatewaysSnapshot | null;
   onboarding?: boolean;
@@ -432,7 +431,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
-        ${props.boardDockAction ?? nothing} ${props.terminalAction} ${props.discussionAction}
+        ${props.terminalAction} ${props.discussionAction}
         ${props.catalog
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}`}
@@ -451,7 +450,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${!props.narrow && props.onSplitDown
           ? html`<openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
               <button
-                class="btn btn--ghost btn--icon chat-icon-btn"
+                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down"
                 type="button"
                 aria-label=${t("chat.splitView.splitDown")}
                 @click=${() => props.onSplitDown?.(props.paneId)}
@@ -463,7 +462,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${!props.narrow && props.onSplitRight
           ? html`<openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
               <button
-                class="btn btn--ghost btn--icon chat-icon-btn"
+                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right"
                 type="button"
                 aria-label=${t("chat.splitView.splitRight")}
                 @click=${() => props.onSplitRight?.(props.paneId)}
@@ -475,7 +474,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${props.onClosePane
           ? html`<openclaw-tooltip .content=${t("chat.splitView.closePane")}>
               <button
-                class="btn btn--ghost btn--icon chat-icon-btn"
+                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane"
                 type="button"
                 aria-label=${t("chat.splitView.closePane")}
                 @click=${() => props.onClosePane?.(props.paneId)}

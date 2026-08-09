@@ -28,6 +28,7 @@ const TEST_ENTRYPOINTS = [
   "provider-selection-runtime",
   "provider-web-search-config-contract",
   "realtime-voice",
+  "session-catalog",
   "sqlite-runtime-testing",
 ] as const;
 
@@ -194,6 +195,10 @@ describe("Plugin SDK API baseline", () => {
     expect(findDeclaration("ProviderSelection")).toContain(
       "export type ProviderSelection<TProvider> =",
     );
+    expect(findDeclaration("SessionCatalogEntrySummary")).toContain(
+      "export interface SessionCatalogEntrySummary",
+    );
+    expect(findDeclaration("SessionCatalogEntrySummary")).toContain("entry: SessionEntry;");
     expect(rendered.json).not.toContain('"line":');
     expect(rendered.jsonl).not.toContain('"sourceLine":');
   });

@@ -1,7 +1,12 @@
 /** Relays child ACP session stream updates back into the requester parent session. */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  sliceUtf16Safe,
+  truncateUtf16Safe,
+  truncateWithMarker,
+} from "@openclaw/normalization-core/utf16-slice";
 import {
   isAcpTagVisible,
   resolveAcpProjectionSettings,
@@ -58,7 +63,7 @@ function truncate(value: string, maxChars: number): string {
   if (maxChars <= 1) {
     return truncateUtf16Safe(value, maxChars);
   }
-  return `${truncateUtf16Safe(value, maxChars - 1)}…`;
+  return truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -73,12 +78,6 @@ function formatProxyEnvSummary(keys: string[]): string {
     return "proxy env: none";
   }
   return `proxy env: ${keys.join(", ")}`;
-}
-
-function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function mergeStreamingConfig(base: unknown, override: unknown): unknown {

@@ -73,6 +73,7 @@ type AppViewCallbacks = {
 };
 
 type LifecycleHost = {
+  active: () => boolean;
   connected: () => boolean;
   requestUpdate: () => void;
   sessionKey: () => string;
@@ -112,6 +113,13 @@ export class BoardMcpAppLifecycle {
     }
   }
 
+  activityChanged(): void {
+    if (!this.host.active()) {
+      this.visibility.disconnect();
+      this.clearTimers();
+    }
+  }
+
   observe(target: Element | null, enabled: boolean): void {
     if (!target || !enabled) {
       this.visibility.disconnect();
@@ -123,7 +131,7 @@ export class BoardMcpAppLifecycle {
   sync(): void {
     const widget = this.host.widget();
     const callbacks = this.callbacks;
-    if (!widget || widget.contentKind !== "mcp-app" || !callbacks) {
+    if (!this.host.active() || !widget || widget.contentKind !== "mcp-app" || !callbacks) {
       this.renewalTimer = clearTimer(this.renewalTimer);
       return;
     }
@@ -153,7 +161,7 @@ export class BoardMcpAppLifecycle {
 
   retry(): void {
     const widget = this.host.widget();
-    if (widget && this.callbacks) {
+    if (this.host.active() && widget && this.callbacks) {
       void this.load(widget, this.callbacks, "refresh");
     }
   }
@@ -168,7 +176,7 @@ export class BoardMcpAppLifecycle {
     this.state = { status: "stale", error: "MCP App view expired" };
     this.loading = false;
     this.notify();
-    if (!wasLoading) {
+    if (this.host.active() && !wasLoading) {
       void this.load(widget, callbacks, "expired");
     }
   }
@@ -202,7 +210,7 @@ export class BoardMcpAppLifecycle {
     callbacks: AppViewCallbacks,
     mode: AppViewMode,
   ): Promise<void> {
-    if (this.loading || !this.nearVisible) {
+    if (!this.host.active() || this.loading || !this.nearVisible) {
       return;
     }
     const key = appViewKey(this.host.sessionKey(), widget);
@@ -314,6 +322,9 @@ export class BoardMcpAppLifecycle {
     if (appView.status !== "ready") {
       return;
     }
+    if (!this.host.active()) {
+      return;
+    }
     const key = this.key;
     const delayMs = appView.expiresAtMs - Date.now() - REFRESH_LEAD_MS;
     if (!this.nearVisible) {
@@ -335,6 +346,7 @@ export class BoardMcpAppLifecycle {
       const current = this.host.widget();
       if (
         this.host.connected() &&
+        this.host.active() &&
         this.nearVisible &&
         this.key === key &&
         current?.name === widget.name &&

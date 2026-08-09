@@ -1,5 +1,9 @@
 {
   "id": "googlechat",
+  "doctorContract": {
+    "legacyConfigRules": true,
+    "normalizeCompatibilityConfig": true
+  },
   "name": "Google Chat",
   "description": "OpenClaw Google Chat channel plugin for spaces and direct messages.",
   "icon": "https://cdn.simpleicons.org/googlechat",

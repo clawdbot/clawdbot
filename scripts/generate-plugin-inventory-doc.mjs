@@ -302,7 +302,7 @@ function resolveDocs({ dirName, manifest, packageJson }) {
     }
   }
 
-  for (const candidate of [manifest.id, dirName]) {
+  for (const candidate of [manifest.id, dirName, ...(manifest.legacyPluginIds ?? [])]) {
     if (typeof candidate !== "string") {
       continue;
     }

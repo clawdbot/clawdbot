@@ -6,7 +6,7 @@ import {
   MATRIX_CREDENTIALS_NAMESPACE,
   normalizeMatrixStoredCredentials,
   type MatrixCredentialStateRecord,
-} from "./src/matrix/credentials-read.js";
+} from "./src/matrix/credentials-state.js";
 
 type MatrixAuthPresenceParams =
   | {

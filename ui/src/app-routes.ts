@@ -1,5 +1,11 @@
 import { createRouter } from "@openclaw/uirouter";
-import type { PageDefinition, RouteLocation, Router, RouterHistory } from "@openclaw/uirouter";
+import type {
+  PageDefinition,
+  RouteLocation,
+  RouteMatch,
+  Router,
+  RouterHistory,
+} from "@openclaw/uirouter";
 import {
   agentRouteFromPath,
   INTERNAL_AGENT_PATH_PARAM,
@@ -30,6 +36,7 @@ import { page as cronPage } from "./pages/cron/route.ts";
 import { page as custodianPage } from "./pages/custodian/route.ts";
 import { page as dashboardsPage } from "./pages/dashboards/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
+import { page as devicesPage } from "./pages/devices/route.ts";
 import { page as labsPage } from "./pages/labs/route.ts";
 import { page as lobsterdexPage } from "./pages/lobsterdex/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
@@ -37,7 +44,6 @@ import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
 import { page as modelSetupPage } from "./pages/model-setup/route.ts";
 import { page as newSessionPage } from "./pages/new-session/route.ts";
-import { page as nodesPage } from "./pages/nodes/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.ts";
 import { page as pluginsPage } from "./pages/plugins/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
@@ -51,6 +57,10 @@ import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
 type AppRouteModule = {
   render: (data: unknown) => unknown;
+  renderOwnerKey?: (
+    match: Pick<RouteMatch, "data" | "location">,
+    settled: Pick<RouteMatch, "data" | "location"> | undefined,
+  ) => string | undefined;
 };
 
 export type ApplicationRouter = Router<
@@ -91,7 +101,7 @@ const APP_ROUTE_TREE = [
   pluginsPage,
   cronPage,
   tasksPage,
-  nodesPage,
+  devicesPage,
   pluginPage,
 ] as const;
 

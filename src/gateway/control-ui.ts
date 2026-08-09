@@ -16,6 +16,7 @@ import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-fi
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
+import { readFileWindowFully } from "../infra/file-read.js";
 import { openLocalFileSafely, FsSafeError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
@@ -570,7 +571,7 @@ async function resolveAssistantMediaAvailability(
         const sniffLength = Math.min(sizeBytes, 8192);
         const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
         const bytesRead = sniffBuffer
-          ? (await opened.handle.read(sniffBuffer, 0, sniffLength, 0)).bytesRead
+          ? await readFileWindowFully(opened.handle, sniffBuffer, 0)
           : 0;
         mimeType =
           (await detectMime({
@@ -687,9 +688,7 @@ export async function handleControlUiAssistantMediaRequest(
     const sniffLength = Math.min(opened.stat.size, 8192);
     const sniffBuffer = sniffLength > 0 ? Buffer.allocUnsafe(sniffLength) : undefined;
     const bytesRead =
-      sniffBuffer && sniffLength > 0
-        ? (await opened.handle.read(sniffBuffer, 0, sniffLength, 0)).bytesRead
-        : 0;
+      sniffBuffer && sniffLength > 0 ? await readFileWindowFully(opened.handle, sniffBuffer, 0) : 0;
     const mime = await detectMime({
       buffer: sniffBuffer?.subarray(0, bytesRead),
       filePath: localPath,

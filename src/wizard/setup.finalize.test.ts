@@ -1487,7 +1487,7 @@ describe("finalizeSetupWizard", () => {
       state: { installed: true, loaded: true, running: false },
       issues: [
         { code: "port-mismatch", message: "service is configured for another port" },
-        { code: "version-mismatch", message: "service was installed by an older version" },
+        { code: "missing-program", message: "service command points at a missing path" },
       ],
     });
 
@@ -1503,7 +1503,7 @@ describe("finalizeSetupWizard", () => {
 
     expect(result.gateway).toEqual({
       status: "failed",
-      error: "service is configured for another port; service was installed by an older version",
+      error: "service is configured for another port; service command points at a missing path",
     });
     expect(
       vi

@@ -130,10 +130,26 @@ function getAssistantUsage(msg: AgentMessage): Usage | undefined {
   return undefined;
 }
 
+function isUnavailableContextBarrier(message: AgentMessage): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  if (message.api === "cli" && message.usage.contextUsage === undefined) {
+    return true;
+  }
+  if (message.usage.contextUsage?.state !== "unavailable") {
+    return false;
+  }
+  return calculateContextTokens(message.usage) === 0;
+}
+
 /** Return usage from the last valid assistant message in session entries. */
 export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | undefined {
   for (const entry of entries.toReversed()) {
     if (entry.type === "message") {
+      if (isUnavailableContextBarrier(entry.message)) {
+        return undefined;
+      }
       const usage = getAssistantUsage(entry.message);
       if (usage) {
         return usage;
@@ -162,6 +178,11 @@ function getLastAssistantUsageInfo(
     const message = messages.at(i);
     if (!message) {
       continue;
+    }
+    if (isUnavailableContextBarrier(message)) {
+      // Synthetic CLI markers invalidate older usage without contributing a
+      // replacement. Estimate the whole transcript instead of scanning past it.
+      return undefined;
     }
     const usage = getAssistantUsage(message);
     if (usage && usage.contextUsage?.state !== "unavailable") {

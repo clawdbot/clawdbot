@@ -18,6 +18,11 @@ on:
         required: false
         default: false
         type: boolean
+      skip_package_telegram_e2e:
+        description: Defer beta Package Acceptance Telegram E2E while preserving focused npm Telegram validation
+        required: false
+        default: false
+        type: boolean
       provider:
         description: Provider lane for cross-OS onboarding and the end-to-end agent turn
         required: false
@@ -175,6 +180,17 @@ jobs:
             --ref "$TARGET_REF" \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Validate release inputs
+        env:
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" && "$RELEASE_PROFILE" != "beta" ]]; then
+            echo "skip_package_telegram_e2e is allowed only for release_profile=beta." >&2
+            exit 1
+          fi
+
       - name: Summarize target
         env:
           TARGET_REF: ${{ inputs.ref }}
@@ -188,6 +204,7 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
           FAIL_FAST: ${{ inputs.fail_fast }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
@@ -201,6 +218,7 @@ jobs:
             echo "- Child workflow ref: \`${CHILD_WORKFLOW_REF}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Fail fast: \`${FAIL_FAST}\`"
+            echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
             echo "- Allow Unreleased changelog packaging: \`${ALLOW_UNRELEASED_CHANGELOG}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
             if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
@@ -239,7 +257,11 @@ jobs:
             elif [[ "$RERUN_GROUP" == "npm-telegram" ]]; then
               echo "- Package Telegram E2E: focused rerun requires \`release_package_spec\` or \`npm_telegram_package_spec\`"
             elif [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "release-checks" || "$RERUN_GROUP" == "package" ]]; then
-              echo "- Package Telegram E2E: OpenClaw Release Checks Package Acceptance"
+              if [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" ]]; then
+                echo "- Package Telegram E2E: deferred by \`skip_package_telegram_e2e\`"
+              else
+                echo "- Package Telegram E2E: OpenClaw Release Checks Package Acceptance"
+              fi
             else
               echo "- Package Telegram E2E: skipped by rerun group"
             fi
@@ -311,6 +333,7 @@ jobs:
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
         run: |
           set -euo pipefail
@@ -328,6 +351,7 @@ jobs:
             --arg npmTelegramPackageSpec "$NPM_TELEGRAM_PACKAGE_SPEC" \
             --arg npmTelegramProviderMode "$NPM_TELEGRAM_PROVIDER_MODE" \
             --arg npmTelegramScenario "$NPM_TELEGRAM_SCENARIO" \
+            --arg skipPackageTelegramE2e "$SKIP_PACKAGE_TELEGRAM_E2E" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             '{
               provider: $provider,
@@ -341,6 +365,7 @@ jobs:
               npmTelegramPackageSpec: $npmTelegramPackageSpec,
               npmTelegramProviderMode: $npmTelegramProviderMode,
               npmTelegramScenario: $npmTelegramScenario,
+              skipPackageTelegramE2e: $skipPackageTelegramE2e,
               allowUnreleasedChangelog: $allowUnreleasedChangelog
             }')"
           bash workflow/scripts/github/find-reusable-release-validation.sh \
@@ -486,19 +511,23 @@ jobs:
               echo "::error::Refusing to adopt invalid ${workflow} run ID ${candidate_run_id}." >&2
               return 1
             fi
-            # GitHub evaluates run-name asynchronously: a run adopted from the dispatch
-            # response can briefly report its default display_title. Identity fields are
-            # immediate-refuse; a lone title mismatch retries until the template lands.
+            # GitHub materializes a dispatched run asynchronously: the API can 404 the
+            # fresh run id (read-after-write lag) and can briefly report the default
+            # display_title before run-name evaluates. Both are retryable; a REAL run
+            # object with mismatched identity fields still refuses immediately.
             for attempt in $(seq 1 12); do
-              candidate_run_json="$(
+              if ! candidate_run_json="$(
                 gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${candidate_run_id}"
-              )"
+              )" || ! jq -e --argjson id "$candidate_run_id" '.id == $id' \
+                <<< "$candidate_run_json" >/dev/null 2>&1; then
+                echo "Waiting for ${workflow} run ${candidate_run_id} to become readable (attempt ${attempt})." >&2
+                sleep 5
+                continue
+              fi
               if ! jq -e \
-                --argjson id "$candidate_run_id" \
                 --argjson workflow_id "$expected_workflow_id" \
                 --arg branch "$CHILD_WORKFLOW_REF" \
-                '(.id == $id)
-                  and (.workflow_id == $workflow_id)
+                '(.workflow_id == $workflow_id)
                   and (.head_branch == $branch)
                   and (.event == "workflow_dispatch")' \
                 <<< "$candidate_run_json" >/dev/null; then
@@ -515,9 +544,9 @@ jobs:
               echo "Waiting for ${workflow} run ${candidate_run_id} display title (attempt ${attempt})." >&2
               sleep 5
             done
-            echo "::error::Refusing to adopt ${workflow} run ${candidate_run_id}: display title never matched ${dispatch_run_name}." >&2
+            echo "::error::Refusing to adopt ${workflow} run ${candidate_run_id}: run never became readable with display title ${dispatch_run_name}." >&2
             jq '{id, workflow_id, path, display_title, head_branch, head_sha, event, html_url}' \
-              <<< "$candidate_run_json" >&2
+              <<< "$candidate_run_json" >&2 || printf '%s\n' "$candidate_run_json" >&2
             return 1
           }
 
@@ -853,6 +882,7 @@ jobs:
                 if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
                   echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
                 fi
+                echo "- Package Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
               } >> "$GITHUB_STEP_SUMMARY"
               child_rerun_group="$RERUN_GROUP"
               if [[ "$child_rerun_group" == "release-checks" ]]; then
@@ -868,6 +898,7 @@ jobs:
                 -f run_release_soak="$RUN_RELEASE_SOAK"
                 -f fail_fast="$FAIL_FAST"
                 -f allow_unreleased_changelog="$ALLOW_UNRELEASED_CHANGELOG"
+                -f skip_package_telegram_e2e="$SKIP_PACKAGE_TELEGRAM_E2E"
                 -f rerun_group="$child_rerun_group"
               )
               if [[ -n "${TARGET_CONTEXT_REF// }" ]]; then
@@ -1007,6 +1038,7 @@ jobs:
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           CANDIDATE_ARTIFACT_JSON: ${{ needs.prepare_release_candidate.outputs.candidate_artifact_json }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
         run: *full_release_child_dispatch
 
   npm_telegram:
@@ -1095,6 +1127,7 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
           EVIDENCE_RUN_URL: ${{ needs.evidence_reuse.outputs.evidence_run_url }}
@@ -1370,6 +1403,7 @@ jobs:
           if [[ "$RERUN_GROUP" == "npm-telegram" || ( "$RERUN_GROUP" == "all" && ( -n "${NPM_TELEGRAM_PACKAGE_SPEC// }" || -n "${RELEASE_PACKAGE_SPEC// }" ) ) ]]; then
             npm_telegram_required=1
           fi
+          echo "- Package Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`" >> "$GITHUB_STEP_SUMMARY"
           if [[ -z "${RELEASE_PACKAGE_SPEC// }" && -z "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             case "$RERUN_GROUP" in
               all|plugin-prerelease|release-checks|cross-os|live-e2e|package)
@@ -1621,6 +1655,7 @@ jobs:
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
         run: |
           set -euo pipefail
@@ -1696,6 +1731,7 @@ jobs:
             --arg npmTelegramPackageSpec "$NPM_TELEGRAM_PACKAGE_SPEC" \
             --arg npmTelegramProviderMode "$NPM_TELEGRAM_PROVIDER_MODE" \
             --arg npmTelegramScenario "$NPM_TELEGRAM_SCENARIO" \
+            --arg skipPackageTelegramE2e "$SKIP_PACKAGE_TELEGRAM_E2E" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             '{
               version: 3,
@@ -1723,6 +1759,7 @@ jobs:
                 npmTelegramPackageSpec: $npmTelegramPackageSpec,
                 npmTelegramProviderMode: $npmTelegramProviderMode,
                 npmTelegramScenario: $npmTelegramScenario,
+                skipPackageTelegramE2e: $skipPackageTelegramE2e,
                 allowUnreleasedChangelog: $allowUnreleasedChangelog
               },
               controls: {

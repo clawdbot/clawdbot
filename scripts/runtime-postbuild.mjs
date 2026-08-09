@@ -6,6 +6,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { buildSync } from "esbuild";
+import { verifyBuiltPluginControlPlaneModules } from "./check-built-plugin-control-plane-modules.mjs";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
@@ -703,6 +704,9 @@ export function runRuntimePostBuild(params = {}) {
     writeLegacyRootRuntimeCompatAliases(phaseParams),
   );
   runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(phaseParams));
+  runPhase("built plugin control-plane loads", () =>
+    verifyBuiltPluginControlPlaneModules(phaseParams),
+  );
   logSummary();
 }
 

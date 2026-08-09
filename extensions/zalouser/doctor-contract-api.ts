@@ -7,7 +7,7 @@ import { buildAgentSessionKey, parseAgentSessionKey } from "openclaw/plugin-sdk/
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   deleteSessionEntry,
   deliveryContextFromSession,

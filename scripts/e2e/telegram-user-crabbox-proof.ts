@@ -38,6 +38,8 @@ type CrabboxInspect = {
   host?: string;
   id?: string;
   slug?: string;
+  sshHost?: string;
+  sshFallbackPorts?: string[];
   sshKey?: string;
   sshPort?: string;
   sshUser?: string;
@@ -2034,8 +2036,14 @@ async function inspectCrabbox(opts: Options, root: string, leaseId: string) {
   return JSON.parse(result.stdout) as CrabboxInspect;
 }
 
-function sshArgs(inspect: CrabboxInspect) {
-  if (!inspect.host || !inspect.sshKey || !inspect.sshUser) {
+function crabboxSshPortCandidates(inspect: Pick<CrabboxInspect, "sshFallbackPorts" | "sshPort">) {
+  const ports = [inspect.sshPort?.trim() || "22", ...(inspect.sshFallbackPorts ?? [])];
+  return [...new Set(ports.map((port) => port.trim()).filter(Boolean))];
+}
+
+function sshArgs(inspect: CrabboxInspect, sshPort = inspect.sshPort?.trim() || "22") {
+  const sshHost = inspect.sshHost || inspect.host;
+  if (!sshHost || !inspect.sshKey || !inspect.sshUser) {
     throw new Error("Crabbox inspect output is missing SSH details.");
   }
   return {
@@ -2043,7 +2051,7 @@ function sshArgs(inspect: CrabboxInspect) {
       "-i",
       inspect.sshKey,
       "-p",
-      inspect.sshPort ?? "22",
+      sshPort,
       "-o",
       "IdentitiesOnly=yes",
       "-o",
@@ -2057,7 +2065,7 @@ function sshArgs(inspect: CrabboxInspect) {
       "-i",
       inspect.sshKey,
       "-P",
-      inspect.sshPort ?? "22",
+      sshPort,
       "-o",
       "IdentitiesOnly=yes",
       "-o",
@@ -2067,13 +2075,43 @@ function sshArgs(inspect: CrabboxInspect) {
       "-o",
       "ConnectTimeout=15",
     ],
-    target: `${inspect.sshUser}@${inspect.host}`,
+    sshPort,
+    target: `${inspect.sshUser}@${sshHost}`,
   };
 }
 
 function isTransientSshFailure(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return /Connection (?:closed|reset)|Operation timed out|Connection timed out/u.test(message);
+}
+
+function isSshConnectionFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  return (
+    code === "ETIMEDOUT" ||
+    isTransientSshFailure(error) ||
+    /Connection refused|Network is unreachable|No route to host/u.test(message)
+  );
+}
+
+export async function selectCrabboxSshPort(params: {
+  inspect: Pick<CrabboxInspect, "sshFallbackPorts" | "sshPort">;
+  probe: (port: string) => Promise<void>;
+}) {
+  let lastError: unknown;
+  for (const port of crabboxSshPortCandidates(params.inspect)) {
+    try {
+      await params.probe(port);
+      return port;
+    } catch (error) {
+      if (!isSshConnectionFailure(error)) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 async function runRemoteCommand(params: {
@@ -2101,8 +2139,30 @@ async function runRemoteCommand(params: {
   throw lastError;
 }
 
+const selectedSshPorts = new WeakMap<CrabboxInspect, string>();
+
+async function selectedSshArgs(root: string, inspect: CrabboxInspect) {
+  let sshPort = selectedSshPorts.get(inspect);
+  if (!sshPort) {
+    // Probe with a no-op so fallback selection cannot replay a remote command or file transfer.
+    sshPort = await selectCrabboxSshPort({
+      inspect,
+      probe: async (port) => {
+        const ssh = sshArgs(inspect, port);
+        await runCommand({
+          args: [...ssh.base, ssh.target, "exit 0"],
+          command: "ssh",
+          cwd: root,
+        });
+      },
+    });
+    selectedSshPorts.set(inspect, sshPort);
+  }
+  return sshArgs(inspect, sshPort);
+}
+
 async function scpToRemote(root: string, inspect: CrabboxInspect, local: string, remote: string) {
-  const ssh = sshArgs(inspect);
+  const ssh = await selectedSshArgs(root, inspect);
   await runRemoteCommand({
     command: "scp",
     args: [...ssh.scpBase, local, `${ssh.target}:${remote}`],
@@ -2112,7 +2172,7 @@ async function scpToRemote(root: string, inspect: CrabboxInspect, local: string,
 }
 
 async function scpFromRemote(root: string, inspect: CrabboxInspect, remote: string, local: string) {
-  const ssh = sshArgs(inspect);
+  const ssh = await selectedSshArgs(root, inspect);
   await runRemoteCommand({
     command: "scp",
     args: [...ssh.scpBase, `${ssh.target}:${remote}`, local],
@@ -2127,7 +2187,7 @@ async function sshRun(
   remoteCommand: string,
   options: { outputFile?: string; timeoutMs?: number } = {},
 ) {
-  const ssh = sshArgs(inspect);
+  const ssh = await selectedSshArgs(root, inspect);
   return await runRemoteCommand({
     command: "ssh",
     args: [...ssh.base, ssh.target, remoteCommand],
@@ -2174,12 +2234,15 @@ async function startTailscaleFunnelBridge(params: {
   // Keep the SUT local while letting its real Gateway lifecycle own Funnel on
   // the Tailscale-enabled desktop lease; no Tailscale credential leaves Crabbox.
   const proxyPath = path.join(params.localRoot, "tailscale");
+  const ssh = await selectedSshArgs(params.localRoot, params.inspect);
   await writeExecutable(
     proxyPath,
-    renderTailscaleSshProxy({ gatewayPort: params.gatewayPort, inspect: params.inspect }),
+    renderTailscaleSshProxy({
+      gatewayPort: params.gatewayPort,
+      inspect: { ...params.inspect, sshPort: ssh.sshPort },
+    }),
   );
   const tunnelLog = path.join(params.localRoot, "gateway-funnel-tunnel.log");
-  const ssh = sshArgs(params.inspect);
   const tunnelPid = spawnDaemon({
     args: [
       ...ssh.base,

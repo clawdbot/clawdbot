@@ -463,7 +463,7 @@ export type CronTriggerEvaluationResult =
   | { kind: "busy" }
   | { kind: "error"; code: CronTriggerFailureCode; error: string };
 
-/** Fully persisted cron job with spec fields and mutable run state. */
+/** Public cron job contract with spec fields and mutable run state. */
 export type CronJob = CronJobBase<
   CronSchedule,
   CronSessionTarget,
@@ -486,10 +486,21 @@ export type CronJob = CronJobBase<
   state: CronJobState;
 };
 
+/** Store-only proof omitted from public Gateway results and the CronJob wire/type contract. */
+export type CronToolsAllowProvenance = {
+  version: 1;
+  source: "final-executable-surface";
+};
+
+/** Persisted row shape; public Gateway and wire contracts use CronJob. */
+export type CronStoredJob = CronJob & {
+  toolsAllowProvenance?: CronToolsAllowProvenance;
+};
+
 /** Versioned cron store file shape. */
 export type CronStoreFile = {
   version: 1;
-  jobs: CronJob[];
+  jobs: CronStoredJob[];
 };
 
 type CronJobStateInput = Partial<

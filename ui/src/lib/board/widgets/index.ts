@@ -13,6 +13,7 @@ type BuiltinBoardWidgetRenderer = (context: {
 export type PluginBoardWidgetRenderer = (props: {
   widget: BoardViewWidget;
   sessionKey: string;
+  active: boolean;
   canMutate: boolean;
   requestUpdate: () => void;
 }) => TemplateResult;

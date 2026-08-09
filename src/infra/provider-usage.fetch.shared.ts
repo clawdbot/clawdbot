@@ -23,12 +23,6 @@ export async function fetchJson(
   return await fetchFn(url, { ...init, signal });
 }
 
-export async function discardUsageResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
-
 export function parseFiniteNumber(value: unknown): number | undefined {
   return parseFiniteNumberish(value);
 }

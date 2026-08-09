@@ -83,9 +83,6 @@ describe("createSlackDraftStream", () => {
   it("uses the enterprise event client for draft writes", async () => {
     const client = {} as NonNullable<DraftStreamParams["eventScope"]>["client"];
     const eventScope = {
-      apiAppId: "A_TEST",
-      enterpriseId: "E_TEST",
-      isEnterpriseInstall: true as const,
       teamId: "T_TEST",
       client,
     };
@@ -100,7 +97,7 @@ describe("createSlackDraftStream", () => {
     expect(send).toHaveBeenCalledWith(
       "channel:C123",
       "hello",
-      expect.objectContaining({ client, enterpriseEventScope: eventScope }),
+      expect.objectContaining({ eventScope }),
     );
     expect(edit).toHaveBeenCalledWith(
       "C123",
@@ -353,9 +350,6 @@ describe("createSlackDraftStream", () => {
   it("keeps simultaneous Enterprise Grid conversations isolated by workspace", async () => {
     const accountId = "enterprise-grid";
     const eventScope = {
-      apiAppId: "A_TEST",
-      enterpriseId: "E_TEST",
-      isEnterpriseInstall: true as const,
       teamId: "T_FIRST",
       client: {} as NonNullable<DraftStreamParams["eventScope"]>["client"],
     };

@@ -11,6 +11,7 @@ export type ProviderConfig = {
   secretEnv: string;
   authChoice: string;
   model: string;
+  requiredCompanionPackages: readonly string[];
   baseUrl?: string;
   timeoutSeconds?: number;
 };
@@ -64,6 +65,9 @@ export type CommandInvocation = {
 };
 export type Cleanup = () => Promise<void> | void;
 export type LaneBaseParams = {
+  companions: Readonly<
+    ReturnType<typeof import("./companions.ts").resolveCrossOsCompanionPackages>
+  >;
   logsDir: string;
   providerConfig: ProviderConfig;
   providerSecretValue: string;
@@ -128,6 +132,7 @@ const providerConfig = {
     secretEnv: "OPENAI_API_KEY",
     authChoice: "openai-api-key",
     model: "openai/gpt-5.6-luna",
+    requiredCompanionPackages: ["@openclaw/codex"],
     baseUrl: "https://api.openai.com/v1",
     timeoutSeconds: CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   },
@@ -136,12 +141,14 @@ const providerConfig = {
     secretEnv: "ANTHROPIC_API_KEY",
     authChoice: "apiKey",
     model: "anthropic/claude-sonnet-4-6",
+    requiredCompanionPackages: [],
   },
   minimax: {
     extensionId: "minimax",
     secretEnv: "MINIMAX_API_KEY",
     authChoice: "minimax-global-api",
     model: "minimax/MiniMax-M2.7",
+    requiredCompanionPackages: [],
   },
 } satisfies Record<ProviderId, ProviderConfig>;
 

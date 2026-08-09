@@ -76,7 +76,7 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:rename-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open thread menu" }).click();
+      await row.getByRole("button", { name: "Open session menu" }).click();
       page.once("dialog", (dialog) => void dialog.accept("Rejected rename"));
       await page.getByRole("menuitem", { name: "Rename…" }).click();
       await gateway.waitForRequest("sessions.patch");
@@ -218,12 +218,12 @@ suite.define(() => {
 
       // Hover-revealed management actions on sidebar rows.
       const sidebarResearch = sidebarRows.filter({ hasText: "Research notes" });
-      const sidebarResearchPin = sidebarResearch.getByRole("button", { name: "Pin thread" });
+      const sidebarResearchPin = sidebarResearch.getByRole("button", { name: "Pin session" });
       await page.mouse.move(900, 500);
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("0");
       const sidebarReleasePin = sidebarRows
         .filter({ hasText: "Release planning" })
-        .getByRole("button", { name: "Unpin thread" });
+        .getByRole("button", { name: "Unpin session" });
       await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("0");
       await sidebarResearch.hover();
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("1");
@@ -244,14 +244,14 @@ suite.define(() => {
       // The current-main full context menu remains intact: active rows cannot
       // archive, while an idle row can.
       await sidebarMigration.hover();
-      await sidebarMigration.getByRole("button", { name: "Open thread menu" }).click();
+      await sidebarMigration.getByRole("button", { name: "Open session menu" }).click();
       await expect
-        .poll(() => page.getByRole("menuitem", { name: "Archive thread" }).isDisabled())
+        .poll(() => page.getByRole("menuitem", { name: "Archive session" }).isDisabled())
         .toBe(true);
       await page.keyboard.press("Escape");
       await sidebarResearch.hover();
-      await sidebarResearch.getByRole("button", { name: "Open thread menu" }).click();
-      await activateMenuItem(page.getByRole("menuitem", { name: "Archive thread" }));
+      await sidebarResearch.getByRole("button", { name: "Open session menu" }).click();
+      await activateMenuItem(page.getByRole("menuitem", { name: "Archive session" }));
       const archivePatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:research" && params.archived === true,
@@ -382,8 +382,8 @@ suite.define(() => {
       await expect.poll(rowNames).toEqual(["Alpha thread", "Zulu thread"]);
       expect(await keyHeader.getAttribute("aria-sort")).toBe("ascending");
 
-      await table.getByRole("checkbox", { name: "Select thread: agent:main:alpha" }).waitFor();
-      await table.getByRole("checkbox", { name: "Select thread: agent:main:zulu" }).waitFor();
+      await table.getByRole("checkbox", { name: "Select session: agent:main:alpha" }).waitFor();
+      await table.getByRole("checkbox", { name: "Select session: agent:main:zulu" }).waitFor();
     } finally {
       await context.close();
     }
@@ -690,7 +690,7 @@ suite.define(() => {
       await expect.poll(() => sidebarRows.count()).toBe(12);
       await page.getByRole("button", { name: "Show more" }).click();
       await expect.poll(() => sidebarRows.count()).toBe(13);
-      await expect.poll(() => page.getByText("All threads", { exact: true }).count()).toBe(0);
+      await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
       await captureUiProof(page, "sidebar-all-sessions.png");
 
       // New groups are created from a session's menu (Move to group → New group…),
@@ -699,7 +699,7 @@ suite.define(() => {
         '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
       );
       await sessionTen.hover();
-      await sessionTen.getByRole("button", { name: "Open thread menu" }).click();
+      await sessionTen.getByRole("button", { name: "Open session menu" }).click();
       const moveToGroup = page.getByRole("menuitem", { name: "Move to group" });
       await expect.poll(() => moveToGroup.getAttribute("aria-haspopup")).toBe("menu");
       const moveToGroupIndex = await moveToGroup.evaluate((element) =>
@@ -815,7 +815,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
-      const sortSessionsButton = page.getByRole("button", { name: "Sort threads" });
+      const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
       await sortSessionsButton.locator("..").hover();
       await sortSessionsButton.click();
       await activateMenuItem(page.getByRole("menuitemradio", { name: "None" }));

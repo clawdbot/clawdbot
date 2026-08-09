@@ -3091,6 +3091,7 @@ test("sessions.create forks the parent transcript into the new session", async (
         sessionFile: parent.sessionFile,
         totalTokens: 123,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       }),
     },
   });
@@ -3328,6 +3329,7 @@ test("sessions.create rejects fork when the parent exceeds the fork size cap", a
         // Fresh persisted usage above DEFAULT_PARENT_FORK_MAX_TOKENS (100K).
         totalTokens: 200_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       }),
     },
   });

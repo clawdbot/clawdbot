@@ -791,6 +791,19 @@ describe("plugin-sdk subpath exports", () => {
       "listDirectoryEntriesFromSources",
       "listResolvedDirectoryEntriesFromSources",
     ]);
+    expectSourceContract("memory-core-host-engine-foundation", {
+      mentions: ['from "../../packages/memory-host-sdk/src/host/fs-utils.js"'],
+      omits: ['from "../../packages/memory-host-sdk/src/engine-foundation.js"'],
+    });
+    expectSourceContract("memory-core-host-engine-curated", {
+      mentions: ["extractProjectKeysFromCuratedEntry"],
+    });
+    expectSourceContract("memory-core-host-engine-fs", {
+      mentions: ["resolveUserPath", 'from "../infra/fs-safe.js"'],
+    });
+    expectSourceContract("memory-core-host-engine-schema", {
+      mentions: ["ensureMemoryIndexSchema", "loadSqliteVecExtension"],
+    });
     expectSourceContract("memory-core-host-runtime-core", {
       mentions: ["SILENT_REPLY_TOKEN", "resolveMemorySearchConfig", "MemoryPluginRuntime"],
       omits: ['export * from "../../packages/memory-host-sdk/src/runtime-core.js";'],
