@@ -55,9 +55,19 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
         input.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+        let keyboard = app.keyboards.firstMatch
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+        }
+        let focusProbe = "focus"
+        input.typeText(focusProbe)
+        XCTAssertEqual(input.value as? String, focusProbe)
+        input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: focusProbe.count))
+        XCTAssertEqual(input.value as? String, "")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+        if keyboard.exists {
+            XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
+        }
 
         snapshot(target.name, timeWaitingForIdle: 5)
         self.attachScreenshot(named: target.name)
