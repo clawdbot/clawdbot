@@ -24,6 +24,7 @@ import {
   saveSessionStoreStrict,
   unresolvedSessionStoreIdentityWarning,
 } from "./state-migrations.session-store.js";
+import type { PreparedLegacySessionSurfaces } from "./state-migrations.session-surfaces.js";
 import type { LegacyStateDetection } from "./state-migrations.types.js";
 
 function normalizeMergedSessionStore(
@@ -51,12 +52,21 @@ function normalizeMergedSessionStore(
 export async function migrateLegacySessions(
   detected: LegacyStateDetection,
   now: () => number,
-  options: { recoverCorruptTargetStore?: boolean } = {},
+  options: {
+    recoverCorruptTargetStore?: boolean;
+    legacySessionSurfaces: PreparedLegacySessionSurfaces;
+  },
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
   if (!detected.sessions.hasLegacy) {
     return { changes, warnings };
+  }
+  if (options.legacySessionSurfaces.failures.length > 0) {
+    return {
+      changes,
+      warnings: [...options.legacySessionSurfaces.failures],
+    };
   }
 
   ensureMigrationDir(detected.sessions.targetDir);
@@ -120,6 +130,7 @@ export async function migrateLegacySessions(
     preserveCanonicalAgentOwner: true,
     preserveAmbiguousKeys: detected.sessions.preserveAmbiguousKeys,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
+    legacySessionSurfaces: options.legacySessionSurfaces.surfaces,
   });
   const canonicalizedLegacy = canonicalizeSessionStore({
     store: legacyStore,
@@ -128,6 +139,7 @@ export async function migrateLegacySessions(
     scope: detected.targetScope,
     preserveCanonicalAgentOwner: true,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
+    legacySessionSurfaces: options.legacySessionSurfaces.surfaces,
   });
   const targetKeys = new Set(Object.keys(canonicalizedTarget.store));
   const preservedLegacyForeignMainAliasCount = detected.sessions.preserveForeignMainAliases
@@ -167,7 +179,7 @@ export async function migrateLegacySessions(
   });
   let migratedDirectChatKey: string | undefined;
   if (!merged[mainKey]) {
-    const latest = pickLatestLegacyDirectEntry(legacyStore);
+    const latest = pickLatestLegacyDirectEntry(legacyStore, options.legacySessionSurfaces.surfaces);
     if (latest?.sessionId) {
       merged[mainKey] = latest;
       migratedDirectChatKey = mainKey;

@@ -33,11 +33,11 @@ import {
 } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import {
-  beginChatSendMessageInjection,
+  createChatSendMessageInjectionStarter,
   finalizeAcceptedChatSendMessageInjection,
+  settleChatSendPreAckMessageInjection,
 } from "./chat-send-message-injection.js";
 import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
-import { ACTIVE_RUN_CHANGED_ERROR_REASON } from "./chat-send-pre-admission.js";
 import {
   applyChatSendReplyContextFields,
   resolveChatSendReplyContext,
@@ -96,6 +96,7 @@ export async function handleChatSend(
     agentId,
     activeRunScopeKey,
     expectedLeafEntryId,
+    expectedRunId,
     resolvedSessionModel,
     now,
   } = preparedSession.value;
@@ -225,15 +226,7 @@ export async function handleChatSend(
       }
     }
 
-    const {
-      accountId,
-      ctx,
-      isInternalTextSlashCommandTurn,
-      pluginBoundMediaPromise,
-      queuedFollowupOwnerKey,
-      replyOptionImages,
-      replyOptionMedia,
-    } = prepareChatSendUserTurn({
+    const preparedUserTurn = prepareChatSendUserTurn({
       request: normalizedRequest.value,
       session: preparedSession.value,
       admission: admitted.value,
@@ -242,36 +235,62 @@ export async function handleChatSend(
       logGateway: context.logGateway,
       userTurn,
     });
-    const beginCapturedMessageInjection = () =>
+    const {
+      accountId,
+      ctx,
+      isInternalTextSlashCommandTurn,
+      pluginBoundMediaPromise,
+      queuedFollowupOwnerKey,
+      replyOptionImages,
+      replyOptionMedia,
+    } = preparedUserTurn;
+    const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
+      target: messageInjectionTarget,
+      request: normalizedRequest.value,
+      session: preparedSession.value,
+      turn: preparedUserTurn,
+      imageOrder,
+      userTurnTranscriptRecorder: userTurnRecorder,
+    });
+    const replyContextFieldsPromise = p.replyToId
+      ? resolveChatSendReplyContext({
+          replyToId: p.replyToId,
+          cfg,
+          agentId,
+          sessionKey,
+          sessionEntry: entry,
+          storePath,
+          userSenderLabel: clientInfo?.displayName,
+          warn: (message) => context.logGateway.warn(message),
+        })
+      : undefined;
+    const preAckReplyContextPromise =
       messageInjectionTarget && !isInternalTextSlashCommandTurn
-        ? beginChatSendMessageInjection({
-            target: messageInjectionTarget,
-            text: ctx.BodyForAgent ?? ctx.Body ?? rawMessage,
-            replyContext: p.replyToId
-              ? { body: ctx.BodyForAgent ?? ctx.Body ?? rawMessage, cfg, ctx, sessionEntry: entry }
-              : undefined,
-            images: replyOptionImages,
-            imageOrder,
-            media: replyOptionMedia,
-            queueSettings: {
-              cfg,
-              channel: ctx.Provider,
-              sessionEntry: entry,
-              inlineMode: p.queueMode,
-            },
-            taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
-            userTurnTranscriptRecorder: userTurnRecorder,
-          })
+        ? replyContextFieldsPromise
         : undefined;
-    let messageInjectionAttempt = p.replyToId ? undefined : beginCapturedMessageInjection();
-    if (messageInjectionTarget && !isInternalTextSlashCommandTurn) {
-      // Accepted injection never consumes plugin-bound media, but the shared
-      // persistence promise still needs a rejection observer.
-      void pluginBoundMediaPromise.catch(() => undefined);
+    if (preAckReplyContextPromise) {
+      applyChatSendReplyContextFields(ctx, await preAckReplyContextPromise);
+      if (activeRunAbort.controller.signal.aborted) {
+        return finishAbortedChatSend();
+      }
+      if (sessionRoutingChanged(context.getRuntimeConfig())) {
+        return admitted.value.rejectSessionRoutingChanged();
+      }
     }
-    if (messageInjectionAttempt?.rejectBeforeAck) {
-      return admitted.value.rejectActiveLeafChanged();
+    let messageInjectionAttempt =
+      !p.replyToId || preAckReplyContextPromise ? beginCapturedMessageInjection() : undefined;
+    const preAckInjection = await settleChatSendPreAckMessageInjection({
+      attempt: messageInjectionAttempt,
+      isAborted: () => activeRunAbort.controller.signal.aborted,
+      sessionRoutingChanged: () => sessionRoutingChanged(context.getRuntimeConfig()),
+      onActiveLeafChanged: admitted.value.rejectActiveLeafChanged,
+      onAborted: finishAbortedChatSend,
+      onSessionRoutingChanged: admitted.value.rejectSessionRoutingChanged,
+    });
+    if (preAckInjection.status === "handled") {
+      return;
     }
+    messageInjectionAttempt = preAckInjection.attempt;
 
     const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
       ? {
@@ -325,22 +344,6 @@ export async function handleChatSend(
       sessionLoadOptions,
       storePath,
     });
-    // Resolve the reply target from session history in parallel with the
-    // remaining dispatch prep so replies do not delay the first model call.
-    // Skipped entirely for non-reply sends so their dispatch path keeps its
-    // existing await ordering.
-    const replyContextFieldsPromise = p.replyToId
-      ? resolveChatSendReplyContext({
-          replyToId: p.replyToId,
-          cfg,
-          agentId,
-          sessionKey,
-          sessionEntry: entry,
-          storePath,
-          userSenderLabel: clientInfo?.displayName,
-          warn: (message) => context.logGateway.warn(message),
-        })
-      : undefined;
     let agentRunStarted = false;
     const replyDispatch = createChatSendReplyDispatch({
       accountId,
@@ -415,7 +418,7 @@ export async function handleChatSend(
         measureDiagnosticsTimelineSpan(
           "gateway.chat_send.dispatch_inbound",
           async () => {
-            if (replyContextFieldsPromise) {
+            if (replyContextFieldsPromise && !preAckReplyContextPromise) {
               applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
               messageInjectionAttempt = beginCapturedMessageInjection();
             }
@@ -437,9 +440,6 @@ export async function handleChatSend(
                   queuedFinal: false,
                   counts: { tool: 0, block: 0, final: 0 },
                 };
-              }
-              if (p.replyToId) {
-                throw new Error(ACTIVE_RUN_CHANGED_ERROR_REASON);
               }
             }
             applyChatSendManagedMedia(ctx, await pluginBoundMediaPromise);
@@ -502,7 +502,8 @@ export async function handleChatSend(
                   fastModeOverride: p.fastMode,
                   queueModeOverride: p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
-                  ...(messageInjectionTarget && !isInternalTextSlashCommandTurn
+                  ...((messageInjectionTarget && !isInternalTextSlashCommandTurn) ||
+                  (p.queueMode === "steer" && expectedRunId !== undefined)
                     ? { messageInjectionAttempted: true as const }
                     : {}),
                   ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),

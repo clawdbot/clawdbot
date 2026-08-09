@@ -32,7 +32,6 @@ export type TelegramApi = Bot["api"];
 export type TelegramApiOverride = Partial<TelegramApi>;
 export type TelegramThreadScopedParams = {
   message_thread_id?: number;
-  direct_messages_topic_id?: number;
   reply_parameters?: { message_id?: number };
   reply_to_message_id?: number;
 };
@@ -105,12 +104,6 @@ export function toAcceptedThreadScopedParams(
   const scoped: TelegramThreadScopedParams = {};
   if (typeof params.message_thread_id === "number" && Number.isFinite(params.message_thread_id)) {
     scoped.message_thread_id = params.message_thread_id;
-  }
-  if (
-    typeof params.direct_messages_topic_id === "number" &&
-    Number.isFinite(params.direct_messages_topic_id)
-  ) {
-    scoped.direct_messages_topic_id = params.direct_messages_topic_id;
   }
   if (
     typeof params.reply_to_message_id === "number" &&

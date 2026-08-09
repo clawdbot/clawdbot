@@ -6,7 +6,11 @@ import { resolveTelegramAccount } from "./accounts.js";
 import type { TelegramHandlerAuthorizationRuntime } from "./bot-handlers.authorization.runtime.js";
 import type { TelegramHandlerMessageRuntime } from "./bot-handlers.message.runtime.js";
 import type { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
-import { buildTelegramGroupPeerId, buildTelegramParentPeer } from "./bot/helpers.js";
+import {
+  buildTelegramGroupPeerId,
+  buildTelegramParentPeer,
+  resolveTelegramThreadSpec,
+} from "./bot/helpers.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
 
 /** Stable operator-facing reason for a forum reaction dropped without a known topic. */
@@ -108,9 +112,12 @@ export function registerTelegramReactionHandler(
         cfg: authorizationCfg,
         chatId,
         isGroup,
-        isForum,
         senderId,
-        ...(cachedForumThreadId === undefined ? {} : { messageThreadId: cachedForumThreadId }),
+        threadSpec: resolveTelegramThreadSpec({
+          isGroup,
+          isForum,
+          messageThreadId: cachedForumThreadId,
+        }),
       });
       const senderAuthorization = await authorizeTelegramEventSender({
         chatId,

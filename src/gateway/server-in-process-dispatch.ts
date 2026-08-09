@@ -101,6 +101,16 @@ async function waitForDispatch<T>(
   }
 }
 
+/** Applies the same non-cancelling deadline used by in-process Gateway dispatch. */
+export async function waitForGatewayDispatch<T>(
+  method: string,
+  promise: Promise<T>,
+  timeoutMs?: number,
+  signal?: AbortSignal,
+): Promise<T> {
+  return await waitForDispatch(method, promise, resolveDispatchDeadlineMs(timeoutMs), signal);
+}
+
 /** Dispatches one request through the ordinary Gateway router without opening a transport. */
 export async function dispatchGatewayRequestInProcessRaw(
   method: string,

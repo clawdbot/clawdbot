@@ -164,6 +164,7 @@ const createCliProgressMock = vi.hoisted(() =>
   })),
 );
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+const readSourceConfigBestEffortMock = vi.hoisted(() => vi.fn(async () => ({})));
 const startProxyMock = vi.hoisted(() =>
   vi.fn<(config: unknown) => Promise<unknown>>(async () => null),
 );
@@ -428,6 +429,7 @@ vi.mock("./progress.js", () => ({
 
 vi.mock("../config/io.js", () => ({
   readBestEffortConfig: loadConfigMock,
+  readSourceConfigBestEffort: readSourceConfigBestEffortMock,
 }));
 
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
@@ -2293,10 +2295,15 @@ describe("runCli exit behavior", () => {
     expect(buildProgramMock).not.toHaveBeenCalled();
   });
 
-  it("does not start the managed proxy for local gateway client commands", async () => {
+  it.each([
+    ["local gateway status", ["node", "openclaw", "status"]],
+    ["models JSON alias", ["node", "openclaw", "models", "--json"]],
+    ["models status JSON alias", ["node", "openclaw", "models", "--status-json"]],
+    ["models plain alias", ["node", "openclaw", "models", "--status-plain"]],
+  ])("does not start the managed proxy for %s", async (_name, argv) => {
     tryRouteCliMock.mockResolvedValueOnce(true);
 
-    await runCli(["node", "openclaw", "status"]);
+    await runCli(argv);
 
     expect(startProxyMock).not.toHaveBeenCalled();
     expect(stopProxyMock).not.toHaveBeenCalled();
@@ -2362,27 +2369,24 @@ describe("runCli exit behavior", () => {
   it.each([
     ["root command", ["node", "openclaw", "update", "--dry-run", "--json"]],
     ["root shorthand", ["node", "openclaw", "--update", "--dry-run", "--json"]],
-  ])("reads proxy config without observation for the update dry-run %s", async (_name, argv) => {
+  ])("reads source-only proxy config for the update dry-run %s", async (_name, argv) => {
     tryRouteCliMock.mockResolvedValueOnce(true);
-    loadConfigMock.mockReturnValueOnce({ proxy: { selected: "dry-run" } });
+    readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "dry-run" } });
 
     await runCli(argv);
 
-    expect(loadConfigMock).toHaveBeenCalledWith({
-      observe: false,
-      skipPluginValidation: true,
-    });
+    expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
+    expect(loadConfigMock).not.toHaveBeenCalled();
     expect(startProxyMock).toHaveBeenCalledWith({ selected: "dry-run" });
   });
 
-  it("keeps observed proxy config reads for mutable updates", async () => {
+  it("reads source-only proxy config for mutable updates", async () => {
     tryRouteCliMock.mockResolvedValueOnce(true);
 
     await runCli(["node", "openclaw", "update"]);
 
-    expect(loadConfigMock).toHaveBeenCalledWith({
-      skipPluginValidation: true,
-    });
+    expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
+    expect(loadConfigMock).not.toHaveBeenCalled();
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
@@ -2432,17 +2436,14 @@ describe("runCli exit behavior", () => {
     );
   });
 
-  it.each([
-    ["JSON flag", ["node", "openclaw", "plugins", "marketplace", "list", "--json"]],
-    ["models status JSON alias", ["node", "openclaw", "models", "--status-json"]],
-  ])("routes managed-proxy startup logs away for the %s", async (_name, argv) => {
+  it("routes managed-proxy startup logs away for JSON output", async () => {
     tryRouteCliMock.mockResolvedValueOnce(true);
     startProxyMock.mockImplementationOnce(async () => {
       expect(loggingState.forceConsoleToStderr).toBe(true);
       return null;
     });
 
-    await runCli(argv);
+    await runCli(["node", "openclaw", "plugins", "marketplace", "list", "--json"]);
 
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
     expect(loggingState.forceConsoleToStderr).toBe(false);
@@ -2561,6 +2562,23 @@ describe("runCli exit behavior", () => {
     );
 
     expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: true, quiet: true });
+  });
+
+  it("keeps explicit database preflight isolated from default state selection", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli([
+      "node",
+      "openclaw",
+      "database",
+      "preflight",
+      "/tmp/openclaw-candidate.sqlite",
+      "--json",
+    ]);
+
+    expect(loadDotEnvMock).not.toHaveBeenCalled();
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(startProxyMock).not.toHaveBeenCalled();
   });
 
   it("keeps agent exec outside the CLI dotenv loader", async () => {

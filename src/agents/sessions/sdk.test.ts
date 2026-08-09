@@ -393,6 +393,37 @@ describe("AgentSession tree navigation", () => {
 });
 
 describe("AgentSession queued user turns", () => {
+  it("rechecks captured steering ownership after transcript preparation", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    let resolveInput!: () => void;
+    const inputReady = new Promise<void>((resolve) => {
+      resolveInput = resolve;
+    });
+    const recorder = createUserTurnTranscriptRecorder({
+      resolveInput: async () => {
+        await inputReady;
+        return { text: "visible prompt" };
+      },
+      target: createTestUserTurnTranscriptTarget(),
+    });
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    let canInject = true;
+    const queued = session.steer(
+      "runtime prompt",
+      undefined,
+      recorder,
+      undefined,
+      undefined,
+      "queue-identity",
+      () => canInject,
+    );
+    canInject = false;
+    resolveInput();
+
+    await expect(queued).rejects.toThrow("active session is finalizing");
+    expect(steer).not.toHaveBeenCalled();
+  });
+
   it("carries prepared transcript context on the exact steered message", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
     const recorder = createUserTurnTranscriptRecorder({

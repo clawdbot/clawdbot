@@ -32562,14 +32562,6 @@
       "id": "native.apple.e7d1ee5662c1d646"
     },
     {
-      "kind": "ui-call",
-      "line": 1020,
-      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
-      "source": "Test",
-      "surface": "apple",
-      "id": "native.apple.0397fa643df26663"
-    },
-    {
       "kind": "ui-named-argument",
       "line": 74,
       "path": "apps/macos/Sources/OpenClaw/DeepLinks.swift",
@@ -34144,30 +34136,6 @@
       "source": "\\(status.label) presence",
       "surface": "apple",
       "id": "native.apple.12d83e5f01c98fc0"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 452,
-      "path": "apps/macos/Sources/OpenClaw/InstancesSettings.swift",
-      "source": "Android",
-      "surface": "apple",
-      "id": "native.apple.ee499f632a5076c5"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 453,
-      "path": "apps/macos/Sources/OpenClaw/InstancesSettings.swift",
-      "source": "Sparkles",
-      "surface": "apple",
-      "id": "native.apple.57ca2baac54a05fc"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 454,
-      "path": "apps/macos/Sources/OpenClaw/InstancesSettings.swift",
-      "source": "Plain",
-      "surface": "apple",
-      "id": "native.apple.c9a63d0f5247185d"
     },
     {
       "kind": "conditional-branch",

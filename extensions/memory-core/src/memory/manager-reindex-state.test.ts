@@ -255,6 +255,54 @@ describe("memory reindex state", () => {
     ).toBe(true);
   });
 
+  it("includes extra path patterns in stable scope identity", () => {
+    const workspaceDir = "/tmp/workspace";
+    const multimodal = {
+      enabled: false,
+      modalities: [],
+      maxFileBytes: 20 * 1024 * 1024,
+    };
+    const firstScopeHash = resolveConfiguredScopeHash({
+      workspaceDir,
+      extraPaths: [
+        { path: "notes", pattern: "runbooks/**/*.md" },
+        { path: "notes", pattern: "decisions/**/*.md" },
+      ],
+      multimodal,
+    });
+    const reorderedScopeHash = resolveConfiguredScopeHash({
+      workspaceDir,
+      extraPaths: [
+        { path: "notes", pattern: "decisions/**/*.md" },
+        { path: "notes", pattern: "runbooks/**/*.md" },
+      ],
+      multimodal,
+    });
+    const changedScopeHash = resolveConfiguredScopeHash({
+      workspaceDir,
+      extraPaths: [{ path: "notes", pattern: "archive/**/*.md" }],
+      multimodal,
+    });
+
+    expect(reorderedScopeHash).toBe(firstScopeHash);
+    expect(changedScopeHash).not.toBe(firstScopeHash);
+    expect(resolveConfiguredScopeHash({ workspaceDir, extraPaths: ["notes"], multimodal })).toBe(
+      resolveConfiguredScopeHash({
+        workspaceDir,
+        extraPaths: [{ path: "notes" }],
+        multimodal,
+      }),
+    );
+    expect(
+      isMemoryIndexIdentityDirty(
+        createIdentityParams({
+          meta: createMeta({ scopeHash: firstScopeHash }),
+          configuredScopeHash: changedScopeHash,
+        }),
+      ),
+    ).toBe(true);
+  });
+
   it("marks identity dirty when configured sources add sessions", () => {
     expect(
       isMemoryIndexIdentityDirty(
