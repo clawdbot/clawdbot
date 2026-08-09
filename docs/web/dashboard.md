@@ -125,7 +125,7 @@ Then configure your tunnel/proxy to route `https://mcp-apps.example.com` to `127
 - Do **not** put the sandbox origin behind an interactive auth wall (e.g., Cloudflare Access, Basic Auth). An interstitial login cannot complete inside a cross-origin iframe, and widget rendering will break.
 - Do not host other authenticated or sensitive content on the sandbox origin.
 
-For CLI reference, see [`mcp.apps.sandboxOrigin`](/cli/mcp#mcpapps).
+For CLI reference, see [`mcp.apps.sandboxOrigin`](/cli/mcp#mcp-apps).
 
 ## Related
 
