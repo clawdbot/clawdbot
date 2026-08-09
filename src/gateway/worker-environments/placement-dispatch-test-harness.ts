@@ -46,6 +46,7 @@ export function createHarness(
     destroyFailureState?: "draining" | "destroying";
     terminalizeReclaimOnTunnelDrop?: boolean;
     terminalizedReclaimError?: Error;
+    environmentGeneration?: number;
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -156,7 +157,7 @@ export function createHarness(
     },
   };
   const { attached, destroyedEnvironment, environmentId, ready } =
-    createDispatchEnvironmentFixtures();
+    createDispatchEnvironmentFixtures(options.environmentGeneration);
   let currentEnvironment: ReturnType<WorkerDispatchEnvironmentService["get"]> = ready;
   const tunnelHandle = (ownerEpoch: number): WorkerTunnelHandle => ({
     environmentId: ready.environmentId,

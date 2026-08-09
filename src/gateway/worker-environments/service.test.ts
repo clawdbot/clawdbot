@@ -1173,6 +1173,10 @@ describe("worker environment service", () => {
       leaseId: null,
       lastError: "npm install requires a released gateway package",
     });
+    expect(workerService.list()[0]).toMatchObject({
+      state: "failed",
+      error: "npm install requires a released gateway package",
+    });
   });
 
   it("keeps a remotely bootstrapped lease retryable when receipt persistence fails", async () => {

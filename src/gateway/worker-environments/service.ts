@@ -321,6 +321,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const project = (record: WorkerEnvironmentRecord) => ({
     ...record,
+    ...((record.state === "failed" || record.state === "orphaned") && record.lastError
+      ? { error: boundedError(record.lastError) }
+      : {}),
     tunnelStatus: tunnels?.status(record.environmentId) ?? ("stopped" as const),
   });
 
