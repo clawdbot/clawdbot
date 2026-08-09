@@ -6,6 +6,35 @@ import { baseOpenRequest, makeFakePty } from "./session-manager.test-helpers.js"
 const TERMINAL_EVENT_EXIT = "terminal.exit";
 
 describe("TerminalSessionManager task lifecycle", () => {
+  it("aborts a matching pending task open and kills its late backend", async () => {
+    let resolveSpawn!: (pty: ReturnType<typeof makeFakePty>) => void;
+    const spawn = new Promise<ReturnType<typeof makeFakePty>>((resolve) => {
+      resolveSpawn = resolve;
+    });
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: () => spawn });
+    const opening = manager.open(
+      baseOpenRequest({
+        owner: {
+          kind: "agent",
+          agentSessionKey: "agent:main:cron:job-1:run:run-1",
+          taskId: "task-1",
+        } as const,
+      }),
+    );
+
+    expect(manager.closeAgentSessions("task-1")).toBe(0);
+    const latePty = makeFakePty();
+    resolveSpawn(latePty);
+
+    await expect(opening).resolves.toEqual({
+      ok: false,
+      code: "closed",
+      message: "terminal closed because its task ended",
+    });
+    expect(latePty.killed).toBe(true);
+    expect(manager.size).toBe(0);
+  });
+
   it("closes one task owner with viewer cleanup while preserving persistent owners", async () => {
     const emit = vi.fn();
     const runPtys = [makeFakePty(), makeFakePty()];

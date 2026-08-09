@@ -9,6 +9,8 @@ import {
   waitForTerminalOpenDeadline,
 } from "../../gateway/terminal/open-deadline.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isTerminalTaskStatus } from "../../tasks/task-executor-policy.js";
+import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readPositiveIntegerParam, readStringParam, ToolInputError } from "./common.js";
 import {
@@ -73,21 +75,19 @@ type TerminalToolGatewayContext = Pick<
 type TerminalToolOptions = {
   agentId?: string;
   agentSessionKey?: string;
-  resolveTaskOwnerId?: (agentSessionKey: string) => Promise<string | undefined>;
+  taskRunId?: string;
+  lookupTaskByRunId?: (
+    runId: string,
+  ) => Promise<Pick<TaskRecord, "taskId" | "status" | "childSessionKey"> | undefined>;
   callGateway?: InProcessGatewayCaller;
   getGatewayContext?: () => TerminalToolGatewayContext | undefined;
 };
 
-async function resolveTaskOwnerId(agentSessionKey: string): Promise<string | undefined> {
-  const { listTasksForSessionKeyForStatus } = await import("../../tasks/task-status-access.js");
-  const tasks = listTasksForSessionKeyForStatus(agentSessionKey).filter(
-    (task) =>
-      (task.status === "queued" || task.status === "running") &&
-      task.childSessionKey?.trim() === agentSessionKey,
-  );
-  // Shared persistent sessions can host more than one task. Without a unique
-  // owner, keep the terminal conversation-scoped instead of guessing.
-  return tasks.length === 1 ? tasks[0]?.taskId : undefined;
+async function lookupTaskByRunId(
+  runId: string,
+): Promise<Pick<TaskRecord, "taskId" | "status" | "childSessionKey"> | undefined> {
+  const { findTaskByRunIdForStatus } = await import("../../tasks/task-status-access.js");
+  return findTaskByRunIdForStatus(runId);
 }
 
 function readDimension(
@@ -155,7 +155,7 @@ function launchBlockMessage(
 export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool {
   const gatewayCall = opts.callGateway ?? callInProcessGatewayTool;
   const getContext = opts.getGatewayContext ?? getInProcessGatewayToolContext;
-  const resolveOwnerTaskId = opts.resolveTaskOwnerId ?? resolveTaskOwnerId;
+  const findOwnerTask = opts.lookupTaskByRunId ?? lookupTaskByRunId;
   return {
     label: "Terminal",
     name: "terminal",
@@ -198,7 +198,14 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
           ...launch.plan,
           ...(cwd ? { cwdOverride: cwd } : {}),
         });
-        const taskId = await resolveOwnerTaskId(agentSessionKey);
+        const taskRunId = opts.taskRunId?.trim();
+        const candidateTask = taskRunId ? await findOwnerTask(taskRunId) : undefined;
+        const task =
+          candidateTask?.childSessionKey?.trim() === agentSessionKey ? candidateTask : undefined;
+        if (task && isTerminalTaskStatus(task.status)) {
+          throw new ToolInputError("terminal task already ended");
+        }
+        const taskId = task?.taskId;
         const owner = { kind: "agent", agentSessionKey, ...(taskId ? { taskId } : {}) } as const;
         const deadline = createTerminalOpenDeadline();
         const cancelOpen = () => {

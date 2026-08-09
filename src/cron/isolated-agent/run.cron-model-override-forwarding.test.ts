@@ -230,12 +230,13 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
 
-    const result = await runCronIsolatedAgentTurn(makeParams());
+    const result = await runCronIsolatedAgentTurn(makeParams({ taskRunId: "task-run-1" }));
 
     expect(result.status).toBe("ok");
     const embeddedCall = firstMockArg(runEmbeddedAgentMock);
     expect(embeddedCall.provider).toBe("google");
     expect(embeddedCall.model).toBe("gemini-2.0-flash");
+    expect(embeddedCall.taskRunId).toBe("task-run-1");
   });
 
   it("forwards isolated cron execution phase updates from embedded runs", async () => {

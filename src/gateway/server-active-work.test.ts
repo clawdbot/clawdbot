@@ -2,6 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import { TerminalSessionManager } from "./terminal/session-manager.js";
+import { baseOpenRequest, makeFakePty } from "./terminal/session-manager.test-helpers.js";
 
 vi.mock("../cron/active-jobs.js", () => ({
   getActiveCronJobCount: vi.fn(() => 2),
@@ -53,5 +55,42 @@ describe("gateway server active work inspectors", () => {
     expect(inspectors.getQueuedTurns?.()).toBe(1);
     expect(inspectors.getTerminalPersistence?.()).toBe(1);
     expect(inspectors.getTerminalSessions?.()).toBe(2);
+  });
+
+  it("drops the raw terminal-session blocker count after task lifecycle cleanup", async () => {
+    const taskPty = makeFakePty();
+    const persistentPty = makeFakePty();
+    const ptys = [taskPty, persistentPty];
+    const terminalSessions = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => ptys.shift() ?? makeFakePty(),
+    });
+    await terminalSessions.open(
+      baseOpenRequest({
+        owner: {
+          kind: "agent",
+          agentSessionKey: "agent:main:cron:job-1:run:run-1",
+          taskId: "task-1",
+        } as const,
+      }),
+    );
+    await terminalSessions.open(
+      baseOpenRequest({ owner: { kind: "agent", agentSessionKey: "agent:main:main" } }),
+    );
+    const inspectors = createGatewayServerActiveWorkInspectors({
+      cron: {},
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+      terminalSessions,
+    } as unknown as Pick<
+      GatewayRequestContext,
+      "chatAbortControllers" | "chatQueuedTurns" | "cron" | "terminalSessions"
+    >);
+
+    expect(inspectors.getTerminalSessions?.()).toBe(2);
+    expect(terminalSessions.closeAgentSessions("task-1")).toBe(1);
+    expect(inspectors.getTerminalSessions?.()).toBe(1);
+    expect(taskPty.killed).toBe(true);
+    expect(persistentPty.killed).toBe(false);
   });
 });

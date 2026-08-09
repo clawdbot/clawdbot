@@ -237,6 +237,7 @@ export async function executeJobCoreWithTimeout(
       };
       const progress: CronRunProgress = {};
       const corePromise = executeJobCore(state, job, runAbortController.signal, {
+        taskRunId: opts?.runId,
         activeJobMarker: opts?.activeJobMarker,
         owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         streamBatch: opts?.streamBatch,
@@ -311,6 +312,7 @@ export async function executeJobCoreWithTimeout(
     };
     const progress: CronRunProgress = {};
     const corePromise = executeJobCore(state, job, runAbortController.signal, {
+      taskRunId: opts?.runId,
       activeJobMarker: opts?.activeJobMarker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       streamBatch: opts?.streamBatch,

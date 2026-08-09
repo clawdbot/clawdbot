@@ -145,22 +145,66 @@ describe("terminal tool", () => {
     expect(backend.killed).toBe(true);
   });
 
-  it("binds a uniquely active task to terminals opened from its child session", async () => {
-    const backend = makeBackend();
-    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
-    const resolveTaskOwnerId = vi.fn(async () => "task-1");
+  it("binds the exact run when two active tasks share one child session", async () => {
+    const firstBackend = makeBackend();
+    const secondBackend = makeBackend();
+    const persistentBackend = makeBackend();
+    const backends = [firstBackend, secondBackend, persistentBackend];
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => backends.shift() ?? makeBackend(),
+    });
+    const agentSessionKey = "agent:main:shared-task-session";
+    const lookupTaskByRunId = vi.fn(async (runId: string) =>
+      runId === "conversation-run"
+        ? undefined
+        : {
+            taskId: runId === "run-1" ? "task-1" : "task-2",
+            status: "running" as const,
+            childSessionKey: agentSessionKey,
+          },
+    );
+    const createTaskTool = (taskRunId: string) =>
+      createTerminalTool({
+        agentId: "main",
+        agentSessionKey,
+        taskRunId,
+        lookupTaskByRunId,
+        getGatewayContext: () => makeContext(manager),
+      });
+
+    await createTaskTool("run-1").execute("open", { action: "open", show: false });
+    await createTaskTool("run-2").execute("open", { action: "open", show: false });
+    await createTaskTool("conversation-run").execute("open", { action: "open", show: false });
+
+    expect(lookupTaskByRunId.mock.calls).toEqual([["run-1"], ["run-2"], ["conversation-run"]]);
+    expect(manager.closeAgentSessions("task-1")).toBe(1);
+    expect(firstBackend.killed).toBe(true);
+    expect(secondBackend.killed).toBe(false);
+    expect(persistentBackend.killed).toBe(false);
+    expect(manager.listAgent(agentSessionKey)).toHaveLength(2);
+  });
+
+  it("refuses an open when its exact task is already terminal", async () => {
+    const spawn = vi.fn(async () => makeBackend());
+    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn });
     const tool = createTerminalTool({
       agentId: "main",
-      agentSessionKey: "agent:main:task-run",
-      resolveTaskOwnerId,
+      agentSessionKey: "agent:main:completed-task",
+      taskRunId: "completed-run",
+      lookupTaskByRunId: vi.fn(async () => ({
+        taskId: "task-completed",
+        status: "succeeded",
+        childSessionKey: "agent:main:completed-task",
+      })),
       getGatewayContext: () => makeContext(manager),
     });
 
-    await tool.execute("open", { action: "open", show: false });
-
-    expect(resolveTaskOwnerId).toHaveBeenCalledWith("agent:main:task-run");
-    expect(manager.closeAgentSessions("task-1")).toBe(1);
-    expect(backend.killed).toBe(true);
+    await expect(tool.execute("open", { action: "open", show: false })).rejects.toThrow(
+      "terminal task already ended",
+    );
+    expect(spawn).not.toHaveBeenCalled();
+    expect(manager.size).toBe(0);
   });
 
   it("fails closed when launch policy blocks the agent", async () => {

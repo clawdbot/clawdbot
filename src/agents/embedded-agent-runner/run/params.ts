@@ -290,6 +290,8 @@ export type RunEmbeddedAgentParams = {
    */
   runTimeoutOverrideMs?: number;
   runId: string;
+  /** Detached task-ledger run id when it differs from runId. */
+  taskRunId?: string;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
   abortSignal?: AbortSignal;
