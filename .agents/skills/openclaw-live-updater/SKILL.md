@@ -20,12 +20,13 @@ Keep `/Users/steipete/openclaw` a read-only-to-the-agent deployment mirror: clea
 1. Run the deterministic updater and retain its JSON:
 
    ```bash
-   node .agents/skills/openclaw-live-updater/scripts/update-main.mjs
+   node --import tsx .agents/skills/openclaw-live-updater/scripts/update-main.mjs
    ```
 
    Stop on any failed invariant. Do not repair the mirror destructively. The helper holds one checkout-scoped lock across update, build, Gateway proof, and Mac work. A concurrent heartbeat returns `reason: "overlap"`; it must not start another build. A dead owner lock may be recovered, but unreadable or unsafe lock state fails closed.
 
 2. The helper verifies one unrewritten expected origin, an owned non-symlinked standalone/full clone, single worktree, clean `main`, fetches `origin/main`, rechecks for concurrent changes, and merges `--ff-only`. It then uses the source runner's canonical local-build metadata contract and parser: both `dist/.buildstamp` and `dist/.runtime-postbuildstamp` heads, required runtime-postbuild outputs, `dist/entry.js`, Control UI index plus referenced local assets, and `dist/build-info.json` must all match exact `afterSha`.
+
    - Every successful update sets `actions.gatewayBuild` and rebuilds exact new `main` before any restart.
    - Missing, invalid, or stale build output also forces a build, even when Git did not move.
    - A dependency-input change, absent `node_modules`, or missing/invalid build provenance requires `pnpm install --frozen-lockfile`. When a build is required, do not install before acquiring the maintenance suspension and stopping the managed Gateway.
