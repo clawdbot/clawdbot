@@ -44,7 +44,23 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testReleaseChatScreenshot() {
-        self.captureReleaseScreenshot(Self.chatScreenshotTarget)
+        let target = Self.chatScreenshotTarget
+        self.launchApp(for: target)
+        self.waitForReleaseScreenshotTarget(target)
+        guard let app = self.app else {
+            XCTFail("OpenClaw is not running for the chat screenshot")
+            return
+        }
+
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
+
+        snapshot(target.name, timeWaitingForIdle: 5)
+        self.attachScreenshot(named: target.name)
     }
 
     func testReleaseAgentScreenshot() {
@@ -494,8 +510,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
         input.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
-        self.attachScreenshot(named: "chat-composer-keyboard-focused")
         input.typeText("first line\nsecond line")
 
         XCTAssertEqual(input.value as? String, "first line\nsecond line")

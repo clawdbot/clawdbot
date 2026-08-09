@@ -5,7 +5,7 @@ import UIKit
 @MainActor
 struct ChatComposerTextViewIOS: UIViewRepresentable {
     @Binding var text: String
-    var shouldFocus: Bool
+    var focusRequested: Bool
     var isEnabled: Bool
     var minHeight: CGFloat
     var maxHeight: CGFloat
@@ -31,9 +31,9 @@ struct ChatComposerTextViewIOS: UIViewRepresentable {
         textView.isSelectable = self.isEnabled
         self.configureHistoryHandlers(textView)
 
-        // UIKit owns user-initiated focus. Treat shouldFocus as a request to focus,
-        // not a mirror whose stale false value can cancel a tap before SwiftUI updates.
-        if self.shouldFocus, self.isEnabled, !textView.isFirstResponder {
+        // UIKit owns user-initiated focus. A false focus request is not a blur request;
+        // conflating the two cancels a tap before SwiftUI observes first-responder state.
+        if self.focusRequested, self.isEnabled, !textView.isFirstResponder {
             textView.becomeFirstResponder()
         } else if !self.isEnabled, textView.isFirstResponder {
             textView.resignFirstResponder()
