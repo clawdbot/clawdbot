@@ -303,7 +303,8 @@ Required invariants:
 
 #### 6.2 Runtime capability extension
 
-Extend the selected memory runtime with a versioned authorized surface:
+Extend the selected memory capability with a versioned authorization declaration
+and its optional runtime with the authorized surface:
 
 ```ts
 type AuthorizedMemoryPlanForContext<Context extends MemoryAccessContext> =
@@ -313,8 +314,12 @@ type AuthorizedMemoryPlanForContext<Context extends MemoryAccessContext> =
       : AuthorizedMemoryPlan & { operation: Operation }
     : never;
 
+type MemoryPluginCapability = Readonly<{
+  authorization?: MemoryAuthorizationCapabilities;
+  runtime?: MemoryPluginRuntime;
+}>;
+
 interface AuthorizedMemoryRuntime {
-  authorization: MemoryAuthorizationCapabilities;
   authorize<Context extends MemoryAccessContext>(
     context: Context,
   ): Promise<AuthorizedMemoryPlanForContext<Context>>;
@@ -328,9 +333,10 @@ interface AuthorizedMemoryRuntime {
 }
 ```
 
-Legacy agents may continue to use the existing manager path. An enforced agent
-must reject a runtime without the new capability. Do not silently wrap a
-context-free backend and call it conforming.
+The selected `MemoryPluginCapability`, rather than its optional `runtime`,
+declares `authorization`. Legacy agents may continue to use the existing manager
+path. An enforced agent must reject a selected capability without the new
+declaration. Do not silently wrap a context-free backend and call it conforming.
 
 The declaration and the conformance suite describe plugin behavior only; they
 do not construct a trusted context or make an authorization decision. Phase 0
