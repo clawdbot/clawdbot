@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import type { AgentTurnContext, AgentTurnPrincipal } from "../agent-turn/types.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
 import { consumeSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
@@ -93,8 +94,8 @@ export async function prepareAgentRunDispatch(params: {
   isRestartRecoveryResumeRun: boolean;
   runId: string;
   agentDedupeKeys: readonly string[];
-  context: GatewayRequestHandlerOptions["context"];
-  client: GatewayRequestHandlerOptions["client"];
+  context: AgentTurnContext;
+  client: AgentTurnPrincipal | null;
   respond: GatewayRequestHandlerOptions["respond"];
   abortForLifecycleRotation: (target?: { sessionKey?: string; agentId?: string }) => boolean;
   acquireGatewayWorkAdmission: (scope: string) => Promise<void>;

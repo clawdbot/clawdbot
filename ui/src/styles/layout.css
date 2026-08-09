@@ -1491,7 +1491,7 @@ html.openclaw-native-macos
 .sidebar-recent-sessions__head:hover
   .sidebar-session-group-toggle__lead--branded
   .sidebar-session-catalog-provider-icon,
-.sidebar-recent-sessions__head:focus-within
+.sidebar-recent-sessions__head:has(:focus-visible)
   .sidebar-session-group-toggle__lead--branded
   .sidebar-session-catalog-provider-icon {
   opacity: 0;
@@ -1500,7 +1500,7 @@ html.openclaw-native-macos
 .sidebar-recent-sessions__head:hover
   .sidebar-session-group-toggle__lead--branded
   .sidebar-session-group-toggle__icon,
-.sidebar-recent-sessions__head:focus-within
+.sidebar-recent-sessions__head:has(:focus-visible)
   .sidebar-session-group-toggle__lead--branded
   .sidebar-session-group-toggle__icon {
   opacity: 0.75;
@@ -1596,7 +1596,7 @@ html.openclaw-native-macos
 }
 
 .sidebar-recent-sessions__head--draggable:hover .sidebar-session-group-drag-handle,
-.sidebar-recent-sessions__head--draggable:focus-within .sidebar-session-group-drag-handle {
+.sidebar-recent-sessions__head--draggable:has(:focus-visible) .sidebar-session-group-drag-handle {
   opacity: 0.55;
 }
 
@@ -1650,7 +1650,7 @@ html.openclaw-native-macos
   stroke-linejoin: round;
 }
 
-/* Group header kebab: hidden until hover/focus like row actions, but always
+/* Group header kebab: hidden until hover/keyboard focus like row actions, but always
    reachable on touch pointers where hover does not exist. */
 .sidebar-session-group-actions {
   display: inline-flex;
@@ -1672,7 +1672,7 @@ html.openclaw-native-macos
 }
 
 .sidebar-recent-sessions__head:hover .sidebar-session-group-actions,
-.sidebar-recent-sessions__head:focus-within .sidebar-session-group-actions,
+.sidebar-recent-sessions__head:has(:focus-visible) .sidebar-session-group-actions,
 .sidebar-session-group-actions[aria-expanded="true"],
 .sidebar-session-group-actions.sidebar-session-sort--filtered {
   opacity: 1;

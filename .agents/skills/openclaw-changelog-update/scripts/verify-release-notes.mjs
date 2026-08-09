@@ -684,7 +684,7 @@ export function contributionRecordTarget(section) {
 }
 
 export function pullRequestTitleFromCommitSubject(subject, number) {
-  const match = subject.match(/^(?<title>\S(?:.*?\S)?)(?<pr> \(#(?<number>[1-9]\d*)\))\k<pr>*$/u);
+  const match = subject.match(/^(?<title>\S(?:.*\S)?)(?<! \(#\d+\)) \(#(?<number>[1-9]\d*)\)$/u);
   return match?.groups?.number === String(number) ? match.groups.title : undefined;
 }
 
@@ -839,7 +839,7 @@ function appendReferences(references, additions) {
 
 function normalizedCommitSubject(subject) {
   return subject
-    .replace(/\s+\(#\d+\)\s*$/, "")
+    .replace(/(?:\s+\(#\d+\))+\s*$/, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();

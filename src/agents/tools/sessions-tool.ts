@@ -18,7 +18,6 @@ import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routi
 import {
   getCurrentSessionWorkAdmissionRelease,
   getSessionWorkAdmissionRelease,
-  SESSION_ARCHIVE_ACTIVE_RUN_ERROR,
 } from "../../sessions/session-lifecycle-admission.js";
 import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { stringEnum } from "../schema/typebox.js";
@@ -436,7 +435,6 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                     // admitted owner, or retry a transient gateway disconnect,
                     // instead of losing an archive that was already scheduled.
                     const message = formatErrorMessage(error);
-                    const activeRun = message.includes(SESSION_ARCHIVE_ACTIVE_RUN_ERROR);
                     const retryableGatewayFailure =
                       error instanceof GatewayTransportError ||
                       isTransientNetworkError(error) ||
@@ -444,12 +442,10 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                         error !== null &&
                         "retryable" in error &&
                         error.retryable === true);
-                    if (!activeRun && !retryableGatewayFailure) {
+                    if (!retryableGatewayFailure) {
                       throw error;
                     }
-                    if (!activeRun) {
-                      log.warn(`retrying deferred self-archive for ${key}: ${message}`);
-                    }
+                    log.warn(`retrying deferred self-archive for ${key}: ${message}`);
                     const retryAfterRelease = getSessionWorkAdmissionRelease({
                       scope: storePath,
                       identities: archiveIdentities,

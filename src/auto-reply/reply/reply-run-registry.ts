@@ -127,6 +127,8 @@ export type ReplyMessageInjectionAttempt = {
   targetRunId: string | undefined;
   /** Leaf-bound compatibility must reject before ACK instead of falling through. */
   rejectBeforeAck?: true;
+  /** Settles once the runtime accepts or rejects ownership of this exact message. */
+  acceptance: Promise<boolean>;
   /** Settles after the backend confirms or rejects this exact injection. */
   outcome: Promise<ReplyMessageInjectionOutcome>;
 };
@@ -1655,6 +1657,7 @@ export function beginReplyMessageInjectionTarget(
     return {
       targetRunId: target.runId,
       ...(target.identity === "leaf" ? { rejectBeforeAck: true as const } : {}),
+      acceptance: Promise.resolve(false),
       outcome: Promise.resolve(immediateRejection),
     };
   }
@@ -1662,12 +1665,28 @@ export function beginReplyMessageInjectionTarget(
   // sub-10-minute user messages re-arm a wedged run's staleness window forever.
   // Invoke before the first await. The capability owns the final synchronous
   // admission check, matching Codex's active-turn lock boundary.
+  const acceptance = createDeferred<boolean>();
+  let acceptanceSettled = false;
+  const settleAcceptance = (accepted: boolean) => {
+    if (acceptanceSettled) {
+      return;
+    }
+    acceptanceSettled = true;
+    acceptance.resolve(accepted);
+  };
+  const callerOnQueueAccepted = options?.onQueueAccepted;
+  const queueOptions: ReplyBackendQueueMessageOptions = {
+    ...options,
+    onQueueAccepted: (accepted) => {
+      settleAcceptance(accepted);
+      callerOnQueueAccepted?.(accepted);
+    },
+  };
   let queued: Promise<void | ReplyBackendQueueMessageResult>;
   try {
-    queued = options
-      ? resolved.injection.queueMessage(text, options)
-      : resolved.injection.queueMessage(text);
+    queued = resolved.injection.queueMessage(text, queueOptions);
   } catch (error) {
+    settleAcceptance(false);
     const immediateRejection = {
       status: "rejected" as const,
       reason: "runtime_rejected" as const,
@@ -1675,20 +1694,28 @@ export function beginReplyMessageInjectionTarget(
     };
     return {
       targetRunId: target.runId,
+      acceptance: acceptance.promise,
       outcome: Promise.resolve(immediateRejection),
     };
   }
-  return {
-    targetRunId: target.runId,
-    outcome: queued.then(
-      (result): ReplyMessageInjectionOutcome =>
-        result ? { status: "accepted", result } : { status: "accepted" },
-      (error: unknown): ReplyMessageInjectionOutcome => ({
+  const outcome = queued.then(
+    (result): ReplyMessageInjectionOutcome => {
+      settleAcceptance(true);
+      return result ? { status: "accepted", result } : { status: "accepted" };
+    },
+    (error: unknown): ReplyMessageInjectionOutcome => {
+      settleAcceptance(false);
+      return {
         status: "rejected",
         reason: "runtime_rejected",
         errorMessage: String(error),
-      }),
-    ),
+      };
+    },
+  );
+  return {
+    targetRunId: target.runId,
+    acceptance: acceptance.promise,
+    outcome,
   };
 }
 

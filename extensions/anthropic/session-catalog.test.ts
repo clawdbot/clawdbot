@@ -2282,6 +2282,54 @@ describe("Claude session catalog", () => {
     );
   });
 
+  it("builds a local Claude terminal start plan with the initial prompt", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const binDir = path.join(home, "bin");
+    await fs.mkdir(binDir);
+    const executable = path.join(binDir, process.platform === "win32" ? "claude.cmd" : "claude");
+    await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
+    if (process.platform !== "win32") {
+      await fs.chmod(executable, 0o755);
+    }
+    process.env.PATH = binDir;
+    nodeHostMocks.userShellPaths.set("claude", binDir);
+    const provider = captureCatalogProvider(createPluginRuntimeMock());
+
+    await expect(
+      provider.startTerminalSession?.({
+        agentId: "main",
+        cwd: "/work/new-session",
+        initialMessage: "--help",
+      }),
+    ).resolves.toEqual({
+      kind: "local",
+      argv: [executable, "--", "--help"],
+      cwd: "/work/new-session",
+      pathEnv: binDir,
+      title: "claude",
+    });
+    await expect(
+      provider.startTerminalSession?.({
+        agentId: "main",
+        cwd: "/work/command-prompt",
+        initialMessage: "mcp",
+      }),
+    ).resolves.toMatchObject({ argv: [executable, "--", "mcp"] });
+    await expect(
+      provider.startTerminalSession?.({ agentId: "main", cwd: "/work/blank-session" }),
+    ).resolves.toMatchObject({ argv: [executable], cwd: "/work/blank-session" });
+    await expect(
+      provider.startTerminalSession?.({
+        agentId: "main",
+        cwd: "/work/new-session",
+        nodeId: "paired-node",
+      }),
+    ).rejects.toThrow(
+      "Paired-node Claude terminal start is unavailable; omit hostId to start on the gateway host",
+    );
+  });
+
   it("resolves Claude terminal eligibility and cwd from the node-owned catalog", async () => {
     const home = await createHome();
     process.env.HOME = home;

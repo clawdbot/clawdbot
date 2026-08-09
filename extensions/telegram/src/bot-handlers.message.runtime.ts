@@ -27,7 +27,7 @@ import {
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
-import { resolveTelegramForumThreadId } from "./bot/helpers.js";
+import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
 import type { TelegramCachedMessageNode, TelegramReplyChainEntry } from "./message-cache.js";
@@ -272,13 +272,7 @@ export function createTelegramHandlerMessageRuntime({
       const replyChainNodes = await buildReplyChainForMessage(params.msg);
       const isGroupConversation =
         params.msg.chat.type === "group" || params.msg.chat.type === "supergroup";
-      const isForum =
-        params.msg.chat.type === "supergroup" &&
-        Boolean(params.msg.chat.is_forum || params.msg.is_topic_message);
-      const scopedThreadId = resolveTelegramForumThreadId({
-        isForum,
-        messageThreadId: params.msg.message_thread_id,
-      });
+      const scopedThreadId = resolveTelegramMessageThreadSpec(params.msg).id;
       const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
         runtimeTelegramCfg,
         params.msg.chat.id,

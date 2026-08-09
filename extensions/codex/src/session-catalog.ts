@@ -101,6 +101,7 @@ import {
   openCodexCatalogTerminal,
   requireCatalogEligibleThread,
   resolveLocalCodexTerminalExecutable,
+  startCodexCatalogTerminal,
   type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
@@ -1537,6 +1538,12 @@ function registerCodexSessionCatalog(params: {
         getPluginConfig: params.getPluginConfig,
         getRuntimeConfig: params.getRuntimeConfig,
         parseCatalogPage,
+        ...request,
+      }),
+    startTerminalSession: (request) =>
+      startCodexCatalogTerminal({
+        getPluginConfig: params.getPluginConfig,
+        getRuntimeConfig: params.getRuntimeConfig,
         ...request,
       }),
   };

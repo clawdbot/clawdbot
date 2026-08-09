@@ -20,6 +20,7 @@ describe("TerminalSessionManager task lifecycle", () => {
     const runOwner = {
       kind: "agent",
       agentSessionKey: "agent:main:cron:job-1:run:run-1",
+      taskId: "task-1",
     } as const;
     const persistentOwner = { kind: "agent", agentSessionKey: "agent:main:main" } as const;
     const first = await manager.open(baseOpenRequest({ owner: runOwner }));
@@ -35,7 +36,7 @@ describe("TerminalSessionManager task lifecycle", () => {
     manager.attach("viewer-2", second.sessionId);
     emit.mockClear();
 
-    expect(manager.closeAgentSessions(runOwner.agentSessionKey)).toBe(2);
+    expect(manager.closeAgentSessions(runOwner.taskId)).toBe(2);
     expect(runPtys.every((pty) => pty.killed)).toBe(true);
     expect(persistentPty.killed).toBe(false);
     expect(connectionPty.killed).toBe(false);

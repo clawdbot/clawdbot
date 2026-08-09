@@ -179,7 +179,7 @@ function scanGenericCoreImports(
 /**
  * Collects web-search provider boundary inventory from core source files.
  */
-export async function collectWebSearchProviderBoundaryInventory() {
+async function collectWebSearchProviderBoundaryInventory() {
   if (!webSearchProviderInventoryPromise) {
     webSearchProviderInventoryPromise = (async () => {
       const inventory: InventoryEntry[] = [];
@@ -213,7 +213,7 @@ export async function collectWebSearchProviderBoundaryInventory() {
 /**
  * Reads the expected web-search provider boundary inventory baseline.
  */
-export async function readExpectedInventory(): Promise<InventoryEntry[]> {
+async function readExpectedInventory(): Promise<InventoryEntry[]> {
   try {
     const parsed: unknown = JSON.parse(await fs.readFile(baselinePath, "utf8"));
     const result = z.array(inventoryEntrySchema).safeParse(parsed);
@@ -229,7 +229,7 @@ export async function readExpectedInventory(): Promise<InventoryEntry[]> {
 /**
  * Diffs expected and actual web-search provider boundary inventory entries.
  */
-export function diffInventory(expected: InventoryEntry[], actual: InventoryEntry[]) {
+function diffInventory(expected: InventoryEntry[], actual: InventoryEntry[]) {
   return diffInventoryEntries(expected, actual, compareInventoryEntries);
 }
 
