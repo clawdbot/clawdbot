@@ -283,10 +283,11 @@ export type StartSpanOptions = {
    */
   attributes?: SpanAttributes;
   /**
-   * W3C `traceparent` to anchor the span to an existing trace. When
-   * omitted the span starts a new trace. The continuation substrate lifts this onto
-   * `SystemEvent.traceparent` so producer-side reconstruction at drain
-   * time has the field to read from.
+   * W3C `traceparent` to anchor the span to an existing trace across deferred
+   * or cross-process hops. When omitted, concrete adapters may inherit their
+   * process-local active context and otherwise start a new trace. The
+   * continuation substrate lifts this onto `SystemEvent.traceparent` so
+   * producer-side reconstruction at drain time has the field to read from.
    */
   traceparent?: string;
 };

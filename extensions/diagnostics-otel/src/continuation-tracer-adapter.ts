@@ -9,15 +9,13 @@
 //     down.
 //
 // Span parenting:
-//   The continuation-tracer surface carries a W3C `traceparent` on
-//   `StartSpanOptions`. The continuation substrate already lifts this onto
-//   `SystemEvent.traceparent` and `QueuedSessionDeliveryPayloadMetadata`
-//   so the producer→consumer hop has it available. This adapter parses
-//   it via the same `parseDiagnosticTraceparent` helper that powers the
-//   auto-instrumented spans (`service.ts::contextForTraceContext`), then
-//   uses `trace.setSpanContext` so the new span is correctly stitched
-//   into the parent OTEL trace. That stitching turns continuation chains into
-//   one trace instead of disconnected per-session spans.
+//   Same-process spans use the currently active OTEL context. Deferred or
+//   cross-process hops carry a W3C `traceparent` on `StartSpanOptions`; the
+//   continuation substrate lifts it onto `SystemEvent.traceparent` and
+//   `QueuedSessionDeliveryPayloadMetadata`. This adapter reconstructs that
+//   parent with the same `parseDiagnosticTraceparent` helper that powers the
+//   auto-instrumented spans (`service.ts::contextForTraceContext`), keeping the
+//   continuation chain on one trace with the correct parent span.
 
 import {
   context as otelContextApi,
@@ -30,6 +28,7 @@ import {
   type Span as OtelSpan,
   type SpanContext,
   type SpanOptions as OtelSpanOptions,
+  type TracerProvider as OtelTracerProvider,
 } from "@opentelemetry/api";
 import {
   parseDiagnosticTraceparent,
@@ -53,6 +52,7 @@ import {
 export const CONTINUATION_OTEL_TRACER_NAME = "openclaw.continuation";
 
 type ContinuationOtelTracerAdapterOptions = {
+  tracerProvider?: Pick<OtelTracerProvider, "getTracer">;
   resolveParentContext?: (traceContext: DiagnosticTraceContext) => Context | undefined;
   resolveSpanContext?: (traceContext: DiagnosticTraceContext) => SpanContext | undefined;
 };
@@ -149,7 +149,9 @@ function wrapOtelSpan(otelSpan: OtelSpan): ContinuationSpan {
 export function createContinuationOtelTracerAdapter(
   adapterOptions: ContinuationOtelTracerAdapterOptions = {},
 ): ContinuationTracer {
-  const otelTracer = trace.getTracer(CONTINUATION_OTEL_TRACER_NAME);
+  const otelTracer =
+    adapterOptions.tracerProvider?.getTracer(CONTINUATION_OTEL_TRACER_NAME) ??
+    trace.getTracer(CONTINUATION_OTEL_TRACER_NAME);
   return {
     formatTraceparent(traceContext: DiagnosticTraceContext): string | undefined {
       const spanContext = adapterOptions.resolveSpanContext?.(traceContext);
@@ -190,7 +192,7 @@ export function createContinuationOtelTracerAdapter(
         }
       }
 
-      return wrapOtelSpan(otelTracer.startSpan(name, otelOpts));
+      return wrapOtelSpan(otelTracer.startSpan(name, otelOpts, otelContextApi.active()));
     },
   };
 }

@@ -57,6 +57,7 @@ const telemetryState = vi.hoisted(() => {
 });
 
 const traceProviderCtor = vi.hoisted(() => vi.fn());
+const traceProviderGetTracer = vi.hoisted(() => vi.fn());
 const traceProviderShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const meterProviderCtor = vi.hoisted(() => vi.fn());
 const meterProviderShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -211,7 +212,10 @@ vi.mock("@opentelemetry/sdk-trace-base", () => ({
       traceProviderCtor(options);
     }
 
-    getTracer = () => telemetryState.tracer;
+    getTracer = (name: string) => {
+      traceProviderGetTracer(name);
+      return telemetryState.tracer;
+    };
     shutdown = traceProviderShutdown;
   },
   BatchSpanProcessor: function BatchSpanProcessor(exporter?: unknown, options?: unknown) {
@@ -266,6 +270,7 @@ import {
   resetContinuationTracer,
   type DiagnosticEventPayload,
 } from "../api.js";
+import { CONTINUATION_OTEL_TRACER_NAME } from "./continuation-tracer-adapter.js";
 import { resetContinuationTracerIfOwned } from "./continuation-tracer-ownership.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import {
@@ -726,6 +731,7 @@ describe("diagnostics-otel service", () => {
     telemetryState.meter.createCounter.mockClear();
     telemetryState.meter.createHistogram.mockClear();
     traceProviderCtor.mockClear();
+    traceProviderGetTracer.mockClear();
     traceProviderShutdown.mockClear();
     meterProviderCtor.mockClear();
     meterProviderShutdown.mockClear();
@@ -7177,6 +7183,8 @@ describe("diagnostics-otel service", () => {
       const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
       await service.start(ctx);
       expect(getContinuationTracer()).not.toBe(noopTracer);
+      expect(traceProviderGetTracer).toHaveBeenCalledWith("openclaw");
+      expect(traceProviderGetTracer).toHaveBeenCalledWith(CONTINUATION_OTEL_TRACER_NAME);
       await service.stop?.(ctx);
       expect(getContinuationTracer()).toBe(noopTracer);
     });

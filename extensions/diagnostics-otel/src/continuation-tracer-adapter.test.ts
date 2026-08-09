@@ -111,16 +111,26 @@ describe("continuation-tracer adapter :: tracer acquisition", () => {
     expect(trace.getTracer).toHaveBeenCalledWith(CONTINUATION_OTEL_TRACER_NAME);
     expect(CONTINUATION_OTEL_TRACER_NAME).toBe("openclaw.continuation");
   });
+
+  it("uses an owned tracer provider instead of the global provider", () => {
+    const injectedTracer = trace.getTracer("test.injected");
+    vi.mocked(trace.getTracer).mockClear();
+    const getTracer = vi.fn(() => injectedTracer);
+
+    createContinuationOtelTracerAdapter({ tracerProvider: { getTracer } });
+
+    expect(getTracer).toHaveBeenCalledWith(CONTINUATION_OTEL_TRACER_NAME);
+    expect(trace.getTracer).not.toHaveBeenCalled();
+  });
 });
 
 describe("continuation-tracer adapter :: startSpan without traceparent", () => {
-  it("starts a new root span when no traceparent is provided", () => {
+  it("uses the active OTEL context when no traceparent is provided", () => {
     const adapter = createContinuationOtelTracerAdapter();
     adapter.startSpan("continuation.work");
     expect(startSpanCalls).toHaveLength(1);
     expect(startSpanCalls[0]?.name).toBe("continuation.work");
-    // No parent context arg when traceparent is absent.
-    expect(startSpanCalls[0]?.parentCtx).toBeUndefined();
+    expect(startSpanCalls[0]?.parentCtx).toEqual({ __tag: "rootCtx" });
   });
 
   it("passes attributes through to the underlying OTEL startSpan options", () => {
@@ -211,11 +221,11 @@ describe("continuation-tracer adapter :: startSpan with traceparent (parent stit
     expect(parentCtx?.sc?.spanId).toBe("bbbbbbbbbbbbbbbb");
   });
 
-  it("falls back to root span when traceparent is malformed", () => {
+  it("falls back to the active OTEL context when traceparent is malformed", () => {
     const adapter = createContinuationOtelTracerAdapter();
     adapter.startSpan("continuation.work", { traceparent: "not-a-valid-traceparent" });
     expect(startSpanCalls).toHaveLength(1);
-    expect(startSpanCalls[0]?.parentCtx).toBeUndefined();
+    expect(startSpanCalls[0]?.parentCtx).toEqual({ __tag: "rootCtx" });
   });
 
   it.each([

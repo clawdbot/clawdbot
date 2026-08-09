@@ -616,6 +616,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       if (tracesActive) {
         const continuationTracer = createContinuationOtelTracerAdapter({
+          ...(traceProvider ? { tracerProvider: traceProvider } : {}),
           resolveSpanContext: diagnosticsTrace.resolveTrustedSpanContext,
           resolveParentContext: diagnosticsTrace.resolveTrustedParentContext,
         });
