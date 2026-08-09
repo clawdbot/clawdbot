@@ -28,7 +28,14 @@ import {
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
-import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
+import {
+  withOwnedManagedUpdateEnv,
+  type OwnedManagedUpdateContext,
+} from "./update-command-managed-context.js";
+import {
+  updatePluginsAfterCoreUpdate,
+  type PostCorePluginUpdateResult,
+} from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
   didCoreUpdateChangeInstall,
@@ -95,6 +102,7 @@ export async function finishUpdate(params: {
   opts: UpdateCommandOptions;
   showProgress: boolean;
   preManagedServiceStop?: PreManagedServiceStop;
+  ownedManagedUpdateContext?: OwnedManagedUpdateContext;
   controlPlaneUpdateSentinelMeta: Awaited<ReturnType<typeof readControlPlaneUpdateSentinelMeta>>;
   preUpdatePluginInstallRecords: Awaited<ReturnType<typeof loadInstalledPluginIndexInstallRecords>>;
   startedAt: number;
@@ -200,110 +208,126 @@ export async function finishUpdate(params: {
 
   const postUpdateRoot = params.result.root ?? params.root;
 
-  let postCorePluginUpdate;
+  const preUpdateConfigSnapshot =
+    params.ownedManagedUpdateContext?.configSnapshot ?? params.configSnapshot;
+  const preUpdatePluginInstallRecords =
+    params.ownedManagedUpdateContext?.pluginInstallRecords ?? params.preUpdatePluginInstallRecords;
+  let postCorePluginUpdate: PostCorePluginUpdateResult | undefined;
   let pluginsUpdatedInFreshProcess = false;
-  if (shouldResumePostCoreInFreshProcess) {
-    const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
-      root: postUpdateRoot,
-      channel: params.channel,
-      requestedChannel: params.requestedChannel,
-      opts: params.opts,
-      pluginInstallRecords: params.preUpdatePluginInstallRecords,
-      updateStartedAtMs: params.startedAt,
-      nodeRunner: params.packageUpdateNodeRunner,
-      preUpdateConfig: params.configSnapshot.valid
-        ? {
-            sourceConfig: params.configSnapshot.sourceConfig,
-            authoredConfig: isRecord(params.configSnapshot.parsed)
-              ? (params.configSnapshot.parsed as OpenClawConfig)
-              : params.configSnapshot.sourceConfig,
-          }
-        : undefined,
-    });
-    if (freshProcessResult.exitCode !== undefined) {
-      if (!(await restoreWindowsTaskAutoStartOrExit(params.preManagedServiceStop))) {
-        return;
-      }
-      defaultRuntime.exit(freshProcessResult.exitCode);
-      throw new Error(`post-update process exited with code ${freshProcessResult.exitCode}`);
-    }
-    pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
-    postCorePluginUpdate = freshProcessResult.pluginUpdate;
-  }
-
-  if (!pluginsUpdatedInFreshProcess) {
-    await withPluginLifecycleLease({}, async () => {
-      postUpdateConfigSnapshot = await readConfigFileSnapshot({
-        skipPluginValidation: true,
-        suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
-      });
-      postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
-        configSnapshot: postUpdateConfigSnapshot,
+  let abortFinishUpdate = false;
+  await withOwnedManagedUpdateEnv(params.ownedManagedUpdateContext?.env, async () => {
+    if (shouldResumePostCoreInFreshProcess) {
+      const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
+        root: postUpdateRoot,
+        channel: params.channel,
         requestedChannel: params.requestedChannel,
-      });
-      const restoredConfig = restoreDroppedPreUpdateChannels(
-        postUpdateConfigSnapshot,
-        params.configSnapshot.valid
+        opts: params.opts,
+        pluginInstallRecords: preUpdatePluginInstallRecords,
+        updateStartedAtMs: params.startedAt,
+        nodeRunner: params.packageUpdateNodeRunner,
+        preUpdateConfig: preUpdateConfigSnapshot.valid
           ? {
-              sourceConfig: params.configSnapshot.sourceConfig,
-              authoredConfig: isRecord(params.configSnapshot.parsed)
-                ? (params.configSnapshot.parsed as OpenClawConfig)
-                : params.configSnapshot.sourceConfig,
+              sourceConfig: preUpdateConfigSnapshot.sourceConfig,
+              authoredConfig: isRecord(preUpdateConfigSnapshot.parsed)
+                ? (preUpdateConfigSnapshot.parsed as OpenClawConfig)
+                : preUpdateConfigSnapshot.sourceConfig,
             }
           : undefined,
-      );
-      postUpdateConfigSnapshot = restoredConfig.snapshot;
-      // Current-process post-core convergence still reports the pre-update
-      // VERSION. During downgrades, pin compatibility checks to the installed
-      // target so incompatible newer plugins are disabled before restart.
-      const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
-      const versionComparison =
-        postUpdateInstalledVersion && VERSION
-          ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
-          : null;
-      const compatibilityDowngradeTarget =
-        versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
-      const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-      if (compatibilityDowngradeTarget) {
-        process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
-      }
-      try {
-        const initialPluginUpdate = await updatePluginsAfterCoreUpdate({
-          root: postUpdateRoot,
-          channel: params.channel,
-          configSnapshot: postUpdateConfigSnapshot,
-          configChanged: restoredConfig.changed,
-          restoredAuthoredChannels: restoredConfig.authoredChannels,
-          opts: params.opts,
-          timeoutMs: params.updateStepTimeoutMs,
-          pluginInstallRecords: params.preUpdatePluginInstallRecords,
-        });
-        const completedPluginUpdate = await completePostCorePluginUpdate({
-          root: postUpdateRoot,
-          pluginUpdate: initialPluginUpdate,
-          // A plugin-only update can replace its migration owner without replacing core.
-          // Downgrades and resume fallbacks can also leave an updated core on disk in this process.
-          freshDoctorRequired:
-            didCoreUpdateChangeInstall(params.result) ||
-            initialPluginUpdate.sync.changed ||
-            initialPluginUpdate.npm.changed,
-          yes: params.opts.yes === true,
-          json: params.opts.json === true,
-          timeoutMs: params.updateStepTimeoutMs,
-          ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
-        });
-        postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
-        postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
-      } finally {
-        if (compatibilityDowngradeTarget) {
-          if (previousCompatibilityHostVersion === undefined) {
-            delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
-          } else {
-            process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
-          }
+      });
+      if (freshProcessResult.exitCode !== undefined) {
+        if (!(await restoreWindowsTaskAutoStartOrExit(params.preManagedServiceStop))) {
+          abortFinishUpdate = true;
+          return;
         }
+        defaultRuntime.exit(freshProcessResult.exitCode);
+        throw new Error(`post-update process exited with code ${freshProcessResult.exitCode}`);
       }
-    });
+      pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
+      postCorePluginUpdate = freshProcessResult.pluginUpdate;
+    }
+
+    if (!pluginsUpdatedInFreshProcess) {
+      await withPluginLifecycleLease(
+        params.ownedManagedUpdateContext?.env ? { env: params.ownedManagedUpdateContext.env } : {},
+        async () => {
+          postUpdateConfigSnapshot = await readConfigFileSnapshot({
+            skipPluginValidation: true,
+            suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
+          });
+          postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
+            configSnapshot: postUpdateConfigSnapshot,
+            requestedChannel: params.requestedChannel,
+          });
+          const restoredConfig = restoreDroppedPreUpdateChannels(
+            postUpdateConfigSnapshot,
+            preUpdateConfigSnapshot.valid
+              ? {
+                  sourceConfig: preUpdateConfigSnapshot.sourceConfig,
+                  authoredConfig: isRecord(preUpdateConfigSnapshot.parsed)
+                    ? (preUpdateConfigSnapshot.parsed as OpenClawConfig)
+                    : preUpdateConfigSnapshot.sourceConfig,
+                }
+              : undefined,
+          );
+          postUpdateConfigSnapshot = restoredConfig.snapshot;
+          // Current-process post-core convergence still reports the pre-update
+          // VERSION. During downgrades, pin compatibility checks to the installed
+          // target so incompatible newer plugins are disabled before restart.
+          const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
+          const versionComparison =
+            postUpdateInstalledVersion && VERSION
+              ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
+              : null;
+          const compatibilityDowngradeTarget =
+            versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
+          const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+          if (compatibilityDowngradeTarget) {
+            process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
+          }
+          try {
+            const initialPluginUpdate = await updatePluginsAfterCoreUpdate({
+              root: postUpdateRoot,
+              channel: params.channel,
+              configSnapshot: postUpdateConfigSnapshot,
+              configChanged: restoredConfig.changed,
+              restoredAuthoredChannels: restoredConfig.authoredChannels,
+              opts: params.opts,
+              timeoutMs: params.updateStepTimeoutMs,
+              pluginInstallRecords: preUpdatePluginInstallRecords,
+            });
+            const completedPluginUpdate = await completePostCorePluginUpdate({
+              root: postUpdateRoot,
+              pluginUpdate: initialPluginUpdate,
+              // A plugin-only update can replace its migration owner without replacing core.
+              // Downgrades and resume fallbacks can also leave an updated core on disk in this process.
+              freshDoctorRequired:
+                didCoreUpdateChangeInstall(params.result) ||
+                initialPluginUpdate.sync.changed ||
+                initialPluginUpdate.npm.changed,
+              yes: params.opts.yes === true,
+              json: params.opts.json === true,
+              timeoutMs: params.updateStepTimeoutMs,
+              ...(params.packageUpdateNodeRunner
+                ? { nodeRunner: params.packageUpdateNodeRunner }
+                : {}),
+            });
+            postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
+            postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
+          } finally {
+            if (compatibilityDowngradeTarget) {
+              if (previousCompatibilityHostVersion === undefined) {
+                delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+              } else {
+                process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
+              }
+            }
+          }
+        },
+      );
+    }
+  });
+  if (abortFinishUpdate) {
+    return;
   }
 
   const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
@@ -346,10 +370,12 @@ export async function finishUpdate(params: {
 
   const restartConfigSnapshot =
     postUpdateConfigSnapshot ??
-    (await readConfigFileSnapshot({
-      skipPluginValidation: true,
-      suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
-    }));
+    (await withOwnedManagedUpdateEnv(params.ownedManagedUpdateContext?.env, async () =>
+      readConfigFileSnapshot({
+        skipPluginValidation: true,
+        suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
+      }),
+    ));
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
@@ -372,6 +398,7 @@ export async function finishUpdate(params: {
   let gatewayPort = resolveUpdatedGatewayRestartPort({
     config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
     processEnv: process.env,
+    serviceEnv: params.ownedManagedUpdateContext?.env,
   });
   if (params.shouldRestart && serviceMutationAllowed) {
     try {

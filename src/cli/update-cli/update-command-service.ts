@@ -79,6 +79,7 @@ const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_PROFILE",
+  "OPENCLAW_GATEWAY_PORT",
 ] as const;
 const JSON_MODE_SERVICE_STDOUT = new Writable({
   write(_chunk, _encoding, callback) {
@@ -119,6 +120,7 @@ export type PreManagedServiceStop = {
   serviceMatchesMutationRoot?: boolean;
   blockMessage?: string;
   serviceEnv?: NodeJS.ProcessEnv;
+  serviceDefinitionEnv?: NodeJS.ProcessEnv;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
 
@@ -566,6 +568,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     running: true,
     ...serviceOwnership,
     serviceEnv: serviceState.env,
+    serviceDefinitionEnv: serviceState.command?.environment,
     ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
   };
 }
@@ -774,6 +777,8 @@ export function resolvePostInstallDoctorEnv(params?: {
     const value = serviceEnv[key]?.trim();
     if (value) {
       resolvedEnv[key] = serviceEnv[key];
+    } else {
+      delete resolvedEnv[key];
     }
   }
   return resolvedEnv;

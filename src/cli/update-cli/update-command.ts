@@ -583,7 +583,7 @@ async function updateCommandInternal(
   if (!execution) {
     return;
   }
-  const { result, preManagedServiceStop } = execution;
+  const { result, preManagedServiceStop, ownedManagedUpdateContext } = execution;
   stop();
   await finishUpdate({
     result,
@@ -598,6 +598,7 @@ async function updateCommandInternal(
     opts,
     showProgress,
     preManagedServiceStop,
+    ownedManagedUpdateContext,
     controlPlaneUpdateSentinelMeta,
     preUpdatePluginInstallRecords,
     startedAt,

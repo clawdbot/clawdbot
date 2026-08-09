@@ -6,6 +6,12 @@ const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
 ] as const;
 
+const MANAGED_UPDATE_SELECTOR_ENV_KEYS = [
+  ...SERVICE_REFRESH_PATH_ENV_KEYS,
+  "OPENCLAW_PROFILE",
+  "OPENCLAW_GATEWAY_PORT",
+] as const;
+
 function resolveServiceRefreshEnv(
   env: NodeJS.ProcessEnv,
   invocationCwd?: string,
@@ -54,6 +60,22 @@ export function resolveUpdatedInstallCommandEnv(params?: {
     ...processEnv,
     ...serviceEnv,
   });
+}
+
+export function resolveOwnedManagedUpdateEnv(params: {
+  processEnv?: NodeJS.ProcessEnv;
+  serviceEnv: NodeJS.ProcessEnv;
+  serviceDefinitionEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+}): NodeJS.ProcessEnv {
+  const resolved = resolveUpdatedInstallCommandEnv(params);
+  const definitionEnv = params.serviceDefinitionEnv ?? params.serviceEnv;
+  for (const key of MANAGED_UPDATE_SELECTOR_ENV_KEYS) {
+    if (!definitionEnv[key]?.trim()) {
+      delete resolved[key];
+    }
+  }
+  return resolved;
 }
 
 export function resolveUpdatedServicePathEnv(
