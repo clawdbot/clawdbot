@@ -288,7 +288,7 @@ describe("pdf-tool maxBytesMb cap and input validation", () => {
         }),
       );
       expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
-      expect(result.details?.skippedPdfs).toBeUndefined();
+      expectFields(result.details, { skippedPdfs: undefined });
     });
   });
 
@@ -334,11 +334,12 @@ describe("pdf-tool maxBytesMb cap and input validation", () => {
       expect(firstMockCall(analyzePdfSpy, "anthropicAnalyzePdf")[0]).toEqual(
         expect.objectContaining({ pdfs: [expect.objectContaining({})] }),
       );
-      expect(result.content?.[0]?.text).toContain("native summary");
-      expect(result.content?.[0]?.text).toContain(
+      const text = result.content?.find((block) => block.type === "text")?.text;
+      expect(text).toContain("native summary");
+      expect(text).toContain(
         "Skipped 2 PDF(s): the request byte budget (1 MB total) was exhausted.",
       );
-      expectFields(result.details?.skippedPdfs, {
+      expectFields((result.details as Record<string, unknown> | undefined)?.skippedPdfs, {
         count: 2,
         budgetBytes: 1024 * 1024,
         reason: "request_budget_exhausted",
@@ -370,8 +371,10 @@ describe("pdf-tool maxBytesMb cap and input validation", () => {
 
       // The first PDF consumes the whole budget; the second load never starts.
       expect(loadSpy).toHaveBeenCalledTimes(1);
-      expect(result.content?.[0]?.text).toContain("Skipped 1 PDF(s)");
-      expectFields(result.details?.skippedPdfs, {
+      expect(result.content?.find((block) => block.type === "text")?.text).toContain(
+        "Skipped 1 PDF(s)",
+      );
+      expectFields((result.details as Record<string, unknown> | undefined)?.skippedPdfs, {
         count: 1,
         budgetBytes: 1024 * 1024,
         reason: "request_budget_exhausted",
@@ -404,9 +407,11 @@ describe("pdf-tool maxBytesMb cap and input validation", () => {
 
       // No paid model call without loaded PDFs; the skip is recorded instead.
       expect(analyzePdfSpy).not.toHaveBeenCalled();
-      expect(result.content?.[0]?.text).toContain("No PDFs were loaded");
+      expect(result.content?.find((block) => block.type === "text")?.text).toContain(
+        "No PDFs were loaded",
+      );
       expectFields(result.details, { error: "request_budget_exhausted" });
-      expectFields(result.details?.skippedPdfs, {
+      expectFields((result.details as Record<string, unknown> | undefined)?.skippedPdfs, {
         count: 2,
         budgetBytes: 1024 * 1024,
         reason: "request_budget_exhausted",
