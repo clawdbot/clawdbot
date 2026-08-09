@@ -550,10 +550,10 @@ Two ways to start an ACP session:
   session as system events. OpenClaw records the full relay history in the
   child agent's SQLite state and removes it with the child session. Parent
   progress streams show assistant commentary and ACP status progress by default unless
-  `streaming.progress.commentary=false`. Discord also defaults parent
-  previews to progress mode when no stream mode is configured. Status
-  progress still honors `acp.stream.tagVisibility`, so tags such as `plan`
-  remain hidden unless explicitly enabled.
+  `streaming.progress.commentary=false`. Discord parent progress requires an
+  explicit `streaming.mode: "progress"`; unset Discord streaming stays quiet.
+  Status progress still honors `acp.stream.tagVisibility`, so tags such as
+  `plan` remain hidden unless explicitly enabled.
 </ParamField>
 
 ACP `sessions_spawn` runs use `agents.defaults.subagents.runTimeoutSeconds`

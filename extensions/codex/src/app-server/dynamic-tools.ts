@@ -45,7 +45,11 @@ import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runti
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   estimateToolResultTextChars,
@@ -78,16 +82,11 @@ import {
 import { recordCodexSourceReplyDeliveryIntent } from "./source-reply-finality.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
-type CodexDynamicToolHookContext = {
-  agentId?: string;
-  config?: EmbeddedRunAttemptParams["config"];
-  workspaceDir?: string;
+type CodexDynamicToolHookContext = NonNullable<
+  Parameters<typeof wrapToolWithBeforeToolCallHook>[1]
+> & {
   remoteWorkspaceRoot?: string;
   remoteWorkspaceRequestTimeoutMs?: number;
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-  channelId?: string;
   currentChannelProvider?: string;
   contextWindowTokens?: number;
   currentChannelId?: string;
@@ -97,8 +96,6 @@ type CodexDynamicToolHookContext = {
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
-  onToolOutcome?: EmbeddedRunAttemptParams["onToolOutcome"];
-  allocateToolOutcomeOrdinal?: EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"];
 };
 
 type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
@@ -352,6 +349,8 @@ function hasExplicitNonSourceMessageRoute(
 
 /** Runtime bridge returned to Codex app-server attempt code. */
 export type CodexDynamicToolBridge = {
+  /** Final executable tools after schema projection and hook-wrapper quarantine. */
+  availableTools: AnyAgentTool[];
   availableSpecs: CodexDynamicToolSpec[];
   specs: CodexDynamicToolSpec[];
   resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
@@ -381,9 +380,23 @@ export type CodexDynamicToolBridge = {
     toolMediaUrls: string[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
+    acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
     quarantinedTools: CodexDynamicToolSchemaQuarantine[];
   };
 };
+
+function normalizeAcceptedSessionSpawn(result: unknown): {
+  runId: string;
+  childSessionKey: string;
+} | null {
+  const details = asOptionalRecord(asOptionalRecord(result)?.details);
+  if (!details || details.status !== "accepted") {
+    return null;
+  }
+  const runId = normalizeOptionalString(details.runId);
+  const childSessionKey = normalizeOptionalString(details.childSessionKey);
+  return runId && childSessionKey ? { runId, childSessionKey } : null;
+}
 
 /** Namespace attached to OpenClaw-owned dynamic tools exposed to Codex. */
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
@@ -455,19 +468,16 @@ export function createCodexDynamicToolBridge(params: {
     contextWindowTokens > 0
       ? Math.max(1, resolveLiveToolResultMaxChars({ contextWindowTokens }))
       : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
-  const availableProjection = projectCodexDynamicTools(params.tools);
+  const availableProjection = projectCodexExecutableDynamicToolSurface(
+    params.tools,
+    params.hookContext,
+  );
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
     : availableProjection;
-  const wrappedAvailableProjection = wrapProjectedCodexDynamicTools(
-    availableProjection.tools,
-    params.hookContext,
-  );
-  const availableTools = wrappedAvailableProjection.tools;
+  const availableTools = availableProjection.tools;
   const quarantinedAvailableToolNames = new Set(
-    [...availableProjection.quarantinedTools, ...wrappedAvailableProjection.quarantinedTools].map(
-      (tool) => tool.tool,
-    ),
+    availableProjection.quarantinedTools.map((tool) => tool.tool),
   );
   const registeredSpecTools = (
     params.registeredTools ? registeredProjection.tools : availableTools
@@ -477,7 +487,6 @@ export function createCodexDynamicToolBridge(params: {
   const quarantinedTools = dedupeQuarantinedDynamicTools([
     ...availableProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
-    ...wrappedAvailableProjection.quarantinedTools,
   ]);
   warnQuarantinedDynamicTools(quarantinedTools);
   emitQuarantinedDynamicToolDiagnostics(quarantinedTools, params.hookContext);
@@ -490,6 +499,7 @@ export function createCodexDynamicToolBridge(params: {
     messagingToolSourceReplyPayloads: [],
     toolMediaUrls: [],
     toolAudioAsVoice: false,
+    acceptedSessionSpawns: [],
     quarantinedTools,
   };
   const middlewareRunner = createAgentToolResultMiddlewareRunner({
@@ -521,6 +531,7 @@ export function createCodexDynamicToolBridge(params: {
   ]);
   let readRemoteWorkspaceFile: CodexRemoteWorkspaceFileReader | undefined;
   return {
+    availableTools: availableTools.map((entry) => entry.tool),
     availableSpecs: createCodexDynamicToolSpecs({
       entries: availableTools,
       loading: params.loading ?? "searchable",
@@ -654,6 +665,14 @@ export function createCodexDynamicToolBridge(params: {
           result: middlewareResult,
         });
         const resultIsError = rawIsError || isToolResultError(result);
+        // A successful spawn is durable before presentation middleware can rewrite details.
+        const acceptedSessionSpawn =
+          toolName === "sessions_spawn" && !rawIsError
+            ? normalizeAcceptedSessionSpawn(telemetryRawResult)
+            : null;
+        if (acceptedSessionSpawn) {
+          telemetry.acceptedSessionSpawns.push(acceptedSessionSpawn);
+        }
         const finalResultFailureKind = resolveToolResultFailureKind(result);
         const resultFailureKind = rawResultFailureKind ?? finalResultFailureKind;
         const observerResult =
@@ -902,6 +921,39 @@ export function createCodexDynamicToolBridge(params: {
         consumeAdjustedParamsForToolCall(call.callId, toolResultHookContext.runId);
       }
     },
+  };
+}
+
+function projectCodexExecutableDynamicToolSurface(
+  tools: readonly AnyAgentTool[],
+  hookContext: CodexDynamicToolHookContext | undefined,
+): {
+  tools: ProjectedCodexDynamicTool[];
+  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
+} {
+  const projected = projectCodexDynamicTools(tools);
+  const wrapped = wrapProjectedCodexDynamicTools(projected.tools, hookContext);
+  return {
+    tools: wrapped.tools,
+    quarantinedTools: dedupeQuarantinedDynamicTools([
+      ...projected.quarantinedTools,
+      ...wrapped.quarantinedTools,
+    ]),
+  };
+}
+
+/** Applies the exact schema and hook-wrapper projection used by the executable Codex bridge. */
+export function projectCodexExecutableDynamicTools(params: {
+  tools: readonly AnyAgentTool[];
+  hookContext?: CodexDynamicToolHookContext;
+}): {
+  availableTools: AnyAgentTool[];
+  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
+} {
+  const projected = projectCodexExecutableDynamicToolSurface(params.tools, params.hookContext);
+  return {
+    availableTools: projected.tools.map((entry) => entry.tool),
+    quarantinedTools: projected.quarantinedTools,
   };
 }
 

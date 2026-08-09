@@ -13,6 +13,7 @@ import {
   createManagedOutgoingMediaBlocks,
 } from "../managed-image-attachments.js";
 import { formatForLog } from "../ws-log.js";
+import { hasRegisteredChatRunForSessionKey } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const MANAGED_OUTGOING_MEDIA_PATH_PREFIX = "/api/chat/media/outgoing/";
@@ -426,7 +427,7 @@ export function hasManagedOutgoingAssistantContent(
 export function scheduleChatHistoryManagedMediaCleanup(params: {
   sessionKey: string;
   agentId?: string;
-  context: Pick<GatewayRequestContext, "logGateway">;
+  context: Pick<GatewayRequestContext, "chatAbortControllers" | "logGateway">;
 }) {
   const cleanupKey =
     params.sessionKey === "global" && params.agentId
@@ -438,6 +439,8 @@ export function scheduleChatHistoryManagedMediaCleanup(params: {
   const pending = cleanupManagedOutgoingMediaRecords({
     sessionKey: params.sessionKey,
     ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
+    hasActiveSessionRun: (sessionKey, agentId) =>
+      hasRegisteredChatRunForSessionKey({ context: params.context, sessionKey, agentId }),
   })
     .then(() => undefined)
     .catch((error: unknown) => {

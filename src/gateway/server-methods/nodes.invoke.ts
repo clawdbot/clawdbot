@@ -6,12 +6,12 @@ import {
   missingScopeErrorShape,
   validateNodeInvokeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { captureNodePairingGeneration } from "../../infra/device-pairing-node-state.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import {
   isAdminOnlyNodeInvokeCommand,
   isBrowserProxyNodeInvokeCommand,
 } from "../../infra/node-commands.js";
-import { captureNodePairingGeneration } from "../../infra/node-pairing-state.js";
 import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";

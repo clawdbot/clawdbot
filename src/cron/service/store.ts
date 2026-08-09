@@ -3,6 +3,7 @@ import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import { deleteCronJobScratch } from "../scratch-store.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
   getCronJobsStoreRevision,
@@ -19,6 +20,7 @@ const loadedCronStoreRevisions = new WeakMap<CronServiceState, number>();
 type PersistOptions = {
   stateOnly?: boolean;
   suppressScheduledJobId?: string;
+  postPersistNotifications?: DeferredCronNotifications;
 };
 
 export type CronRollbackSnapshot = {
@@ -293,7 +295,47 @@ export async function persist(state: CronServiceState, opts?: PersistOptions) {
     stateOnly,
     suppressScheduledJobId: opts?.suppressScheduledJobId,
   });
+  runPostPersistCronNotifications(state, opts?.postPersistNotifications);
   return true;
+}
+
+/**
+ * Notifications run after the durable commit; one throwing notify (e.g. an
+ * auto-disable notice for a removed agent) must not drop its siblings or
+ * masquerade as a store-write failure — at startup that keeps the whole
+ * scheduler down.
+ */
+export function runPostPersistCronNotifications(
+  state: CronServiceState,
+  notifications: DeferredCronNotifications | undefined,
+) {
+  for (const notify of notifications ?? []) {
+    try {
+      notify();
+    } catch (err) {
+      state.deps.log.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "cron: post-persist notification failed",
+      );
+    }
+  }
+}
+
+/** Best-effort scratch pruning after the owning job deletions are durable. */
+export function pruneCronJobScratchAfterCommit(
+  state: CronServiceState,
+  committedJobIds: Iterable<string>,
+) {
+  for (const jobId of committedJobIds) {
+    try {
+      deleteCronJobScratch(state.deps.storePath, jobId);
+    } catch (error) {
+      state.deps.log.warn(
+        { jobId, err: String(error) },
+        "cron: post-commit scratch cleanup failed",
+      );
+    }
+  }
 }
 
 /** Captures the live cron state that must stay aligned with the durable store. */
@@ -309,18 +351,12 @@ export function snapshotStoreForRollback(state: CronServiceState): CronRollbackS
 export async function persistOrRestore(
   state: CronServiceState,
   snapshot: CronRollbackSnapshot,
-  opts: {
-    postPersistNotifications?: DeferredCronNotifications;
-    suppressScheduledJobId?: string;
-  } = {},
+  opts: Omit<PersistOptions, "stateOnly"> = {},
 ) {
   try {
-    const persisted = await persist(
-      state,
-      opts.suppressScheduledJobId === undefined
-        ? undefined
-        : { suppressScheduledJobId: opts.suppressScheduledJobId },
-    );
+    // Notification failures are contained inside persist(), so a throw here
+    // always means the durable write itself failed and the snapshot must win.
+    const persisted = await persist(state, opts);
     if (!persisted) {
       throw new Error("cron: durable store write did not complete");
     }
@@ -328,10 +364,5 @@ export async function persistOrRestore(
     state.store = snapshot.store;
     state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
     throw err;
-  }
-  // Queued notifications must not describe speculative cron state that a
-  // failed write rolls back before the service lock is released.
-  for (const notify of opts.postPersistNotifications ?? []) {
-    notify();
   }
 }

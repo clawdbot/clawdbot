@@ -237,6 +237,7 @@ export function renderAgentTools(params: {
   toolsEffectiveResult: ToolsEffectiveResult | null;
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
+  canUpdateConfig: boolean;
   onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
   onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
@@ -256,6 +257,7 @@ export function renderAgentTools(params: {
   const hasAgentAllow = Array.isArray(agentTools.allow) && agentTools.allow.length > 0;
   const hasGlobalAllow = Array.isArray(globalTools.allow) && globalTools.allow.length > 0;
   const editable =
+    params.canUpdateConfig &&
     Boolean(params.configForm) &&
     !params.configLoading &&
     !params.configSaving &&
@@ -449,7 +451,7 @@ export function renderAgentTools(params: {
           </button>
           <button
             class="btn btn--sm primary"
-            ?disabled=${params.configSaving || !params.configDirty}
+            ?disabled=${!params.canUpdateConfig || params.configSaving || !params.configDirty}
             @click=${params.onConfigSave}
           >
             ${params.configSaving ? t("common.saving") : t("common.save")}
@@ -709,6 +711,8 @@ export function renderAgentSkills(params: {
   configSaving: boolean;
   configDirty: boolean;
   filter: string;
+  canPatchConfig: boolean;
+  canUpdateConfig: boolean;
   onFilterChange: (next: string) => void;
   onRefresh: () => void;
   onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
@@ -717,11 +721,21 @@ export function renderAgentSkills(params: {
   onConfigReload: () => void;
   onConfigSave: () => void;
 }) {
-  const editable = Boolean(params.configForm) && !params.configLoading && !params.configSaving;
+  const editable =
+    params.canUpdateConfig &&
+    Boolean(params.configForm) &&
+    !params.configLoading &&
+    !params.configSaving;
   const config = resolveAgentConfig(params.configForm, params.agentId);
   const allowlist = Array.isArray(config.entry?.skills) ? config.entry?.skills : undefined;
   const allowSet = new Set(normalizeStringEntries(allowlist ?? []));
   const usingAllowlist = allowlist !== undefined;
+  const canClear =
+    params.canPatchConfig &&
+    usingAllowlist &&
+    Boolean(params.configForm) &&
+    !params.configLoading &&
+    !params.configSaving;
   const reportReady = Boolean(params.report && params.activeAgentId === params.agentId);
   const rawSkills = reportReady ? (params.report?.skills ?? []) : [];
   const filter = normalizeLowercaseStringOrEmpty(params.filter);
@@ -757,7 +771,7 @@ export function renderAgentSkills(params: {
         actions: html`
           <button
             class="btn btn--sm"
-            ?disabled=${!editable}
+            ?disabled=${!canClear}
             @click=${() => params.onClear(params.agentId)}
           >
             ${t("agentTools.enableAll")}
@@ -771,7 +785,7 @@ export function renderAgentSkills(params: {
           </button>
           <button
             class="btn btn--sm"
-            ?disabled=${!editable || !usingAllowlist}
+            ?disabled=${!canClear}
             @click=${() => params.onClear(params.agentId)}
           >
             ${t("common.reset")}
@@ -788,7 +802,7 @@ export function renderAgentSkills(params: {
           </button>
           <button
             class="btn btn--sm primary"
-            ?disabled=${params.configSaving || !params.configDirty}
+            ?disabled=${!params.canUpdateConfig || params.configSaving || !params.configDirty}
             @click=${params.onConfigSave}
           >
             ${params.configSaving ? t("common.saving") : t("common.save")}

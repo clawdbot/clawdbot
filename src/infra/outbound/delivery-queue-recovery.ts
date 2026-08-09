@@ -83,6 +83,7 @@ export type DeliverFn = (
       deliveryQueueId?: string;
       deliveryQueueStateDir?: string;
       deliveryProducerClaimId?: string;
+      deliveryProducerLeaseRequired?: boolean;
       skipQueue?: boolean;
       deferredDeliveryAdmissionPassed?: true;
       deferCommitHooks?: boolean;
@@ -254,13 +255,15 @@ function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
   );
 }
 
-function hasActiveStableDeliveryOwner(entry: QueuedDelivery, now: number): boolean {
+function hasActiveDeliveryOwner(entry: QueuedDelivery, now: number): boolean {
   return (
     (typeof entry.completionRetention === "object" ||
       entry.completionRetention === "permanent" ||
       entry.requiresProducerClaim === true) &&
     (entry.recoveryState === "producer_claimed" ||
-      (entry.recoveryState === "send_attempt_started" && entry.requiresProducerClaim === true)) &&
+      ((entry.recoveryState === "send_attempt_started" ||
+        entry.recoveryState === "unknown_after_send") &&
+        entry.requiresProducerClaim === true)) &&
     typeof entry.availableAt === "number" &&
     entry.availableAt > now
   );
@@ -328,6 +331,7 @@ function buildRecoveryDeliverParams(
     deliveryQueueId: entry.id,
     deliveryQueueStateDir: stateDir,
     ...(producerClaimId ? { deliveryProducerClaimId: producerClaimId } : {}),
+    ...(entry.requiresProducerClaim === true ? { deliveryProducerLeaseRequired: true } : {}),
     skipQueue: true, // Prevent re-enqueueing during recovery.
     deferredDeliveryAdmissionPassed: true,
     deferCommitHooks: true,
@@ -561,9 +565,11 @@ function recoveryPlatformAttemptId(
 ): string | null | undefined {
   return claimedAttemptId !== undefined
     ? claimedAttemptId
-    : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
-      ? null
-      : undefined;
+    : typeof entry.platformSendAttemptId === "string"
+      ? entry.platformSendAttemptId
+      : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
+        ? null
+        : undefined;
 }
 
 async function ackRecoveredDelivery(
@@ -896,9 +902,9 @@ async function drainQueuedEntry(opts: {
       await runOutboundDeliveryCommitHooks(deliveredResults);
     }
   };
-  // Stable producer rows can be observed between enqueue and live ownership.
-  // Fence recovery at the same SQLite claim before consuming an attempt or
-  // crossing provider I/O; an active live producer keeps its original lease.
+  // Live producer rows can be observed between enqueue and platform I/O.
+  // Fence recovery at the same SQLite claim before consuming an attempt;
+  // an active live producer keeps its original renewable lease.
   const requiresProducerClaim =
     typeof entry.completionRetention === "object" ||
     entry.requiresProducerClaim === true ||
@@ -1224,7 +1230,7 @@ export async function drainPendingDeliveries(opts: {
       // Poll-driven reconnect drains can repeat while a live send owns its
       // claim. Leave conflicts silent so reconnect polling cannot starve it.
       onEntry: async (currentEntry) => {
-        if (hasActiveStableDeliveryOwner(currentEntry, Date.now())) {
+        if (hasActiveDeliveryOwner(currentEntry, Date.now())) {
           return;
         }
         const admission = await applyRecoveryDeliveryAdmission({
@@ -1360,7 +1366,7 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(`Recovery skipped for delivery ${entry.id}: already gone`);
     },
     onEntry: async (currentEntry) => {
-      if (hasActiveStableDeliveryOwner(currentEntry, Date.now())) {
+      if (hasActiveDeliveryOwner(currentEntry, Date.now())) {
         opts.log.info(`Recovery skipped for delivery ${currentEntry.id}: active platform owner`);
         return "continue";
       }

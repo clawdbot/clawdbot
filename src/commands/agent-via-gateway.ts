@@ -9,6 +9,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { measureAgentStartup } from "../agents/startup-timing.js";
+import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
@@ -29,6 +30,7 @@ import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
+import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
@@ -102,6 +104,7 @@ type AgentCliProcessLike = {
 };
 type AgentCliDeps = CliDeps & {
   process?: AgentCliProcessLike;
+  localGatewayLockOptions?: GatewayLockOptions;
 };
 type AgentGatewayCallIdentity = Pick<
   Parameters<typeof callGateway>[0],
@@ -126,10 +129,16 @@ const embeddedAgentCommandLoader = createLazyPromiseLoader(
   () => import("./agent.js").then((module) => module.agentCommand),
   { cacheRejections: true },
 );
+const localAuditModuleLoader = createLazyPromiseLoader(() => import("./agent-local-audit.js"), {
+  cacheRejections: true,
+});
 const agentSessionModuleCache = createLazyPromiseLoader(() => agentSessionModuleLoader(), {
   cacheRejections: true,
 });
 const runtimeConfigModuleLoader = createLazyPromiseLoader(() => import("../config/io.js"), {
+  cacheRejections: true,
+});
+const gatewayLockModuleLoader = createLazyPromiseLoader(() => import("../infra/gateway-lock.js"), {
   cacheRejections: true,
 });
 const replyPayloadModuleLoader = createLazyPromiseLoader(
@@ -154,10 +163,11 @@ type EmbeddedRunDiagnosticsOptions = {
 async function startEmbeddedRunDiagnosticsExporters(
   runtime: RuntimeEnv,
   options: EmbeddedRunDiagnosticsOptions,
+  config: OpenClawConfig,
 ): Promise<OneShotDiagnosticsHandle | null> {
   try {
     return await startOneShotDiagnosticsExporters({
-      config: await loadRuntimeConfig(),
+      config,
       suppressStdoutDiagnosticLogs: options.suppressStdoutDiagnosticLogs,
     });
   } catch (err) {
@@ -182,11 +192,24 @@ async function runEmbeddedAgentCommand(
   const agentCommand = await measureAgentStartup("command-import", () =>
     embeddedAgentCommandLoader.load(),
   );
-  const diagnostics = await startEmbeddedRunDiagnosticsExporters(runtime, diagnosticsOptions);
+  const config = await loadRuntimeConfig();
+  const diagnostics = await startEmbeddedRunDiagnosticsExporters(
+    runtime,
+    diagnosticsOptions,
+    config,
+  );
+  let stopLocalAuditWriter: (() => Promise<void>) | undefined;
+  if (isExecutionIdentityCollectionEnabled(config)) {
+    try {
+      stopLocalAuditWriter = (await localAuditModuleLoader.load()).startAgentLocalAuditWriter();
+    } catch {
+      // Admission emits one bounded warning if evidence cannot be queued.
+    }
+  }
   try {
     return await agentCommand(opts, runtime, deps);
   } finally {
-    await diagnostics?.stop();
+    await Promise.all([diagnostics?.stop(), stopLocalAuditWriter?.().catch(() => undefined)]);
   }
 }
 
@@ -195,14 +218,52 @@ async function loadRuntimeConfig(): Promise<OpenClawConfig> {
   return getRuntimeConfig();
 }
 
+function formatActiveGatewayLocalRefusal(identity: GatewayLockIdentity): string {
+  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Run without --local to use it, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
+}
+
+async function acquireEmbeddedAgentStateLock(
+  options: GatewayLockOptions | undefined,
+  signal: AbortSignal,
+) {
+  const { acquireGatewayLock, GatewayLockError, readActiveGatewayLockIdentity } =
+    await gatewayLockModuleLoader.load();
+  const env = options?.env ?? process.env;
+  if (options?.allowInTests !== true && (env.VITEST || env.NODE_ENV === "test")) {
+    return null;
+  }
+  const activeGateway = await readActiveGatewayLockIdentity(options);
+  if (activeGateway) {
+    throw new GatewayLockError(formatActiveGatewayLocalRefusal(activeGateway));
+  }
+  try {
+    return await acquireGatewayLock({
+      ...options,
+      role: "agent-embedded",
+      sleep: options?.sleep ?? (async (ms) => await delayMs(ms, signal)),
+    });
+  } catch (error) {
+    if (!(error instanceof GatewayLockError)) {
+      throw error;
+    }
+    const racedGateway = await readActiveGatewayLockIdentity(options);
+    if (racedGateway) {
+      throw new GatewayLockError(formatActiveGatewayLocalRefusal(racedGateway), error);
+    }
+    throw error;
+  }
+}
+
 const loadReplyPayloadModule = replyPayloadModuleLoader.load;
 
 /** Test-only hooks for resetting lazy imports and shortening retry timing. */
 export const agentViaGatewayTesting = {
   resetLazyImportsForTests(): void {
     embeddedAgentCommandLoader.clear();
+    localAuditModuleLoader.clear();
     agentSessionModuleCache.clear();
     runtimeConfigModuleLoader.clear();
+    gatewayLockModuleLoader.clear();
     replyPayloadModuleLoader.clear();
     agentSessionModuleLoader = defaultAgentSessionModuleLoader;
   },
@@ -970,20 +1031,29 @@ export async function agentCliCommand(
   const signalBridge = createAgentCliSignalBridge(resolveAgentCliProcessLike(deps));
   try {
     if (dispatchOpts.local === true) {
-      const result = await runEmbeddedAgentCommand(
-        {
-          ...gatewayDispatchOpts,
-          agentId: gatewayDispatchOpts.agent,
-          replyAccountId: gatewayDispatchOpts.replyAccount,
-          cleanupBundleMcpOnRunEnd: true,
-          cleanupCliLiveSessionOnRunEnd: true,
-          oneShotCliRun: true,
-          abortSignal: signalBridge.signal,
-        },
-        runtime,
-        deps,
-        { suppressStdoutDiagnosticLogs: dispatchOpts.json === true },
+      const stateLock = await acquireEmbeddedAgentStateLock(
+        deps?.localGatewayLockOptions,
+        signalBridge.signal,
       );
+      let result: Awaited<ReturnType<typeof runEmbeddedAgentCommand>>;
+      try {
+        result = await runEmbeddedAgentCommand(
+          {
+            ...gatewayDispatchOpts,
+            agentId: gatewayDispatchOpts.agent,
+            replyAccountId: gatewayDispatchOpts.replyAccount,
+            cleanupBundleMcpOnRunEnd: true,
+            cleanupCliLiveSessionOnRunEnd: true,
+            oneShotCliRun: true,
+            abortSignal: signalBridge.signal,
+          },
+          runtime,
+          deps,
+          { suppressStdoutDiagnosticLogs: dispatchOpts.json === true },
+        );
+      } finally {
+        await stateLock?.release();
+      }
       return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
     }
 

@@ -578,7 +578,7 @@ suite.define(() => {
       await gateway.closeLatest(1006, "lost ack");
 
       const queue = page.locator(".chat-queue");
-      await queue.getByText("Needs review").waitFor({ timeout: 10_000 });
+      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       await queue.locator(".chat-queue__retry").click();
 

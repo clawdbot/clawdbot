@@ -12,6 +12,7 @@ import type {
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { FastMode } from "../../auto-reply/thinking.shared.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type {
   CliSessionBinding,
@@ -32,6 +33,7 @@ import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
@@ -47,6 +49,8 @@ import type {
 } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
+import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
+import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SessionManager } from "../sessions/index.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
@@ -63,6 +67,7 @@ export type RunCliAgentParams = {
   sessionManager?: SessionManager;
   sessionId: string;
   sessionKey?: string;
+  chatType?: ChatType;
   sessionTarget?: SessionTranscriptRuntimeTarget;
   /** Session identity used only for sandbox and tool-policy resolution. */
   runtimePolicySessionKey?: string;
@@ -96,8 +101,16 @@ export type RunCliAgentParams = {
   persistAssistantTranscript?: boolean;
   /** Session store path used when assistant transcript persistence is enabled. */
   storePath?: string;
+  /** Admission-time lifecycle half of the durable transcript writer fence. */
+  expectedLifecycleRevision?: string;
+  /** Exact admitted run allowed to append to the durable transcript. */
+  expectedWriterRunId?: string;
   /** Canonical user-turn recorder shared with gateway/queue dispatch. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Context engine resolved once by the outer logical-turn owner. */
+  contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
+  /** Attempt-local facts accepted or discarded by the outer logical-turn owner. */
+  onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   /** Skip current-turn user persistence when a retry/fallback already wrote it. */
   suppressNextUserMessagePersistence?: boolean;
   /** Notification fired after the current user turn has been accepted into the transcript. */
@@ -286,6 +299,8 @@ export type CliSessionBindingFacts = {
 export type PreparedCliRunContext = {
   params: RunCliAgentParams;
   effectiveAuthProfileId?: string;
+  /** Selected profile snapshot used only for terminal health settlement. */
+  authProfileStore?: AuthProfileStore;
   agentDir?: string;
   started: number;
   workspaceDir: string;

@@ -1133,7 +1133,7 @@ printf 'status=%s\\n' "$status"
 
     expect(script).toContain("assert_pack_unpacked_size_budget");
     expect(script).toContain('assert_pack_unpacked_size_budget "update" "$pack_json_file"');
-    expect(script).toContain('from "./scripts/lib/npm-pack-budget.mjs"');
+    expect(script).toContain('from "./scripts/lib/npm-pack-budget.mts"');
     expect(script).toContain("install smoke cannot verify pack budget");
   });
 
@@ -1608,6 +1608,8 @@ describe("bun global install smoke", () => {
     expect(script).toContain("--output-name openclaw-current.tgz");
     expect(script).not.toContain("npm pack --ignore-scripts --json --pack-destination");
     expect(script).toContain('"$bun_path" install -g "$PACKAGE_TGZ" --no-progress');
+    expect(script).toContain('"$openclaw_bin" --help');
+    expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_PROOF_PATH");
     expect(script).toContain("infer image providers --json");
     expect(script).toContain("assert-image-providers");
     expect(assertions).toContain("image providers output is missing bundled provider");

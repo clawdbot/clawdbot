@@ -4,11 +4,9 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-ru
 import { describe, expect, it, vi } from "vitest";
 
 const managerDebug = {
-  backend: "qmd" as const,
+  backend: "builtin" as const,
   purpose: "default" as const,
   managerMs: 7,
-  managerCacheState: "cached-full-hit" as const,
-  qmdIdentityHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 };
 
 const getMemorySearchManagerMock = vi.hoisted(() =>
@@ -19,6 +17,7 @@ const getMemorySearchManagerMock = vi.hoisted(() =>
   })),
 );
 const filterMemorySearchHitsBySessionVisibilityMock = vi.hoisted(() => vi.fn());
+const configureMemoryCoreDreamingStateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./memory/index.js", () => ({
   closeAllMemorySearchManagers: vi.fn(async () => {}),
@@ -28,6 +27,10 @@ vi.mock("./memory/index.js", () => ({
 
 vi.mock("./session-search-visibility.js", () => ({
   filterMemorySearchHitsBySessionVisibility: filterMemorySearchHitsBySessionVisibilityMock,
+}));
+
+vi.mock("./dreaming-state.js", () => ({
+  configureMemoryCoreDreamingState: configureMemoryCoreDreamingStateMock,
 }));
 
 import { createMemoryRuntime, memoryRuntime } from "./runtime-provider.js";
@@ -102,6 +105,19 @@ describe("memoryRuntime", () => {
       agentId: "second",
       withLease: secondLease,
     });
+  });
+
+  it("binds the scoped state opener inside each lazy runtime instance", async () => {
+    const cfg = {} as OpenClawConfig;
+    const openKeyedStore = vi.fn();
+    configureMemoryCoreDreamingStateMock.mockClear();
+
+    await createMemoryRuntime({ openKeyedStore }).getMemorySearchManager({
+      cfg,
+      agentId: "main",
+    });
+
+    expect(configureMemoryCoreDreamingStateMock).toHaveBeenCalledWith(openKeyedStore);
   });
 
   it("delegates raw-hit authorization to the canonical session visibility filter", async () => {

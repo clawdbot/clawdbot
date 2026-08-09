@@ -3,6 +3,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -10,7 +11,6 @@ import {
 } from "../../agents/auth-profiles.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { modelsHandlers } from "./models.js";
@@ -1266,6 +1266,83 @@ describe("models.list", () => {
                 provider: "demo-provider",
                 available: false,
               },
+            ],
+          },
+          undefined,
+        );
+      },
+    );
+  });
+
+  it("hides inline provider keys during billing cooldown from model browsing", async () => {
+    // Regression: the models.list availability checker loaded the auth store
+    // for profile checks but did not pass it to the runtime availability check,
+    // so inline provider keys in billing cooldown stayed browseable.
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-models-list-inline-cooldown-",
+        agentEnv: "main",
+      },
+      async (state) => {
+        const runtimeConfig = {
+          models: {
+            providers: {
+              cliproxyapi: {
+                api: "openai-responses",
+                baseUrl: "https://cliproxy.example/v1",
+                apiKey: "sk-inline-cooldown", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+        const catalog = [{ id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi" }];
+        const writeCooldown = (disabledUntil: number) =>
+          state.writeAuthProfiles({
+            version: 1,
+            profiles: {},
+            usageStats: {
+              "inline-api-key:cliproxyapi": {
+                disabledUntil,
+                disabledReason: "billing",
+              },
+            },
+          });
+
+        await writeCooldown(Date.now() + 60_000);
+        const cooled = requestModelsList({
+          view: "all",
+          runtimeConfig,
+          loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+          reqId: "req-models-list-inline-cooldown-active",
+        });
+        await cooled.request;
+        expect(cooled.respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              { id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi", available: false },
+            ],
+          },
+          undefined,
+        );
+
+        // Expired cooldown proves the store reaches the runtime check instead
+        // of the row being unavailable for an unrelated reason.
+        await writeCooldown(Date.now() - 60_000);
+        const recovered = requestModelsList({
+          view: "all",
+          runtimeConfig,
+          loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+          reqId: "req-models-list-inline-cooldown-expired",
+        });
+        await recovered.request;
+        expect(recovered.respond).toHaveBeenCalledWith(
+          true,
+          {
+            models: [
+              { id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi", available: true },
             ],
           },
           undefined,

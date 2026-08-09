@@ -135,7 +135,7 @@ async function readBoundedText(
   signal?: AbortSignal,
 ): Promise<string> {
   return await readBoundedResponseText(response, label, maxBytes, {
-    createTooLargeError: (message) => new Error(message),
+    createTooLargeError: (message: string) => new Error(message),
     signal,
   });
 }

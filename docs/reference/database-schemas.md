@@ -27,6 +27,8 @@ Each database records its schema in two places:
 
 OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. `openclaw update` also refuses a package or source target whose declared schema support is older than an on-disk database. Target packages published before schema metadata was added cannot be preflighted.
 
+Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
 
 ## Agent schema history
@@ -107,7 +109,7 @@ The general procedure is:
 
 ### Example: agent schema 11 to 9
 
-Schema 10 added the active transcript projection. Schema 11 added leases, durable delivery, conversation-address state, and heartbeat outcomes. QMD coordination uses rows in `state_leases`; there is no separate QMD table to preserve.
+Schema 10 added the active transcript projection. Schema 11 added leases, durable delivery, conversation-address state, and heartbeat outcomes.
 
 Run equivalent SQL against each affected per-agent database after inspecting the exact schema that wrote it:
 

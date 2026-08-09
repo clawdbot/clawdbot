@@ -2,6 +2,10 @@
 import { AsyncResource } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -113,6 +117,35 @@ describe("dispatchReplyFromConfig", () => {
         "hookMocks.runner.hasHooks.mock.invocationCallOrder[0] test invariant",
       ),
     );
+  });
+
+  it("uses zero fallback registry loads for a published Gateway dispatch", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    const preparedRegistry = createTestRegistry([]);
+    const preparedRuntime = await import("../../agents/prepared-model-runtime.js");
+    const preparedLookup = vi
+      .spyOn(preparedRuntime, "loadPublishedGatewayInboundPluginRegistry")
+      .mockResolvedValue(preparedRegistry);
+    try {
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "whatsapp",
+          SessionKey: "agent:main:main",
+          MessageSid: "prepared",
+        }),
+        cfg,
+        dispatcher: createDispatcher(),
+        replyResolver,
+        usePublishedModelRuntime: true,
+      });
+      expect(preparedLookup).toHaveBeenCalledOnce();
+      expect(preparedLookup).toHaveBeenCalledWith({ agentId: "main" });
+      expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+    } finally {
+      preparedLookup.mockRestore();
+    }
   });
 
   it("drops a durable source duplicate before before_dispatch hooks", async () => {
@@ -375,6 +408,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       sessionKey: "agent:main:slack:channel:C123",
       agentId: "main",
+      expectedWriterRunId: "slack-run-1",
       text: "Slack command reply",
       mediaUrls: undefined,
       idempotencyKey: "channel-final:slack-message-1:0",
@@ -1219,6 +1253,136 @@ describe("dispatchReplyFromConfig", () => {
       expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
     } finally {
       activeOperation.complete();
+    }
+  });
+
+  it("lets Gateway-owned turns reach queue resolution while only an embedded run is active", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:main";
+    const sessionId = "active-embedded-session";
+    const activeHandle = {
+      queueMessage: vi.fn(async () => {}),
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+    setActiveEmbeddedRun(sessionId, activeHandle, sessionKey);
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => {
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      return undefined;
+    });
+
+    try {
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "webchat",
+          Surface: "webchat",
+          SessionKey: sessionKey,
+          BodyForAgent: "steer this active turn",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: {
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
+            onDeferred: vi.fn(),
+            onSettled: vi.fn(),
+          },
+        },
+        replyResolver,
+      });
+
+      expect(result).toMatchObject({
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 0 },
+        noVisibleReplyFallbackDelivered: true,
+      });
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+    } finally {
+      clearActiveEmbeddedRun(sessionId, activeHandle, sessionKey);
+    }
+  });
+
+  it("keeps non-Gateway turns on normal admission while only an embedded run is active", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:telegram:direct:embedded-only";
+    const sessionId = "active-non-gateway-embedded-session";
+    const activeHandle = {
+      queueMessage: vi.fn(async () => {}),
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+    setActiveEmbeddedRun(sessionId, activeHandle, sessionKey);
+    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+    const replyResolver = vi.fn(async () => {
+      expect(replyRunRegistry.get(sessionKey)?.sessionId).toBe(sessionId);
+      return undefined;
+    });
+
+    try {
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: sessionKey,
+          BodyForAgent: "queue through normal admission",
+        }),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver,
+      });
+
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+    } finally {
+      clearActiveEmbeddedRun(sessionId, activeHandle, sessionKey);
+    }
+  });
+
+  it("keeps Gateway turns on normal admission when the embedded run belongs to an old session", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:main";
+    const staleSessionId = "stale-embedded-session";
+    const currentSessionId = "current-session";
+    const activeHandle = {
+      queueMessage: vi.fn(async () => {}),
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+    setActiveEmbeddedRun(staleSessionId, activeHandle, sessionKey);
+    sessionStoreMocks.currentEntry = { sessionId: currentSessionId, updatedAt: Date.now() };
+    const replyResolver = vi.fn(async () => {
+      expect(replyRunRegistry.get(sessionKey)?.sessionId).toBe(currentSessionId);
+      return undefined;
+    });
+
+    try {
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "webchat",
+          Surface: "webchat",
+          SessionKey: sessionKey,
+          BodyForAgent: "start on the current session",
+        }),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyOptions: {
+          turnAdoptionLifecycle: {
+            onAdopted: async () => {},
+            onDeferred: vi.fn(),
+            onSettled: vi.fn(),
+          },
+        },
+        replyResolver,
+      });
+
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+    } finally {
+      clearActiveEmbeddedRun(staleSessionId, activeHandle, sessionKey);
     }
   });
 

@@ -419,34 +419,9 @@ jobs:
             echo "Root image artifact name does not match the target and producer run attempt." >&2
             exit 1
           }
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --arg id "$ARTIFACT_ID" \
-            --arg name "$ARTIFACT_NAME" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '
-              (.id | tostring) == $id and
-              .name == $name and
-              .expired == false and
-              .digest == $digest and
-              (.workflow_run.id | tostring) == $run_id
-            ' <<< "$artifact_json" >/dev/null || {
-              echo "Root image artifact identity does not match the requested immutable tuple." >&2
-              exit 1
-            }
-          attempt_json="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
-          )"
-          jq -e \
-            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
-            <<< "$attempt_json" >/dev/null || {
-              echo "Root image artifact producer run attempt does not match the requested tuple." >&2
-              exit 1
-            }
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download root Dockerfile image artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -623,34 +598,9 @@ jobs:
             echo "Root image artifact name does not match the target and producer run attempt." >&2
             exit 1
           }
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --arg id "$ARTIFACT_ID" \
-            --arg name "$ARTIFACT_NAME" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '
-              (.id | tostring) == $id and
-              .name == $name and
-              .expired == false and
-              .digest == $digest and
-              (.workflow_run.id | tostring) == $run_id
-            ' <<< "$artifact_json" >/dev/null || {
-              echo "Root image artifact identity does not match the requested immutable tuple." >&2
-              exit 1
-            }
-          attempt_json="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
-          )"
-          jq -e \
-            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
-            <<< "$attempt_json" >/dev/null || {
-              echo "Root image artifact producer run attempt does not match the requested tuple." >&2
-              exit 1
-            }
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download root Dockerfile image artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -804,34 +754,9 @@ jobs:
             echo "Root image artifact name does not match the target and producer run attempt." >&2
             exit 1
           }
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --arg id "$ARTIFACT_ID" \
-            --arg name "$ARTIFACT_NAME" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '
-              (.id | tostring) == $id and
-              .name == $name and
-              .expired == false and
-              .digest == $digest and
-              (.workflow_run.id | tostring) == $run_id
-            ' <<< "$artifact_json" >/dev/null || {
-              echo "Root image artifact identity does not match the requested immutable tuple." >&2
-              exit 1
-            }
-          attempt_json="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
-          )"
-          jq -e \
-            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
-            <<< "$attempt_json" >/dev/null || {
-              echo "Root image artifact producer run attempt does not match the requested tuple." >&2
-              exit 1
-            }
+          bash .release-harness/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Root image" "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Download root Dockerfile image artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

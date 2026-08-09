@@ -96,6 +96,7 @@ vi.mock("../model-catalog.js", () => ({
 }));
 
 vi.mock("../model-catalog.runtime.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalogSnapshot: vi.fn(async () => ({
     entries: [],
     routeVariants: [],
@@ -111,6 +112,10 @@ vi.mock("../provider-model-normalization.runtime.js", () => ({
 
 vi.mock("../harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+}));
+
+vi.mock("../runtime-plugins.js", () => ({
+  withAgentPluginRegistry: ({ run }: { run: () => unknown }) => run(),
 }));
 
 vi.mock("../workspace.js", () => ({

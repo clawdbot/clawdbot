@@ -901,6 +901,14 @@ describe("plugin registry runtime config scope", () => {
         }),
       ).rejects.toThrow('owned by plugin "codex-owner"');
     }
+    const gatewayRequestCountBeforeBatch = gatewayRequest.mock.calls.length;
+    await expect(
+      otherApi.runtime.gateway.request("sessions.patchMany", {
+        targets: [{ key: ordinaryKey }, { key: reservedKey }],
+        patch: { archived: true },
+      }),
+    ).rejects.toThrow('owned by plugin "codex-owner"');
+    expect(gatewayRequest).toHaveBeenCalledTimes(gatewayRequestCountBeforeBatch);
     await expect(
       otherApi.runtime.gateway.request("agent", {
         sessionId: reservedEntry.sessionId,

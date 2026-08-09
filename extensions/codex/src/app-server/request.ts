@@ -217,7 +217,7 @@ export async function withCodexAppServerJsonClient<T>(
     // to the conservative graceful/force-kill window used elsewhere.
     isolatedShutdown?: { exitTimeoutMs?: number; forceKillDelayMs?: number };
   },
-  run: (request: CodexAppServerScopedRequest) => Promise<T>,
+  run: (request: CodexAppServerScopedRequest, client: CodexAppServerClient) => Promise<T>,
 ): Promise<T> {
   const timeoutMs = params.timeoutMs ?? 60_000;
   const timeoutMessage = params.timeoutMessage ?? "codex app-server request timed out";
@@ -273,7 +273,7 @@ export async function withCodexAppServerJsonClient<T>(
                 signal: timeoutController.signal,
               });
             };
-            return await run(scopedRequest);
+            return await run(scopedRequest, client);
           } catch (error) {
             if (!isCodexAppServerStartSelectionChangedError(error) || attempt > 0) {
               throw error;

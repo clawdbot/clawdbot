@@ -21,11 +21,34 @@ import { TelegramPairingStoreReadError } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
 
+type TelegramMessageHandlerParams = Pick<
+  RegisterTelegramHandlerParams,
+  "bot" | "shouldSkipUpdate"
+> & {
+  opts: Pick<RegisterTelegramHandlerParams["opts"], "botInfo">;
+  runtime: Pick<RegisterTelegramHandlerParams["runtime"], "error">;
+};
+
+type TelegramMessageHandlerRuntime = Pick<
+  TelegramHandlerMessageRuntime,
+  | "normalizePromptContextMinTimestampMs"
+  | "promptContextBoundaryOptions"
+  | "releaseDispatchDedupeClaims"
+  | "claimMessageDispatchDedupe"
+  | "buildSyntheticContext"
+  | "resolveTelegramSessionState"
+  | "resolvePromptContextAmbientWatermark"
+> & {
+  recordMessageForReplyChain: (
+    ...args: Parameters<TelegramHandlerMessageRuntime["recordMessageForReplyChain"]>
+  ) => Promise<unknown>;
+};
+
 export function registerTelegramMessageHandlers(
-  { bot, opts, runtime, shouldSkipUpdate }: RegisterTelegramHandlerParams,
-  messageRuntime: TelegramHandlerMessageRuntime,
-  authorizationRuntime: TelegramHandlerAuthorizationRuntime,
-  inboundRuntime: TelegramHandlerInboundRuntime,
+  { bot, opts, runtime, shouldSkipUpdate }: TelegramMessageHandlerParams,
+  messageRuntime: TelegramMessageHandlerRuntime,
+  authorizationRuntime: Pick<TelegramHandlerAuthorizationRuntime, "authorizeInboundMessage">,
+  inboundRuntime: Pick<TelegramHandlerInboundRuntime, "processInboundMessage">,
 ) {
   const {
     normalizePromptContextMinTimestampMs,
@@ -113,7 +136,6 @@ export function registerTelegramMessageHandlers(
       chatId: normalizedMsg.chat.id,
       isGroup,
       isForum,
-      messageThreadId: normalizedMsg.message_thread_id,
       senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
       senderUsername: normalizedMsg.from?.username ?? "",
       requireConfiguredGroup: params.requireConfiguredGroup,
@@ -141,7 +163,6 @@ export function registerTelegramMessageHandlers(
         chatId: event.chatId,
         isGroup: event.isGroup,
         isForum: event.isForum,
-        messageThreadId: event.messageThreadId,
         senderId: event.senderId,
         senderUsername: event.senderUsername,
         requireConfiguredGroup: event.requireConfiguredGroup,

@@ -126,6 +126,12 @@ Options:
 - `--runtime <runtime>`: Service runtime (`node`)
 - `--force`: Reinstall/overwrite if already installed
 
+> **Linux (systemd user service):** Run `sudo loginctl enable-linger <user>` after
+> install. Without lingering, `systemd --user` tears down the node service when
+> your last SSH session ends, so the node silently goes offline after logout.
+> `openclaw node install` prints this warning when it detects lingering is
+> disabled.
+
 Manage the service:
 
 ```bash

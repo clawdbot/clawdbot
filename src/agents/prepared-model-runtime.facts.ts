@@ -5,7 +5,6 @@ import type { ConfiguredModelRef } from "@openclaw/model-catalog-core/configured
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stableStringify } from "@openclaw/normalization-core";
 import type { PreparedMessageToolCatalog } from "../channels/plugins/message-action-discovery.js";
-import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -17,7 +16,6 @@ import type { PreparedProviderStaticCatalog } from "../plugins/provider-discover
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
-import type { ProviderPlugin } from "../plugins/types.js";
 import type { AgentCredentialMap } from "./agent-auth-credentials.js";
 import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
 import {
@@ -52,13 +50,21 @@ import {
   toStaticCatalogEntry,
   type PreparedConfiguredRuntimeModel,
 } from "./prepared-model-runtime.configured.js";
+import {
+  prepareWorkspacePluginRegistries,
+  type PreparedInboundRegistryLoader,
+} from "./prepared-model-runtime.inbound-registry.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import {
+  listPreparedSyntheticAuthProviderRefs,
+  resolvePreparedSyntheticAuth,
+  scopeSyntheticAuthProviderRefs,
+} from "./prepared-model-runtime.synthetic-auth.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
 } from "./prepared-model-runtime.types.js";
-import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 import type { AuthStorage, AuthStorageData } from "./sessions/auth-storage.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
@@ -89,6 +95,7 @@ export type PreparedModelRuntimeWorkspaceFacts = {
   inlineProviderModels: readonly InlineModelEntry[];
   configuredCatalogEntries: readonly ModelCatalogEntry[];
   pluginRegistry?: import("../plugins/registry-types.js").PluginRegistry;
+  inboundPluginRegistry?: import("../plugins/registry-types.js").PluginRegistry;
 };
 
 export type PreparedModelRuntimeCatalogFacts = {
@@ -155,57 +162,11 @@ function prepareAgentFacts(
   };
 }
 
-function listPreparedSyntheticAuthProviderRefs(providers: readonly ProviderPlugin[]): string[] {
-  return [
-    ...new Set(
-      providers.flatMap((provider) =>
-        typeof provider.resolveSyntheticAuth === "function"
-          ? [provider.id, ...(provider.aliases ?? []), ...(provider.hookAliases ?? [])]
-          : [],
-      ),
-    ),
-  ].toSorted((left, right) => left.localeCompare(right));
-}
-
-function resolvePreparedSyntheticAuth(params: {
-  config: PreparedModelRuntimeInput["config"];
-  provider: string;
-  providers: readonly ProviderPlugin[];
-}): { apiKey?: string } | undefined {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const providerPlugin = params.providers.find((candidate) =>
-    [candidate.id, ...(candidate.aliases ?? []), ...(candidate.hookAliases ?? [])].some(
-      (ref) => normalizeProviderId(ref) === normalizedProvider,
-    ),
-  );
-  return (
-    providerPlugin?.resolveSyntheticAuth?.({
-      config: params.config,
-      provider: params.provider,
-      providerConfig: Object.entries(params.config.models?.providers ?? {}).find(
-        ([providerId]) => normalizeProviderId(providerId) === normalizedProvider,
-      )?.[1],
-    }) ?? undefined
-  );
-}
-
-export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntimeInput): string {
-  return JSON.stringify({
-    // Config is the process generation. Agent-specific configured refs are projected after these
-    // workspace/plugin facts are shared.
-    config: hashRuntimeConfigValue(input.config),
-    env: hashRuntimeConfigValue(input.env ?? process.env),
-    readOnly: input.readOnly === true,
-    workspaceDir: input.workspaceDir,
-    allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
-    runtimePluginSelections: input.runtimePluginSelections,
-  });
-}
-
 export async function prepareWorkspaceBuildGroup(
   inputs: readonly PreparedModelRuntimeInput[],
   catalogMode: PreparedModelRuntimeCatalogMode,
   options: { providerDiscoveryProviderIds?: readonly string[] } = {},
+  loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
 ): Promise<{
   agentFacts: PreparedModelRuntimeAgentFacts[];
   workspaceFacts: PreparedModelRuntimeWorkspaceFacts;
@@ -225,15 +186,10 @@ export async function prepareWorkspaceBuildGroup(
   }
   const env = input.env ?? process.env;
   const runtimePluginStartedAt = performance.now();
-  const runtimePluginRegistry = !input.readOnly
-    ? loadAgentRuntimePluginRegistryHandle({
-        config: input.config,
-        env,
-        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-        ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
-        selections: input.runtimePluginSelections,
-      })
-    : undefined;
+  const { inboundPluginRegistry, runtimePluginRegistry } = prepareWorkspacePluginRegistries(
+    input,
+    loadInboundPluginRegistry,
+  );
   const runtimePluginMs = performance.now() - runtimePluginStartedAt;
   return await withPluginRuntimeRegistryScope(runtimePluginRegistry, async () => {
     const pluginMetadataStartedAt = performance.now();
@@ -311,13 +267,16 @@ export async function prepareWorkspaceBuildGroup(
       syntheticAuthProviderRefs:
         catalogMode === "static"
           ? listPreparedSyntheticAuthProviderRefs(preparedSyntheticAuthProviders)
-          : resolveRuntimeSyntheticAuthProviderRefs({
-              config: input.config,
-              env,
-              index: pluginMetadataSnapshot.index,
-              registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
-              ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-            }),
+          : scopeSyntheticAuthProviderRefs(
+              resolveRuntimeSyntheticAuthProviderRefs({
+                config: input.config,
+                env,
+                index: pluginMetadataSnapshot.index,
+                registryDiagnostics: pluginMetadataSnapshot.registryDiagnostics,
+                ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+              }),
+              options.providerDiscoveryProviderIds,
+            ),
       ...(catalogMode === "static"
         ? {
             resolveSyntheticAuth: (provider: string) =>
@@ -425,6 +384,7 @@ export async function prepareWorkspaceBuildGroup(
         inlineProviderModels,
         configuredCatalogEntries,
         ...(runtimePluginRegistry ? { pluginRegistry: runtimePluginRegistry } : {}),
+        ...(inboundPluginRegistry ? { inboundPluginRegistry } : {}),
         ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
         ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
         ...(providerStaticModels ? { providerStaticModels } : {}),

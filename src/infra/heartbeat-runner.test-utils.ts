@@ -79,7 +79,7 @@ export async function seedHeartbeatScratchForTest(params: {
 export async function seedSessionStore(
   storePath: string,
   sessionKey: string,
-  session: HeartbeatSessionSeed,
+  session: Partial<HeartbeatSessionSeed>,
 ): Promise<void> {
   const {
     deliveryContext,

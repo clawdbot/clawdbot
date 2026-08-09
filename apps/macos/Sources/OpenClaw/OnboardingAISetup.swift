@@ -81,38 +81,6 @@ final class OnboardingAISetupModel {
     private(set) var manualError: Failure?
     var showManualEntry = false
 
-    var selectedManualProvider: ManualProvider? {
-        self.manualProviders.first { $0.id == self.manualProviderID }
-    }
-
-    var prepareOptions: [PrepareOption] {
-        guard self.prepareAvailable else { return [] }
-        return Self.prepareOptions(
-            candidates: self.candidates,
-            advertisedOptions: self.detectedPrepareOptions)
-    }
-
-    var isPreparingModel: Bool {
-        self.providerWizardKind == .prepare
-    }
-
-    var connected: Bool {
-        self.phase == .connected
-    }
-
-    var isBusy: Bool {
-        self.phase == .detecting || self.phase == .testing || self.manualTesting || self.authBusy ||
-            self.pendingActivationVerification
-    }
-
-    /// Once setup starts changing inference, its successful result belongs to
-    /// OpenClaw rather than the existing-Gateway onboarding bypass.
-    var ownsInferenceTransition: Bool {
-        (self.phase == .detecting && self.configuredGatewayBlocker == nil) ||
-            self.phase == .testing || self.manualTesting || self.authBusy || self.connected ||
-            self.pendingActivationVerification
-    }
-
     /// Called when a candidate connects so the page can advance.
     var onConnected: (() -> Void)?
     /// Called whenever setup enters the read-only wait for an ambiguous
@@ -140,28 +108,6 @@ final class OnboardingAISetupModel {
     /// Only a just-completed provider flow may trust setupComplete without re-probing.
     @ObservationIgnored private var providerAuthReconciliationPending = false
 
-    /// Internal (not private): the persisted-transition helper lives in
-    /// OnboardingAISetupSupport.swift with the other pure statics.
-    struct PersistedActivationState: Equatable {
-        let setupComplete: Bool
-        let configuredModel: String?
-    }
-
-    private struct AttemptContext: Equatable {
-        let token: UUID
-        let routeIdentity: String
-    }
-
-    private struct PendingVerification {
-        let context: AttemptContext
-        let task: Task<PendingVerificationOutcome, Never>
-    }
-
-    private struct CompletedHandoff {
-        let routeIdentity: String
-        let activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?
-    }
-
     init(
         gateway: GatewayConnection = .shared,
         defaults: UserDefaults = .standard,
@@ -176,44 +122,6 @@ final class OnboardingAISetupModel {
         self.defaults = defaults
         self.routeIdentityProvider = routeIdentityProvider
         self.connectionModeProvider = connectionModeProvider
-    }
-
-    private struct DetectResult: Decodable {
-        struct DetectedCandidate: Decodable {
-            let icon: String?
-            let website: String?
-            let kind: String
-            let label: String
-            let detail: String
-            let modelRef: String
-            let credentials: Bool?
-        }
-
-        let candidates: [DetectedCandidate]
-        let unavailableCandidates: [UnavailableCandidate]?
-        let manualProviders: [ManualProvider]?
-        let authOptions: [AuthOption]?
-        let prepareOptions: [PrepareOption]?
-        let recommendedInstalls: [RecommendedInstall]?
-        let configuredModel: String?
-        let setupComplete: Bool?
-
-        var persistedActivationState: PersistedActivationState? {
-            self.setupComplete.map {
-                PersistedActivationState(
-                    setupComplete: $0,
-                    configuredModel: self.configuredModel)
-            }
-        }
-    }
-
-    struct ActivateResult: Decodable {
-        let ok: Bool
-        let modelRef: String?
-        let latencyMs: Double?
-        let lines: [String]?
-        let status: String?
-        let error: String?
     }
 
     func startIfNeeded() {
@@ -374,6 +282,13 @@ final class OnboardingAISetupModel {
               await self.gateway.isCurrentServerLease(lease)
         else { return .superseded }
         if let activationOwner = pendingActivationOwner {
+            if activationOwner.isUnbound {
+                // Unbound receipts never resume across relaunch or verification
+                // retry; a fresh activation is the only safe continuation.
+                self.pendingActivationVerification = false
+                clearPendingHandoff(ifOwnedBy: context)
+                return .freshSetupAllowed
+            }
             guard let currentFingerprint = await gateway.activationOwnershipFingerprint(
                 ifCurrentServerLease: lease)
             else {
@@ -446,6 +361,16 @@ final class OnboardingAISetupModel {
                         return .freshSetupAllowed
                     }
                 case .completed:
+                    guard let receiptOwner = self.pendingActivationOwner, !receiptOwner.isUnbound
+                    else {
+                        // Ownerless and unbound receipts carry no auth binding,
+                        // so they can belong to replaced credentials on this
+                        // route. Never let one authorize a handoff — repeat a
+                        // fresh activation instead.
+                        self.pendingActivationVerification = false
+                        clearPendingHandoff(ifOwnedBy: context)
+                        return .freshSetupAllowed
+                    }
                     finishConnected(
                         kind: "existing-model",
                         result: result,
@@ -752,7 +677,12 @@ extension OnboardingAISetupModel {
             self.detectedPrepareOptions = result.prepareOptions
             self.candidatePresentation = Dictionary(
                 result.candidates.map { candidate in
-                    (candidate.kind, CandidatePresentation(icon: candidate.icon, website: candidate.website))
+                    (
+                        candidate.kind,
+                        CandidatePresentation(
+                            brandId: candidate.brandId,
+                            icon: candidate.icon,
+                            website: candidate.website))
                 },
                 uniquingKeysWith: { current, _ in current })
             let providerAuthReconciliationPending = self.providerAuthReconciliationPending
@@ -805,7 +735,7 @@ extension OnboardingAISetupModel {
             if let preparedChoiceID {
                 // Detection kinds encode the provider-auth choice ID, while
                 // PrepareOption.brandId owns the model-ref namespace.
-                let preparedKind = "provider-auto:\(preparedChoiceID)"
+                let preparedKind = Self.providerAutoSetupKind(choiceID: preparedChoiceID)
                 if let prepared = candidates.first(where: {
                     $0.kind == preparedKind && $0.credentials != false
                 }) {
@@ -907,8 +837,29 @@ extension OnboardingAISetupModel {
 
     private func activate(kind: String, context: AttemptContext) async {
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-        guard let candidate = candidates.first(where: { $0.kind == kind }),
-              let lease = serverLease,
+        guard let candidate = candidates.first(where: { $0.kind == kind })
+        else {
+            requireFreshDetection(after: Self.transportFailure(
+                "The Gateway connection changed. Check for AI accounts again."))
+            return
+        }
+        await self.activate(
+            kind: kind,
+            modelRef: candidate.modelRef,
+            label: candidate.label,
+            tryNextCandidateOnFailure: true,
+            context: context)
+    }
+
+    private func activate(
+        kind: String,
+        modelRef: String,
+        label: String,
+        tryNextCandidateOnFailure: Bool,
+        context: AttemptContext) async
+    {
+        guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
+        guard let lease = serverLease,
               await gateway.isCurrentServerLease(lease)
         else {
             requireFreshDetection(after: Self.transportFailure(
@@ -931,22 +882,22 @@ extension OnboardingAISetupModel {
                 "The Gateway connection changed. Check for AI accounts again."))
             return
         }
-        guard let routeFingerprint = await gateway.activationOwnershipFingerprint(
+        let routeFingerprint = await gateway.activationOwnershipFingerprint(
             ifCurrentServerLease: lease)
-        else {
-            self.statuses[kind] = .failed(Self.transportFailure(
-                "Secure storage is unavailable, so OpenClaw cannot safely resume this AI setup."))
-            self.phase = .ready
-            return
-        }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         let params = Self.activationParams(
             kind: kind,
-            modelRef: candidate.modelRef,
+            modelRef: modelRef,
             supportsExactModel: supportsExactModel)
-        let activationOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
-            id: UUID().uuidString,
-            routeFingerprint: routeFingerprint)
+        // Keychain-unavailable degrades to an unbound per-attempt lease instead
+        // of refusing setup: live matching stays attempt-exact, and relaunch
+        // repeats activation rather than trusting the receipt, so a broken
+        // login keychain cannot dead-end onboarding.
+        let activationOwner = routeFingerprint.map { fingerprint in
+            OnboardingSystemAgentResumeStore.ActivationOwner(
+                id: UUID().uuidString,
+                routeFingerprint: fingerprint)
+        } ?? .unbound()
         self.pendingActivationOwner = activationOwner
         self.pendingActivationRequiresFreshActivation = true
         // Activation can persist before the response reaches the app. Cover the
@@ -957,8 +908,10 @@ extension OnboardingAISetupModel {
             activationTimeoutMs: requestTimeoutMs,
             defaults: defaults)
         else {
-            self.statuses[kind] = .failed(Self.transportFailure(
-                "No Gateway is selected. Select a Gateway, then try again."))
+            let failure = Self.transportFailure(
+                "No Gateway is selected. Select a Gateway, then try again.")
+            self.statuses[kind] = .failed(failure)
+            self.exposeActivationFailure(failure, whenTerminal: !tryNextCandidateOnFailure)
             self.phase = .ready
             return
         }
@@ -999,11 +952,18 @@ extension OnboardingAISetupModel {
             } else {
                 self.pendingActivationVerification = false
                 self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
-                self.statuses[kind] = .failed(Self.failure(
-                    label: self.candidates.first { $0.kind == kind }?.label ?? kind,
+                let failure = Self.failure(
+                    label: label,
                     status: result.status,
-                    error: result.error))
-                await tryNextAfterFailure(of: kind, context: context)
+                    error: result.error)
+                self.statuses[kind] = .failed(failure)
+                if tryNextCandidateOnFailure {
+                    await tryNextAfterFailure(of: kind, context: context)
+                } else {
+                    self.phase = .ready
+                    self.detectError = failure
+                    self.showManualEntry = !self.manualProviders.isEmpty
+                }
             }
         } catch {
             guard self.isCurrentAttempt(context) else { return }
@@ -1012,6 +972,7 @@ extension OnboardingAISetupModel {
             // this activation and its credential mutation completed safely.
             let failure = Self.transportFailure(error.localizedDescription)
             self.statuses[kind] = .failed(failure)
+            self.exposeActivationFailure(failure, whenTerminal: !tryNextCandidateOnFailure)
             if Self.activationFailureIsDefinitive(error) {
                 self.pendingActivationVerification = false
                 self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
@@ -1024,10 +985,14 @@ extension OnboardingAISetupModel {
                 // A managed Gateway can restart after persisting fresh-Mac Codex setup.
                 // The retired process cannot mutate further, so accept only the same
                 // route/auth owner, an exact persisted transition, and a fresh live turn.
+                // Unbound (keychain-unavailable) leases cannot prove ownership;
+                // reconciliation's fingerprint guard rejects them and setup
+                // falls through to the deadline probe instead.
                 if !Task.isCancelled,
                    await !(self.gateway.isCurrentServerLease(lease)),
                    await self.reconcileActivationAfterGatewayRestart(
                        kind: kind,
+                       expectedModel: modelRef,
                        context: context,
                        activationOwner: activationOwner,
                        before: persistedStateBeforeActivation,
@@ -1045,8 +1010,14 @@ extension OnboardingAISetupModel {
         }
     }
 
+    private func exposeActivationFailure(_ failure: Failure, whenTerminal: Bool) {
+        guard whenTerminal else { return }
+        self.detectError = failure
+    }
+
     private func reconcileActivationAfterGatewayRestart(
         kind: String,
+        expectedModel: String,
         context: AttemptContext,
         activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner,
         before: PersistedActivationState?,
@@ -1067,6 +1038,7 @@ extension OnboardingAISetupModel {
                 timeoutMs: Double(leaseTimeoutMs)),
                 await reconcilePersistedActivation(
                     kind: kind,
+                    expectedModel: expectedModel,
                     context: context,
                     activationOwner: activationOwner,
                     before: before,
@@ -1096,6 +1068,7 @@ extension OnboardingAISetupModel {
 
     private func reconcilePersistedActivation(
         kind: String,
+        expectedModel: String,
         context: AttemptContext,
         activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner,
         before: PersistedActivationState?,
@@ -1103,14 +1076,13 @@ extension OnboardingAISetupModel {
         timeoutMs: Int) async -> Bool
     {
         guard timeoutMs > 0,
-              let expectedModel = candidates.first(where: { $0.kind == kind })?.modelRef,
-              isCurrentAttempt(context),
+              self.isCurrentAttempt(context),
               !Task.isCancelled,
               OnboardingSystemAgentResumeStore.isOwned(
                   by: activationOwner,
                   for: context.routeIdentity,
-                  defaults: defaults),
-              await gateway.activationOwnershipFingerprint(ifCurrentServerLease: serverLease) ==
+                  defaults: self.defaults),
+              await self.gateway.activationOwnershipFingerprint(ifCurrentServerLease: serverLease) ==
               activationOwner.routeFingerprint
         else { return false }
         guard let detectData = try? await gateway.request(
@@ -1156,6 +1128,7 @@ extension OnboardingAISetupModel {
         self.startProviderWizard(
             AuthOption(
                 id: option.id,
+                brandId: option.brandId,
                 label: option.label,
                 hint: option.hint,
                 groupLabel: nil,
@@ -1215,7 +1188,8 @@ extension OnboardingAISetupModel {
                     done: result.done,
                     step: result.step,
                     status: wizardStatusString(result.status),
-                    error: result.error)
+                    error: result.error,
+                    preparedModelRef: result.preparedmodelref)
             } catch {
                 // The Gateway session survives socket loss; cancel by its known
                 // id before reporting failure so it cannot persist config later.
@@ -1322,7 +1296,8 @@ extension OnboardingAISetupModel {
                     done: result.done,
                     step: result.step,
                     status: wizardStatusString(result.status),
-                    error: result.error)
+                    error: result.error,
+                    preparedModelRef: result.preparedmodelref)
             } catch {
                 let cancellation = await self.gateway.cancelWizardSession(sessionID, on: serverLease)
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
@@ -1347,7 +1322,8 @@ extension OnboardingAISetupModel {
         done: Bool,
         step: WizardStep?,
         status: String?,
-        error: String?)
+        error: String?,
+        preparedModelRef: String?)
     {
         self.authBusy = false
         let validationError = !done && status == "running" && error?.isEmpty == false
@@ -1371,8 +1347,30 @@ extension OnboardingAISetupModel {
             let preparedProvider = self.providerWizardKind == .prepare
                 ? self.activeAuthOption.map { (id: $0.id, label: $0.label) }
                 : nil
+            let preparedModel = preparedModelRef?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             self.providerAuthReconciliationPending = self.providerWizardKind == .auth
             self.clearProviderAuth()
+            if let preparedProvider,
+               let preparedModel,
+               !preparedModel.isEmpty
+            {
+                guard let context = self.captureAttemptContext() else {
+                    self.failDetectionForMissingRoute()
+                    return
+                }
+                let kind = Self.providerAutoSetupKind(choiceID: preparedProvider.id)
+                self.statuses[kind] = .untried
+                Task {
+                    await self.activate(
+                        kind: kind,
+                        modelRef: preparedModel,
+                        label: preparedProvider.label,
+                        tryNextCandidateOnFailure: false,
+                        context: context)
+                }
+                return
+            }
             self.scheduleDetection(
                 preparedChoiceID: preparedProvider?.id,
                 preparedProviderLabel: preparedProvider?.label)
@@ -1462,8 +1460,18 @@ extension OnboardingAISetupModel {
         self.authBusy = true
     }
 
-    func _test_applyAuthWizardResult(done: Bool, status: String?, error: String?) {
-        self.applyAuthWizardResult(done: done, step: nil, status: status, error: error)
+    func _test_applyAuthWizardResult(
+        done: Bool,
+        status: String?,
+        error: String?,
+        preparedModelRef: String? = nil)
+    {
+        self.applyAuthWizardResult(
+            done: done,
+            step: nil,
+            status: status,
+            error: error,
+            preparedModelRef: preparedModelRef)
     }
 
     var _test_authSessionID: String? {
@@ -1507,18 +1515,17 @@ extension OnboardingAISetupModel {
             return
         }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-        guard let routeFingerprint = await gateway.activationOwnershipFingerprint(
+        let routeFingerprint = await gateway.activationOwnershipFingerprint(
             ifCurrentServerLease: lease)
-        else {
-            self.manualError = Self.transportFailure(
-                "Secure storage is unavailable, so OpenClaw cannot safely resume this AI setup.")
-            return
-        }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         let requestTimeoutMs = Self.activationRequestTimeoutMs(for: "api-key")
-        let activationOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
-            id: UUID().uuidString,
-            routeFingerprint: routeFingerprint)
+        // Same keychain-unavailable degradation as detected candidates: an
+        // unbound lease keeps the ambiguity window without a resume receipt.
+        let activationOwner = routeFingerprint.map { fingerprint in
+            OnboardingSystemAgentResumeStore.ActivationOwner(
+                id: UUID().uuidString,
+                routeFingerprint: fingerprint)
+        } ?? .unbound()
         self.pendingActivationOwner = activationOwner
         self.pendingActivationRequiresFreshActivation = true
         // Manual activation has the same persist-before-response ambiguity as
@@ -1666,16 +1673,4 @@ extension OnboardingAISetupModel {
         self.connectedSetupLines = Self.normalizedSetupLines(lines)
     }
     #endif
-}
-
-private enum OnboardingAISetupError: LocalizedError {
-    case providerCatalogUnavailable
-
-    var errorDescription: String? {
-        switch self {
-        case .providerCatalogUnavailable:
-            "The Gateway is running an older OpenClaw version that doesn’t provide the " +
-                "supported provider list. Update OpenClaw on the gateway, then try again."
-        }
-    }
 }

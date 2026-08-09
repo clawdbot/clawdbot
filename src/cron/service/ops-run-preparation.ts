@@ -15,12 +15,12 @@ import {
 import { locked } from "./locked.js";
 import { markManualCronJobActive, ownsStreamSource } from "./ops-shared.js";
 import {
+  activateQueuedCronRun,
   clearQueuedCronRunReservationMarker,
   isQueuedCronRunReservationCurrent,
   isQueuedCronRunReservationMarkerCurrent,
   releaseQueuedCronRun,
   reserveQueuedCronRun,
-  updateQueuedCronRunReservationMarker,
 } from "./run-admission.js";
 import type { CronEvent, CronServiceState, DeferredCronNotifications } from "./state.js";
 import { emit } from "./state.js";
@@ -468,39 +468,18 @@ export async function activatePreparedManualRun(
       return { ok: true, ran: false, reason: "invalid-spec" } as const;
     }
 
-    const startedAt = state.deps.nowMs();
-    const previousLastError = job.state.lastError;
-    const activationRollbackSnapshot = snapshotStoreForRollback(state);
-    delete job.state.queuedAtMs;
-    job.state.runningAtMs = startedAt;
-    job.state.lastError = undefined;
-    // A failed write restores the durable reservation; run() owns releasing
-    // that queued claim for every activation failure before it propagates.
-    await persistOrRestore(state, activationRollbackSnapshot);
-    updateQueuedCronRunReservationMarker(
+    const activation = await activateQueuedCronRun({
       state,
-      prepared.jobId,
-      prepared.reservationIdentity,
-      startedAt,
-      previousLastError,
-    );
-    if (state.stopped || state.restartRecoveryPending) {
-      job.state.lastError = previousLastError;
-      const rollbackSnapshot = snapshotStoreForRollback(state);
-      delete job.state.runningAtMs;
-      try {
-        await persistOrRestore(state, rollbackSnapshot);
-      } catch (error) {
+      job,
+      reservationIdentity: prepared.reservationIdentity,
+      onUnavailableRollbackError: async () => {
         await releasePreparedManualReservationWithRetry(state, prepared);
-        throw error;
-      }
-      releaseQueuedCronRun(state, prepared.jobId, prepared.reservationIdentity);
-      return {
-        ok: true,
-        ran: false,
-        reason: state.stopped ? "stopped" : "restart-recovery-pending",
-      } as const;
+      },
+    });
+    if (activation.kind === "unavailable") {
+      return { ok: true, ran: false, reason: activation.reason } as const;
     }
+    const { startedAt } = activation;
     emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
     const taskRunId = tryCreateCronTaskRun({
       state,

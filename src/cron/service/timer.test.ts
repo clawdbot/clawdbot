@@ -1,6 +1,7 @@
 // Cron service timer tests cover timer scheduling, cancellation, and wakeups.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
@@ -13,7 +14,6 @@ import * as taskExecutor from "../../tasks/task-executor.js";
 import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({

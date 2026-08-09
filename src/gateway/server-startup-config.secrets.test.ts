@@ -1,6 +1,6 @@
 // Startup config secret tests protect gateway token preparation, weak-secret
 // detection, auth profile loading, warning emission, and runtime activation.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,7 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
+import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { providerResolutionError, refResolutionError } from "../secrets/resolve-errors.js";
@@ -24,6 +25,7 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
 } from "../secrets/runtime-state.js";
 import type { PreparedSecretsRuntimeSnapshot, SecretResolverWarning } from "../secrets/runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createRuntimeSecretsActivator,
   prepareGatewayStartupConfig,
@@ -354,6 +356,33 @@ async function activateImportedStartupConfig(config: OpenClawConfig) {
       reason: "startup",
       activate: true,
     },
+  );
+}
+
+async function activateStartupConfigWithEnv(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  const activateRuntimeSecrets = createRuntimeSecretsActivator(
+    runtimeSecretsActivatorOptionsForTest(),
+  );
+  return await activateRuntimeSecrets(gatewayTokenConfig(config), {
+    reason: "startup",
+    activate: true,
+    env,
+  });
+}
+
+function writePersistedOpenAiProfile(agentDir: string, key: string): void {
+  writePersistedAuthProfileStoreRaw(
+    {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key,
+        },
+      },
+    },
+    agentDir,
   );
 }
 
@@ -2876,6 +2905,94 @@ describe("gateway startup config secret preflight", () => {
           list: [{ id: "default", agentDir: harness.agentDir }],
         },
       }),
+    );
+  });
+
+  it("publishes persisted relocated shared-main auth at startup", async () => {
+    const root = autoCleanupTempDirs.make("openclaw-startup-relocated-main-auth-");
+    const processHome = path.join(root, "process-home");
+    const activationHome = path.join(root, "activation-home");
+    const relocatedMainAgentDir = path.join(root, "relocated-main-agent");
+    mkdirSync(processHome, { recursive: true });
+    mkdirSync(activationHome, { recursive: true });
+    mkdirSync(relocatedMainAgentDir, { recursive: true });
+
+    await withEnvAsync(
+      {
+        HOME: processHome,
+        OPENCLAW_STATE_DIR: path.join(processHome, "state"),
+        OPENCLAW_AGENT_DIR: relocatedMainAgentDir,
+      },
+      async () => {
+        writePersistedOpenAiProfile(relocatedMainAgentDir, "fake-persisted-key");
+        const secretsRuntime = await import("../secrets/runtime.js");
+        const activationEnv = {
+          ...process.env,
+          HOME: activationHome,
+          OPENCLAW_STATE_DIR: path.join(activationHome, "state"),
+          OPENCLAW_AGENT_DIR: relocatedMainAgentDir,
+        };
+
+        try {
+          await activateStartupConfigWithEnv(
+            { agents: { list: [{ id: "default", default: true }] } },
+            activationEnv,
+          );
+
+          expect(
+            secretsRuntime.getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles[
+              "openai:default"
+            ],
+          ).toMatchObject({ key: "fake-persisted-key" });
+        } finally {
+          secretsRuntime.clearSecretsRuntimeSnapshot();
+        }
+      },
+    );
+  });
+
+  it("uses the activation env when publishing persisted startup auth", async () => {
+    const root = autoCleanupTempDirs.make("openclaw-startup-activation-env-auth-");
+    const processHome = path.join(root, "process-home");
+    const activationHome = path.join(root, "activation-home");
+    const activationAgentDir = path.join(activationHome, "configured-agent");
+    mkdirSync(processHome, { recursive: true });
+    mkdirSync(activationAgentDir, { recursive: true });
+
+    await withEnvAsync(
+      {
+        HOME: processHome,
+        OPENCLAW_STATE_DIR: path.join(processHome, "state"),
+        OPENCLAW_AGENT_DIR: undefined,
+      },
+      async () => {
+        writePersistedOpenAiProfile(activationAgentDir, "fake-activation-env-key");
+        const secretsRuntime = await import("../secrets/runtime.js");
+        const activationEnv = {
+          ...process.env,
+          HOME: activationHome,
+          OPENCLAW_STATE_DIR: path.join(activationHome, "state"),
+        };
+
+        try {
+          await activateStartupConfigWithEnv(
+            {
+              agents: {
+                list: [{ id: "default", default: true, agentDir: "~/configured-agent" }],
+              },
+            },
+            activationEnv,
+          );
+
+          const activeStore = secretsRuntime.getActiveSecretsRuntimeSnapshot()?.authStores[0];
+          expect(activeStore?.agentDir).toBe(activationAgentDir);
+          expect(activeStore?.store.profiles["openai:default"]).toMatchObject({
+            key: "fake-activation-env-key",
+          });
+        } finally {
+          secretsRuntime.clearSecretsRuntimeSnapshot();
+        }
+      },
     );
   });
 });

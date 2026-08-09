@@ -47,16 +47,26 @@ const log = createSubsystemLogger("gateway/sessions-history-sse");
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
 
-function resolveSessionHistoryPath(req: IncomingMessage): string | null {
+// Route misses must remain distinct from matched-invalid keys so fallback
+// stages cannot claim malformed session-history requests.
+type SessionHistoryPathResolution =
+  | { matched: false }
+  | { error: "invalid-session-key"; matched: true }
+  | { matched: true; sessionKey: string };
+
+function resolveSessionHistoryPath(req: IncomingMessage): SessionHistoryPathResolution {
   const url = new URL(req.url ?? "/", "http://localhost");
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/history$/);
   if (!match) {
-    return null;
+    return { matched: false };
   }
   try {
-    return normalizeOptionalString(decodeURIComponent(match[1] ?? "")) ?? null;
+    const sessionKey = normalizeOptionalString(decodeURIComponent(match[1] ?? ""));
+    return sessionKey
+      ? { matched: true, sessionKey }
+      : { error: "invalid-session-key", matched: true };
   } catch {
-    return "";
+    return { error: "invalid-session-key", matched: true };
   }
 }
 
@@ -101,14 +111,15 @@ export async function handleSessionHistoryHttpRequest(
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
-  const sessionKey = resolveSessionHistoryPath(req);
-  if (sessionKey === null) {
+  const sessionKeyResolution = resolveSessionHistoryPath(req);
+  if (!sessionKeyResolution.matched) {
     return false;
   }
-  if (!sessionKey) {
+  if ("error" in sessionKeyResolution) {
     sendInvalidRequest(res, "invalid session key");
     return true;
   }
+  const { sessionKey } = sessionKeyResolution;
   if (req.method !== "GET") {
     sendMethodNotAllowed(res, "GET");
     return true;
@@ -224,17 +235,15 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
   const rawSnapshot = boundedSnapshot?.messages ?? fullSnapshot?.messages ?? [];
-  const historySnapshot = buildSessionHistorySnapshot({
-    rawMessages: rawSnapshot,
-    maxChars: effectiveMaxChars,
-    limit,
-    cursor,
-    rawTranscriptSeq: boundedSnapshot?.totalMessages,
-    totalRawMessages: boundedSnapshot?.totalMessages,
-  });
-  const history = historySnapshot.history;
-
   if (!shouldStreamSse(req)) {
+    const history = buildSessionHistorySnapshot({
+      rawMessages: rawSnapshot,
+      maxChars: effectiveMaxChars,
+      limit,
+      cursor,
+      rawTranscriptSeq: boundedSnapshot?.totalMessages,
+      totalRawMessages: boundedSnapshot?.totalMessages,
+    }).history;
     sendJson(res, 200, {
       sessionKey: target.canonicalKey,
       ...history,
@@ -255,7 +264,6 @@ export async function handleSessionHistoryHttpRequest(
       )
     : new Set<string>();
 
-  let sentHistory = history;
   const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
       agentId: target.agentId,
@@ -272,7 +280,7 @@ export async function handleSessionHistoryHttpRequest(
     limit,
     cursor,
   });
-  sentHistory = sseState.snapshot();
+  let sentHistory = sseState.snapshot();
   let streamStopped = false;
   let streamQueue = Promise.resolve();
   const streamResources: {

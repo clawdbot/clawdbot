@@ -184,6 +184,8 @@ private final class FirstCancelGate: @unchecked Sendable {
 }
 
 private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    private typealias ReceiveResult = Result<URLSessionWebSocketTask.Message, Error>
+
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
     private let helloMethods: [String]
@@ -198,8 +200,8 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private var sentRequestMethods: [String] = []
     private var sentRequestPayloads: [[String: Any]] = []
     private var receivePhase = 0
-    private var pendingReceiveHandler:
-        (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
+    private var pendingReceiveHandler: (@Sendable (ReceiveResult) -> Void)?
+    private var pendingInboundFrames: [ReceiveResult] = []
 
     init(
         helloAuth: [String: Any]? = nil,
@@ -332,19 +334,21 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     func receive(
         completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
     {
-        self.lock.withLock { self.pendingReceiveHandler = completionHandler }
+        let queued = self.lock.withLock { () -> ReceiveResult? in
+            guard !self.pendingInboundFrames.isEmpty else {
+                self.pendingReceiveHandler = completionHandler
+                return nil
+            }
+            return self.pendingInboundFrames.removeFirst()
+        }
+        if let queued {
+            completionHandler(queued)
+        }
     }
 
     func emitReceiveFailure() {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
-            self._state = .canceling
-            defer { self.pendingReceiveHandler = nil }
-            return self.pendingReceiveHandler
-        }
-        handler?(Result<URLSessionWebSocketTask.Message, Error>.failure(URLError(.networkConnectionLost)))
+        self.lock.withLock { self._state = .canceling }
+        self.emitInbound(.failure(URLError(.networkConnectionLost)))
     }
 
     func emitInvokeRequest(id: String, command: String, idempotencyKey: String? = nil) {
@@ -361,14 +365,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         paramsJSON: String?,
         idempotencyKey: String? = nil)
     {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
-            defer { self.pendingReceiveHandler = nil }
-            return self.pendingReceiveHandler
-        }
-        handler?(.success(.data(Self.invokeRequestData(
+        self.emitInbound(.success(.data(Self.invokeRequestData(
             id: id,
             command: command,
             paramsJSON: paramsJSON,
@@ -376,13 +373,6 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     func emitResponse(id: String, payload: [String: Any]) {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
-            defer { self.pendingReceiveHandler = nil }
-            return self.pendingReceiveHandler
-        }
         let frame: [String: Any] = [
             "type": "res",
             "id": id,
@@ -390,7 +380,21 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             "payload": payload,
         ]
         let data = (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
-        handler?(.success(.data(data)))
+        self.emitInbound(.success(.data(data)))
+    }
+
+    private func emitInbound(_ result: ReceiveResult) {
+        let handler = self.lock.withLock { () -> (@Sendable (ReceiveResult) -> Void)? in
+            guard let handler = self.pendingReceiveHandler else {
+                // URLSession preserves socket frame order even while the actor is
+                // processing one callback and has not registered the next receive.
+                self.pendingInboundFrames.append(result)
+                return nil
+            }
+            self.pendingReceiveHandler = nil
+            return handler
+        }
+        handler?(result)
     }
 
     private static func connectChallengeData(nonce: String) -> Data {
@@ -1462,6 +1466,120 @@ struct GatewayNodeSessionTests {
 
         #expect(await (invoking.value).ok == false)
         #expect(await cancellations.values() == ["stale-ptt"])
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `route switch cancels queued PTZ control and waits for invoke cleanup`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invokeGate = AsyncGate()
+        let cancellations = DisconnectProbe()
+        let options = nodeConnectOptions(
+            caps: ["camera"],
+            commands: [OpenClawCameraCommand.ptzControl.rawValue],
+            clientId: "openclaw-macos")
+
+        try await gateway.connectForTest(testURL("ws://first.example.invalid"), options: options, session: session)
+        let route = try #require(await gateway.currentRoute())
+        let invoking = Task {
+            await gateway.invokeIfCurrentRoute(
+                BridgeInvokeRequest(
+                    id: "queued-ptz",
+                    command: OpenClawCameraCommand.ptzControl.rawValue,
+                    paramsJSON: nil),
+                expectedRoute: route,
+                onInvoke: { request in
+                    await invokeGate.wait()
+                    if Task.isCancelled {
+                        await cancellations.record(request.id)
+                    }
+                    return BridgeInvokeResponse(
+                        id: request.id,
+                        ok: false,
+                        error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: route changed"))
+                })
+        }
+        try await waitUntil("PTZ invoke queued before hardware admission") {
+            await invokeGate.hasStarted()
+        }
+
+        let replacement = Task {
+            try await gateway.connectForTest(
+                testURL("ws://replacement.example.invalid"),
+                options: options,
+                session: session)
+        }
+        try await waitUntil("replacement detached old PTZ route") {
+            await gateway.currentRoute() == nil
+        }
+        #expect(session.snapshotMakeCount() == 1)
+
+        await invokeGate.release()
+        #expect(await (invoking.value).ok == false)
+        try await replacement.value
+        #expect(await cancellations.values() == ["queued-ptz"])
+        #expect(session.snapshotMakeCount() == 2)
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `node invoke cancel cancels queued PTZ control and preserves callback`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let invokeGate = AsyncGate()
+        let taskCancellations = DisconnectProbe()
+        let admissions = DisconnectProbe()
+        let callback = NodeInvokeControlProbe()
+        let options = nodeConnectOptions(
+            caps: ["camera"],
+            commands: [OpenClawCameraCommand.ptzControl.rawValue],
+            clientId: "openclaw-macos")
+
+        try await gateway.connectForTest(
+            testURL("ws://gateway.example.invalid"),
+            options: options,
+            session: session,
+            onInvokeCancel: { invokeID in await callback.recordCancellation(invokeID) })
+        let route = try #require(await gateway.currentRoute())
+        let invoking = Task {
+            await gateway.invokeIfCurrentRoute(
+                BridgeInvokeRequest(
+                    id: "queued-ptz",
+                    command: OpenClawCameraCommand.ptzControl.rawValue,
+                    paramsJSON: nil),
+                expectedRoute: route,
+                onInvoke: { request in
+                    await invokeGate.wait()
+                    if Task.isCancelled {
+                        await taskCancellations.record(request.id)
+                        return BridgeInvokeResponse(
+                            id: request.id,
+                            ok: false,
+                            error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: canceled"))
+                    }
+                    await admissions.record(request.id)
+                    return BridgeInvokeResponse(id: request.id, ok: true)
+                })
+        }
+        try await waitUntil("PTZ invoke queued before explicit cancellation") {
+            await invokeGate.hasStarted()
+        }
+
+        await gateway._test_handlePush(
+            .event(EventFrame(
+                type: "event",
+                event: "node.invoke.cancel",
+                payload: AnyCodable(["invokeId": AnyCodable("queued-ptz")]),
+                seq: nil,
+                stateversion: nil)),
+            socketGeneration: 1)
+        await invokeGate.release()
+
+        #expect(await (invoking.value).ok == false)
+        #expect(await taskCancellations.values() == ["queued-ptz"])
+        #expect(await admissions.values() == [])
+        #expect(await (callback.values()).1 == ["queued-ptz"])
         await gateway.disconnect()
     }
 

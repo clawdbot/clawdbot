@@ -1,6 +1,7 @@
 import {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
+  TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
@@ -71,6 +72,7 @@ export function buildDeveloperInstructions(
       ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
       : undefined,
     buildVisibleReplyInstruction(params, messageToolAvailable),
+    TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
     nativeCommandGuidance,
     params.extraSystemPrompt,
   ];
@@ -85,7 +87,7 @@ function buildVisibleReplyInstruction(
     return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery. If `final` is omitted, OpenClaw continues and resolves the latest omitted source reply only when the turn ends successfully. Do not repeat visible message content in your final answer.";
   }
   if (messageToolAvailable) {
-    return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` only for explicit out-of-band sends, media/file sends, or sends to a different target.";
+    return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` for supported non-text actions in the current conversation, such as reacting to its current message. Reserve other `message` actions for explicit out-of-band sends or media/file delivery. Reactions are not delivered automatically.";
   }
   return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
 }

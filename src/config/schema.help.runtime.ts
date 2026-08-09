@@ -34,7 +34,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "browser.profiles.*.mcpArgs":
     "Extra per-profile Chrome DevTools MCP arguments for existing-session attachment, such as --no-usage-statistics. Endpoint arguments here override the built-in auto-connect or browser URL selection.",
   "browser.profiles.*.driver":
-    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
+    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, "existing-session" for Chrome DevTools MCP attachment, or "extension" for the authenticated Chrome extension relay.',
   "browser.profiles.*.executablePath":
     "Per-profile browser executable path for locally launched managed browser profiles. Overrides browser.executablePath and accepts paths starting with ~ for the OS home directory.",
   "browser.profiles.*.headless":
@@ -51,6 +51,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
   "browser.tabCleanup.enabled":
     "Enables cleanup of idle tracked browser tabs for primary-agent sessions. Disable only when external tooling owns tab lifecycle completely.",
+  "browser.extensionRelay":
+    "Chrome extension relay authentication compatibility settings. Keep the legacy window only while older paired extensions or external CDP clients still need it.",
+  "browser.extensionRelay.allowLegacyAuth":
+    "Temporarily accepts legacy Bearer, Basic, and token-subprotocol relay authentication. Default: true for one migration window. Set false after every extension and external CDP client uses Browser Relay Authentication v2.",
   "browser.ssrfPolicy":
     "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":
@@ -269,9 +273,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "nodeHost.skills.enabled":
     "Scan and publish node-hosted skills after connecting (default: true). Set false to disable node skill publication.",
   attachments:
-    "Top-level attachment retention behavior shared across providers and tools that handle inbound files. Use ttlHours when persisted inbound media needs bounded cleanup.",
+    "Top-level retention behavior shared across providers and tools that persist media. Use ttlHours when general staged media needs bounded cleanup.",
   "attachments.ttlHours":
-    "Optional retention window in hours for persisted media cleanup across the full media tree. Leave unset to disable automatic cleanup (media writes never prune), or set values like 24 (1 day) or 168 (7 days) to periodically remove media older than the window.",
+    "Optional retention window in hours for persisted media handled by the general mtime sweep. Leave unset to disable that sweep, or set values like 24 (1 day) or 168 (7 days) to periodically remove older staged media. Managed outgoing media (chat-generated attachments) is excluded and follows its own SQLite- and transcript-aware retention.",
   bindings:
     "Top-level binding rules for routing and persistent ACP conversation ownership. Use type=route for normal routing and type=acp for persistent ACP harness bindings.",
   "bindings[].type":
@@ -329,9 +333,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "diagnostics.otel.logsEndpoint":
     "Signal-specific OTLP/HTTP logs endpoint. When set, this overrides diagnostics.otel.endpoint and OTEL_EXPORTER_OTLP_ENDPOINT for log export only.",
   "diagnostics.otel.protocol":
-    'OTel transport protocol for telemetry export: "http/protobuf" or "grpc" depending on collector support. Use the protocol your observability backend expects to avoid dropped telemetry payloads.',
+    'OTel transport protocol for telemetry export. Only "http/protobuf" is accepted; run "openclaw doctor --fix" to repair a persisted legacy "grpc" value or get source-specific manual-edit guidance.',
   "diagnostics.otel.headers":
-    "Additional HTTP/gRPC metadata headers sent with OpenTelemetry export requests, often used for tenant auth or routing. Keep secrets in env-backed values and avoid unnecessary header sprawl.",
+    "Additional HTTP request headers sent with OpenTelemetry export requests, often used for tenant auth or routing. Keep secrets in env-backed values and avoid unnecessary header sprawl.",
   "diagnostics.otel.serviceName":
     "Service name reported in telemetry resource attributes to identify this gateway instance in observability backends. Use stable names so dashboards and alerts remain consistent over deployments.",
   "diagnostics.otel.metricNamePrefix":

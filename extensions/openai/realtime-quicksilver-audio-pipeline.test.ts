@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { OPENAI_QUICKSILVER_RELAY_FRAME_BYTES } from "./realtime-quicksilver-audio-buffer.js";
+import {
+  type OpenAIQuicksilverPendingAudio,
+  OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
+} from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
   OpenAIQuicksilverAudioPeer,
@@ -11,7 +14,7 @@ const MAX_PENDING_RELAY_FRAMES = 250;
 const MAX_PENDING_AUDIO_BYTES = OPENAI_QUICKSILVER_RELAY_FRAME_BYTES * MAX_PENDING_RELAY_FRAMES;
 
 type TestableAudioPeer = {
-  pendingAudio: Buffer;
+  pendingAudio: OpenAIQuicksilverPendingAudio;
   sequenceNumber: number;
   timestamp: number;
   takeNextRelayFrame(): Buffer;
@@ -30,7 +33,7 @@ type TestableAudioPeer = {
 };
 
 type TestableGatewayBridge = {
-  pendingAudio: Buffer;
+  pendingAudio: OpenAIQuicksilverPendingAudio;
 };
 
 describe("GPT-Live gateway microphone audio pipeline", () => {
@@ -83,9 +86,9 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
       callerBuffer.fill(0xff);
       await vi.advanceTimersByTimeAsync(171);
     }
-    expect((bridge as unknown as TestableGatewayBridge).pendingAudio).toEqual(
-      source.subarray(source.length - MAX_PENDING_AUDIO_BYTES),
-    );
+    const testBridge = bridge as unknown as TestableGatewayBridge;
+    expect(testBridge.pendingAudio).toHaveLength(MAX_PENDING_AUDIO_BYTES);
+    const bridgePendingAudio = testBridge.pendingAudio;
     if (!peerCallbacks) {
       throw new Error("expected the bridge to start peer creation");
     }
@@ -108,13 +111,20 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
     });
     const initialSequenceNumber = testPeer.sequenceNumber;
     const initialTimestamp = testPeer.timestamp;
+    const copy = vi.spyOn(Buffer.prototype, "copy");
     try {
-      resolvePeer?.(peer);
-      await connection;
+      try {
+        resolvePeer?.(peer);
+        await connection;
 
-      expect(testPeer.pendingAudio).toEqual(
-        source.subarray(source.length - MAX_PENDING_AUDIO_BYTES),
-      );
+        expect(copy).not.toHaveBeenCalled();
+        expect(testPeer.pendingAudio).toBe(bridgePendingAudio);
+        expect(testPeer.pendingAudio).toHaveLength(MAX_PENDING_AUDIO_BYTES);
+        expect(testBridge.pendingAudio).not.toBe(bridgePendingAudio);
+        expect(testBridge.pendingAudio).toHaveLength(0);
+      } finally {
+        copy.mockRestore();
+      }
 
       testPeer.state.peer.connectionStateChange.execute("connected");
       await vi.advanceTimersByTimeAsync(4_980);

@@ -7,6 +7,7 @@ import {
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
   storeDeviceAuthToken as storeScopedDeviceAuthToken,
@@ -34,6 +35,15 @@ const CONTROL_UI_OPERATOR_SCOPES = [
 ] as const;
 const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
   "operator.approvals",
+  "operator.questions",
+  "operator.read",
+  "operator.talk.secrets",
+  "operator.write",
+] as const;
+const CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES = [
+  "operator.admin",
+  "operator.approvals",
+  "operator.pairing",
   "operator.questions",
   "operator.read",
   "operator.talk.secrets",
@@ -73,17 +83,6 @@ type HandlerMap = {
 };
 
 type MockWebSocketHandler = (ev?: { code?: number; data?: string; reason?: string }) => void;
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
 
 class MockWebSocket {
   static OPEN = 1;
@@ -525,6 +524,25 @@ describe("GatewayBrowserClient", () => {
     expectSignedPayloadFields(signedPayload, {
       scopes: [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES],
       token: "boot-1",
+      nonce: "nonce-1",
+    });
+  });
+
+  it("requests the exact owner profile for host-authorized bootstrap auth", async () => {
+    const client = new GatewayBrowserClient({
+      url: "wss://gateway.example",
+      bootstrapToken: "boot-owner",
+      bootstrapProfile: "owner",
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.auth?.bootstrapToken).toBe("boot-owner");
+    expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]);
+    const [, signedPayload] = requireFirstSignCall();
+    expectSignedPayloadFields(signedPayload, {
+      scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
+      token: "boot-owner",
       nonce: "nonce-1",
     });
   });

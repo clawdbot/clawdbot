@@ -137,6 +137,32 @@ gh workflow run openclaw-npm-release.yml \
   -f plugin_npm_run_id=<plugin-npm-run-id>
 ```
 
+If the immutable candidate has already passed its saved preflight and Full
+Release Validation but core publication needs a workflow-only recovery, dispatch
+the trusted current-`main` workflow instead. Keep the same tag and evidence
+identities; do not move the tag or republish plugins:
+
+```bash
+gh workflow run openclaw-npm-release.yml \
+  --ref main \
+  -f tag=vYYYY.M.P \
+  -f preflight_only=false \
+  -f npm_dist_tag=extended-stable \
+  -f release_candidate_branch=extended-stable/YYYY.M.33 \
+  -f preflight_run_id=<npm-preflight-run-id> \
+  -f full_release_validation_run_id=<full-validation-run-id> \
+  -f full_release_validation_run_attempt=<full-validation-run-attempt> \
+  -f plugin_npm_run_id=<plugin-npm-run-id>
+```
+
+This recovery path checks out and publishes the immutable tag and requires the
+canonical branch implied by that tag. It accepts Full Release Validation
+evidence from the canonical candidate branch directly, from current `main`
+directly when its workflow SHA is reachable from current `main`, or from the
+trusted main-pinned harness. Every accepted form must attest the immutable
+tag's SHA. Use it only when the candidate source and recorded evidence are
+unchanged.
+
 For non-production rehearsal only, add
 `-f bypass_extended_stable_guard=true` to preflight and publish. It bypasses the
 month guard only, never canonical-ref, SHA/tag/version equality, provenance,
@@ -464,7 +490,7 @@ Use this box to answer "does the release behave correctly in QA scenarios and li
 
 ### Package
 
-The Package box is the installable-product gate. It is backed by `Package Acceptance` and the resolver `scripts/resolve-openclaw-package-candidate.mjs`. The resolver normalizes a candidate into the `package-under-test` tarball consumed by Docker E2E, validates the package inventory, records the package version and SHA-256, and keeps the workflow harness ref separate from the package source ref.
+The Package box is the installable-product gate. It is backed by `Package Acceptance` and the resolver `scripts/resolve-openclaw-package-candidate.mts`. The resolver normalizes a candidate into the `package-under-test` tarball consumed by Docker E2E, validates the package inventory, records the package version and SHA-256, and keeps the workflow harness ref separate from the package source ref.
 
 Supported candidate sources:
 
@@ -693,7 +719,7 @@ If a maintainer must fall back to local npm authentication, run any 1Password CL
 - [`.github/workflows/openclaw-release-checks.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-release-checks.yml)
 - [`.github/workflows/openclaw-cross-os-release-checks-reusable.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-cross-os-release-checks-reusable.yml)
 - [`.github/workflows/docker-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/docker-release.yml)
-- [`scripts/resolve-openclaw-package-candidate.mjs`](https://github.com/openclaw/openclaw/blob/main/scripts/resolve-openclaw-package-candidate.mjs)
+- [`scripts/resolve-openclaw-package-candidate.mts`](https://github.com/openclaw/openclaw/blob/main/scripts/resolve-openclaw-package-candidate.mts)
 - [`scripts/openclaw-npm-release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-release-check.ts)
 - [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
 - [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)

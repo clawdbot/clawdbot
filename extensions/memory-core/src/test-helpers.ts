@@ -25,11 +25,9 @@ import {
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
-import {
-  normalizeShortTermPhaseSignalStore,
-  normalizeShortTermRecallStore,
-  type ShortTermRecallEntry,
-} from "./short-term-promotion.js";
+import { normalizeShortTermPhaseSignalStore } from "./short-term-promotion-store.js";
+import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
+import type { ShortTermRecallEntry } from "./short-term-promotion.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 

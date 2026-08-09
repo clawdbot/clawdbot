@@ -10,7 +10,7 @@ import {
   STARTUP_INTERRUPTED_ERROR,
 } from "./startup-run-repair.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import { ensureLoaded, persist, pruneCronJobScratchAfterCommit } from "./store.js";
 import { tryFindCronTaskRunIdForRecovery, tryFindFinalizedCronTaskRun } from "./task-runs.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
 
@@ -90,16 +90,14 @@ export async function start(state: CronServiceState) {
       state.store.jobs = jobs.filter((job) => !completedJobIdsToDelete.has(job.id));
     }
     if (repairedAnyStartupRun || jobs.length > 0) {
-      const persisted = await persist(
-        state,
-        repairedAnyStartupRun ? undefined : { stateOnly: true },
-      );
       // Recovery notifications describe repaired durable rows, so never
       // publish them until the startup write has committed successfully.
+      const persisted = await persist(state, {
+        ...(repairedAnyStartupRun ? {} : { stateOnly: true }),
+        postPersistNotifications,
+      });
       if (persisted) {
-        for (const notify of postPersistNotifications) {
-          notify();
-        }
+        pruneCronJobScratchAfterCommit(state, completedJobIdsToDelete);
       }
     }
   });
@@ -126,12 +124,9 @@ export async function start(state: CronServiceState) {
       deferredNotifications: postPersistMaintenanceNotifications,
     });
     if (changed) {
-      const persisted = await persist(state);
-      if (persisted) {
-        for (const notify of postPersistMaintenanceNotifications) {
-          notify();
-        }
-      }
+      await persist(state, {
+        postPersistNotifications: postPersistMaintenanceNotifications,
+      });
     }
     for (const interrupted of interruptedRuns) {
       const job = state.store?.jobs.find((entry) => entry.id === interrupted.jobId);

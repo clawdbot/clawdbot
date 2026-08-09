@@ -324,7 +324,6 @@ async function validateResetAuthChoice(params: {
             workspaceDir: params.workspaceDir,
             mode: "setup",
             includeUntrustedWorkspacePlugins: false,
-            bundledProviderVitestCompat: true,
             providerRefs: [providerAuthChoice.providerId],
             activate: true,
           }),
@@ -424,6 +423,7 @@ const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "nonInteractive",
   "classic",
   "tui",
+  "skipUi",
 ]);
 
 function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {

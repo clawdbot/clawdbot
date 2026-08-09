@@ -124,6 +124,45 @@ describe("plugin-sdk provider-auth-runtime", () => {
     await expect(callback).rejects.toThrow("OAuth callback cancelled");
   });
 
+  it("binds the redirect host when the public hostname option is omitted", async () => {
+    const port = await getFreePort();
+    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+      expectedState: "state-1",
+      timeoutMs: 5_000,
+      port,
+      callbackPath: "/callback",
+      redirectUri: `http://127.0.0.1:${port}/callback`,
+      successTitle: "OAuth complete",
+    });
+
+    const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
+    expect(response.status).toBe(200);
+    await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
+  });
+
+  it("keeps an explicit localhost bind compatible with an IPv4 redirect", async () => {
+    const port = await getFreePort();
+    let markReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+      expectedState: "state-1",
+      timeoutMs: 5_000,
+      port,
+      callbackPath: "/callback",
+      redirectUri: `http://127.0.0.1:${port}/callback`,
+      hostname: "localhost",
+      successTitle: "OAuth complete",
+      onProgress: markReady,
+    });
+
+    await ready;
+    const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
+    expect(response.status).toBe(200);
+    await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
+  });
+
   it("does not echo CORS for unallowlisted callback origins but keeps waiting", async () => {
     const port = await getFreePort();
     const callback = providerAuthRuntime.waitForLocalOAuthCallback({

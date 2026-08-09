@@ -818,7 +818,11 @@ describe("plugins cli list", () => {
       cliCommands: [],
       services: [],
       gatewayDiscoveryServices: [],
-      mcpServers: [],
+      mcpServers: [
+        { name: "local", hasStdioTransport: true },
+        { name: "remote", hasStdioTransport: false },
+        { name: "broken", hasStdioTransport: false, unsupported: true },
+      ],
       lspServers: [],
       httpRouteCount: 0,
       bundleCapabilities: [],
@@ -845,6 +849,9 @@ describe("plugins cli list", () => {
     );
     expect(runtimeLogs.join("\n")).toContain("ClawPack spec: 1");
     expect(runtimeLogs.join("\n")).toContain("ClawPack size: 4096 bytes");
+    expect(runtimeLogs.join("\n")).toContain("remote");
+    expect(runtimeLogs.join("\n")).not.toContain("remote (unsupported transport)");
+    expect(runtimeLogs.join("\n")).toContain("broken (unsupported transport)");
   });
 
   it("runtime-inspects without repairing deps", async () => {

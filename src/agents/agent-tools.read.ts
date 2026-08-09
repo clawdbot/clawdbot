@@ -8,7 +8,7 @@ import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import { toErrorObject } from "../infra/errors.js";
+import { isMissingPathError, toErrorObject } from "../infra/errors.js";
 import {
   canonicalPathFromExistingAncestor,
   root as fsRoot,
@@ -48,7 +48,7 @@ import {
   createWriteTool,
   type ReadToolDetails,
   type ReadToolTruncationDetails,
-} from "./sessions/index.js";
+} from "./sessions/tools/index.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -268,9 +268,10 @@ function normalizeDailyMemoryReadPath(value: unknown): string | undefined {
 }
 
 function isNotFoundError(error: unknown): boolean {
-  if (typeof (error as NodeJS.ErrnoException | undefined)?.code === "string") {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  if (isMissingPathError(error)) {
+    return true;
   }
+  // Injected tool implementations may expose only their legacy human-readable error.
   if (!(error instanceof Error)) {
     return false;
   }
@@ -890,8 +891,10 @@ type SandboxToolParams = {
 };
 
 /** Create a sandbox-backed read tool with OpenClaw result normalization. */
-export function createSandboxedReadTool(params: SandboxToolParams) {
-  const base = createReadTool(params.root, {
+export function createSandboxedReadTool(
+  params: SandboxToolParams & { createTool?: typeof createReadTool },
+) {
+  const base = (params.createTool ?? createReadTool)(params.root, {
     operations: createSandboxReadOperations(params),
   }) as unknown as AnyAgentTool;
   return createOpenClawReadTool(base, {
@@ -901,16 +904,20 @@ export function createSandboxedReadTool(params: SandboxToolParams) {
 }
 
 /** Create a sandbox-backed write tool with required-parameter validation. */
-export function createSandboxedWriteTool(params: SandboxToolParams) {
-  const base = createWriteTool(params.root, {
+export function createSandboxedWriteTool(
+  params: SandboxToolParams & { createTool?: typeof createWriteTool },
+) {
+  const base = (params.createTool ?? createWriteTool)(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
 /** Create a sandbox-backed edit tool with required-parameter validation. */
-export function createSandboxedEditTool(params: SandboxToolParams) {
-  const base = createEditTool(params.root, {
+export function createSandboxedEditTool(
+  params: SandboxToolParams & { createTool?: typeof createEditTool },
+) {
+  const base = (params.createTool ?? createEditTool)(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
@@ -922,9 +929,10 @@ export function createHostWorkspaceWriteTool(
   options?: {
     workspaceOnly?: boolean;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+    createTool?: typeof createWriteTool;
   },
 ) {
-  const base = createWriteTool(root, {
+  const base = (options?.createTool ?? createWriteTool)(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
@@ -936,9 +944,10 @@ export function createHostWorkspaceEditTool(
   options?: {
     workspaceOnly?: boolean;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+    createTool?: typeof createEditTool;
   },
 ) {
-  const base = createEditTool(root, {
+  const base = (options?.createTool ?? createEditTool)(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
@@ -1142,6 +1151,13 @@ async function writeWorkspaceFile(
   // succeeds. Eagerly starting it would orphan a rejecting root promise as an unhandled
   // rejection when validation fails first — the readFile/access paths already defer the same way.
   const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+  // fs-safe 0.5.2 atomically replaces a final symlink on write. The workspace
+  // contract rejects symlink write targets so the link and its target survive.
+  const rootReal = await fs.realpath(root);
+  const targetStat = await fs.lstat(path.resolve(rootReal, relative)).catch(() => undefined);
+  if (targetStat?.isSymbolicLink()) {
+    throw new FsSafeError("symlink", `refusing to write to symlink: ${absolutePath}`);
+  }
   await (await getRoot()).write(relative, content, { mkdir: true });
 }
 
@@ -1189,7 +1205,10 @@ function createHostWriteOperations(
       writeFile: (absolutePath: string, content: string) =>
         writeWorkspaceFile(root, getRoot, absolutePath, content),
       readFile: async (absolutePath: string) => {
-        const relative = toRelativeWorkspacePath(root, absolutePath);
+        // Canonicalize symlink parents like the write path: fs-safe 0.5.2
+        // rejects intermediate symlinks by default, but in-workspace symlink
+        // parents are part of the workspace contract.
+        const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
         return (await (await getRoot()).read(relative)).buffer;
       },
       statFile: async (absolutePath: string) => {
@@ -1236,7 +1255,10 @@ function createHostEditOperations(
   return withMemoryWriteProvenance(
     {
       readFile: async (absolutePath: string) => {
-        const relative = toRelativeWorkspacePath(root, absolutePath);
+        // Canonicalize symlink parents like the write path: fs-safe 0.5.2
+        // rejects intermediate symlinks by default, but in-workspace symlink
+        // parents are part of the workspace contract.
+        const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
         const safeRead = await (await getRoot()).read(relative);
         return safeRead.buffer;
       },
@@ -1249,7 +1271,8 @@ function createHostEditOperations(
       access: async (absolutePath: string) => {
         let relative: string;
         try {
-          relative = toRelativeWorkspacePath(root, absolutePath);
+          // Canonicalized like readFile so in-workspace symlink parents pass.
+          relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
         } catch {
           // Path escapes workspace root.  Don't throw here – the upstream
           // library replaces any `access` error with a misleading "File not

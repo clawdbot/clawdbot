@@ -345,20 +345,48 @@ extension CritterStatusLabel {
     }
 
     private var gatewayNeedsAttention: Bool {
-        if self.isSleeping { return false }
-        switch self.gatewayStatus {
-        case .failed, .stopped:
-            return !self.isPaused
-        case .starting, .running, .attachedExisting:
+        Self.needsAttention(
+            connectionMode: self.connectionMode,
+            controlState: self.controlChannelState,
+            gatewayStatus: self.gatewayStatus,
+            isPaused: self.isPaused,
+            isSleeping: self.isSleeping)
+    }
+
+    static func needsAttention(
+        connectionMode: AppState.ConnectionMode,
+        controlState: ControlChannel.ConnectionState,
+        gatewayStatus: GatewayProcessManager.Status,
+        isPaused: Bool,
+        isSleeping: Bool) -> Bool
+    {
+        guard !isPaused else { return false }
+        switch connectionMode {
+        case .unconfigured:
             return false
+        case .remote:
+            return GatewayConnectionPresentation(state: controlState).needsAttention
+        case .local:
+            guard !isSleeping else { return false }
+            switch gatewayStatus {
+            case .failed, .stopped:
+                return true
+            case .starting, .running, .attachedExisting:
+                return false
+            }
         }
     }
 
     private var gatewayBadgeColor: Color {
+        if self.connectionMode == .remote,
+           GatewayConnectionPresentation(state: self.controlChannelState).needsAttention
+        {
+            return .red
+        }
         switch self.gatewayStatus {
-        case .failed: .red
-        case .stopped: .orange
-        default: .clear
+        case .failed: return .red
+        case .stopped: return .orange
+        default: return .clear
         }
     }
 }
@@ -375,6 +403,8 @@ extension CritterStatusLabel {
             blinkTick: 1,
             sendCelebrationTick: 1,
             gatewayStatus: .running(details: nil),
+            connectionMode: .local,
+            controlChannelState: .connected,
             animationsEnabled: true,
             iconState: .workingMain(.tool(.bash)),
             voiceWakeMeterActive: true)
@@ -421,6 +451,8 @@ extension CritterStatusLabel {
             blinkTick: 0,
             sendCelebrationTick: 0,
             gatewayStatus: .failed("boom"),
+            connectionMode: .local,
+            controlChannelState: .connected,
             animationsEnabled: false,
             iconState: .idle,
             voiceWakeMeterActive: false)
@@ -435,6 +467,8 @@ extension CritterStatusLabel {
             blinkTick: 0,
             sendCelebrationTick: 0,
             gatewayStatus: .stopped,
+            connectionMode: .local,
+            controlChannelState: .connected,
             animationsEnabled: false,
             iconState: .idle,
             voiceWakeMeterActive: false)

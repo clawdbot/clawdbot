@@ -383,6 +383,10 @@ struct ChatSessionSidebarModelTests {
         let data = try #require("""
         {
           "key": "agent:main:child",
+          "classification": "subagent",
+          "agentId": "main",
+          "isMain": false,
+          "isBackground": true,
           "parentSessionKey": "agent:main:main",
           "spawnedBy": "agent:main:controller",
           "childSessions": ["agent:main:grandchild"],
@@ -401,6 +405,10 @@ struct ChatSessionSidebarModelTests {
         let entry = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: data)
 
         #expect(entry.parentSessionKey == "agent:main:main")
+        #expect(entry.classification == "subagent")
+        #expect(entry.agentId == "main")
+        #expect(entry.isMain == false)
+        #expect(entry.isBackground == true)
         #expect(entry.spawnedBy == "agent:main:controller")
         #expect(entry.childSessions == ["agent:main:grandchild"])
         #expect(entry.status == "running")

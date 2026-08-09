@@ -13,6 +13,7 @@ import {
   buildGatewayProbeConnectionDetails,
   callGateway,
   formatGatewayAuthErrorJson,
+  formatGatewayClientRequestErrorJson,
   formatGatewayTransportErrorJson,
   isGatewayCredentialsRequiredError,
 } from "../gateway/call.js";
@@ -36,8 +37,11 @@ import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routi
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
+  buildRateLimitedHealthDiagnostic,
+  gatewayConnectErrorWasRateLimited,
   GATEWAY_HEALTH_REACHABLE_LINE,
   gatewayProbeResultSawGateway,
+  gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
 import { formatHealthChannelLines } from "./health-format.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
@@ -71,8 +75,20 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   localPortOverride?: number;
   json?: boolean;
 }): Promise<boolean> {
-  if (!isGatewayHealthAuthUnavailableError(params.error)) {
+  const directRateLimit = gatewayConnectErrorWasRateLimited(params.error);
+  if (!directRateLimit && !isGatewayHealthAuthUnavailableError(params.error)) {
     return false;
+  }
+  if (directRateLimit) {
+    const diagnostic = buildRateLimitedHealthDiagnostic(params.error);
+    if (params.json) {
+      writeRuntimeJson(params.runtime, diagnostic);
+    } else {
+      params.runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
+      params.runtime.log(diagnostic.error.message);
+    }
+    params.runtime.exit(1);
+    return true;
   }
   const details = await buildGatewayProbeConnectionDetails({
     config: params.config,
@@ -93,7 +109,9 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   if (!gatewayProbeResultSawGateway(probe)) {
     return false;
   }
-  const diagnostic = buildCredentialsRequiredHealthDiagnostic();
+  const diagnostic = gatewayProbeResultWasRateLimited(probe)
+    ? buildRateLimitedHealthDiagnostic()
+    : buildCredentialsRequiredHealthDiagnostic();
   if (params.json) {
     writeRuntimeJson(params.runtime, diagnostic);
     params.runtime.exit(1);
@@ -249,7 +267,10 @@ export async function healthCommand(
       return;
     }
     if (opts.json) {
-      const payload = formatGatewayAuthErrorJson(error) ?? formatGatewayTransportErrorJson(error);
+      const payload =
+        formatGatewayAuthErrorJson(error) ??
+        formatGatewayClientRequestErrorJson(error) ??
+        formatGatewayTransportErrorJson(error);
       if (payload) {
         writeRuntimeJson(runtime, payload);
         runtime.exit(1);

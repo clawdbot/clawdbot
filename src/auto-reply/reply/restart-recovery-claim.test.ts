@@ -3,12 +3,17 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  claimMainSessionRecoveryOwner,
+  releaseMainSessionRecoveryOwner,
+} from "../../agents/main-session-recovery-store.js";
+import {
   loadSessionEntry,
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type {
   UserTurnTranscriptRecorder,
@@ -18,6 +23,27 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function createTestAdmission(params: {
+  entryId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}) {
+  return {
+    agentId: "main",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    generation: "test-generation",
+    entryId: params.entryId,
+    rawSeq: 1,
+    effectiveParentId: null,
+    activeMessagePosition: 0,
+    logicalTurnId: `${params.entryId}:turn`,
+    role: "user" as const,
+  };
+}
 
 function replaceSessionEntryFromIndependentConnection(params: {
   entry: SessionEntry;
@@ -38,6 +64,57 @@ function replaceSessionEntryFromIndependentConnection(params: {
 }
 
 describe("createReplyRestartRecoveryClaimController", () => {
+  it.each([
+    { receiptState: undefined, expectedStatus: "done" },
+    { receiptState: "terminal-pending" as const, expectedStatus: "failed" },
+  ])(
+    "clears lifecycle ownership when claim cleanup settles $expectedStatus",
+    async ({ receiptState, expectedStatus }) => {
+      const root = tempDirs.make(`openclaw-reply-claim-${expectedStatus}-`);
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const sessionId = "session";
+      let entry: InternalSessionEntry = {
+        abortedLastRun: false,
+        lifecycleRunId: "recovery-run",
+        restartRecoveryBeforeAgentReplyState: "admitted",
+        restartRecoveryDeliveryRunId: "recovery-run",
+        sessionId,
+        startedAt: 1,
+        status: "running",
+        updatedAt: 1,
+      };
+      await replaceSessionEntry({ storePath, sessionKey }, entry);
+      const controller = createReplyRestartRecoveryClaimController({
+        admissionRunId: "recovery-run",
+        getEntry: () => entry,
+        getSessionId: () => sessionId,
+        isRestartAbort: () => false,
+        resolveDeliveryContext: () => undefined,
+        sessionKey,
+        setEntry: (next) => {
+          entry = next;
+        },
+        storePath,
+      });
+
+      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+      if (receiptState) {
+        entry = (await updateSessionEntry({ storePath, sessionKey }, () => ({
+          restartRecoveryDeliveryReceiptState: receiptState,
+        }))) as InternalSessionEntry;
+      } else {
+        await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
+        await controller.checkpointBeforeAgentReply({ state: "handled-silent" });
+      }
+      await controller.clear();
+
+      const persisted = loadSessionEntry({ storePath, sessionKey }) as InternalSessionEntry;
+      expect(persisted.status).toBe(expectedStatus);
+      expect(persisted.lifecycleRunId).toBeUndefined();
+    },
+  );
+
   it("retargets durable user-turn admission to the prepared reply session", async () => {
     const root = tempDirs.make("openclaw-reply-admission-");
     const storePath = path.join(root, "sessions.json");
@@ -47,10 +124,17 @@ describe("createReplyRestartRecoveryClaimController", () => {
     await replaceSessionEntry({ storePath, sessionKey }, entry);
 
     let persistedTarget: UserTurnTranscriptTarget | undefined;
+    const admission = createTestAdmission({
+      entryId: "user-turn-1",
+      sessionId,
+      sessionKey,
+      storePath,
+    });
     const persistApproved = vi.fn<UserTurnTranscriptRecorder["persistApproved"]>(async (params) => {
       persistedTarget =
         typeof params?.target === "function" ? await params.target() : params?.target;
       return {
+        admission,
         appended: true,
         message: { role: "user", content: "hello", timestamp: Date.now() },
         messageId: "user-turn-1",
@@ -61,6 +145,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
     const recorder = {
       message: undefined,
       resolveMessage: async () => undefined,
+      getAdmissionReceipt: () => admission,
       markRuntimePersistencePending: () => {},
       markRuntimePersisted: () => {},
       markBlocked: () => {},
@@ -121,6 +206,12 @@ describe("createReplyRestartRecoveryClaimController", () => {
       status: "done",
     };
     await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const admission = createTestAdmission({
+      entryId: sourceTurnId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
     const persistApproved = vi.fn<UserTurnTranscriptRecorder["persistApproved"]>();
     const recorder = {
       message: undefined,
@@ -137,6 +228,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
           timestamp: Date.now(),
         };
       },
+      getAdmissionReceipt: () => admission,
       markRuntimePersistencePending: () => {},
       markRuntimePersisted: () => {},
       markBlocked: () => {},
@@ -198,10 +290,17 @@ describe("createReplyRestartRecoveryClaimController", () => {
       idempotencyKey: sourceTurnId,
       timestamp: Date.now(),
     };
+    const admission = createTestAdmission({
+      entryId: sourceTurnId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
     const recorder = {
       message: undefined,
       getPersistedMessage: () => sourceMessage,
       resolveMessage: async () => sourceMessage,
+      getAdmissionReceipt: () => admission,
       markRuntimePersistencePending: () => {},
       markRuntimePersisted: () => {},
       markBlocked: () => {},
@@ -256,6 +355,104 @@ describe("createReplyRestartRecoveryClaimController", () => {
         cycleId: "cycle-new",
         revision: 1,
       },
+      restartRecoveryDeliveryRunId: "orphaned-run",
+      restartRecoveryDeliverySourceRunId: "telegram-update-old",
+      status: "done",
+    });
+  });
+
+  it("rejects durable admission when the captured recovery owner releases", async () => {
+    const root = tempDirs.make("openclaw-reply-admission-owner-release-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:chat:topic:owner-release";
+    const sessionId = "channel-session-id";
+    const sourceTurnId = "telegram-update-new";
+    const deliveryContext = {
+      channel: "telegram",
+      to: "chat",
+      accountId: "default",
+      threadId: "thread",
+    };
+    let entry: InternalSessionEntry = {
+      sessionId,
+      updatedAt: 10,
+      abortedLastRun: true,
+      status: "running",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 1,
+        chargedAttempts: 0,
+      },
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const owner = await claimMainSessionRecoveryOwner({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      sessionId,
+      target: { sessionKey, storePath },
+    });
+    expect(owner.kind).toBe("claimed");
+    if (owner.kind !== "claimed") {
+      return;
+    }
+    entry = (await updateSessionEntry({ storePath, sessionKey }, () => ({
+      abortedLastRun: false,
+      restartRecoveryDeliveryContext: deliveryContext,
+      restartRecoveryDeliveryRunId: "orphaned-run",
+      restartRecoveryDeliverySourceRunId: "telegram-update-old",
+      status: "done",
+    }))) as InternalSessionEntry;
+    const sourceMessage = {
+      role: "user" as const,
+      content: "continue",
+      idempotencyKey: sourceTurnId,
+      timestamp: Date.now(),
+    };
+    const admission = createTestAdmission({
+      entryId: sourceTurnId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+    const delegate = createUserTurnTranscriptRecorder({
+      message: sourceMessage,
+      target: {
+        agentId: "main",
+        sessionEntry: entry,
+        sessionId,
+        sessionKey,
+        storePath,
+      },
+      updateMode: "none",
+    });
+    const recorder = {
+      ...delegate,
+      getAdmissionReceipt: () => admission,
+      persistApproved: async (
+        options?: Parameters<UserTurnTranscriptRecorder["persistApproved"]>[0],
+      ) => {
+        await releaseMainSessionRecoveryOwner(owner.lease);
+        return await delegate.persistApproved(options);
+      },
+    } satisfies UserTurnTranscriptRecorder;
+    const controller = createReplyRestartRecoveryClaimController({
+      getEntry: () => entry,
+      getSessionId: () => sessionId,
+      isRestartAbort: () => false,
+      resolveDeliveryContext: () => deliveryContext,
+      sessionKey,
+      setEntry: (next) => {
+        entry = next;
+      },
+      sourceTurnId,
+      storePath,
+    });
+
+    await expect(controller.admitUserTurn(recorder)).rejects.toThrow(
+      "session changed before durable user-turn admission",
+    );
+    const persisted = loadSessionEntry({ storePath, sessionKey });
+    expect(persisted).not.toHaveProperty("mainRestartRecovery");
+    expect(persisted).toMatchObject({
       restartRecoveryDeliveryRunId: "orphaned-run",
       restartRecoveryDeliverySourceRunId: "telegram-update-old",
       status: "done",

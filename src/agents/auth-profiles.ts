@@ -43,6 +43,7 @@ export {
   setAuthProfileOrder,
   upsertAuthProfile,
   upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
 } from "./auth-profiles/profiles.js";
 export {
   repairOAuthProfileIdMismatch,
@@ -60,7 +61,9 @@ export {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
+  getPreparedRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotRevision,
   hasAuthProfileStoreSourceForProvider,
   hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource,
@@ -97,6 +100,9 @@ export {
   markAuthProfileCooldown,
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
+  markInlineProviderApiKeyFailure,
+  resolveInlineProviderApiKeyUnusableUntil,
+  resolveInlineProviderApiKeyUsageId,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
   setAuthProfileFailureHook,

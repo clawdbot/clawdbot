@@ -66,7 +66,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-30)).toEqual([
+    expect(listGatewayMethods().slice(-35)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -97,6 +97,11 @@ describe("listGatewayMethods", () => {
       "hooks.status",
       "tasks.retry",
       "tasks.dismiss",
+      "audit.run.inspect",
+      "sessions.patchMany",
+      "update.hold",
+      "sessions.catalog.startTerminal",
+      "worker.desktop.observe",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -134,6 +139,13 @@ describe("listGatewayMethods", () => {
   it("advertises the versioned activity audit method", () => {
     expect(listGatewayMethods()).toContain("audit.activity.list");
     expect(coreGatewayHandlers["audit.activity.list"]).toBeTypeOf("function");
+    expect(listGatewayMethods()).toContain("audit.run.inspect");
+    expect(coreGatewayHandlers["audit.run.inspect"]).toBeTypeOf("function");
+  });
+
+  it("advertises the update campaign hold method", () => {
+    expect(listGatewayMethods()).toContain("update.hold");
+    expect(coreGatewayHandlers["update.hold"]).toBeTypeOf("function");
   });
 
   it("does not advertise hidden core handlers", () => {
@@ -162,7 +174,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-37)).toEqual([
+    expect(coreMethods.slice(-42)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -200,9 +212,23 @@ describe("listGatewayMethods", () => {
       "hooks.status",
       "tasks.retry",
       "tasks.dismiss",
+      "audit.run.inspect",
+      "sessions.patchMany",
+      "update.hold",
+      "sessions.catalog.startTerminal",
+      "worker.desktop.observe",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);
+    expect(methods.indexOf("audit.run.inspect")).toBe(methods.indexOf("tasks.dismiss") + 1);
+    expect(methods.indexOf("sessions.patchMany")).toBe(methods.indexOf("audit.run.inspect") + 1);
+    expect(methods.indexOf("update.hold")).toBe(methods.indexOf("sessions.patchMany") + 1);
+    expect(methods.indexOf("sessions.catalog.startTerminal")).toBe(
+      methods.indexOf("update.hold") + 1,
+    );
+    expect(methods.indexOf("worker.desktop.observe")).toBe(
+      methods.indexOf("sessions.catalog.startTerminal") + 1,
+    );
   });
 
   it("advertises the versioned Talk session RPCs", () => {

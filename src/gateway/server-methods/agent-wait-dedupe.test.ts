@@ -33,6 +33,19 @@ function completeRun(dedupe: Map<string, DedupeEntry>, runId: string): void {
   });
 }
 
+function terminalReceipt(runId: string) {
+  return {
+    runId,
+    sessionId: "session-1",
+    turnId: "turn-1",
+    requested: { provider: "openai", model: "gpt-primary" },
+    effective: { provider: "openai", model: "gpt-alternate", responseModel: "gpt-alternate" },
+    successfulToolNames: ["read"],
+    rerouted: true,
+    terminalDisposition: "visible",
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -105,6 +118,11 @@ describe("agent.wait gateway dedupe observations", () => {
       payload: { status: "error", startedAt: 100, endedAt: 150, stopReason: "rpc" },
       expected: { status: "error", endedAt: 150, stopReason: "rpc" },
     },
+    {
+      name: "earlier writer supersession",
+      payload: { status: "error", startedAt: 100, endedAt: 150, stopReason: "superseded" },
+      expected: { status: "error", endedAt: 150, stopReason: "superseded" },
+    },
   ])("merges $name across agent and chat observations", async ({ name, payload, expected }) => {
     for (const timeoutFirst of [true, false]) {
       const runId = `run-cross-source-${name.replaceAll(" ", "-")}-${timeoutFirst}`;
@@ -144,7 +162,7 @@ describe("agent.wait gateway dedupe observations", () => {
   });
 
   it.each(["lifecycle-first", "dedupe-first"] as const)(
-    "keeps reply evidence when sticky status arrives $0",
+    "keeps terminal evidence when sticky status arrives $0",
     async (order) => {
       const runId = `run-reply-merge-${order}`;
       const dedupe = new Map<string, DedupeEntry>();
@@ -161,6 +179,12 @@ describe("agent.wait gateway dedupe observations", () => {
             phase: "end",
             startedAt: 100,
             endedAt: 300,
+            terminalDelivery: {
+              status: "sent",
+              resultCount: 1,
+              target: "private-target",
+            },
+            terminalReceipt: terminalReceipt(runId),
             terminalReply: { disposition: "visible", text: "canonical reply" },
           },
         });
@@ -194,9 +218,12 @@ describe("agent.wait gateway dedupe observations", () => {
         expect.objectContaining({
           runId,
           status: "timeout",
+          terminalDelivery: { status: "sent", resultCount: 1 },
+          terminalReceipt: terminalReceipt(runId),
           terminalReply: { disposition: "visible", text: "canonical reply" },
         }),
       );
+      expect(JSON.stringify(waiter.respond.mock.calls[0]?.[1])).not.toContain("private-target");
     },
   );
 });

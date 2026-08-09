@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const serviceWorkerPath = path.join(here, "../../public/sw.js");
@@ -679,12 +680,4 @@ function createNotificationServiceWorker(
       return close;
     },
   };
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }

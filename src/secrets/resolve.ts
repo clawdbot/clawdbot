@@ -99,7 +99,17 @@ function throwUnknownProviderResolutionError(params: {
   if (isSecretResolutionError(params.err)) {
     throw params.err;
   }
+  // fs-safe 0.5 exposes one fail-closed receipt for failed permission inspection,
+  // unavailable ACL data, and indeterminate owner trust. Keep the diagnostic path-free.
+  const isWindowsPathSecurityFailure =
+    process.platform === "win32" &&
+    (params.source === "file" || params.source === "exec") &&
+    params.err instanceof FsSafeError &&
+    params.err.code === "permission-unverified";
   throw providerResolutionError({
+    ...(isWindowsPathSecurityFailure
+      ? { code: "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE" as const }
+      : {}),
     source: params.source,
     provider: params.provider,
     message: formatErrorMessage(params.err),
@@ -200,7 +210,6 @@ async function assertSecurePath(params: {
   targetPath: string;
   label: string;
   trustedDirs?: string[];
-  allowInsecurePath?: boolean;
   allowReadableByOthers?: boolean;
   allowSymlinkPath?: boolean;
 }): Promise<string> {
@@ -235,10 +244,6 @@ async function assertSecurePath(params: {
       throw new Error(`${params.label} is outside trustedDirs: ${effectivePath}`);
     }
   }
-  if (params.allowInsecurePath) {
-    return effectivePath;
-  }
-
   const perms = await inspectPathPermissions(effectivePath);
   if (!perms.ok) {
     throw new Error(`${params.label} permissions could not be verified: ${effectivePath}`);
@@ -250,8 +255,9 @@ async function assertSecurePath(params: {
   }
 
   if (process.platform === "win32" && perms.source === "unknown") {
-    throw new Error(
-      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Set allowInsecurePath=true for this provider to bypass this check when the path is trusted.`,
+    throw new FsSafeError(
+      "permission-unverified",
+      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Move the command to a path whose ACLs OpenClaw can verify; there is no provider-level bypass.`,
     );
   }
 

@@ -27,6 +27,9 @@ import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-
 type CreateOpenClawCodingTools =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
 type OpenClawCodingToolsOptions = NonNullable<Parameters<CreateOpenClawCodingTools>[0]>;
+type CreateOpenClawCodingToolsForBridge = (
+  options?: OpenClawCodingToolsOptions,
+) => ReturnType<CreateOpenClawCodingTools> | Promise<ReturnType<CreateOpenClawCodingTools>>;
 type AgentHarnessToolSurfaceRuntime = ReturnType<typeof createAgentHarnessToolSurfaceRuntime>;
 type CatalogExecuteParams = Parameters<
   NonNullable<AgentHarnessToolSurfaceRuntime["toolSearchCatalogExecutor"]>
@@ -133,7 +136,7 @@ interface CopilotToolBridgeInput {
    */
   onYieldDetected?: (message?: string) => void;
   onToolCompleted?: (completion: CopilotToolCompletion) => void | Promise<void>;
-  createOpenClawCodingTools?: (opts: unknown) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
+  createOpenClawCodingTools?: CreateOpenClawCodingToolsForBridge;
   beforeExecute?: (ctx: {
     toolName: string;
     toolCallId: string;
@@ -372,6 +375,7 @@ function buildOpenClawCodingToolsOptions(
       jobId: a.jobId,
       memoryFlushWritePath: a.memoryFlushWritePath,
       toolsAllow: a.toolsAllow,
+      conversationToolPolicy: a.conversationToolPolicy,
     }),
     exec: {
       ...a.execOverrides,
@@ -446,6 +450,7 @@ function buildOpenClawCodingToolsOptions(
     // recordToolPrepStage intentionally omitted: copilot does not
     // surface attempt-stage telemetry yet. Codex omits this too.
     onToolOutcome: a.onToolOutcome,
+    isTurnTainted: a.isTurnTainted,
     onYield: (message) => {
       // Notify the caller first so the final attempt result can carry
       // yieldDetected even if the abort below races a concurrent
@@ -603,11 +608,13 @@ function convertOpenClawToolToSdkTool(
       );
     }
 
-    // OpenClaw tools throw for execution failures. Error-shaped details remain
-    // lifecycle metadata; successful content uses the SDK's MCP converter.
-    const sdkResult = convertMcpCallToolResult({ content: result.content });
     const sanitizedResult = sanitizeToolResult(result);
-    const resultIsError = sdkResult.resultType === "failure" || isToolResultError(sanitizedResult);
+    const resultIsError = isToolResultError(sanitizedResult);
+    // The SDK only marks fulfilled tool results as failures when isError is forwarded.
+    const sdkResult = convertMcpCallToolResult({
+      content: result.content,
+      isError: resultIsError,
+    });
     const resultError = resultIsError ? extractToolErrorMessage(sanitizedResult) : undefined;
     ctx.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,

@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
+import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.js";
 import {
   ackDelivery,
   claimDeliveryPlatformSendAttempt,
@@ -93,7 +94,7 @@ describe("delivery-queue storage", () => {
         if (!firstAttemptId) {
           throw new Error("test invariant: first platform owner must claim the durable row");
         }
-        const lostClaim = `Stable delivery platform claim was lost: ${id}`;
+        const lostClaim = `Delivery platform claim was lost: ${id}`;
         // Admission snapshots taken before ownership must CAS the unclaimed
         // state; a producer that claimed meanwhile retains its media and row.
         await expect(
@@ -475,6 +476,52 @@ describe("delivery-queue storage", () => {
       expect(entry.retryCount).toBe(0);
     });
 
+    it("preserves and renews the exact explicit owner after an ambiguous platform outcome", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+        const stateDir = tmpDir();
+        const id = "cron-direct-delivery:v1:unknown-owner-lease";
+        await enqueueDeliveryOnce(
+          {
+            channel: "forum",
+            to: "123",
+            payloads: [{ text: "test" }],
+            completionRetention: {
+              idPrefix: "cron-direct-delivery:v1:",
+              maxAgeMs: 24 * 60 * 60_000,
+              maxEntries: 2_000,
+            },
+            requiresProducerClaim: true,
+          },
+          id,
+          stateDir,
+        );
+        const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+        if (!claimId) {
+          throw new Error("test invariant: explicit producer must own the stable row");
+        }
+        await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, claimId);
+        const started = readQueuedEntry(stateDir, id);
+        const originalExpiry = started.availableAt;
+        vi.setSystemTime(Date.now() + 1_000);
+
+        await markDeliveryPlatformOutcomeUnknown(id, stateDir, claimId);
+
+        expect(readQueuedEntry(stateDir, id)).toMatchObject({
+          recoveryState: "unknown_after_send",
+          platformSendAttemptId: claimId,
+          availableAt: originalExpiry,
+        });
+        await expect(renewDeliveryPlatformSendLease(id, stateDir, claimId)).resolves.toBe(
+          Date.now() + 30_000,
+        );
+        expect(readQueuedEntry(stateDir, id).availableAt).toBe(Date.now() + 30_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("refreshes the attempt timestamp immediately before provider I/O", async () => {
       const id = await enqueueTextDelivery(
         {
@@ -517,6 +564,27 @@ describe("delivery-queue storage", () => {
       expect(typeof entry.lastAttemptAt).toBe("number");
       expect((entry.lastAttemptAt as number) > 0).toBe(true);
       expect(entry.lastError).toBe("connection refused");
+    });
+
+    it("releases a settled live owner while retaining retryable custody", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "test" }],
+        requiresProducerClaim: true,
+      });
+      const claimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+      expect(claimId).toEqual(expect.any(String));
+
+      await failDelivery(id, "provider failed", tmpDir(), claimId);
+
+      expect(readQueuedEntry(tmpDir(), id)).toMatchObject({
+        retryCount: 1,
+        lastError: "provider failed",
+      });
+      expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("availableAt");
+      expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("producerClaimId");
+      expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("recoveryState");
     });
 
     it("keeps post-send failure evidence while recording the retry failure", async () => {

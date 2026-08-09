@@ -5,6 +5,7 @@ type RealtimeVoiceAudioOverflowPolicy = "drop-oldest" | "reject-newest";
 
 export type RealtimeVoiceAudioQueue = {
   clear: () => void;
+  dequeue: () => Buffer | undefined;
   drain: () => Buffer[];
   enqueue: (audio: Buffer) => boolean;
 };
@@ -22,6 +23,13 @@ export function createRealtimeVoiceAudioQueue(
 
   return {
     clear,
+    dequeue: () => {
+      const chunk = chunks.shift();
+      if (chunk) {
+        bytes -= chunk.byteLength;
+      }
+      return chunk;
+    },
     drain: () => {
       const drained = chunks;
       clear();
@@ -88,6 +96,7 @@ type RealtimeVoiceConnectAttempt = {
   reject: (error: Error) => void;
   rejectStartup: (error: Error) => boolean;
   resolve: (providerReady?: boolean) => void;
+  startTimeout: () => void;
 };
 
 type RealtimeVoiceConnectAttemptOptions = {
@@ -174,8 +183,11 @@ export class RealtimeVoiceSessionLifecycle {
       rejectPromise = reject;
     });
     let removeAbortListener = () => {};
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const cleanup = () => {
-      clearTimeout(timeout);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
       removeAbortListener();
     };
     const resolve = (providerReady = false) => {
@@ -203,17 +215,22 @@ export class RealtimeVoiceSessionLifecycle {
       reject(error);
       return true;
     };
-    const timeout = setTimeout(() => {
-      if (
-        this.isCurrent(options.connection) &&
-        !ready &&
-        this.terminalOutcome(options.connection) !== "completed"
-      ) {
-        startupFailed = true;
-        options.onTimeout();
-        reject(options.timeoutError());
+    const startTimeout = () => {
+      if (settled || timeout) {
+        return;
       }
-    }, options.timeoutMs);
+      timeout = setTimeout(() => {
+        if (
+          this.isCurrent(options.connection) &&
+          !ready &&
+          this.terminalOutcome(options.connection) !== "completed"
+        ) {
+          startupFailed = true;
+          options.onTimeout();
+          reject(options.timeoutError());
+        }
+      }, options.timeoutMs);
+    };
     const onAbort = () => {
       const outcome = this.terminalOutcome(options.connection);
       options.onAbort(outcome);
@@ -243,6 +260,7 @@ export class RealtimeVoiceSessionLifecycle {
       reject,
       rejectStartup,
       resolve,
+      startTimeout,
     };
   }
 

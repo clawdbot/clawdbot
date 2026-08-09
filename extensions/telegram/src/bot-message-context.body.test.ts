@@ -361,15 +361,17 @@ describe("resolveTelegramInboundBody", () => {
   privateBodyTest(
     "renders Telegram text entities before building the agent body",
     {
-      text: "Hello world docs",
+      text: "Hello world\nquoted\nordinary docs",
       entities: [
         { type: "bold", offset: 6, length: 5 },
-        { type: "text_link", offset: 12, length: 4, url: "https://docs.example" },
+        { type: "blockquote", offset: 12, length: 6 },
+        { type: "text_link", offset: 28, length: 4, url: "https://docs.example" },
       ],
     },
     (result) => {
-      expect(result?.rawBody).toBe("Hello **world** [docs](https://docs.example)");
-      expect(result?.bodyText).toBe("Hello **world** [docs](https://docs.example)");
+      const expected = "Hello **world**\n> quoted\n\nordinary [docs](https://docs.example)";
+      expect(result?.rawBody).toBe(expected);
+      expect(result?.bodyText).toBe(expected);
     },
   );
 

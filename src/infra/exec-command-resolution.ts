@@ -1,7 +1,7 @@
 // Resolves command executables and wrapper policy paths for exec approvals.
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
+import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -51,14 +51,7 @@ function parseFirstToken(command: string): string | null {
 }
 
 function tryResolveRealpath(filePath: string | undefined): string | undefined {
-  if (!filePath) {
-    return undefined;
-  }
-  try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return undefined;
-  }
+  return filePath ? (safeRealpathSync(filePath) ?? undefined) : undefined;
 }
 
 function buildExecutableResolution(

@@ -67,7 +67,6 @@ function createLazyBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
-  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -112,7 +111,6 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
-  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -134,7 +132,6 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
       ? { allowHostControl: ctx.browser.allowHostControl }
       : {}),
     ...(ctx.sessionKey ? { agentSessionKey: ctx.sessionKey } : {}),
-    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
     ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
     ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
     ...(ctx.activeModel?.provider || ctx.activeModel?.modelId

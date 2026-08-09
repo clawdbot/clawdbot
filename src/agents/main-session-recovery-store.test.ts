@@ -20,6 +20,17 @@ import {
 } from "./main-session-recovery-store.js";
 
 const sessionKey = "agent:main:main";
+const executionIdentity = (runId: string) => ({
+  tokenVersion: 1 as const,
+  contextId: `context-${runId}`,
+  executionId: `execution-${runId}`,
+  runId,
+  createdAt: 1,
+});
+const enabledExecutionIdentity = (runId: string) => ({
+  state: "enabled" as const,
+  token: executionIdentity(runId),
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("main session recovery store", () => {
@@ -104,6 +115,7 @@ describe("main session recovery store", () => {
         now: 200,
         observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
         runId: "recovery-1",
+        executionIdentity: enabledExecutionIdentity("recovery-1"),
       },
       target: { sessionKey: targetSessionKey, storePath },
     });
@@ -210,6 +222,7 @@ describe("main session recovery store", () => {
       now: 400,
       observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
       runId: "stale-recovery",
+      executionIdentity: enabledExecutionIdentity("stale-recovery"),
     });
 
     expect(result.transition).toEqual({ kind: "rejected", reason: "session_replaced" });
@@ -390,7 +403,10 @@ describe("main session recovery store", () => {
         },
       );
 
-      const immediateRelease = releaseMainSessionRecoveryOwner(claim.lease);
+      const onDeferredSuccess = vi.fn();
+      const immediateRelease = releaseMainSessionRecoveryOwner(claim.lease, {
+        onDeferredSuccess,
+      });
       const immediateReleaseRejected = expect(immediateRelease).rejects.toThrow(
         "transient session-store failure",
       );
@@ -401,6 +417,11 @@ describe("main session recovery store", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(() => {
         expect(read().mainRestartRecovery?.foregroundClaims).toBeUndefined();
+      });
+      expect(onDeferredSuccess).toHaveBeenCalledWith({
+        sessionId: "session-1",
+        sessionKey,
+        storePath,
       });
     } finally {
       vi.useRealTimers();

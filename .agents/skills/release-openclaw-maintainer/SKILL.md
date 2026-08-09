@@ -103,11 +103,13 @@ a workflow fix that the existing parent run cannot consume.
   returns to the Code SHA loop.
 - During release planning, inspect both `src/plugins/compat/registry.ts` and
   `src/commands/doctor/shared/deprecation-compat.ts` before branching and again
-  before final publish. For every deprecated or removal-pending compatibility
-  record whose `removeAfter` date is on or before the release date, either
-  remove the compatibility path where safe and validate the affected tests, or
-  write down why removal is blocked and get explicit maintainer approval before
-  shipping the expired compatibility path.
+  before final publish. For every `deprecated` compatibility record whose
+  `removeAfter` date is on or before the release date, either remove the
+  compatibility path where safe and validate the affected tests, or change it
+  to `removal-pending`, document the blocker, and get explicit maintainer
+  approval. Revalidate every due `removal-pending` record's blocker and upgrade
+  conditions before shipping; keep it only with explicit maintainer approval
+  until those conditions are met.
 - When removing deprecated runtime/config compatibility, preserve any doctor
   migration, repair, or hint that is still needed by supported upgrade paths.
   Doctor-side compatibility should stay tracked in
@@ -252,22 +254,29 @@ on pinned current `main` as the exact command and validation contract.
    and workflow validation. Run focused checks and freeze the untagged tip SHA.
 2. From that branch, run npm preflight with the SHA as `tag`,
    `preflight_only=true`, and `npm_dist_tag=extended-stable`; save the run ID.
-3. Run complete Full Release Validation from and against the canonical branch
-   with `release_profile=stable`; save its run ID and successful `run_attempt`.
-   Any branch change invalidates both gates.
+3. Run complete Full Release Validation against the canonical branch with
+   `release_profile=stable`; save its run ID and successful `run_attempt`.
+   Prefer the trusted main-pinned harness, which attests the immutable target
+   SHA in its v3 manifest. Any candidate branch change invalidates both gates.
 4. Require the tip still equals the frozen SHA, then create signed `vYYYY.M.P`.
    Never move or delete a final tag; later source changes need a new patch.
-5. Require the saved validation run to be complete, successful, and bound to
-   the canonical branch, tag SHA, and attempt. Reject `release-ci/*` and narrow
-   reruns.
+5. Require the saved validation run to be complete and successful, bind its
+   manifest target SHA and attempt to the tag, and accept a direct run from the
+   canonical branch, a direct current-`main` run whose workflow SHA is still
+   reachable from main, or a trusted main-pinned `release-ci/*` harness. Reject
+   narrow reruns.
 6. Dispatch `plugin-npm-release.yml` from the same branch with
    `publish_scope=all-publishable`, the full release SHA as `ref`, and
    `npm_dist_tag=extended-stable`. Require complete exact-version and selector
    readback, then save the successful plugin run ID.
-7. Publish core from the same branch with the tag, `npm_dist_tag=extended-stable`,
-   all three run IDs, and
-   `full_release_validation_run_attempt=<saved-attempt>`. Require the prepared
-   tarball and every run to match the branch and release SHA.
+7. Publish core with the tag, `npm_dist_tag=extended-stable`, all three run IDs,
+   and `full_release_validation_run_attempt=<saved-attempt>`. Normally dispatch
+   from the canonical branch. For a workflow-only recovery after the candidate
+   is immutable, dispatch trusted current `main` with
+   `release_candidate_branch=extended-stable/YYYY.M.33`; it still publishes the
+   tag checkout and accepts canonical-branch, current-main, or trusted-pinned
+   validation evidence; the prepared tarball and every evidence identity must
+   still match the candidate SHA.
 8. From a clean current-`main` checkout, run
    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
    Verify signatures, provenance, inventories, exact versions, and selectors.
@@ -471,7 +480,7 @@ HEAD/worktree-bound manifest under git metadata for cutover review.
   credit from that PR's record on the same bullet.
 - Changelog entries should be user-facing, not internal release-process notes.
 - GitHub release and prerelease bodies use
-  `scripts/render-github-release-notes.mjs`. When the full matching
+  `scripts/render-github-release-notes.mts`. When the full matching
   `CHANGELOG.md` version section fits GitHub's 125,000-character limit and
   the renderer's matching 125,000-byte safety ceiling, publish the exact
   `## YYYY.M.PATCH` block through the line before the next level-2 heading,
@@ -735,7 +744,7 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`. If either cannot be injected, stop
   before starting those local long lanes and report the missing key.
 - Live credentialed channel QA is the GitHub Actions workflow
-  `QA-Lab - All Lanes` (`.github/workflows/qa-live-telegram-convex.yml`), not a
+  `QA-Lab - All Lanes` (`.github/workflows/qa-live-transports-convex.yml`), not a
   local substitute. Dispatch it from Actions against the release tag and wait
   for it to pass before npm preflight/publish readiness. Use a SHA only when it
   satisfies the workflow's secret-bearing trust gate: main ancestor or open PR

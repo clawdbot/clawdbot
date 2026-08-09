@@ -10,6 +10,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
@@ -281,16 +282,6 @@ async function runPollWithClient(
     isWebchatConnect: () => false,
   });
   return { respond };
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 async function runMessageActionRequest(
@@ -1304,9 +1295,7 @@ describe("gateway send mirroring", () => {
       clearInterval(maintenance.healthInterval);
       clearInterval(maintenance.dedupeCleanup);
       clearInterval(maintenance.worktreeCleanup);
-      if (maintenance.mediaCleanup) {
-        clearInterval(maintenance.mediaCleanup);
-      }
+      await maintenance.stopMediaCleanup();
       maintenance.skillCuratorCleanup();
       vi.useRealTimers();
     }
@@ -1359,9 +1348,7 @@ describe("gateway send mirroring", () => {
       clearInterval(maintenance.healthInterval);
       clearInterval(maintenance.dedupeCleanup);
       clearInterval(maintenance.worktreeCleanup);
-      if (maintenance.mediaCleanup) {
-        clearInterval(maintenance.mediaCleanup);
-      }
+      await maintenance.stopMediaCleanup();
       maintenance.skillCuratorCleanup();
       vi.useRealTimers();
     }

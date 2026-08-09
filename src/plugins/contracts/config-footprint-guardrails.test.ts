@@ -257,7 +257,10 @@ describe("config footprint guardrails", () => {
     ]);
     const facadeImportPattern =
       /\bfrom\s*["'][^"']*(?:channel-config-primitives|bundled-channel-config-schema)(?:\.js)?["']/u;
-    const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: "src" }) ?? [];
+    const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: "src" });
+    if (!files) {
+      throw new Error("unable to list tracked source files for the config facade guard");
+    }
 
     const offenders = files.filter((file) => {
       if (!(file.endsWith(".ts") || file.endsWith(".tsx")) || allowedShellImporters.has(file)) {

@@ -8,10 +8,11 @@ import {
   SessionManager,
   type FileEntry as SessionFileEntry,
 } from "../agents/sessions/session-manager.js";
-import type {
-  SessionCompactionCheckpoint,
-  SessionCompactionCheckpointReason,
-  SessionEntry,
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type SessionCompactionCheckpoint,
+  type SessionCompactionCheckpointReason,
+  type SessionEntry,
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
 import { readFileRangeAsync } from "../config/sessions/file-range.js";
@@ -450,12 +451,13 @@ function readSessionLeafStateFromRecords(
 function resolveCheckpointTranscriptForkSource(
   checkpoint: SessionCompactionCheckpoint,
 ): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
+  const checkpointTokensTrusted = checkpoint.tokensVersion === SESSION_TOTAL_TOKENS_VERSION;
   const preCompactionFile = checkpoint.preCompaction.sessionFile?.trim();
   if (preCompactionFile) {
     return {
       sourceFile: preCompactionFile,
       sourceLeafId: checkpoint.preCompaction.entryId ?? checkpoint.preCompaction.leafId,
-      totalTokens: checkpoint.tokensBefore,
+      totalTokens: checkpointTokensTrusted ? checkpoint.tokensBefore : undefined,
     };
   }
 
@@ -471,7 +473,7 @@ function resolveCheckpointTranscriptForkSource(
   return {
     sourceFile: postCompactionFile,
     sourceLeafId: postCompactionLeafId,
-    totalTokens: checkpoint.tokensAfter,
+    totalTokens: checkpointTokensTrusted ? checkpoint.tokensAfter : undefined,
   };
 }
 
@@ -721,6 +723,7 @@ async function persistSessionCompactionCheckpoint(
     sessionId: params.sessionId,
     createdAt,
     reason: params.reason,
+    tokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     ...(typeof params.tokensBefore === "number" ? { tokensBefore: params.tokensBefore } : {}),
     ...(typeof params.tokensAfter === "number" ? { tokensAfter: params.tokensAfter } : {}),
     ...(params.summary?.trim() ? { summary: params.summary.trim() } : {}),

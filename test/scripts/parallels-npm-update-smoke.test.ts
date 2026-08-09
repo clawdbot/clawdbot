@@ -1,6 +1,5 @@
 // Parallels Npm Update Smoke tests cover parallels npm update smoke script behavior.
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +23,7 @@ import {
 } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
 import type { HostServer, Platform } from "../../scripts/e2e/parallels/types.ts";
 import { withEnv, withEnvAsync } from "../../src/test-utils/env.js";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
 const GUEST_TRANSPORTS_PATH = "scripts/e2e/parallels/guest-transports.ts";
@@ -35,13 +35,7 @@ const TEST_AUTH = {
   apiKeyValue: "test-key",
   modelId: "gpt-5.4",
 };
-const tempDirs: string[] = [];
-
-function makeTempDir(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-parallels-npm-update-"));
-  tempDirs.push(root);
-  return root;
-}
+const tempDirs = createTempDirTracker();
 
 function pidIsAlive(pid: number): boolean {
   try {
@@ -103,9 +97,7 @@ function extractWindowsBackgroundControlMarkers(decoded: string): {
 
 afterEach(() => {
   vi.useRealTimers();
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
-  }
+  tempDirs.cleanup();
 });
 
 describe("parallels npm update smoke", () => {
@@ -160,7 +152,7 @@ describe("parallels npm update smoke", () => {
     class FailingNpmUpdateSmoke extends NpmUpdateSmoke {
       protected override async makeRunTempDir(prefix: string): Promise<string> {
         void prefix;
-        return makeTempDir();
+        return tempDirs.make("openclaw-parallels-npm-update-");
       }
 
       protected override async runSteps(): Promise<void> {
@@ -188,7 +180,7 @@ describe("parallels npm update smoke", () => {
   });
 
   it("removes uploaded guest update scripts when chmod fails", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "prlctl.log");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
@@ -255,7 +247,7 @@ exit 1
   });
 
   it("uses one macOS guest identity to write and execute update scripts", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "prlctl.log");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
@@ -389,6 +381,27 @@ exit 1
     for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
       expect(script).toContain("attempt=$((attempt + 1))");
       expect(script).toContain('if [ "$attempt" -eq 4 ]; then\n      start_openclaw_gateway');
+    }
+  });
+
+  it("keeps POSIX provider secrets out of executable command lines", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.5",
+      updateTarget: "2026.7.2-beta.5",
+    };
+    const exportLine = `  export ${TEST_AUTH.apiKeyEnv}='${TEST_AUTH.apiKeyValue}'`;
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script.split("\n").filter((line) => line.includes(TEST_AUTH.apiKeyValue))).toEqual([
+        exportLine,
+      ]);
+      expect(script).toMatch(/with_provider_api_key [^\n]*gateway run/u);
+      expect(script).toMatch(/with_provider_api_key [^\n]*agent --local/u);
+      expect(script).toContain(`unset ${TEST_AUTH.apiKeyEnv}`);
+      expect(script.split("\n").find((line) => line.includes(" update --tag "))).not.toContain(
+        "with_provider_api_key",
+      );
     }
   });
 
@@ -538,7 +551,7 @@ exit 1
   });
 
   it("streams fresh lane logs instead of retaining them in memory", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "fresh.log");
     const output: string[] = [];
 
@@ -579,7 +592,7 @@ exit 1
   });
 
   it("clamps oversized fresh lane command timeouts before scheduling", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "fresh.log");
 
     const code = await spawnLoggedCommand(
@@ -595,7 +608,7 @@ exit 1
   });
 
   it.runIf(process.platform !== "win32")("times out fresh lane process groups", async () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const logPath = path.join(root, "fresh.log");
     const scriptPath = path.join(root, "hung-fresh-lane.mjs");
     const descendantPidPath = path.join(root, "descendant.pid");
@@ -635,7 +648,7 @@ exit 1
   it.runIf(process.platform !== "win32")(
     "lets fresh lane descendants exit during timeout kill grace",
     async () => {
-      const root = makeTempDir();
+      const root = tempDirs.make("openclaw-parallels-npm-update-");
       const logPath = path.join(root, "fresh.log");
       const scriptPath = path.join(root, "graceful-fresh-lane.mjs");
       const readyPath = path.join(root, "ready");
@@ -714,7 +727,7 @@ exit 1
   it.runIf(process.platform !== "win32")(
     "lets update stream descendants exit during timeout kill grace",
     async () => {
-      const root = makeTempDir();
+      const root = tempDirs.make("openclaw-parallels-npm-update-");
       const scriptPath = path.join(root, "stream-update-grace.mjs");
       const readyPath = path.join(root, "stream-ready");
       const donePath = path.join(root, "stream-done");
@@ -839,6 +852,110 @@ exit 1
     expect(commands).not.toContain("ReadAllBytes");
   });
 
+  it.each([
+    {
+      scenario: "a successfully launched job",
+      launchStatus: 0,
+      launchOutput: "started\n",
+      expectedError: "windows setup deadline timed out",
+    },
+    {
+      scenario: "a launch that never materializes",
+      launchStatus: 0,
+      launchOutput: "",
+      expectedError: "windows setup deadline background launch failed with exit code 0",
+    },
+    {
+      scenario: "a genuine launch failure",
+      launchStatus: 17,
+      launchOutput: "",
+      expectedError: "windows setup deadline background launch failed with exit code 17",
+    },
+  ])("preserves $scenario when Windows setup exhausts its active budget", async (testCase) => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let launchAttempts = 0;
+    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
+      if (options?.input) {
+        now += 2;
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      const decoded = decodePowerShellFromArgs(args);
+      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
+        launchAttempts++;
+        return { status: testCase.launchStatus, stderr: "", stdout: testCase.launchOutput };
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    };
+
+    try {
+      await expect(
+        runWindowsBackgroundPowerShell({
+          label: "windows setup deadline",
+          pollIntervalMs: 1,
+          runCommand: fakeRun,
+          script: "Write-Output test",
+          timeoutMs: 5,
+          vmName: "Windows Test",
+        }),
+      ).rejects.toThrow(testCase.expectedError);
+      expect(launchAttempts).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("drains a completed Windows job when setup exhausts the active budget", async () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    let completionProbes = 0;
+    let logProbes = 0;
+    const fakeRun: typeof hostCommandRun = (_command, args, options) => {
+      if (options?.input) {
+        now += 2;
+        return { status: 0, stderr: "", stdout: "" };
+      }
+      const decoded = decodePowerShellFromArgs(args);
+      if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
+        return { status: 0, stderr: "", stdout: "started\n" };
+      }
+      if (args.includes("cmd.exe")) {
+        const command = args.at(-1) ?? "";
+        if (command.includes("__OPENCLAW_BACKGROUND_DONE__")) {
+          logProbes++;
+          const markers = extractWindowsBackgroundControlMarkers(command);
+          return {
+            status: 0,
+            stderr: "",
+            stdout: [`${markers.exitPrefix}0`, markers.done, ""].join("\n"),
+          };
+        }
+        if (command.includes("(echo done) else (echo wait)")) {
+          completionProbes++;
+          return { status: 0, stderr: "", stdout: "done\n" };
+        }
+      }
+      return { status: 0, stderr: "", stdout: "" };
+    };
+
+    try {
+      await expect(
+        runWindowsBackgroundPowerShell({
+          label: "windows completed before first poll",
+          pollIntervalMs: 1,
+          runCommand: fakeRun,
+          script: "Write-Output done",
+          timeoutMs: 5,
+          vmName: "Windows Test",
+        }),
+      ).resolves.toBeUndefined();
+      expect(completionProbes).toBe(1);
+      expect(logProbes).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("does not treat Windows background log text as completion control", async () => {
     const decodedCommands: string[] = [];
     const fakeRun: typeof hostCommandRun = (_command, args) => {
@@ -929,7 +1046,7 @@ exit 1
   });
 
   it("selects macOS desktop users with homes on spaced mounted volumes", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
       prlctlPath,
@@ -977,7 +1094,7 @@ exit 7
   });
 
   it("keeps spaces in macOS sudo fallback desktop homes", () => {
-    const root = makeTempDir();
+    const root = tempDirs.make("openclaw-parallels-npm-update-");
     const prlctlPath = path.join(root, "prlctl");
     writeFileSync(
       prlctlPath,

@@ -190,6 +190,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             config: params.config,
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
+            chatType: params.chatType,
             agentId: effectiveSkillAgentId,
             warn: makeBootstrapWarn({
               sessionLabel,
@@ -204,6 +205,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       provider: contextConfigProvider,
       modelId,
       model: runtimeModelWithContext,
+      agentId: effectiveSkillAgentId,
       requestedTokenBudget: params.contextTokenBudget,
       fallbackTokenBudget: params.tokenBudget,
     });
@@ -266,6 +268,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       agentAccountId: params.agentAccountId,
       messageProvider: resolvedMessageProvider,
       chatType: params.chatType,
+      conversationToolPolicy: params.conversationToolPolicy,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,

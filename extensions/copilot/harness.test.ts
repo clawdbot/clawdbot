@@ -7,6 +7,7 @@ import type {
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -159,16 +160,6 @@ function makeSessionStoreMock() {
       delete: vi.fn((key: string) => entries.delete(key)),
     },
   };
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 async function flushAsyncWork() {

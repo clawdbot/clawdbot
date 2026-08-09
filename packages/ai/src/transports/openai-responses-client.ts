@@ -16,12 +16,18 @@ import { buildGuardedModelFetch } from "./host-policy.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
 import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  suppressOpenAIResponsesCompaction,
+  type OpenAIResponsesReplayMode,
+} from "./openai-responses-compaction-replay.js";
+import {
   AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
   type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
 import {
   applyServiceTierPricing,
   logResponsesFailedNoDetails,
+  ResponsesStreamFailure,
   safeDebugValue,
   summarizeOpenAITransportError,
   summarizeResponsesPayload,
@@ -30,15 +36,12 @@ import {
   buildOpenAIResponsesParams,
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
+import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import {
-  buildOpenAIResponsesReasoningReplayMetadata,
   createResponsesStreamWithEncryptedContentRetry,
   resolveAzureOpenAIApiVersion,
 } from "./openai-responses-replay-internal.js";
-import {
-  processResponsesStream,
-  ResponsesStreamFailure,
-} from "./openai-responses-stream-internal.js";
+import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
   assertCodeModeResponsesToolSurface,
@@ -56,6 +59,7 @@ import {
   mergeTransportMetadata,
   transportAbortError,
 } from "./transport-stream-shared.js";
+import { redactIdentifier } from "./transport-utils.js";
 
 function resolveProviderTransportTurnState(
   model: Model,
@@ -125,6 +129,7 @@ type ResponsesTransportExecutorOptions = {
     context: Context,
     options: OpenAIResponsesOptions | undefined,
     metadata?: Record<string, string>,
+    replayMode?: OpenAIResponsesReplayMode,
   ) => ReturnType<typeof buildOpenAIResponsesParams>;
   createResponseStream: (
     params: ResponsesStreamParams,
@@ -172,27 +177,43 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           turnState?.headers,
           options?.sessionId,
         );
-        let params = config.buildRequest(model, context, responsesOptions, turnState?.metadata);
-        const nextParams = await options?.onPayload?.(params, model);
-        if (nextParams !== undefined) {
-          params = nextParams as typeof params;
-        }
-        if (!isOpenAICodexResponsesModel(model)) {
-          params = mergeTransportMetadata(params, turnState?.metadata);
-        }
-        params = sanitizeOpenAICodexResponsesParams(
-          model,
-          params as Record<string, unknown>,
-        ) as typeof params;
-        params = sanitizeResponsesImagePayload(params as Record<string, unknown>) as typeof params;
-        if (
-          (options as { openclawCodeModeToolSurface?: unknown } | undefined)
-            ?.openclawCodeModeToolSurface === true
-        ) {
-          const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
-          enforceCodeModeResponsesToolSurface(params, visibleToolNames);
-          assertCodeModeResponsesToolSurface(params, visibleToolNames);
-        }
+        const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
+          let params = config.buildRequest(
+            model,
+            context,
+            responsesOptions,
+            turnState?.metadata,
+            replayMode,
+          );
+          const nextParams = await options?.onPayload?.(params, model);
+          if (nextParams !== undefined) {
+            params = nextParams as typeof params;
+          }
+          if (!isOpenAICodexResponsesModel(model)) {
+            params = mergeTransportMetadata(params, turnState?.metadata);
+          }
+          params = sanitizeOpenAICodexResponsesParams(
+            model,
+            params as Record<string, unknown>,
+          ) as typeof params;
+          params = sanitizeResponsesImagePayload(
+            params as Record<string, unknown>,
+          ) as typeof params;
+          if (
+            (options as { openclawCodeModeToolSurface?: unknown } | undefined)
+              ?.openclawCodeModeToolSurface === true
+          ) {
+            const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
+            enforceCodeModeResponsesToolSurface(params, visibleToolNames);
+            assertCodeModeResponsesToolSurface(params, visibleToolNames);
+          }
+          return params;
+        };
+        const params = await buildRequest("checkpoint");
+        const observePrompt = createResponsesPromptEgressObserver(
+          responsesOptions,
+          context.systemPrompt,
+        );
         const requestStartedAt = Date.now();
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
         const requestOptions = buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
@@ -203,6 +224,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         emitModelTransportDebug(
           log,
           `[responses] start provider=${model.provider} api=${model.api} model=${model.id} ` +
+            `requestIdHash=${redactIdentifier(options?.requestId, { len: 64 })} ` +
             `baseUrl=${formatModelTransportDebugBaseUrl(model.baseUrl)} timeoutMs=${safeDebugValue(requestOptions?.timeout)} ` +
             `apiKey=${apiKey ? "present" : "missing"} ${summarizeResponsesPayload(params)}`,
         );
@@ -211,6 +233,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           request: params,
           requestOptions,
           model,
+          observePrompt,
+          buildFullHistoryRequest: () => buildRequest("full-history"),
+          onCompactionRejected: () =>
+            suppressOpenAIResponsesCompaction(output, model, {
+              sessionId: options?.sessionId,
+              authProfileId: responsesOptions?.authProfileId,
+            }),
         });
         await options?.onResponse?.(
           { status: response.status, headers: headersToRecord(response.headers) },
@@ -282,20 +311,16 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
     outputApi: "azure-openai-responses",
     firstEventTimeoutMs: AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
     createClient: createAzureOpenAIClient,
-    buildRequest: (model, context, options, metadata) =>
+    buildRequest: (model, context, options, metadata, replayMode) =>
       buildAzureOpenAIResponsesParams(
         model,
         context,
         options,
         resolveAzureDeploymentName(model),
         metadata,
+        replayMode,
       ),
-    createResponseStream: async ({ client, request, requestOptions }) => {
-      const { data, response } = await client.responses
-        .create(request as never, requestOptions)
-        .withResponse();
-      return { stream: data as unknown as AsyncIterable<unknown>, response };
-    },
+    createResponseStream: createResponsesStreamWithEncryptedContentRetry,
   });
 }
 
@@ -343,8 +368,9 @@ function buildAzureOpenAIResponsesParams(
   options: OpenAIResponsesOptions | undefined,
   deploymentName: string,
   metadata?: Record<string, string>,
+  replayMode: OpenAIResponsesReplayMode = "checkpoint",
 ) {
-  const params = buildOpenAIResponsesParams(model, context, options, metadata);
+  const params = buildOpenAIResponsesParams(model, context, options, metadata, replayMode);
   params.model = deploymentName;
   delete params.store;
   return params;

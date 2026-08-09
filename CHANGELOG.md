@@ -6,6 +6,10 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **Developer workflow:** remove the obsolete scoped-commit helper and use standard Git commands in isolated worktrees.
+- **Plugin uninstall cleanup:** remove exact recorded install paths from `plugins.load.paths` for marketplace, npm, and other managed installs while preserving parent, child, prefix, and unrelated paths.
+- Fixed Crabbox hydration on unprivileged cloud sandboxes by falling back to a user-writable pnpm store when the shared `/var/cache/crabbox` cache is unavailable, preserving the hardlink import mode after hydration, and making Docker an explicit routed capability instead of an implicit install requirement.
+
 - **Browser extension relay CDP compat:** answer `Target.getBrowserContexts` so Puppeteer-based clients (chrome-devtools-mcp) can drive the paired Chrome without the remote-debugging permission prompt, serve DevTools-style `/json/list` target descriptors, and add `openclaw browser extension cdp` to print the relay endpoint plus auth header for external CDP clients.
 - **Local model setup:** advertise provider-owned Ollama, llama.cpp, and LM Studio setup choices to Control UI and macOS, retry unavailable LM Studio services in place, and verify the exact prepared model before showing success.
 - **Control UI first-run setup:** continue verified model setup into Custodian, explain that the web app is ready without a channel, and offer an optional dismissible path to Channels.
@@ -57,9 +61,20 @@ Docs: https://docs.openclaw.ai
 - **Gateway TTS playback:** add an operator-scoped `tts.speak` RPC that returns configured-provider speech as inline whole-clip audio for remote clients. (#100708, #100770)
 - **Workboard dispatch cap:** add a request-scoped `--max-starts` override while preserving the default cap, sequential starts, and one-card-per-owner guard. (#100174) Thanks @souvikDevloper.
 - **Plugin install provenance warnings:** require explicit `--force` acknowledgement for arbitrary executable plugin sources in CLI and chat installs, keep trusted ClawHub, bundled, official-catalog, and tracked-update flows frictionless, and restrict Crestodian installs to trusted sources. (#102197) Thanks @jesse-merhi.
+- **Custodian rich setup controls:** render the Gateway's sanitized wizard steps as native selects, multiselects, text fields, and masked secret inputs while preserving text-only chat compatibility. (#114631) Thanks @jesse-merhi.
 
 ### Fixes
 
+- **Control UI browser annotations:** keep marked screenshots and generated page context together in structured composer cards, preserve user-written drafts when annotations are removed or replaced, retain complete unsent annotation packages across same-tab route and active split-pane remounts, and offer bounded Undo without restoring removed context into another session. Fixes #120744. Thanks @shakkernerd.
+- **Control UI profile avatar refreshes:** carry canonical content revisions through mutation responses and live presence so rapid replacements refresh every connected browser without stale cache rollback. Thanks @shakkernerd.
+- **Control UI appearance accessibility:** keep the unavailable custom-theme card announced as an Import command while preserving selected-state semantics for selectable themes and text sizes. Thanks @shakkernerd.
+- **Control UI dashboard index refresh:** keep an open Dashboards page current after session changes, agent-scope updates, and Gateway reconnects while preserving the last safe list until replacement hydration completes. Fixes #120602. Thanks @shakkernerd.
+- **Browser extension relay security:** require canonical 64-character relay secrets and safe WebSocket pairing URLs, and recheck OpenClaw tab-group consent at the extension edge before every authority-bearing existing-tab command.
+- **Control UI debug diagnostics:** keep last-good status, health, model, and heartbeat snapshots visible when refreshes fail, show the failure inside Snapshots, isolate it from Manual RPC state, and prevent older manual calls from overwriting newer ones. Thanks @shakkernerd.
+- **Control UI read-only preferences:** keep personal preference edits browser-local without attempting unauthorized config writes or claiming server sync, preserve offline intent for a later authorized reconnect, and restore the current server value on local reset. Thanks @shakkernerd.
+- **Control UI owner handoff:** give browsers opened by host-issued dashboard and graphical onboarding links durable administrator access, including same-browser recovery from a limited credential, while keeping generic, Telegram, mobile, and ordinary scope-upgrade paths bounded. Thanks @shakkernerd.
+- **Control UI agent and skill permissions:** gate Agents, Skills, Skill Workshop, and delayed mutation dispatches by the current Gateway method catalog and operator scopes while preserving read-only browsing and legacy Gateway compatibility. Fixes #119176. Thanks @shakkernerd.
+- **Guided onboarding skip-UI routing:** keep `openclaw onboard --skip-ui` and `openclaw setup --skip-ui` on guided onboarding while skipping both browser and terminal handoffs, instead of silently switching to the classic wizard. Thanks @shakkernerd.
 - **Telegram durable ingress:** preserve pre-identity control-lane ownership during replay and attempt each drain snapshot row only once per pass, preventing targeted commands from spinning the spool and blocking polling shutdown.
 - **Control UI operator session permissions:** honor Gateway-advertised operator scopes for new-thread creation, thread management, checkpoints, and sharing controls while preserving read-only navigation and legacy Gateway compatibility. Fixes #117786. Thanks @shakkernerd.
 - **Control UI delayed session commands:** bind slash-command mutations and confirmed resets to their originating Gateway, recheck current operator scopes after asynchronous work, and retain reset authorization through queued delivery so reconnects cannot target a replacement connection. Thanks @shakkernerd.

@@ -30,7 +30,12 @@ import {
   resolveHeartbeatWakePayloadFlags,
   type HeartbeatWakePayloadFlags,
 } from "./heartbeat-wake-policy.js";
-import type { HeartbeatScheduledTask, HeartbeatWakeSource } from "./heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_NO_PENDING_EVENT,
+  type HeartbeatScheduledTask,
+  type HeartbeatWakeSource,
+} from "./heartbeat-wake.js";
+import { selectAgentSystemEvents } from "./system-event-ownership.js";
 import {
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
@@ -43,7 +48,7 @@ export function truncateHeartbeatPreview(value: string | undefined): string | un
   return value ? truncateUtf16Safe(value, 200) : undefined;
 }
 
-type HeartbeatSkipReason = "empty-heartbeat-file";
+type HeartbeatSkipReason = "empty-heartbeat-file" | typeof HEARTBEAT_SKIP_NO_PENDING_EVENT;
 
 function buildCommitmentDeliveryKey(commitment: CommitmentRecord): string {
   return [
@@ -110,20 +115,40 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   dueCommitments: CommitmentRecord[];
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
+  authoritativeScheduledTick: boolean;
   skipReason?: HeartbeatSkipReason;
   scratchJobId?: string;
   scratchRevision?: number;
   heartbeatScratchContent?: string;
 };
 
+export function shouldPreflightExecEventWake(
+  source: HeartbeatWakeSource | undefined,
+  scheduledEveryMs: number | undefined,
+  runScope: HeartbeatRunScope,
+  scheduledTaskCount: number,
+): boolean {
+  return (
+    source === "exec-event" &&
+    !(
+      typeof scheduledEveryMs === "number" &&
+      Number.isSafeInteger(scheduledEveryMs) &&
+      scheduledEveryMs > 0
+    ) &&
+    runScope !== "commitment-only" &&
+    scheduledTaskCount === 0
+  );
+}
+
 export async function resolveHeartbeatPreflight(params: {
   cfg: OpenClawConfig;
   agentId: string;
   heartbeat?: HeartbeatConfig;
   runScope: HeartbeatRunScope;
-  forcedSessionKey?: string;
+  sessionKey?: string;
   reason?: string;
   source?: HeartbeatWakeSource;
+  scheduledEveryMs?: number;
   scheduledTasks?: readonly HeartbeatScheduledTask[];
   nowMs?: number;
 }): Promise<HeartbeatPreflight> {
@@ -135,10 +160,12 @@ export async function resolveHeartbeatPreflight(params: {
     params.cfg,
     params.agentId,
     params.heartbeat,
-    params.forcedSessionKey,
+    params.sessionKey,
   );
-  const pendingEventEntries =
-    params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey);
+  const pendingEventEntries = selectAgentSystemEvents(
+    params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey),
+    params.agentId,
+  );
   const dueCommitments = canHeartbeatDeliverCommitments(params.heartbeat)
     ? selectCommitmentDeliveryBatch(
         await listDueCommitmentsForSession({
@@ -200,6 +227,10 @@ export async function resolveHeartbeatPreflight(params: {
     dueCommitments,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
+    authoritativeScheduledTick:
+      typeof params.scheduledEveryMs === "number" &&
+      Number.isSafeInteger(params.scheduledEveryMs) &&
+      params.scheduledEveryMs > 0,
     ...(monitorScratch?.jobId
       ? {
           scratchJobId: monitorScratch.jobId,
@@ -214,6 +245,20 @@ export async function resolveHeartbeatPreflight(params: {
       : {}),
   } satisfies Omit<HeartbeatPreflight, "skipReason">;
 
+  // The exec completion can be acknowledged by process poll after its wake is
+  // queued. Treat that stale wake as consumed without touching unrelated events.
+  if (
+    wakeFlags.isExecEventWake &&
+    !basePreflight.authoritativeScheduledTick &&
+    !params.scheduledTasks?.length &&
+    !hasTaggedCronEvents &&
+    !pendingEventEntries.some((event) => isExecCompletionEvent(event.text))
+  ) {
+    return {
+      ...basePreflight,
+      skipReason: HEARTBEAT_SKIP_NO_PENDING_EVENT,
+    };
+  }
   if (shouldBypassFileGates) {
     return basePreflight;
   }
@@ -384,6 +429,9 @@ export function selectSystemEventsConsumedByHeartbeat(params: {
         (preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
         isCronSystemEvent(event.text),
     );
+  }
+  if (preflight.isExecEventWake && !params.hasExecCompletion) {
+    return [];
   }
   return preflight.pendingEventEntries;
 }

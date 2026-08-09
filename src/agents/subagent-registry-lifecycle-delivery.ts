@@ -345,6 +345,13 @@ export function createSubagentRegistryLifecycleDelivery(
       if (typeof entry.cleanupCompletedAt === "number") {
         continue;
       }
+      // A paused row's result was deliberately cleared when it yielded; the text
+      // now in its session belongs to whatever turn runs next, not to the paused
+      // work. Refreezing it here would announce a stranger's output as this run's
+      // completion once the row finally settles.
+      if (entry.pauseReason === "sessions_yield") {
+        continue;
+      }
       out.push(entry);
     }
     return out;

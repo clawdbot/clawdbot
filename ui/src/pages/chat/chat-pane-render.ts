@@ -5,7 +5,6 @@ import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-p
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
-import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
@@ -17,11 +16,10 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
-import { renderBoardSessionSurface } from "./board-session-surface.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
-import { ChatPaneHeader } from "./chat-pane-header.ts";
+import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   createChatPaneSessionActionCallbacks,
   readChatPaneMutationAccess,
@@ -60,6 +58,7 @@ import {
   revealSessionWorkspaceFile,
 } from "./components/chat-session-workspace.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   activatePanel,
@@ -75,7 +74,7 @@ import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
-export class ChatPane extends ChatPaneHeader {
+export class ChatPane extends ChatPaneBrowserAnnotationRender {
   override render() {
     const state = this.state;
     if (!state) {
@@ -213,9 +212,6 @@ export class ChatPane extends ChatPaneHeader {
       narrowLayout:
         chatLayoutWidth <
         WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH + (railSideDocked ? WORKSPACE_RAIL_MAX_WIDTH : 0),
-      onOpenSession: (sessionKey) => {
-        this.onPaneSessionChange?.(this.paneId, sessionKey);
-      },
     });
     const tasksSideDocked = !backgroundTasks.collapsed && !backgroundTasks.narrowLayout;
     // Only side-docked rails narrow the conversation region.
@@ -253,6 +249,7 @@ export class ChatPane extends ChatPaneHeader {
     });
     const props: ChatProps = {
       transcript: this.transcript,
+      backgroundTaskTranscript: this.backgroundTaskTranscript,
       paneId: this.paneId,
       sessionKey: state.sessionKey,
       announceTranscript: this.active,
@@ -410,7 +407,11 @@ export class ChatPane extends ChatPaneHeader {
             state,
             selectedSession,
             agentDefaultModel,
-            mutationAccess: mutationAccess.runtimePatch,
+            modelAccess: mutationAccess.model,
+            effortAccess: mutationAccess.effort,
+            preferencesBrowserOnly:
+              this.context.runtimeConfig.state.connected &&
+              this.context.runtimeConfig.canPatch === false,
           }),
       sessionWorkspace: catalogKey ? undefined : sessionWorkspace,
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
@@ -445,10 +446,13 @@ export class ChatPane extends ChatPaneHeader {
         void this.resolveCurrentSessionSuggestion(suggestion, resolution),
       canAcceptTaskSuggestions:
         state.connected &&
-        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.accept") === true,
       canDismissTaskSuggestions:
         state.connected &&
-        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.dismiss") ===
+          true,
       onAcceptTaskSuggestion: (suggestion) => void this.acceptTaskSuggestion(suggestion),
       onDismissTaskSuggestion: (suggestion) => void this.dismissTaskSuggestion(suggestion),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
@@ -464,6 +468,8 @@ export class ChatPane extends ChatPaneHeader {
       },
       onChatScroll: (event) => this.handleTranscriptScroll(event),
       onHistoryIntent: (event) => this.handleTranscriptHistoryIntent(event),
+      // Metadata can resize a committed row; re-enter the scroll owner so the follow lock wins.
+      onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
       onDraftChange: state.handleChatDraftChange,
       onRequestUpdate: state.requestUpdate,
@@ -481,6 +487,7 @@ export class ChatPane extends ChatPaneHeader {
         state.chatAttachments = next;
         state.requestUpdate?.();
       },
+      onRemoveAttachment: this.removeBrowserAnnotation,
       onSend: () =>
         catalogKey
           ? void this.continueCatalogSession(catalogKey)
@@ -563,43 +570,10 @@ export class ChatPane extends ChatPaneHeader {
       gatewayUrl: state.settings.gatewayUrl,
     };
     const chat = renderChat(props);
-    const workboardCardChip = this.resolveWorkboardCardChip(board);
-    const primary =
-      board.hasBoard && board.face === "dashboard"
-        ? renderBoardSessionSurface({
-            snapshot: board.snapshot,
-            observer: {
-              activeRunId: observerRunId,
-              digests: this.observerDigestHistory.get(
-                this.resolveObserverDigestHistoryKey(board.snapshot.sessionKey),
-              ),
-              lastReadAt: selectedSession?.lastReadAt,
-            },
-            activeTabId: board.activeTabId,
-            dock: board.dock,
-            reopenDock: board.reopenDock,
-            dockSize: this.boardChatDockSize,
-            chat,
-            divider: this.renderBoardDivider("bottom"),
-            canMutate: board.provider.canMutate,
-            canGrant: board.provider.canGrant,
-            callbacks: {
-              applyOps: (ops) => board.provider.applyOps(ops),
-              grant: (name, decision) => board.provider.grant(name, decision),
-              selectTab: (tabId) => {
-                this.boardCommandDock = null;
-                this.persistBoardSessionView({ face: "dashboard", activeTabId: tabId });
-              },
-              frameLoadFailed: (name) => board.provider.refreshWidgetFrame(name),
-              widgetAppView: (name, revision) => board.provider.widgetAppView(name, revision),
-              refreshWidgetAppView: (name, revision) =>
-                board.provider.refreshWidgetAppView(name, revision),
-            } satisfies BoardViewCallbacks,
-            widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
-            workboardCardChip,
-            onDockChange: (dock) => this.handleBoardDockChange(dock),
-          })
-        : chat;
+    const primary = this.renderBoardPrimary(board, chat, {
+      activeRunId: observerRunId,
+      lastReadAt: selectedSession?.lastReadAt,
+    });
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const panelTemplates = {
       chat,

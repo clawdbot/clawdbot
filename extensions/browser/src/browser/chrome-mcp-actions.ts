@@ -8,8 +8,8 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import {
-  CHROME_MCP_NAVIGATE_TIMEOUT_MS,
   rethrowChromeMcpDocumentError,
   type ChromeMcpOperationOptions,
   type ChromeMcpProfileOptions,
@@ -104,7 +104,7 @@ export async function navigateChromeMcpPage(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<{ url: string }> {
-  const resolvedTimeoutMs = params.timeoutMs ?? CHROME_MCP_NAVIGATE_TIMEOUT_MS;
+  const resolvedTimeoutMs = resolveBrowserNavigationTimeoutMs(params.timeoutMs);
   const callTimeoutMs = resolveChromeMcpNavigateCallTimeoutMs(resolvedTimeoutMs);
   return await withChromeMcpTarget({ ...params, timeoutMs: callTimeoutMs }, async (target) => {
     await callTool(

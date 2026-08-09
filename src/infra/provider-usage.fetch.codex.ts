@@ -1,9 +1,9 @@
 // Fetches Codex provider usage windows.
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+import { cancelUnreadResponseBody } from "./http-body.js";
 import { parseStrictFiniteNumber } from "./parse-finite-number.js";
 import {
   buildUsageHttpErrorSnapshot,
-  discardUsageResponseBody,
   fetchJson,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
@@ -89,7 +89,7 @@ export async function fetchCodexUsage(
   );
 
   if (!res.ok) {
-    await discardUsageResponseBody(res);
+    await cancelUnreadResponseBody(res);
     return buildUsageHttpErrorSnapshot({
       provider: "openai",
       status: res.status,

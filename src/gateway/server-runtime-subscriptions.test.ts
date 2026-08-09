@@ -1,6 +1,11 @@
 // Tests for gateway runtime subscription wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  configureExecutionIdentityAdmissionSink,
+  enqueueExecutionIdentityContextAtAdmission,
+  hasExecutionIdentityAdmissionSink,
+} from "../audit/execution-identity-admission.js";
+import {
   emitAgentAuditEvent,
   emitAgentEvent,
   resetAgentEventsForTest,
@@ -11,7 +16,7 @@ import {
   emitSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
-import { createTaskRecord } from "../tasks/task-registry.js";
+import { createTaskRecord, markTaskTerminalById } from "../tasks/task-registry.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { installInMemoryTaskRegistryRuntime } from "../test-utils/task-registry-runtime.js";
@@ -49,6 +54,7 @@ const auditTestState = vi.hoisted(() => ({
   messageMode: "off" as "off" | "direct" | "all",
   created: 0,
   recorded: 0,
+  identityRecorded: 0,
   stopped: 0,
 }));
 const agentEventHandlerMocks = vi.hoisted(() => ({
@@ -73,6 +79,10 @@ vi.mock("../audit/audit-recorder.js", () => ({
       }),
       recordTool: vi.fn(),
       recordMessage: vi.fn(),
+      recordExecutionIdentity: vi.fn(() => {
+        auditTestState.identityRecorded += 1;
+        return true;
+      }),
       stop: vi.fn(async () => {
         auditTestState.stopped += 1;
       }),
@@ -132,6 +142,7 @@ function createParams(): SubscriptionParams {
     sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
     chatAbortControllers: new Map(),
     restartRecoveryCandidates: new Map(),
+    terminalSessions: { closeAgentSessions: vi.fn() },
   };
 }
 
@@ -144,6 +155,7 @@ describe("startGatewayEventSubscriptions", () => {
     auditTestState.messageMode = "off";
     auditTestState.created = 0;
     auditTestState.recorded = 0;
+    auditTestState.identityRecorded = 0;
     auditTestState.stopped = 0;
     transcriptBroadcastMocks.useActualHandler = false;
     transcriptBroadcastMocks.readMessageCount.mockReset();
@@ -161,6 +173,7 @@ describe("startGatewayEventSubscriptions", () => {
     void unsubs?.taskUnsub();
     resetAgentEventsForTest();
     resetTaskRegistryForTests({ persist: false });
+    configureExecutionIdentityAdmissionSink(() => false)();
   });
 
   it("records audit events by default and stops the recorder on unsubscribe", async () => {
@@ -173,8 +186,22 @@ describe("startGatewayEventSubscriptions", () => {
       data: { phase: "start", startedAt: 1_000 },
     });
     expect(auditTestState.recorded).toBe(1);
+    expect(hasExecutionIdentityAdmissionSink()).toBe(true);
+    expect(
+      enqueueExecutionIdentityContextAtAdmission(
+        {
+          runId: "gateway-admission",
+          agentId: "main",
+          ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
+          runtime: { kind: "embedded" },
+        },
+        { enabled: true, runtimeInstanceId: "runtime-1" },
+      )?.accepted,
+    ).toBe(true);
+    expect(auditTestState.identityRecorded).toBe(1);
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
+    expect(hasExecutionIdentityAdmissionSink()).toBe(false);
   });
 
   it("keeps retention maintenance but creates no producers when audit.enabled is false", async () => {
@@ -371,6 +398,53 @@ describe("startGatewayEventSubscriptions", () => {
       notifyPolicy: "silent",
     });
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("closes task-run terminals only after the authoritative task becomes terminal", async () => {
+    const events: string[] = [];
+    const closeAgentSessions = vi.fn((taskId: string) => {
+      events.push(`terminal:${taskId}`);
+      return 1;
+    });
+    const broadcast = vi.fn<SubscriptionParams["broadcast"]>((event, payload) => {
+      if (event === "task" && (payload as TaskEventPayload).action === "upserted") {
+        const taskPayload = payload as Extract<TaskEventPayload, { action: "upserted" }>;
+        events.push(`task:${taskPayload.task.status}`);
+      }
+    });
+    unsubs = startGatewayEventSubscriptions({
+      ...createParams(),
+      broadcast,
+      terminalSessions: { closeAgentSessions },
+    });
+    await waitForFast(() => expect(getTaskRegistryObservers()).not.toBeNull());
+
+    const runSessionKey = "agent:main:cron:job-1:run:run-1";
+    const task = createTaskRecord({
+      runtime: "cron",
+      requesterSessionKey: "",
+      ownerKey: "",
+      scopeKind: "system",
+      childSessionKey: runSessionKey,
+      task: "Cron task",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    if (!task) {
+      throw new Error("expected task record");
+    }
+    expect(closeAgentSessions).not.toHaveBeenCalled();
+    expect(events).toEqual(["task:running"]);
+
+    markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_000 });
+    expect(closeAgentSessions).toHaveBeenCalledOnce();
+    expect(closeAgentSessions).toHaveBeenCalledWith(task.taskId);
+    expect(events).toEqual(["task:running", "task:completed", `terminal:${task.taskId}`]);
+
+    // Later terminal-row updates cannot close terminals opened by a newer owner.
+    markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 2_001 });
+    expect(closeAgentSessions).toHaveBeenCalledOnce();
   });
 
   it("keeps a replacement gateway's task observer when a stale unsub runs late", async () => {

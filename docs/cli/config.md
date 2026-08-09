@@ -33,6 +33,7 @@ openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set browser.profiles.work.executablePath "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
+openclaw config set logging.audit.executionIdentity true
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
@@ -112,6 +113,13 @@ openclaw config validate --json
 <Note>
 If validation is already failing, start with `openclaw configure` or `openclaw doctor --fix`. `openclaw chat` does not bypass the invalid-config guard.
 </Note>
+
+Provider and runtime `params` bags are intentionally typed as
+`Record<string, unknown>` because their owners define the supported keys and
+values. `openclaw config validate` can validate the container and overall
+config shape, but it cannot type-check provider-specific parameter names or
+values. Passing validation does not prove that a param is supported; consult
+the provider docs and verify behavior on the selected runtime and provider.
 
 ## Values
 
@@ -228,7 +236,6 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
     - `--provider-path <path>` (required)
     - `--provider-mode <singleValue|json>`
     - `--provider-max-bytes <bytes>`
-    - `--provider-allow-insecure-path`
 
   </Accordion>
   <Accordion title="Exec provider (--provider-source exec)">
@@ -240,8 +247,6 @@ Provider builder targets must use `secrets.providers.<alias>` as the path.
     - `--provider-env <KEY=VALUE>` (repeatable)
     - `--provider-pass-env <ENV_VAR>` (repeatable)
     - `--provider-trusted-dir <path>` (repeatable)
-    - `--provider-allow-insecure-path`
-    - `--provider-allow-symlink-command`
 
   </Accordion>
 </AccordionGroup>
@@ -303,12 +308,19 @@ Example patch:
     defaults: {
       model: { primary: "openai/gpt-5.6-sol" },
       models: {
-        "openai/gpt-5.6-sol": { params: { fastMode: true } },
+        "openai/gpt-5.6-sol": {
+          agentRuntime: { id: "openclaw" },
+          params: { fastMode: true },
+        },
       },
     },
   },
 }
 ```
+
+The runtime pin makes this an embedded OpenClaw recipe. A valid `fastMode`
+value is a portable typed runtime control and does not choose OpenClaw by
+itself.
 
 Use `--replace-path <path>` when one object or array must become exactly the provided value instead of being recursively patched:
 

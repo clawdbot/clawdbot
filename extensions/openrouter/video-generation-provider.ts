@@ -425,8 +425,7 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_MODEL,
     models: [DEFAULT_MODEL],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({ provider: "openrouter", agentDir }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
     resolveModelCapabilities: resolveOpenRouterVideoModelCapabilities,
     capabilities: {
       providerOptions: {

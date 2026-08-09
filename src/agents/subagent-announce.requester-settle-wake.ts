@@ -8,7 +8,10 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { logWarn } from "../logger.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  type DeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
 import {
@@ -221,6 +224,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   if (!requesterSessionKey || !initialState) {
     return false;
   }
+  const admittedRearmGeneration = initialState.rearmGeneration;
   if (isCronSessionKey(requesterSessionKey)) {
     completeRequesterSettleWakeBatch({
       runIds: [params.settledEntry.runId],
@@ -235,14 +239,17 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
   const requesterRuns = Array.isArray(listedRuns) ? listedRuns : [];
   const currentSettledEntry =
     requesterRuns.find((entry) => entry.runId === params.settledEntry.runId) ?? params.settledEntry;
-  if (!currentSettledEntry.requesterSettleWake) {
+  const currentState = currentSettledEntry.requesterSettleWake;
+  // A requester yield may re-arm this row while runtime loading is in flight.
+  // Only the admitted generation may inspect descendants or mutate its batch.
+  if (!currentState || currentState.rearmGeneration !== admittedRearmGeneration) {
     return false;
   }
   const requesterHasUnsettledDescendants = () =>
     registryRuntime.hasDescendantRunAwaitingSettle(requesterSessionKey, currentSettledEntry.runId);
 
-  const frozenBatchRunIds = currentSettledEntry.requesterSettleWake.batchRunIds;
-  const currentRearmGeneration = currentSettledEntry.requesterSettleWake.rearmGeneration;
+  const frozenBatchRunIds = currentState.batchRunIds;
+  const currentRearmGeneration = currentState.rearmGeneration;
   const hasUnsettledDescendants = requesterHasUnsettledDescendants();
   if ((!frozenBatchRunIds || frozenBatchRunIds.length === 0) && hasUnsettledDescendants) {
     return false;

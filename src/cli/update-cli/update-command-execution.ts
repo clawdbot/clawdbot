@@ -13,6 +13,10 @@ import {
   hasSchemaRefusal,
   runGitUpdate,
 } from "./update-command-git.js";
+import {
+  captureOwnedManagedUpdateContext,
+  type OwnedManagedUpdateContext,
+} from "./update-command-managed-context.js";
 import { runPackageInstallUpdate } from "./update-command-package.js";
 import {
   createAggregateErrorWithCause,
@@ -31,6 +35,7 @@ const CLI_NAME = resolveCliName();
 type MutableUpdateExecutionResult = {
   result: UpdateRunResult;
   preManagedServiceStop: PreManagedServiceStop | undefined;
+  ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
 };
 
 export async function executeMutableUpdate(params: {
@@ -60,6 +65,7 @@ export async function executeMutableUpdate(params: {
   recoveryState: UpdateCommandRecoveryState;
 }): Promise<MutableUpdateExecutionResult | null> {
   let preManagedServiceStop: PreManagedServiceStop | undefined;
+  let ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
   let schemaRefusalAfterStop = false;
   const gitMutationRoots =
     params.updateInstallKind === "git"
@@ -103,6 +109,23 @@ export async function executeMutableUpdate(params: {
       }
       params.stop();
       defaultRuntime.error(`Failed to stop managed gateway service before update: ${String(err)}`);
+      defaultRuntime.exit(1);
+      throw new UpdateCommandAbort();
+    }
+
+    try {
+      ownedManagedUpdateContext = await captureOwnedManagedUpdateContext({
+        stopState: preManagedServiceStop,
+        processEnv: process.env,
+        invocationCwd: params.invocationCwd,
+      });
+    } catch (err) {
+      params.stop();
+      defaultRuntime.error(`Failed to capture managed gateway update state: ${String(err)}`);
+      await maybeRestartServiceAfterFailedMutableUpdate({
+        preManagedServiceStop,
+        jsonMode: Boolean(params.opts.json),
+      });
       defaultRuntime.exit(1);
       throw new UpdateCommandAbort();
     }
@@ -251,5 +274,5 @@ export async function executeMutableUpdate(params: {
     throw err;
   }
 
-  return { result, preManagedServiceStop };
+  return { result, preManagedServiceStop, ownedManagedUpdateContext };
 }

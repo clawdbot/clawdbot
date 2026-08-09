@@ -311,6 +311,12 @@ export type GatewayTerminalConfig = {
   detachedSessionTimeoutSeconds?: number;
 };
 
+/** Labs-gated external CLI session targets in the Control UI. */
+export type GatewayCliAgentsConfig = {
+  /** Show catalog-backed CLI agents in the new-session model picker. Default: false. */
+  enabled?: boolean;
+};
+
 /** Gateway config reload strategy for managed installs. */
 export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
 
@@ -549,6 +555,7 @@ export type GatewayConfig = {
   /** Custom IPv4 address for bind="custom" mode. IPv6-only BYOH requires an IPv4 sidecar or proxy. */
   customBindHost?: string;
   controlUi?: GatewayControlUiConfig;
+  cliAgents?: GatewayCliAgentsConfig;
   terminal?: GatewayTerminalConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;

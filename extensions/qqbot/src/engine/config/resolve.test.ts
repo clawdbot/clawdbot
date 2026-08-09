@@ -1,6 +1,7 @@
 // Qqbot tests cover resolve plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applyAccountConfig,
   DEFAULT_ACCOUNT_ID,
   listAccountIds,
   resolveDefaultAccountId,
@@ -65,6 +66,38 @@ describe("engine/config/resolve", () => {
     const ids = listAccountIds(cfg);
     expect(ids).toContain("bot2");
     expect(ids).toContain("bot3");
+  });
+
+  it("ignores inherited appId on a named account when listing IDs", () => {
+    const account = Object.assign(
+      Object.create({ appId: "inherited-app-id" }) as Record<string, unknown>,
+      { name: "Owned Bot" },
+    );
+    const cfg = {
+      channels: {
+        qqbot: {
+          accounts: { bot2: account },
+        },
+      },
+    };
+
+    expect(listAccountIds(cfg)).toStrictEqual([]);
+    expect(resolveDefaultAccountId(cfg)).toBe(DEFAULT_ACCOUNT_ID);
+  });
+
+  it("ignores an inherited accounts container", () => {
+    const inheritedAccounts = {
+      bot2: { appId: "inherited-app-id", name: "Inherited Bot" },
+    };
+    const qqbot = Object.create({ accounts: inheritedAccounts }) as Record<string, unknown>;
+    const cfg = { channels: { qqbot } };
+    const base = resolveAccountBase(cfg, "bot2");
+
+    expect(listAccountIds(cfg)).toStrictEqual([]);
+    expect(resolveDefaultAccountId(cfg)).toBe(DEFAULT_ACCOUNT_ID);
+    expect(base.appId).toBe("");
+    expect(base.config).toEqual({});
+    expect(Object.hasOwn(qqbot, "accounts")).toBe(false);
   });
 
   it("resolves default account id to 'default' when top-level appId exists", () => {
@@ -167,6 +200,58 @@ describe("engine/config/resolve", () => {
     expect(base.appId).toBe("654321");
     expect(base.name).toBe("Bot Two");
     expect(base.enabled).toBe(false);
+  });
+
+  it("ignores inherited fields on an own named account entry", () => {
+    const account = Object.assign(
+      Object.create({
+        appId: "inherited-app-id",
+        clientSecret: "placeholder",
+        clientSecretFile: "/tmp/placeholder",
+      }) as Record<string, unknown>,
+      { name: "Owned Bot", enabled: false },
+    );
+    const cfg = {
+      channels: {
+        qqbot: {
+          accounts: { bot2: account },
+        },
+      },
+    };
+
+    const base = resolveAccountBase(cfg, "bot2");
+
+    expect(account.appId).toBe("inherited-app-id");
+    expect(base.appId).toBe("");
+    expect(base.name).toBe("Owned Bot");
+    expect(base.enabled).toBe(false);
+    expect(base.config).toEqual({ name: "Owned Bot", enabled: false });
+    expect(base.config.clientSecret).toBeUndefined();
+    expect(base.config.clientSecretFile).toBeUndefined();
+  });
+
+  it("does not copy an inherited accounts container during named-account setup", () => {
+    const qqbot = Object.create({
+      accounts: {
+        inherited: { appId: "inherited-app-id" },
+      },
+    }) as Record<string, unknown>;
+
+    const next = applyAccountConfig({ channels: { qqbot } }, "bot2", {
+      appId: "owned-app-id",
+    });
+    const nextAccounts = (
+      (next.channels as Record<string, unknown>).qqbot as Record<string, unknown>
+    ).accounts as Record<string, unknown>;
+
+    expect(Object.hasOwn(nextAccounts, "inherited")).toBe(false);
+    expect(nextAccounts).toEqual({
+      bot2: {
+        enabled: true,
+        allowFrom: ["*"],
+        appId: "owned-app-id",
+      },
+    });
   });
 
   it("uses configured defaultAccount when accountId is omitted", () => {

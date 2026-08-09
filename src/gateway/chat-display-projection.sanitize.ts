@@ -30,6 +30,56 @@ import {
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
 } from "./worker-environments/workspace-conflicts.js";
 
+const AUDIO_LOCAL_PATH_FIELDS = ["path", "file", "filePath", "localPath"] as const;
+
+function isInlineOrLocalAudioReference(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const reference = value.trim();
+  const isManagedRoute = /^\/(?:api\/chat\/media\/outgoing|media|__openclaw__)\//u.test(reference);
+  return (
+    /^data:audio\//iu.test(reference) ||
+    /^file:/iu.test(reference) ||
+    /^~[\\/]/u.test(reference) ||
+    (!isManagedRoute &&
+      (reference.startsWith("/") ||
+        /^[A-Za-z]:[\\/]/u.test(reference) ||
+        reference.startsWith("\\\\")))
+  );
+}
+
+function omitAudioHistoryContent(
+  entry: Record<string, unknown>,
+  referenceFields: readonly string[],
+): boolean {
+  let removed = false;
+  if (Object.hasOwn(entry, "data")) {
+    const data = entry.data;
+    delete entry.data;
+    if (typeof data === "string") {
+      entry.bytes = estimateBase64DecodedBytes(data);
+    }
+    removed = true;
+  }
+  for (const field of AUDIO_LOCAL_PATH_FIELDS) {
+    if (Object.hasOwn(entry, field)) {
+      delete entry[field];
+      removed = true;
+    }
+  }
+  for (const field of referenceFields) {
+    if (isInlineOrLocalAudioReference(entry[field])) {
+      delete entry[field];
+      removed = true;
+    }
+  }
+  if (removed) {
+    entry.omitted = true;
+  }
+  return removed;
+}
+
 export function sanitizeChatHistoryContentBlock(
   block: unknown,
   opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
@@ -113,15 +163,18 @@ export function sanitizeChatHistoryContentBlock(
       changed = true;
     }
   }
-  if (type === "audio" && entry.source && typeof entry.source === "object") {
-    const source = { ...(entry.source as Record<string, unknown>) };
-    if (source.type === "base64" && typeof source.data === "string") {
-      const bytes = estimateBase64DecodedBytes(source.data);
-      delete source.data;
-      source.omitted = true;
-      source.bytes = bytes;
-      entry.source = source;
-      changed = true;
+  if (type === "audio") {
+    // Audio transcripts can retain model-input bytes and host-local references.
+    // Strip them at the shared display boundary while preserving safe metadata.
+    const blockChanged = omitAudioHistoryContent(entry, ["url", "openUrl", "audio_url"]);
+    changed ||= blockChanged;
+    const source = readRecord(entry.source);
+    if (source) {
+      const projectedSource = { ...source };
+      if (omitAudioHistoryContent(projectedSource, ["url"])) {
+        entry.source = projectedSource;
+        changed = true;
+      }
     }
   }
   return { block: changed ? entry : block, changed };
@@ -302,6 +355,23 @@ export function sanitizeChatHistoryMessage(
   }
   const entry = { ...(message as Record<string, unknown>) };
   let changed = false;
+  if ("providerReplay" in entry) {
+    delete entry.providerReplay;
+    changed = true;
+  }
+  const openClawMeta = readRecord(entry["__openclaw"]);
+  if (openClawMeta && "upstreamUserText" in openClawMeta) {
+    // Codex retains the decorated upstream prompt for transcript reconstruction.
+    // It is not display data and can otherwise evict the visible row from history.
+    const projectedMeta = { ...openClawMeta };
+    delete projectedMeta.upstreamUserText;
+    if (Object.keys(projectedMeta).length > 0) {
+      entry["__openclaw"] = projectedMeta;
+    } else {
+      delete entry["__openclaw"];
+    }
+    changed = true;
+  }
   const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
   const preserveExactToolPayload =
     role === "toolresult" ||

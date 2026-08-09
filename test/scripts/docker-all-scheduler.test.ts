@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -15,7 +16,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mjs";
+import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mts";
 import {
   appendBoundedShellCapture,
   canStartSchedulerLane,
@@ -32,7 +33,7 @@ import {
   SHELL_CAPTURE_MAX_CHARS,
   tailFile,
   writeRunSummary,
-} from "../../scripts/test-docker-all.mjs";
+} from "../../scripts/test-docker-all.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -163,16 +164,45 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.stderr).not.toContain("at ");
   });
 
-  it("plans from an isolated release harness without installed dependencies", () => {
-    const root = tempDirs.make("openclaw-docker-plan-isolated-harness-");
+  it("plans from an isolated release harness with source-checkout TypeScript support", () => {
+    const artifactRoot = path.resolve(".artifacts");
+    mkdirSync(artifactRoot, { recursive: true });
+    const root = tempDirs.make("openclaw-docker-plan-isolated-harness-", artifactRoot);
     const scriptsDir = path.join(root, "scripts");
     const libDir = path.join(scriptsDir, "lib");
+    const upgradeSurvivorDir = path.join(scriptsDir, "e2e/lib/upgrade-survivor");
     mkdirSync(libDir, { recursive: true });
+    mkdirSync(upgradeSurvivorDir, { recursive: true });
     copyFileSync("package.json", path.join(root, "package.json"));
     copyFileSync("scripts/test-docker-all.mjs", path.join(scriptsDir, "test-docker-all.mjs"));
-    for (const fileName of ["docker-e2e-plan.mjs", "docker-e2e-scenarios.mjs", "sleep.mjs"]) {
+    copyFileSync("scripts/test-docker-all.mts", path.join(scriptsDir, "test-docker-all.mts"));
+    copyFileSync("scripts/lib/tsx-cli-shim.mjs", path.join(libDir, "tsx-cli-shim.mjs"));
+    copyFileSync(
+      "scripts/prepublish-plugin-registry-artifact.mjs",
+      path.join(scriptsDir, "prepublish-plugin-registry-artifact.mjs"),
+    );
+    copyFileSync(
+      "scripts/windows-cmd-helpers.mjs",
+      path.join(scriptsDir, "windows-cmd-helpers.mjs"),
+    );
+    for (const fileName of [
+      "docker-e2e-plan.mts",
+      "docker-e2e-scenarios.mts",
+      "official-external-channel-catalog.json",
+      "release-version.mjs",
+      "sleep.mjs",
+    ]) {
       copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));
     }
+    copyFileSync(
+      "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
+      path.join(upgradeSurvivorDir, "config-recipe.mts"),
+    );
+    cpSync(
+      "scripts/e2e/lib/upgrade-survivor/config-recipe",
+      path.join(upgradeSurvivorDir, "config-recipe"),
+      { recursive: true },
+    );
 
     const result = spawnSync(
       process.execPath,
@@ -207,6 +237,28 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("OPENCLAW_DOCKER_ALL_PARALLELISM must be a positive integer");
     expect(result.stderr).not.toContain("at ");
+  });
+
+  it("selects the CLI installer distribution lane through the scheduler catalog", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_ALL_BUILD: "0",
+        OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+        OPENCLAW_DOCKER_ALL_LANES: "cli-installer-distribution",
+        OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+        OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Selected lanes: cli-installer-distribution");
+    expect(result.stdout).toContain(
+      "cli-installer-distribution(w=3 r=docker,npm timeout=1800s image=bare state=empty)",
+    );
+    expect(result.stdout).toContain("Dry run complete");
   });
 
   it("reuses only registry-backed images in generated workflow reruns", () => {
@@ -273,11 +325,15 @@ describe("scripts/test-docker-all scheduler", () => {
       expect(failureIndex.combinedGhWorkflowCommand).toContain("allow_unreleased_changelog=true");
 
       for (const artifact of [summaryFile, failureIndexFile]) {
-        const rerun = spawnSync(process.execPath, ["scripts/docker-e2e-rerun.mjs", artifact], {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: process.env,
-        });
+        const rerun = spawnSync(
+          process.execPath,
+          ["--import", "tsx", "scripts/docker-e2e-rerun.mts", artifact],
+          {
+            cwd: process.cwd(),
+            encoding: "utf8",
+            env: process.env,
+          },
+        );
         expect(rerun.status, rerun.stderr).toBe(0);
         expect(rerun.stdout).toContain(`-f ref='${selectedSha}'`);
         expect(rerun.stdout).toContain("allow_unreleased_changelog=true");
@@ -1031,7 +1087,7 @@ const startedAt = realNow();
 Date.now = () => startedAt + (realNow() - startedAt) * 100;
 
 const { runShellCommand } = await import(${JSON.stringify(
-        new URL("../../scripts/test-docker-all.mjs", import.meta.url).href,
+        new URL("../../scripts/test-docker-all.mts", import.meta.url).href,
       )});
 
 await runShellCommand({
@@ -1070,7 +1126,7 @@ await runShellCommand({
     );
 
     try {
-      runner = spawn(process.execPath, [runnerPath], {
+      runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
         cwd: process.cwd(),
         stdio: ["ignore", "ignore", "pipe"],
       });

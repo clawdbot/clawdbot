@@ -12,6 +12,7 @@ import {
   normalizeOptionalString as asString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { noteSlackDraftConversationMessage } from "../../draft-message-boundaries.js";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -193,6 +194,23 @@ export function registerSlackMessageEvents(params: {
 }) {
   const { ctx, handleSlackMessage } = params;
 
+  const noteConversationMessage = (
+    message: SlackMessageEvent | SlackAppMentionEvent,
+    eventScope?: SlackEventScope,
+  ) => {
+    noteSlackDraftConversationMessage({
+      accountId: ctx.accountId,
+      teamId: eventScope?.teamId,
+      channelId: message.channel,
+      threadTs: message.thread_ts,
+      messageTs: message.ts ?? message.event_ts,
+      userId: asString(message.user),
+      botUserId: ctx.botUserId,
+      botId: asString(message.bot_id),
+      subtype: "subtype" in message ? asString(message.subtype) : undefined,
+    });
+  };
+
   const resolveEventScope = (args: {
     body: unknown;
     context: AllMiddlewareArgs["context"];
@@ -219,7 +237,7 @@ export function registerSlackMessageEvents(params: {
     client,
   }: {
     event: unknown;
-    body: unknown;
+    body: SlackEventMiddlewareArgs<"message">["body"];
     context: AllMiddlewareArgs["context"];
     client: AllMiddlewareArgs["client"];
   }) => {
@@ -250,6 +268,7 @@ export function registerSlackMessageEvents(params: {
         ctx,
       });
       if (assistantChangedInbound) {
+        noteConversationMessage(assistantChangedInbound, eventScope);
         await handleSlackMessage(assistantChangedInbound, {
           source: "message",
           ...(eventScope ? { eventScope } : {}),
@@ -287,11 +306,12 @@ export function registerSlackMessageEvents(params: {
         }
         enqueueSystemEvent(subtypeHandler.describe(ingressContext.channelLabel), {
           sessionKey: ingressContext.sessionKey,
-          contextKey: subtypeHandler.contextKey(message),
+          contextKey: `${subtypeHandler.contextKey(message)}:${body.event_id}`,
         });
         return;
       }
 
+      noteConversationMessage(message, eventScope);
       await handleSlackMessage(message, {
         source: "message",
         ...(eventScope ? { eventScope } : {}),
@@ -373,6 +393,7 @@ export function registerSlackMessageEvents(params: {
           }),
         );
 
+        noteConversationMessage(mention, eventScope);
         await handleSlackMessage(mention as unknown as SlackMessageEvent, {
           source: "app_mention",
           wasMentioned: true,

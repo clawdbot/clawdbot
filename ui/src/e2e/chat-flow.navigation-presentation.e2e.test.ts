@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   SESSION_DRAG_MIME,
   captureSessionAccessibilityProof,
@@ -22,9 +23,9 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
     });
-    await context.addInitScript(() => {
+    await context.addInitScript((settingsKey) => {
       localStorage.setItem(
-        "openclaw.control.settings.v1:ws://127.0.0.1:18789",
+        settingsKey,
         JSON.stringify({
           chatSplitLayout: {
             activePaneId: "p1",
@@ -44,7 +45,7 @@ suite.define(() => {
           },
         }),
       );
-    });
+    }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["chat.startup", "chat.startup"],
@@ -298,7 +299,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
 
       // Keyboard focus on a header action marks the pane active.
-      await headers.first().getByRole("button", { name: "Split down" }).focus();
+      await headers.first().getByRole("button", { name: "Close pane" }).focus();
       const cells = page.locator(".chat-split-view__cell");
       await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
 
@@ -397,6 +398,22 @@ suite.define(() => {
           provider: "openai",
           timestamp: Date.now(),
         },
+        {
+          role: "assistant",
+          content: "Usage ready.",
+          model: "gateway-injected",
+          provider: "openclaw",
+          timestamp: Date.now() + 1,
+          usage: {
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+        },
       ],
       methodResponses: {
         "sessions.list": {
@@ -444,8 +461,13 @@ suite.define(() => {
       await expect.poll(() => popover.textContent()).toContain("$0.018");
       await expect.poll(() => popover.textContent()).toContain("$0.0015");
       await expect.poll(() => popover.textContent()).toContain("$0.0005");
-      await expect.poll(() => popover.textContent()).toContain("openai");
-      await expect.poll(() => popover.textContent()).toContain("gpt-5.5");
+      await expect
+        .poll(async () =>
+          (await popover.locator(".context-usage__provenance").allTextContents()).map((text) =>
+            text.replace(/\s+/g, " ").trim(),
+          ),
+        )
+        .toEqual(["Provider: openai", "Model: gpt-5.5"]);
 
       await page.keyboard.press("Escape");
       await expect.poll(() => popover.isHidden()).toBe(true);
@@ -535,7 +557,7 @@ suite.define(() => {
       await trigger.waitFor({ timeout: 10_000 });
       expect((await trigger.textContent())?.trim()).toBe("~95%");
       expect(await trigger.getAttribute("aria-label")).toBe(
-        "Thread context usage: ~190k of 200k (~95%)",
+        "Session context usage: ~190k of 200k (~95%)",
       );
       expect(
         await trigger.evaluate((element) => element.classList.contains("context-ring--warning")),
@@ -586,8 +608,8 @@ suite.define(() => {
       await composer.fill("");
 
       // The background hydrate must not take the shared sessions loading
-      // flag, which would disable New thread for the whole request.
-      const newThread = page.getByRole("button", { name: "New thread" }).first();
+      // flag, which would disable New session for the whole request.
+      const newThread = page.getByRole("button", { name: "New session" }).first();
       expect(await newThread.isEnabled()).toBe(true);
 
       await gateway.resolveDeferred("sessions.list");
@@ -673,7 +695,7 @@ suite.define(() => {
         .evaluate((label) => getComputedStyle(label).fontWeight);
       expect(activeWeight).toBe(inactiveWeight);
 
-      const sortThreads = page.getByRole("button", { name: "Sort threads" });
+      const sortThreads = page.getByRole("button", { name: "Sort sessions" });
       await sortThreads.locator("..").hover();
       await sortThreads.click();
       await page.getByRole("menuitemradio", { name: "Last updated" }).click();
@@ -865,7 +887,7 @@ suite.define(() => {
 
       const listCountBeforePatch = (await gateway.getRequests("sessions.list")).length;
       await row.hover();
-      await row.getByRole("button", { name: "Pin thread" }).click();
+      await row.getByRole("button", { name: "Pin session" }).click();
 
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({

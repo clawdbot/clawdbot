@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
@@ -123,6 +124,65 @@ async function writeTempProviderConfig(value: unknown) {
   const configPath = path.join(await tempDirs.makeTempDir("qa-provider-config-"), "openclaw.json");
   await writeJsonFixture(configPath, value);
   return configPath;
+}
+
+async function writePackagedGatewayFixture(root: string): Promise<string> {
+  const fixturePath = path.join(root, "packaged-gateway-fixture.mjs");
+  await writeFile(
+    fixturePath,
+    `import fs from "node:fs";
+import path from "node:path";
+
+const args = process.argv.slice(2);
+const recordPath = process.env.QA_RECORD_PATH;
+const configPath = process.env.OPENCLAW_CONFIG_PATH;
+const stateDir = process.env.OPENCLAW_STATE_DIR;
+if (!recordPath || !configPath || !stateDir) {
+  throw new Error("missing fixture environment");
+}
+const record = (value) => fs.appendFileSync(recordPath, JSON.stringify(value) + "\\n");
+if (args[0] === "models") {
+  let stdin = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) stdin += chunk;
+  const provider = args[args.indexOf("--provider") + 1];
+  record({
+    kind: "auth",
+    args,
+    stdin,
+    dbExists: fs.existsSync(path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite")),
+    env: {
+      OPENCLAW_CLI: process.env.OPENCLAW_CLI,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: stateDir,
+    },
+  });
+  if (process.env.QA_FAIL_PROVIDER === provider) {
+    process.stderr.write("Authorization: Bearer " + stdin.trim());
+    process.exit(9);
+  }
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  config.fixtureProfiles = [...(config.fixtureProfiles ?? []), provider];
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  process.exit(0);
+}
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+record({ kind: "gateway", args, fixtureProfiles: config.fixtureProfiles });
+process.stderr.write("fixture gateway exit");
+process.exit(17);
+`,
+    "utf8",
+  );
+  return fixturePath;
+}
+
+async function readJsonLines(filePath: string): Promise<Array<Record<string, unknown>>> {
+  const contents = await readFile(filePath, "utf8");
+  return contents
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 describe("runQaGatewayCliCommand", () => {
@@ -272,6 +332,34 @@ describe("waitForGatewayReady", () => {
       }
     },
   );
+
+  it("bounds a stalled readiness probe by the remaining deadline", async () => {
+    let probeSignal: AbortSignal | undefined;
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ init }: { init?: RequestInit }) =>
+        await new Promise((_, reject) => {
+          probeSignal = init?.signal ?? undefined;
+          probeSignal?.addEventListener(
+            "abort",
+            () => reject(toErrorObject(probeSignal?.reason, "QA readiness probe aborted")),
+            { once: true },
+          );
+        }),
+    );
+    const startedAt = Date.now();
+
+    await expect(
+      testing.waitForGatewayReady({
+        baseUrl: "http://127.0.0.1:43124",
+        logs: () => "near-expiry logs",
+        child: { exitCode: null, signalCode: null },
+        timeoutMs: 25,
+      }),
+    ).rejects.toThrow("gateway failed to become healthy");
+
+    expect(probeSignal?.aborted).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
 });
 
 describe("Gateway child fixture helpers", () => {
@@ -421,6 +509,58 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
   });
 
+  it("cleans up temp QA gateway roots when repo CLI discovery fails before startup", async () => {
+    const tempParent = await tempDirs.makeTempDir("qa-gateway-cli-discovery-fail-");
+    const emptyRepo = await tempDirs.makeTempDir("qa-gateway-empty-repo-");
+    qaTempPathState.preferredTmpDir = tempParent;
+
+    await expect(
+      startQaGatewayChild({
+        repoRoot: emptyRepo,
+        useRepoCli: true,
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow("OpenClaw CLI entry not found");
+
+    await expect(readdir(tempParent)).resolves.toStrictEqual([]);
+  });
+
+  it.each([
+    {
+      failure: "bundled plugin staging cannot copy root package metadata",
+      packageContents: undefined,
+      expectedError: /ENOENT/u,
+    },
+    {
+      failure: "host version resolution cannot parse staged package metadata",
+      packageContents: "{",
+      expectedError: /JSON/u,
+    },
+  ])("cleans staged QA runtime roots when $failure", async ({ packageContents, expectedError }) => {
+    const tempParent = await tempDirs.makeTempDir("qa-gateway-staged-runtime-fail-");
+    const repoRoot = await tempDirs.makeTempDir("qa-gateway-staged-runtime-repo-");
+    const stagedRuntimeParent = path.join(repoRoot, ".artifacts", "qa-runtime");
+    qaTempPathState.preferredTmpDir = tempParent;
+
+    if (packageContents !== undefined) {
+      await writeFile(path.join(repoRoot, "package.json"), packageContents, "utf8");
+    }
+
+    await expect(
+      startQaGatewayChild({
+        repoRoot,
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow(expectedError);
+
+    await expect(readdir(tempParent)).resolves.toStrictEqual([]);
+    await expect(readdir(stagedRuntimeParent)).resolves.toStrictEqual([]);
+  });
+
   it("reports command spawn errors instead of leaking unhandled child errors", async () => {
     const preferredTempParent = await tempDirs.makeTempDir("qa-gateway-default-spawn-fail-");
     const commandTempParent = await tempDirs.makeTempDir("qa-gateway-command-spawn-fail-");
@@ -441,7 +581,7 @@ describe("buildQaRuntimeEnv", () => {
         },
         transportBaseUrl: "http://127.0.0.1:43123",
       }),
-    ).rejects.toThrow(/gateway failed to spawn: .*ENOENT/u);
+    ).rejects.toThrow(/installed package mock auth bootstrap failed for openai: .*ENOENT/u);
 
     await expect(readdir(preferredTempParent)).resolves.toStrictEqual([]);
     await expect(readdir(commandTempParent)).resolves.toStrictEqual([]);
@@ -466,6 +606,34 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
     expect(env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("/tmp/openclaw-qa/bundled-plugins");
     expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.4.8");
+  });
+
+  it("isolates gateway children from Vitest without removing QA controls or non-test NODE_ENV", () => {
+    const testEnv = buildQaRuntimeEnv({
+      ...createParams({
+        NODE_ENV: "test",
+        VITEST: "true",
+        VITEST_POOL_ID: "base-pool",
+        VITEST_WORKER_ID: "base-worker",
+      }),
+      runtimeEnvPatch: {
+        VITEST: "patched",
+        VITEST_POOL_ID: "patched-pool",
+        VITEST_WORKER_ID: "patched-worker",
+      },
+    });
+
+    expect(testEnv.NODE_ENV).toBeUndefined();
+    expect(testEnv.VITEST).toBeUndefined();
+    expect(testEnv.VITEST_POOL_ID).toBeUndefined();
+    expect(testEnv.VITEST_WORKER_ID).toBeUndefined();
+    expect(testEnv.OPENCLAW_TEST_FAST).toBe("1");
+    expect(testEnv.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
+
+    const developmentEnv = buildQaRuntimeEnv({
+      ...createParams({ NODE_ENV: "development" }),
+    });
+    expect(developmentEnv.NODE_ENV).toBe("development");
   });
 
   it("maps live frontier key aliases into provider env vars", () => {
@@ -770,6 +938,56 @@ describe("buildQaRuntimeEnv", () => {
     expect(testing.isRetryableGatewayCallError("gateway closed (1012 service restart)")).toBe(true);
     expect(testing.isRetryableGatewayCallError("service restart in progress")).toBe(true);
     expect(testing.isRetryableGatewayCallError("permission denied")).toBe(false);
+  });
+
+  it("preserves relative gateway retry timeouts without an absolute deadline", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("gateway closed (1012 service restart)"))
+      .mockResolvedValueOnce({ ok: true });
+    const waitForReady = vi.fn(async () => {});
+
+    await expect(
+      testing.callQaGatewayWithRetry({
+        logs: () => "qa logs",
+        request,
+        throwChildFailure: vi.fn(),
+        timeoutMs: 2_000,
+        waitForReady,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(request).toHaveBeenNthCalledWith(1, { timeoutMs: 2_000 });
+    expect(request).toHaveBeenNthCalledWith(2, { timeoutMs: 2_000 });
+    expect(waitForReady).toHaveBeenCalledWith(10_000);
+  });
+
+  it("bounds near-expiry restart recovery by the absolute deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const request = vi.fn(async () => {
+      vi.setSystemTime(9_995);
+      throw new Error("gateway closed (1012 service restart)");
+    });
+    const waitForReady = vi.fn(async (timeoutMs: number) => {
+      vi.setSystemTime(Date.now() + timeoutMs);
+    });
+
+    await expect(
+      testing.callQaGatewayWithRetry({
+        deadlineMs: 10_000,
+        logs: () => "qa logs",
+        request,
+        throwChildFailure: vi.fn(),
+        timeoutMs: 20_000,
+        waitForReady,
+      }),
+    ).rejects.toThrow("gateway call deadline exceeded");
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith({ deadlineMs: 10_000, timeoutMs: 10_000 });
+    expect(waitForReady).toHaveBeenCalledWith(5);
+    expect(Date.now()).toBe(10_000);
   });
 
   it("waits for a fresh in-process restart boundary after the current log offset", async () => {
@@ -1206,6 +1424,109 @@ describe("buildQaRuntimeEnv", () => {
     }
   });
 
+  it("lets an explicit packaged command own mock auth state before gateway spawn", async () => {
+    const fixtureRoot = await tempDirs.makeTempDir("qa-packaged-auth-");
+    const tempParentDir = path.join(fixtureRoot, "gateway-temp");
+    const recordPath = path.join(fixtureRoot, "commands.jsonl");
+    const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
+    await mkdir(tempParentDir);
+
+    await expect(
+      startQaGatewayChild({
+        repoRoot: process.cwd(),
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: [fixturePath],
+          tempParentDir,
+          usePackagedPlugins: true,
+        },
+        providerMode: "mock-openai",
+        transportBaseUrl: "http://127.0.0.1:43123",
+        runtimeEnvPatch: { QA_RECORD_PATH: recordPath },
+      }),
+    ).rejects.toThrow("fixture gateway exit");
+
+    const records = await readJsonLines(recordPath);
+    const authRecords = records.filter((record) => record.kind === "auth");
+    expect(authRecords).toHaveLength(2);
+    expect(authRecords.map((record) => record.args)).toEqual([
+      [
+        "models",
+        "auth",
+        "--agent",
+        "qa",
+        "paste-api-key",
+        "--provider",
+        "openai",
+        "--profile-id",
+        "qa-mock-openai",
+      ],
+      [
+        "models",
+        "auth",
+        "--agent",
+        "qa",
+        "paste-api-key",
+        "--provider",
+        "anthropic",
+        "--profile-id",
+        "qa-mock-anthropic",
+      ],
+    ]);
+    for (const record of authRecords) {
+      expect(record.dbExists).toBe(false);
+      expect(record.stdin).toMatch(/^sk-qa-mock-[a-f0-9]{32}\n$/u);
+      expect(record.env).toMatchObject({
+        OPENCLAW_CLI: "1",
+      });
+    }
+    expect(records.at(-1)).toMatchObject({
+      kind: "gateway",
+      fixtureProfiles: ["openai", "anthropic"],
+    });
+  });
+
+  it("blocks packaged gateway spawn when candidate auth bootstrap fails", async () => {
+    const fixtureRoot = await tempDirs.makeTempDir("qa-packaged-auth-fail-");
+    const tempParentDir = path.join(fixtureRoot, "gateway-temp");
+    const recordPath = path.join(fixtureRoot, "commands.jsonl");
+    const fixturePath = await writePackagedGatewayFixture(fixtureRoot);
+    await mkdir(tempParentDir);
+
+    const result = startQaGatewayChild({
+      repoRoot: process.cwd(),
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [fixturePath],
+        tempParentDir,
+        usePackagedPlugins: true,
+      },
+      providerMode: "mock-openai",
+      transportBaseUrl: "http://127.0.0.1:43123",
+      runtimeEnvPatch: {
+        QA_FAIL_PROVIDER: "openai",
+        QA_RECORD_PATH: recordPath,
+      },
+    });
+
+    const error = await result.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) {
+      throw new Error("expected package auth bootstrap error");
+    }
+    expect(error.message).toContain(
+      "installed package mock auth bootstrap failed for openai: OpenClaw CLI exited 9: Authorization: Bearer <redacted>",
+    );
+    const records = await readJsonLines(recordPath);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ kind: "auth", dbExists: false });
+    const submittedKey = String(records[0]?.stdin).trim();
+    expect(submittedKey).toMatch(/^sk-qa-mock-[a-f0-9]{32}$/u);
+    expect(error.message).not.toContain(submittedKey);
+    expect(String(error.cause)).not.toContain(submittedKey);
+    expect(records.some((record) => record.kind === "gateway")).toBe(false);
+  });
+
   it("stages mock profiles only for the requested agents and providers when callers override the defaults", async () => {
     const stateDir = await tempDirs.makeTempDir("qa-mock-auth-override-");
 
@@ -1347,26 +1668,131 @@ describe("buildQaRuntimeEnv", () => {
         testing.stopQaGatewayChildProcessTree(child as never, {
           gracefulTimeoutMs: 1,
           forceTimeoutMs: 1,
+          inspectLinuxProcessGroup: () => null,
         }),
-      ).rejects.toThrow("qa gateway process tree remained alive after forced shutdown");
+      ).rejects.toThrow(
+        process.platform === "linux"
+          ? "qa gateway process tree remained alive after forced shutdown: pgid=12345 members=unknown (/proc unavailable) childExitRecorded=false"
+          : "qa gateway process tree remained alive after forced shutdown: pid=12345 childExitRecorded=false",
+      );
     },
   );
 
-  it("treats Linux process groups with only dead members as stopped", () => {
-    const stats = [
+  it("reports Linux process-tree diagnostics when forced shutdown times out", async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const child = Object.assign(new EventEmitter(), {
+      pid: 12345,
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill: vi.fn(() => true),
+    });
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      await expect(
+        testing.stopQaGatewayChildProcessTree(child as never, {
+          gracefulTimeoutMs: 1,
+          forceTimeoutMs: 1,
+          inspectLinuxProcessGroup: () => ({
+            alive: true,
+            diagnostics:
+              'pgid=12345 members=[pid=12345 state=Z command="gateway", pid=12346 state=S command="worker"]',
+          }),
+        }),
+      ).rejects.toThrow(
+        'qa gateway process tree remained alive after forced shutdown: pgid=12345 members=[pid=12345 state=Z command="gateway", pid=12346 state=S command="worker"] childExitRecorded=false',
+      );
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+    }
+  });
+
+  it("classifies Linux zombie-only process groups as stopped", () => {
+    const inspection = testing.inspectLinuxProcessGroupStats(123, [
       "123 (gateway child) Z 1 123 123 0 -1 0",
       "124 (helper (worker)) X 1 123 123 0 -1 0",
       "125 (unrelated) S 1 999 999 0 -1 0",
-    ];
+    ]);
 
-    expect(testing.classifyLinuxProcessGroupStats(123, stats)).toBe(false);
+    expect(inspection).toEqual({
+      alive: false,
+      diagnostics:
+        'pgid=123 members=[pid=123 state=Z command="gateway child", pid=124 state=X command="helper (worker)"]',
+    });
+  });
+
+  it("classifies Linux process groups with a runnable descendant as alive", () => {
+    const inspection = testing.inspectLinuxProcessGroupStats(123, [
+      "123 (gateway child) Z 1 123 123 0 -1 0",
+      "126 (live helper) D 1 123 123 0 -1 0",
+    ]);
+
+    expect(inspection).toEqual({
+      alive: true,
+      diagnostics:
+        'pgid=123 members=[pid=123 state=Z command="gateway child", pid=126 state=D command="live helper"]',
+    });
+  });
+
+  it("classifies an empty Linux process-group snapshot as unknown", () => {
     expect(
-      testing.classifyLinuxProcessGroupStats(123, [
-        ...stats,
-        "126 (live helper) D 1 123 123 0 -1 0",
-      ]),
-    ).toBe(true);
-    expect(testing.classifyLinuxProcessGroupStats(456, stats)).toBeNull();
+      testing.inspectLinuxProcessGroupStats(123, ["125 (unrelated) S 1 999 999 0 -1 0"]),
+    ).toEqual({
+      alive: null,
+      diagnostics: "pgid=123 members=[]",
+    });
+  });
+
+  it("bounds Linux process-group diagnostics", () => {
+    const stats = Array.from(
+      { length: 300 },
+      (_, index) => `${index + 1} (${`worker-${index}`.padEnd(32, "x")}) S 1 123 123 0 -1 0`,
+    );
+
+    const inspection = testing.inspectLinuxProcessGroupStats(123, stats);
+
+    expect(inspection.alive).toBe(true);
+    expect(inspection.diagnostics.length).toBeLessThanOrEqual(2_048);
+    expect(inspection.diagnostics).toMatch(/\.\.\.$/u);
+  });
+
+  it("trusts Linux runnable-member inspection before child exit metadata settles", () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const processKill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const child = {
+      pid: 12345,
+      exitCode: null,
+      signalCode: null,
+    };
+    try {
+      expect(
+        testing.isQaGatewayChildProcessTreeAlive(child as never, () => ({
+          alive: false,
+          diagnostics: 'pgid=12345 members=[pid=12345 state=Z command="gateway"]',
+        })),
+      ).toBe(false);
+      expect(
+        testing.isQaGatewayChildProcessTreeAlive(child as never, () => ({
+          alive: true,
+          diagnostics: 'pgid=12345 members=[pid=12346 state=S command="worker"]',
+        })),
+      ).toBe(true);
+      expect(
+        testing.isQaGatewayChildProcessTreeAlive(child as never, () => ({
+          alive: null,
+          diagnostics: "pgid=12345 members=[]",
+        })),
+      ).toBe(true);
+      expect(testing.isQaGatewayChildProcessTreeAlive(child as never, () => null)).toBe(true);
+      expect(processKill).toHaveBeenCalledWith(-12345, 0);
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+    }
   });
 
   it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
@@ -1451,6 +1877,10 @@ describe("buildQaRuntimeEnv", () => {
       {
         gracefulTimeoutMs: 1,
         forceTimeoutMs: 50,
+        inspectLinuxProcessGroup: () => ({
+          alive: !sawForceKill || postKillLivenessChecks < 2,
+          diagnostics: 'pgid=12346 members=[pid=12347 state=S command="worker"]',
+        }),
       },
     );
 
@@ -1464,18 +1894,85 @@ describe("buildQaRuntimeEnv", () => {
     }
   });
 
-  it("treats bind collisions as retryable gateway startup errors", () => {
+  it("classifies bind collisions separately from migration convergence restarts", () => {
     expect(
-      testing.isRetryableGatewayStartupError(
+      testing.classifyQaGatewayStartupRetry(
         "another gateway instance is already listening on ws://127.0.0.1:43124",
       ),
-    ).toBe(true);
+    ).toBe("bind-collision");
     expect(
-      testing.isRetryableGatewayStartupError(
+      testing.classifyQaGatewayStartupRetry(
         "failed to bind gateway socket on ws://127.0.0.1:43124: Error: listen EADDRINUSE",
       ),
-    ).toBe(true);
-    expect(testing.isRetryableGatewayStartupError("gateway failed to become healthy")).toBe(false);
+    ).toBe("bind-collision");
+    expect(
+      testing.classifyQaGatewayStartupRetry(
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.",
+      ),
+    ).toBe("migration-convergence-restart");
+  });
+
+  it.each([
+    "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
+    "OpenClaw plugin migration inputs changed during startup convergence",
+    "Restart OpenClaw so state migrations can continue.",
+    "gateway failed to become healthy",
+  ])("does not retry unrelated startup failure: %s", (details) => {
+    expect(testing.classifyQaGatewayStartupRetry(details)).toBeNull();
+  });
+
+  it("restarts migration convergence once with the same launch state", () => {
+    const first = testing.resolveQaGatewayStartupRetry({
+      attempt: 1,
+      details:
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.",
+      migrationConvergenceRestartUsed: false,
+    });
+
+    expect(first).toEqual({
+      kind: "migration-convergence-restart",
+      reuseLaunchState: true,
+      migrationConvergenceRestartUsed: true,
+    });
+    expect(
+      testing.resolveQaGatewayStartupRetry({
+        attempt: 2,
+        details:
+          "OpenClaw plugin migration inputs changed during startup convergence; refusing readiness.",
+        migrationConvergenceRestartUsed: first?.migrationConvergenceRestartUsed ?? false,
+      }),
+    ).toBeNull();
+  });
+
+  it("rotates launch state only for a bind collision", () => {
+    expect(
+      testing.resolveQaGatewayStartupRetry({
+        attempt: 1,
+        details: "listen EADDRINUSE: address already in use",
+        migrationConvergenceRestartUsed: false,
+      }),
+    ).toEqual({
+      kind: "bind-collision",
+      reuseLaunchState: false,
+      migrationConvergenceRestartUsed: false,
+    });
+  });
+
+  it("fails immediately for generic exits and after the startup attempt budget", () => {
+    expect(
+      testing.resolveQaGatewayStartupRetry({
+        attempt: 1,
+        details: "gateway exited with code 1",
+        migrationConvergenceRestartUsed: false,
+      }),
+    ).toBeNull();
+    expect(
+      testing.resolveQaGatewayStartupRetry({
+        attempt: 5,
+        details: "listen EADDRINUSE",
+        migrationConvergenceRestartUsed: false,
+      }),
+    ).toBeNull();
   });
 
   it("treats startup token mismatches as retryable rpc startup errors", () => {

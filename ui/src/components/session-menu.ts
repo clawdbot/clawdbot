@@ -78,9 +78,8 @@ class SessionMenu extends OpenClawLightDomElement {
     Record<SessionMenuActionKind, string>
   > = {};
   @property({ attribute: false }) forkDisabled = false;
-  // Guards both Archive and Delete: hosts pass canArchiveSessionRow() so agent
-  // main sessions and active runs stay protected from casual retirement.
   @property({ attribute: false }) archiveAllowed = false;
+  @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) cloudWorkerStopAllowed = false;
   @property({ attribute: false }) groups: readonly string[] = [];
   @property({ attribute: false }) canOpenChat = false;
@@ -590,7 +589,7 @@ class SessionMenu extends OpenClawLightDomElement {
                 aria-keyshortcuts="A"
                 ?disabled=${this.actionDisabled(
                   "toggle-archived",
-                  !session.archived && !this.archiveAllowed,
+                  !batch && !session.archived && !this.archiveAllowed,
                 )}
                 title=${this.actionTitle("toggle-archived")}
               >
@@ -599,7 +598,9 @@ class SessionMenu extends OpenClawLightDomElement {
                 >
                 <span class="session-menu__text"
                   >${batch
-                    ? t("sessionsView.archiveSessionCount", { count })
+                    ? session.archived
+                      ? t("sessionsView.restoreSessionCount", { count })
+                      : t("sessionsView.archiveSessionCount", { count })
                     : session.archived
                       ? t("sessionsView.restoreSession")
                       : t("sessionsView.archiveSession")}</span
@@ -612,10 +613,7 @@ class SessionMenu extends OpenClawLightDomElement {
                 variant="danger"
                 data-shortcut="d"
                 aria-keyshortcuts="D"
-                ?disabled=${this.actionDisabled(
-                  "delete",
-                  !(session.archived || this.archiveAllowed),
-                )}
+                ?disabled=${this.actionDisabled("delete", !this.deleteAllowed)}
                 title=${this.actionTitle("delete")}
               >
                 <span slot="icon" class="session-menu__icon" aria-hidden="true"

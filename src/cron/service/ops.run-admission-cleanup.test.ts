@@ -1,11 +1,11 @@
 // Queued cron reservation cleanup regressions across every trigger.
 import { describe, expect, it, vi } from "vitest";
 import {
-  createDeferred,
   createDueIsolatedJob,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -40,7 +40,7 @@ describe("cron service run admission cleanup", () => {
       job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
       await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-      const runnerStarted = createDeferred<void>();
+      const runnerStarted = createDeferred();
       const releaseRun = createDeferred<{
         status: "ok";
         summary: string;
@@ -85,7 +85,7 @@ describe("cron service run admission cleanup", () => {
 
   it("releases immediate and queued admission slots in FIFO order after failures", async () => {
     const store = opsRegressionFixtures.makeStorePath();
-    const releaseFirst = createDeferred<void>();
+    const releaseFirst = createDeferred();
     const executionOrder: string[] = [];
     const state = createCronServiceState({
       cronEnabled: true,
@@ -152,6 +152,7 @@ describe("cron service run admission cleanup", () => {
       });
       const realSave = cronStoreModule.saveCronJobsStore;
       let reservationPersisted = false;
+      const markerTransitions: Array<"queued" | "running" | "idle"> = [];
       const saveSpy = vi
         .spyOn(cronStoreModule, "saveCronJobsStore")
         .mockImplementation(async (storePath, nextStore, opts) => {
@@ -161,9 +162,13 @@ describe("cron service run admission cleanup", () => {
           await realSave(storePath, nextStore, opts);
           if (!reservationPersisted && queuedAtMs === dueAt) {
             reservationPersisted = true;
+            markerTransitions.push("queued");
             now = dueAt + 1;
           } else if (reservationPersisted && runningAtMs === dueAt + 1) {
+            markerTransitions.push("running");
             stop(state);
+          } else if (markerTransitions.length === 2 && !queuedAtMs && !runningAtMs) {
+            markerTransitions.push("idle");
           }
         });
 
@@ -184,6 +189,7 @@ describe("cron service run admission cleanup", () => {
       }
 
       expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(markerTransitions).toEqual(["queued", "running", "idle"]);
       expect(state.queuedRunReservationsByJobId.has(job.id)).toBe(false);
       const persistedJob = (await loadCronStore(store.storePath)).jobs.find(
         (entry) => entry.id === job.id,

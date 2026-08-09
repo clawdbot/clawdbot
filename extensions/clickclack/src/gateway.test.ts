@@ -191,6 +191,7 @@ describe("ClickClack gateway", () => {
     socket.emit("open");
     expect(ctx.setStatus).toHaveBeenCalledWith({
       accountId: "default",
+      running: true,
       connected: true,
       lifecycle: "ready",
       lastConnectedAt: expect.any(Number),

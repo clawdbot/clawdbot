@@ -1,5 +1,5 @@
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import type {
   ProviderCatalogContext,
@@ -196,12 +196,6 @@ function buildHeaders(
     headers.set("accept", "application/json");
   }
   return headers;
-}
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 async function readLiveModelCatalogJson(response: Response, timeoutMs: number): Promise<unknown> {

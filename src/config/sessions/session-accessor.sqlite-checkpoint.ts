@@ -27,7 +27,11 @@ import {
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry as SessionEntry,
+  type SessionCompactionCheckpoint,
+} from "./types.js";
 
 // Compaction checkpoint branch/restore owner.
 
@@ -340,12 +344,13 @@ function resolveSqliteCheckpointTranscriptForkSources(
   checkpoint: SessionCompactionCheckpoint,
 ): SqliteCheckpointTranscriptForkSource[] {
   const sources: SqliteCheckpointTranscriptForkSource[] = [];
+  const checkpointTokensTrusted = checkpoint.tokensVersion === SESSION_TOTAL_TOKENS_VERSION;
   if (checkpoint.preCompaction.sessionId) {
     const preLeafId = checkpoint.preCompaction.entryId ?? checkpoint.preCompaction.leafId;
     sources.push({
       sessionId: checkpoint.preCompaction.sessionId,
       ...(preLeafId ? { leafId: preLeafId } : {}),
-      ...(typeof checkpoint.tokensBefore === "number"
+      ...(checkpointTokensTrusted && typeof checkpoint.tokensBefore === "number"
         ? { totalTokens: checkpoint.tokensBefore }
         : {}),
     });
@@ -356,7 +361,7 @@ function resolveSqliteCheckpointTranscriptForkSources(
     sources.push({
       sessionId: checkpoint.postCompaction.sessionId,
       leafId: postLeafId,
-      ...(typeof checkpoint.tokensAfter === "number"
+      ...(checkpointTokensTrusted && typeof checkpoint.tokensAfter === "number"
         ? { totalTokens: checkpoint.tokensAfter }
         : {}),
     });
@@ -428,6 +433,7 @@ function cloneSqliteCheckpointSessionEntry(params: {
     updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,
+    lifecycleRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
@@ -439,6 +445,7 @@ function cloneSqliteCheckpointSessionEntry(params: {
     estimatedCostUsd: undefined,
     totalTokens: hasTotalTokens ? params.totalTokens : undefined,
     totalTokensFresh: hasTotalTokens ? true : undefined,
+    totalTokensVersion: hasTotalTokens ? SESSION_TOTAL_TOKENS_VERSION : undefined,
     label: params.label ?? params.currentEntry.label,
     parentSessionKey: params.parentSessionKey ?? params.currentEntry.parentSessionKey,
     compactionCheckpoints: params.preserveCompactionCheckpoints

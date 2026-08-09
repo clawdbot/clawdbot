@@ -17,6 +17,7 @@ const RESERVED_CATALOG_ROOTS = {
 } as const;
 
 const PLUGIN_CATALOG_PATHS = {
+  memory: "registered and covered by the memory-core plugin",
   "memory search": "registered and covered by the memory-core plugin",
   "memory status": "registered and covered by the memory-core plugin",
 } as const;
@@ -110,6 +111,7 @@ const JSON_NOT_APPLICABLE = {
       "mcp login",
       "attach",
       "tui",
+      "resume",
       "update wizard",
     ],
   },
@@ -310,6 +312,7 @@ describe("root command descriptions", () => {
   });
 
   it("keeps startup policy catalog paths registered or explicitly reserved", async () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
     const program = await registerAllBuiltInCommands();
 
     // Private QA is a lazy source-checkout command. Its root placeholder proves

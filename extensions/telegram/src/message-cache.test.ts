@@ -9,6 +9,7 @@ import {
   buildTelegramReplyChain,
   createTelegramMessageCache,
   hasProviderObservedTelegramThreadBinding,
+  resolveProviderObservedTelegramThreadId,
 } from "./message-cache.js";
 import { resetTelegramMessageCacheForTest as resetCache } from "./runtime.test-support.js";
 
@@ -178,7 +179,61 @@ describe("telegram message cache", () => {
     for (const messageId of ["901", "902"]) {
       const node = await get(reloaded, messageId, { chatId: -1001 });
       expect(hasProviderObservedTelegramThreadBinding(node, 77)).toBe(true);
+      expect(resolveProviderObservedTelegramThreadId(node)).toBe(77);
     }
+  });
+
+  it("keeps an authoritative supplied thread ahead of conflicting root message metadata", async () => {
+    const { bucketKey, entries, store } = createMemoryStore();
+    const forum = { id: -1001, type: "supergroup", title: "QA", is_forum: true };
+    const ancestor = message(904, "Lin", {
+      chat: forum,
+      text: "Ancestor without its own thread metadata",
+    });
+    const reply = message(905, "Ada", {
+      chat: forum,
+      text: "Reply with embedded thread metadata",
+      message_thread_id: 88,
+      reply_to_message: ancestor,
+    });
+    const root = message(906, "Grace", {
+      chat: forum,
+      text: "Authoritative root",
+      message_thread_id: 999,
+      reply_to_message: reply,
+    });
+    const cache = cacheFor(bucketKey, store);
+
+    const recorded = await record(cache, root, {
+      chatId: -1001,
+      threadId: 77,
+      providerObservedThreadId: 77,
+    });
+
+    expect(recorded.threadId).toBe("77");
+    expect(resolveProviderObservedTelegramThreadId(recorded)).toBe(77);
+    expect((await get(cache, "905", { chatId: -1001 }))?.threadId).toBe("88");
+    expect((await get(cache, "904", { chatId: -1001 }))?.threadId).toBe("88");
+    const persistedRoot = Array.from(entries.values()).find(
+      (entry) => entry.sourceMessage.message_id === 906,
+    );
+    expect(persistedRoot?.threadId).toBe("77");
+  });
+
+  it("does not resolve caller-only topic metadata as a provider-observed binding", async () => {
+    const cache = createTelegramMessageCache();
+    await record(
+      cache,
+      message(903, "Ada", {
+        chat: { id: -1001, type: "supergroup", title: "QA", is_forum: true },
+        message_thread_id: 77,
+        is_topic_message: true,
+      }),
+      { chatId: -1001, threadId: 77 },
+    );
+
+    const node = await get(cache, "903", { chatId: -1001 });
+    expect(resolveProviderObservedTelegramThreadId(node)).toBeUndefined();
   });
 
   it("hydrates reply chains from persisted cached messages", async () => {
@@ -546,6 +601,7 @@ describe("telegram message cache", () => {
     });
     expect(reloaded?.promptContextProjectionMarker).toBeUndefined();
     expect(hasProviderObservedTelegramThreadBinding(reloaded, 77)).toBe(false);
+    expect(resolveProviderObservedTelegramThreadId(reloaded)).toBeUndefined();
   });
 
   it("rejects unknown future persisted cache versions", async () => {

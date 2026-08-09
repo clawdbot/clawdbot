@@ -1,6 +1,6 @@
 // Dedicated sidebar for the full-page settings takeover (see app-host.ts).
 import { html, nothing } from "lit";
-import type { UpdateAvailable } from "../api/types.ts";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
   cancelRoutePreload,
   navigationIconForRoute,
@@ -17,6 +17,7 @@ import {
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
@@ -37,8 +38,15 @@ type SettingsSidebarProps = {
   lastError: string | null;
   gatewayVersion: string;
   updateAvailable: UpdateAvailable | null;
+  updateSchedule?: UpdateScheduleState | null;
+  heldUpdateCampaignId?: string | null;
   updateRunning: boolean;
+  canUpdate?: boolean;
+  canHoldUpdate?: boolean;
   onUpdate: () => void;
+  refreshRequired: boolean;
+  onRefresh: () => void;
+  onHoldUpdate?: () => Promise<boolean>;
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
   onExit: () => void;
@@ -163,14 +171,7 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
       @touchstart=${(event: TouchEvent) =>
         scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true)}
       @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
+        if (!shouldHandleNavigationClick(event)) {
           return;
         }
         event.preventDefault();
@@ -201,14 +202,7 @@ function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock
       class="settings-sidebar__subitem ${active ? "settings-sidebar__subitem--active" : ""}"
       aria-current=${active ? "location" : nothing}
       @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
+        if (!shouldHandleNavigationClick(event)) {
           return;
         }
         event.preventDefault();
@@ -316,8 +310,15 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       </nav>
       <openclaw-sidebar-update-card
         .updateAvailable=${props.updateAvailable}
+        .updateSchedule=${props.updateSchedule ?? null}
+        .heldUpdateCampaignId=${props.heldUpdateCampaignId ?? null}
         .updateRunning=${props.updateRunning}
+        .canUpdate=${props.canUpdate ?? false}
+        .canHoldUpdate=${props.canHoldUpdate ?? false}
         .onUpdate=${props.onUpdate}
+        .refreshRequired=${props.refreshRequired}
+        .onRefresh=${props.onRefresh}
+        .onHoldUpdate=${props.onHoldUpdate ?? (async () => false)}
       ></openclaw-sidebar-update-card>
       <footer class="settings-sidebar__footer">
         ${props.offline

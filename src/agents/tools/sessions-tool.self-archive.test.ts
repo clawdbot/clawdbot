@@ -243,7 +243,7 @@ describe("sessions tool self-archive", () => {
             identities: [sessionKey, sessionId],
             assertAllowed: () => {},
           });
-          throw new Error("Cannot archive a session with an active run.");
+          throw Object.assign(new Error("Session did not finish stopping."), { retryable: true });
         }
         return { ok: true };
       });
@@ -308,7 +308,7 @@ describe("sessions tool self-archive", () => {
           });
           competingAdmission.release();
           competingTurnFinished = true;
-          throw new Error("Cannot archive a session with an active run.");
+          throw Object.assign(new Error("Session did not finish stopping."), { retryable: true });
         }
         return { ok: true };
       });
@@ -409,7 +409,9 @@ describe("sessions tool self-archive", () => {
         const callGateway = vi.fn(async () => {
           attempts += 1;
           if (attempts <= 10) {
-            throw new Error("Cannot archive a session with an active run.");
+            throw Object.assign(new Error("Session did not finish stopping."), {
+              retryable: true,
+            });
           }
           return { ok: true };
         });

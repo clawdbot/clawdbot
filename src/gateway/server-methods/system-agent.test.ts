@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSafeGatewayRestartPreflight } from "../../infra/restart-coordinator.js";
@@ -26,7 +27,6 @@ import type {
   SystemAgentVerifiedInferenceBinding,
   SystemAgentVerifiedInferenceDeps,
 } from "../../system-agent/verified-inference.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -39,10 +39,10 @@ import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const setupInferenceMocks = vi.hoisted(() => ({
   activateSetupInference: vi.fn(),
-  detectSetupInference: vi.fn(),
   resolvePersistentApplyInference: vi.fn(),
   verifySetupInference: vi.fn(),
 }));
+const inferenceFallbackMocks = vi.hoisted(() => ({ verify: vi.fn() }));
 const setupInferenceDetectionMocks = vi.hoisted(() => ({
   detectSetupInferenceIsolated: vi.fn(),
 }));
@@ -71,9 +71,11 @@ const onboardingWelcomeMocks = vi.hoisted(() => ({
 
 vi.mock("../../system-agent/setup-inference.js", () => ({
   activateSetupInference: setupInferenceMocks.activateSetupInference,
-  detectSetupInference: setupInferenceMocks.detectSetupInference,
   resolvePersistentApplyInference: setupInferenceMocks.resolvePersistentApplyInference,
   verifySetupInference: setupInferenceMocks.verifySetupInference,
+}));
+vi.mock("../../system-agent/inference-fallback.js", () => ({
+  verifySystemAgentInferenceWithFallback: inferenceFallbackMocks.verify,
 }));
 vi.mock("../../system-agent/setup-inference-detection.js", () => ({
   detectSetupInferenceIsolated: setupInferenceDetectionMocks.detectSetupInferenceIsolated,
@@ -233,6 +235,12 @@ afterAll(() => {
 
 beforeEach(() => {
   setupInferenceMocks.verifySetupInference.mockResolvedValue({
+    ok: true,
+    modelRef: "openai/gpt-5.5",
+    latencyMs: 10,
+    binding: verifiedInference,
+  });
+  inferenceFallbackMocks.verify.mockResolvedValue({
     ok: true,
     modelRef: "openai/gpt-5.5",
     latencyMs: 10,
@@ -413,7 +421,7 @@ describe("openclaw.setup", () => {
       async (params) => {
         await params.prompter.note("Model ready", "Ollama");
         await params.beforePersistentEffect();
-        return { config: preparedConfig };
+        return { config: preparedConfig, agentModelOverride: "ollama/qwen3:0.6b" };
       },
     );
     const { wizardSessions, context } = makeWizardContext();
@@ -451,7 +459,11 @@ describe("openclaw.setup", () => {
       }),
     );
     await session.answer(note.step.id, null);
-    await expect(session.next()).resolves.toMatchObject({ done: true, status: "done" });
+    await expect(session.next()).resolves.toMatchObject({
+      done: true,
+      status: "done",
+      preparedModelRef: "ollama/qwen3:0.6b",
+    });
     expect(setupSharedMocks.writeWizardConfigFile).toHaveBeenCalledWith(preparedConfig, {
       allowConfigSizeDrop: false,
       baseSnapshot: expect.objectContaining({ hash: "prepare-base-hash" }),
@@ -463,7 +475,7 @@ describe("openclaw.setup", () => {
 
 describe("openclaw.chat", () => {
   it("refuses to create a session before inference is available", async () => {
-    setupInferenceMocks.verifySetupInference.mockResolvedValueOnce({
+    inferenceFallbackMocks.verify.mockResolvedValueOnce({
       ok: false,
       status: "unavailable",
       error: "no configured model",
@@ -483,13 +495,16 @@ describe("openclaw.chat", () => {
       },
     });
     expect(sessions.size).toBe(0);
+    expect(inferenceFallbackMocks.verify).toHaveBeenCalledWith({
+      runtime: defaultRuntime,
+    });
   });
 
   it("coalesces concurrent initialization for the same session", async () => {
     stubEngineOverview();
     const started = createDeferred();
     const release = createDeferred();
-    setupInferenceMocks.verifySetupInference.mockImplementation(async () => {
+    inferenceFallbackMocks.verify.mockImplementation(async () => {
       started.resolve();
       await release.promise;
       return {
@@ -509,7 +524,7 @@ describe("openclaw.chat", () => {
     release.resolve();
     const [firstCall, secondCall] = await Promise.all([first, second]);
 
-    expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledOnce();
+    expect(inferenceFallbackMocks.verify).toHaveBeenCalledOnce();
     expect(sessions.size).toBe(1);
     expect([firstCall.ok, secondCall.ok]).toEqual([true, true]);
   });
@@ -924,7 +939,7 @@ describe("openclaw.chat", () => {
     expect(createSafeGatewayRestartPreflight().counts.queueSize).toBe(0);
   });
 
-  it("drops a failed session and requires fresh inference on retry", async () => {
+  it("reuses a live session, then requires fresh fallback verification after failure", async () => {
     stubEngineOverview();
     const engine = makeVerifiedEngine();
     vi.spyOn(engine, "handle").mockRejectedValue(
@@ -946,12 +961,12 @@ describe("openclaw.chat", () => {
     });
     expect(dispose).toHaveBeenCalledOnce();
     expect(sessions.has("s1")).toBe(false);
-    expect(setupInferenceMocks.verifySetupInference).not.toHaveBeenCalled();
+    expect(inferenceFallbackMocks.verify).not.toHaveBeenCalled();
 
     const retried = await callChat(context, { sessionId: "s1" });
 
     expect(retried.ok).toBe(true);
-    expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledOnce();
+    expect(inferenceFallbackMocks.verify).toHaveBeenCalledOnce();
     expect(sessions.has("s1")).toBe(true);
   });
 

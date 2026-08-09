@@ -6,9 +6,14 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { readMemoryHostEventRecords } from "../memory-host-sdk/events.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
-import type { PluginDoctorStateMigrationContext } from "../plugins/doctor-contract-registry.js";
+import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/runtime-doctor-migrations.js";
+import type {
+  PluginDoctorStateMigration,
+  PluginDoctorStateMigrationContext,
+} from "../plugins/doctor-contract-registry.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -108,18 +113,14 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
     },
 );
 
+const legacyChannelStateMigrationEntries = vi.hoisted(() => ({
+  entries: [] as Array<{ pluginId: string; migration: PluginDoctorStateMigration }>,
+}));
+
 vi.mock("../channels/plugins/bundled.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
     "../channels/plugins/bundled.js",
   );
-  function fileExists(filePath: string): boolean {
-    try {
-      return fsSync.statSync(filePath).isFile();
-    } catch {
-      return false;
-    }
-  }
-
   return {
     ...actual,
     listBundledChannelLegacySessionSurfaces: vi.fn(() => [
@@ -135,33 +136,6 @@ vi.mock("../channels/plugins/bundled.js", async () => {
         },
       },
     ]),
-    listBundledChannelLegacyStateMigrationDetectors: vi.fn(() => [
-      ({ oauthDir }: { oauthDir: string }) => {
-        let entries: fsSync.Dirent[];
-        try {
-          entries = fsSync.readdirSync(oauthDir, { withFileTypes: true });
-        } catch {
-          return [];
-        }
-        return entries.flatMap((entry) => {
-          if (!entry.isFile() || !/^(creds|pre-key-1)\.json$/u.test(entry.name)) {
-            return [];
-          }
-          const sourcePath = path.join(oauthDir, entry.name);
-          const targetPath = path.join(oauthDir, "mobileauth", "default", entry.name);
-          return fileExists(targetPath)
-            ? []
-            : [
-                {
-                  kind: "move" as const,
-                  label: `MobileAuth auth ${entry.name}`,
-                  sourcePath,
-                  targetPath,
-                },
-              ];
-        });
-      },
-    ]),
   };
 });
 
@@ -169,7 +143,10 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
   return {
     ...actual,
-    listPluginDoctorStateMigrationEntries: vi.fn(() => pluginDoctorStateMigrationEntries.entries),
+    listPluginDoctorStateMigrationEntries: vi.fn(() => [
+      ...pluginDoctorStateMigrationEntries.entries,
+      ...legacyChannelStateMigrationEntries.entries,
+    ]),
   };
 });
 
@@ -208,6 +185,41 @@ function failArchiveRenameOnce(sourcePath: string) {
     actualRenameSync(from, to);
   });
 }
+
+legacyChannelStateMigrationEntries.entries = [
+  {
+    pluginId: "mobileauth",
+    migration: definePluginDoctorMigrationFromPlans({
+      id: "mobileauth-legacy-state",
+      label: "MobileAuth legacy state",
+      resolvePlans: ({ oauthDir }) => {
+        let entries: fsSync.Dirent[];
+        try {
+          entries = fsSync.readdirSync(oauthDir, { withFileTypes: true });
+        } catch {
+          return [];
+        }
+        return entries.flatMap((entry) => {
+          if (!entry.isFile() || !/^(creds|pre-key-1)\.json$/u.test(entry.name)) {
+            return [];
+          }
+          const sourcePath = path.join(oauthDir, entry.name);
+          const targetPath = path.join(oauthDir, "mobileauth", "default", entry.name);
+          return fsSync.existsSync(targetPath)
+            ? []
+            : [
+                {
+                  kind: "move" as const,
+                  label: `MobileAuth auth ${entry.name}`,
+                  sourcePath,
+                  targetPath,
+                },
+              ];
+        });
+      },
+    }),
+  },
+];
 
 function failNextStateDbCommit(env: NodeJS.ProcessEnv) {
   const { db } = openOpenClawStateDatabase({ env });
@@ -883,6 +895,88 @@ describe("state migrations", () => {
     expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
 
+  it("restores retained Memory Core host events only for explicit plugin-only Doctor repair", async () => {
+    const root = await fs.realpath(await createTempDir());
+    const stateDir = path.join(root, ".openclaw");
+    const workspaceDir = path.join(root, "workspace");
+    const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
+    const env = createEnv(stateDir);
+    const cfg = {
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    } as OpenClawConfig;
+    const event = {
+      type: "memory.recall.recorded",
+      timestamp: "2026-07-01T00:00:00.000Z",
+      query: "retained before upgrade",
+      resultCount: 0,
+      results: [],
+    } as const;
+    await fs.mkdir(path.dirname(eventPath), { recursive: true });
+    await fs.writeFile(eventPath, `${JSON.stringify(event)}\n`, "utf8");
+
+    const { stateMigrations } = (await import(
+      /* @vite-ignore */ new URL(
+        "../../extensions/memory-core/doctor-contract-api.ts",
+        import.meta.url,
+      ).href
+    )) as { stateMigrations: PluginDoctorStateMigration[] };
+    const migration = stateMigrations.find(
+      (candidate) => candidate.id === "memory-core-host-events-jsonl-to-sqlite",
+    );
+    expect(migration).toBeDefined();
+    if (!migration) {
+      throw new Error("Expected the bundled Memory Core host-event Doctor migration");
+    }
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: migration.id,
+          label: migration.label,
+          doctorOnly: migration.doctorOnly,
+          detectLegacyState: (params) =>
+            migration.detectLegacyState({
+              ...params,
+              context: params.context as PluginDoctorStateMigrationContext,
+            }),
+          migrateLegacyState: async (params) => {
+            const result = await migration.migrateLegacyState({
+              ...params,
+              context: params.context as PluginDoctorStateMigrationContext,
+            });
+            return { changes: result.changes, warnings: result.warnings };
+          },
+        },
+      },
+    ];
+
+    const automatic = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+    expect(automatic.warnings).toEqual([]);
+    expect(automatic.changes).not.toContain(
+      "Migrated Memory Core host events -> SQLite plugin state (1 new row(s))",
+    );
+    await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toEqual([]);
+    await expect(fs.stat(eventPath)).resolves.toBeDefined();
+
+    const repaired = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(repaired.warnings).toEqual([]);
+    expect(repaired.changes).toContain(
+      "Migrated Memory Core host events -> SQLite plugin state (1 new row(s))",
+    );
+    await expect(readMemoryHostEventRecords({ workspaceDir, env })).resolves.toEqual([event]);
+    await expectMissingPath(eventPath);
+    await expect(fs.stat(`${eventPath}.migrated`)).resolves.toBeDefined();
+  });
+
   it("runs doctor-only repairs after the automatic migration check", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -957,10 +1051,10 @@ describe("state migrations", () => {
     expect(detectionCase.sessions.hasLegacy).toBe(true);
     expect(detectionCase.sessions.legacyKeys).toEqual(["group:mobile-room", "group:legacy-room"]);
     expect(detectionCase.agentDir.hasLegacy).toBe(true);
-    expect(detectionCase.channelPlans.hasLegacy).toBe(true);
-    expect(detectionCase.channelPlans.plans.map((plan) => plan.targetPath)).toEqual([
-      path.join(detectionCase.stateDir, "credentials", "mobileauth", "default", "creds.json"),
-    ]);
+    expect(detectionCase.pluginPlans?.hasLegacy).toBe(true);
+    expect(detectionCase.pluginPlans?.plans.map((plan) => plan.migration.id)).toContain(
+      "mobileauth-legacy-state",
+    );
     expect(detectionCase.channelPairing.hasLegacy).toBe(true);
     expect(detectionCase.preview).toEqual([
       `- Sessions: ${path.join(detectionCase.stateDir, "sessions")} → ${path.join(detectionCase.stateDir, "agents", "worker-1", "sessions")}`,
@@ -1038,14 +1132,14 @@ describe("state migrations", () => {
     ]);
     expect(result.changes).toEqual([
       "Migrated 2 chatapp/alpha allowFrom entries → shared SQLite state",
+      `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
+      `Moved MobileAuth auth pre-key-1.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "pre-key-1.json")}`,
       `Migrated latest direct-chat session → agent:worker-1:desk`,
       `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       "Canonicalized 3 legacy session key(s)",
       "Moved trace.jsonl → agents/worker-1/sessions",
       "Migrated 2 ACP session metadata rows → shared SQLite state",
       "Moved agent file settings.json → agents/worker-1/agent",
-      `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
-      `Moved MobileAuth auth pre-key-1.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "pre-key-1.json")}`,
     ]);
 
     const mergedStore = JSON.parse(

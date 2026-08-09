@@ -260,6 +260,13 @@ export function hasProviderObservedTelegramThreadBinding(
   return normalizeTelegramMessageThreadBinding(node?.threadBinding, threadId) !== undefined;
 }
 
+export function resolveProviderObservedTelegramThreadId(
+  node: TelegramCachedMessageNode | null | undefined,
+): number | undefined {
+  const threadId = parseTelegramMessageThreadId(node?.threadId);
+  return hasProviderObservedTelegramThreadBinding(node, threadId) ? threadId : undefined;
+}
+
 function normalizeMessageNodes(
   msg: Message,
   params: {
@@ -279,11 +286,15 @@ function normalizeMessageNodes(
     promptContextProjectionMarker?: TelegramPromptContextProjectionMarker,
     threadBinding?: TelegramMessageThreadBinding,
   ) => {
+    const embeddedThreadId = parseTelegramMessageThreadId(
+      (message as { message_thread_id?: unknown }).message_thread_id,
+    );
+    const inheritedThread = parseTelegramMessageThreadId(inheritedThreadId);
     const node = normalizeMessageNode(message, {
       threadId:
-        parseTelegramMessageThreadId(
-          (message as { message_thread_id?: unknown }).message_thread_id,
-        ) ?? inheritedThreadId,
+        mode === "authoritative"
+          ? (inheritedThread ?? embeddedThreadId)
+          : (embeddedThreadId ?? inheritedThread),
       ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
       ...(threadBinding ? { threadBinding } : {}),
     });

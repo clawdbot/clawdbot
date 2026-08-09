@@ -20,6 +20,7 @@ export const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
   "sessions.fork",
   "sessions.create",
   "sessions.delete",
+  "sessions.patchMany",
   "sessions.patch",
   "sessions.pluginPatch",
   "sessions.reset",

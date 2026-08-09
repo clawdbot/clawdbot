@@ -2,9 +2,12 @@
 // Control UI tests cover skills behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createRuntimeConfigCapability } from "../config/index.ts";
+import { searchClawHub } from "./clawhub-search.ts";
 import {
+  clawhubVerdictKey,
   installFromClawHub,
   installSkill,
   loadSkills,
@@ -13,7 +16,6 @@ import {
   refreshSkills,
   reconcileSkillsAgentId,
   saveSkillApiKey,
-  searchClawHub,
   setSkillsAgentId,
   updateSkillEdit,
   updateSkillEnabled,
@@ -22,14 +24,6 @@ import {
 type SkillsState = Parameters<typeof loadSkills>[0];
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
@@ -188,7 +182,11 @@ describe("loadSkills", () => {
     expect(request).toHaveBeenNthCalledWith(1, "skills.status", {});
     expect(request).toHaveBeenNthCalledWith(2, "skills.securityVerdicts", {});
     expect(state.clawhubVerdicts).toEqual({
-      "https://clawhub.ai\u0000agentreceipt\u00001.2.3": expect.objectContaining({
+      [clawhubVerdictKey({
+        registry: "https://clawhub.ai",
+        slug: "agentreceipt",
+        version: "1.2.3",
+      })]: expect.objectContaining({
         ok: true,
         decision: "pass",
         securityStatus: "clean",
@@ -197,6 +195,99 @@ describe("loadSkills", () => {
     });
     expect(state.clawhubVerdictsLoading).toBe(false);
     expect(state.clawhubVerdictsError).toBeNull();
+  });
+
+  it("keeps verdicts for the same slug distinct by installed owner", async () => {
+    const { state, request } = createState();
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.status") {
+        return {
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          skills: [
+            {
+              name: "Alice Weather",
+              skillKey: "alice-weather",
+              source: "workspace",
+              clawhub: {
+                status: "linked",
+                valid: true,
+                registry: "https://clawhub.ai",
+                slug: "weather",
+                ownerHandle: "alice",
+                installedVersion: "1.2.3",
+                installedAt: 123,
+              },
+            },
+            {
+              name: "Bob Weather",
+              skillKey: "bob-weather",
+              source: "workspace",
+              clawhub: {
+                status: "linked",
+                valid: true,
+                registry: "https://clawhub.ai",
+                slug: "weather",
+                ownerHandle: "bob",
+                installedVersion: "1.2.3",
+                installedAt: 456,
+              },
+            },
+          ],
+        };
+      }
+      if (method === "skills.securityVerdicts") {
+        return {
+          schema: "openclaw.skills.security-verdicts.v1",
+          items: [
+            {
+              registry: "https://clawhub.ai",
+              ok: true,
+              decision: "pass",
+              reasons: [],
+              requestedSlug: "weather",
+              requestedOwnerHandle: "alice",
+              requestedVersion: "1.2.3",
+              publisherHandle: "alice",
+              securityStatus: "clean",
+              securityPassed: true,
+            },
+            {
+              registry: "https://clawhub.ai",
+              ok: false,
+              decision: "fail",
+              reasons: ["security.suspicious"],
+              requestedSlug: "weather",
+              requestedOwnerHandle: "bob",
+              requestedVersion: "1.2.3",
+              publisherHandle: "bob",
+              securityStatus: "suspicious",
+              securityPassed: false,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    await loadSkills(state);
+
+    const aliceKey = clawhubVerdictKey({
+      registry: "https://clawhub.ai",
+      slug: "weather",
+      ownerHandle: "alice",
+      version: "1.2.3",
+    });
+    const bobKey = clawhubVerdictKey({
+      registry: "https://clawhub.ai",
+      slug: "weather",
+      ownerHandle: "bob",
+      version: "1.2.3",
+    });
+    expect(aliceKey).not.toBe(bobKey);
+    expect(Object.keys(state.clawhubVerdicts)).toHaveLength(2);
+    expect(state.clawhubVerdicts[aliceKey]?.publisherHandle).toBe("alice");
+    expect(state.clawhubVerdicts[bobKey]?.publisherHandle).toBe("bob");
   });
 
   it("loads selected agent skills and verdicts with the agent id", async () => {
@@ -823,6 +914,58 @@ describe("skill mutations", () => {
     }
   });
 
+  it("does not dispatch a queued skill update after access changes", async () => {
+    const { state, request } = createState();
+    const firstSet = createDeferred<unknown>();
+    const methods: string[] = [];
+    let canDispatch = true;
+    request.mockImplementation((method) => {
+      methods.push(method);
+      if (method === "config.get") {
+        return Promise.resolve({
+          config: { count: 1 },
+          raw: '{"count":1}',
+          hash: "hash-1",
+          valid: true,
+          issues: [],
+        });
+      }
+      if (method === "config.set") {
+        return firstSet.promise;
+      }
+      return Promise.resolve({
+        workspaceDir: "/tmp/workspace",
+        managedSkillsDir: "/tmp/skills",
+        skills: [],
+      });
+    });
+    const client = expectDefined(state.client, "connected skill mutation client");
+    const runtimeConfig = createRuntimeConfigCapability({
+      snapshot: { client, phase: "connected", sessionKey: "main" },
+      subscribe: () => () => undefined,
+    });
+    state.runtimeConfig = runtimeConfig;
+    await runtimeConfig.ensureLoaded();
+    methods.length = 0;
+
+    try {
+      runtimeConfig.patchForm(["count"], 2);
+      const mutation = updateSkillEnabled(state, "github", true, () => canDispatch);
+      await waitForFast(() => expect(methods).toEqual(["config.set"]));
+      canDispatch = false;
+      firstSet.resolve({ hash: "hash-2" });
+      await mutation;
+
+      expect(methods).toEqual(["config.set"]);
+      expect(state.skillMessages.github).toEqual({
+        kind: "error",
+        message: "Access changed before the skill update started.",
+      });
+    } finally {
+      runtimeConfig.dispose();
+    }
+  });
+
   it("reports a committed skill update when its configuration refresh fails", async () => {
     const { state, request } = createState();
     state.runtimeConfig.runExternalMutation = async (task) => ({
@@ -1235,7 +1378,7 @@ describe("reconcileSkillsAgentId", () => {
     reconcileSkillsAgentId(state, {
       defaultId: "main",
       mainKey: "main",
-      scope: "project",
+      scope: "per-sender",
       agents: [{ id: "main" }],
     });
 

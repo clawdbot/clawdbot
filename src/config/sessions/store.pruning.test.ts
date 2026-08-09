@@ -3,7 +3,9 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
@@ -366,61 +368,47 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     }
   });
 
-  it("preserves every active admission instead of only the writer session", async () => {
+  it.each([
+    {
+      name: "preserves every active admission instead of only the writer session",
+      storeName: "active-admissions",
+      preserved: [
+        ["agent:main:cron:job:run:active", "active-session"],
+        ["writer", "writer-session"],
+      ],
+      identities: ["agent:main:cron:job:run:active", "active-session"],
+      activeSessionKey: "writer",
+    },
+    {
+      name: "preserves every store alias backed by an active session id",
+      storeName: "active-aliases",
+      preserved: [
+        ["agent:main:cron:job:run:active", "active-alias-session"],
+        ["agent:main:cron:job:run:active:thread:reply", "active-alias-session"],
+      ],
+      identities: ["active-alias-session"],
+      activeSessionKey: undefined,
+    },
+    {
+      name: "preserves a raw legacy store key matched by a canonical admission identity",
+      storeName: "active-legacy-key",
+      preserved: [["Agent:Main:Subagent:CHILD", "active-legacy-session"]],
+      identities: ["agent:main:subagent:child"],
+      activeSessionKey: undefined,
+    },
+  ] as const)("$name", async ({ storeName, preserved, identities, activeSessionKey }) => {
     const now = Date.now();
-    const storePath = "/tmp/openclaw-sessions/active-admissions.json";
-    const activeKey = "agent:main:cron:job:run:active";
+    const storePath = `/tmp/openclaw-sessions/${storeName}.json`;
     const store = makeStore([
-      [activeKey, { sessionId: "active-session", updatedAt: now - 3 }],
-      ["removable", { sessionId: "removable-session", updatedAt: now - 2 }],
-      ["writer", { sessionId: "writer-session", updatedAt: now - 1 }],
-    ]);
-    const admission = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [activeKey, "active-session"],
-      assertAllowed: () => {},
-    });
-
-    try {
-      await applyFileBackedSessionStoreMaintenance({
-        storePath,
-        store,
-        activeSessionKey: "writer",
-        maintenanceConfig: {
-          mode: "enforce",
-          pruneAfterMs: 30 * DAY_MS,
-          maxEntries: 1,
-          modelRunPruneAfterMs: DAY_MS,
-          resetArchiveRetentionMs: null,
-          maxDiskBytes: null,
-          highWaterBytes: null,
-        },
-        log: { warn: () => {}, info: () => {} },
-        artifacts: createMaintenanceArtifacts(),
-      });
-
-      expect(store).toHaveProperty(activeKey);
-      expect(store).toHaveProperty("writer");
-      expect(store.removable).toBeUndefined();
-    } finally {
-      admission.release();
-    }
-  });
-
-  it("preserves every store alias backed by an active session id", async () => {
-    const now = Date.now();
-    const storePath = "/tmp/openclaw-sessions/active-aliases.json";
-    const activeSessionId = "active-alias-session";
-    const firstAlias = "agent:main:cron:job:run:active";
-    const secondAlias = "agent:main:cron:job:run:active:thread:reply";
-    const store = makeStore([
-      [firstAlias, { sessionId: activeSessionId, updatedAt: now - 3 }],
-      [secondAlias, { sessionId: activeSessionId, updatedAt: now - 2 }],
+      ...preserved.map(([key, sessionId], index): [string, SessionEntry] => [
+        key,
+        { sessionId, updatedAt: now - preserved.length - 1 + index },
+      ]),
       ["removable", { sessionId: "removable-session", updatedAt: now - 1 }],
     ]);
     const admission = await beginSessionWorkAdmission({
       scope: storePath,
-      identities: [activeSessionId],
+      identities: [...identities],
       assertAllowed: () => {},
     });
 
@@ -428,6 +416,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       await applyFileBackedSessionStoreMaintenance({
         storePath,
         store,
+        activeSessionKey,
         maintenanceConfig: {
           mode: "enforce",
           pruneAfterMs: 30 * DAY_MS,
@@ -440,48 +429,9 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         log: { warn: () => {}, info: () => {} },
         artifacts: createMaintenanceArtifacts(),
       });
-
-      expect(store).toHaveProperty(firstAlias);
-      expect(store).toHaveProperty(secondAlias);
-      expect(store.removable).toBeUndefined();
-    } finally {
-      admission.release();
-    }
-  });
-
-  it("preserves a raw legacy store key matched by a canonical admission identity", async () => {
-    const now = Date.now();
-    const storePath = "/tmp/openclaw-sessions/active-legacy-key.json";
-    const rawActiveKey = "Agent:Main:Subagent:CHILD";
-    const canonicalActiveKey = "agent:main:subagent:child";
-    const store = makeStore([
-      [rawActiveKey, { sessionId: "active-legacy-session", updatedAt: now - 2 }],
-      ["removable", { sessionId: "removable-session", updatedAt: now - 1 }],
-    ]);
-    const admission = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [canonicalActiveKey],
-      assertAllowed: () => {},
-    });
-
-    try {
-      await applyFileBackedSessionStoreMaintenance({
-        storePath,
-        store,
-        maintenanceConfig: {
-          mode: "enforce",
-          pruneAfterMs: 30 * DAY_MS,
-          maxEntries: 1,
-          modelRunPruneAfterMs: DAY_MS,
-          resetArchiveRetentionMs: null,
-          maxDiskBytes: null,
-          highWaterBytes: null,
-        },
-        log: { warn: () => {}, info: () => {} },
-        artifacts: createMaintenanceArtifacts(),
-      });
-
-      expect(store).toHaveProperty(rawActiveKey);
+      for (const [key] of preserved) {
+        expect(store).toHaveProperty(key);
+      }
       expect(store.removable).toBeUndefined();
     } finally {
       admission.release();
@@ -985,6 +935,52 @@ describe("resolveMaintenanceConfigFromInput", () => {
 
     expect(maintenance.maxDiskBytes).toBeNull();
     expect(maintenance.highWaterBytes).toBeNull();
+  });
+
+  it("disables the disk budget when maxDiskBytes is 0", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: 0 });
+
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
+  });
+
+  it("disables the disk budget when maxDiskBytes is the string '0'", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: "0" });
+
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
+  });
+
+  it("retains session history when a zero maxDiskBytes disables the budget", async () => {
+    await withTempDir({ prefix: "openclaw-zero-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const transcriptPath = path.join(dir, "old-session.jsonl");
+      await fs.writeFile(transcriptPath, JSON.stringify({ role: "user", content: "hello" }));
+      const store: Record<string, SessionEntry> = {
+        "agent:main:subagent:old-worker": {
+          sessionId: "old-session",
+          updatedAt: 1,
+          transcriptPath,
+        },
+      };
+      await saveSessionStore(storePath, store, { skipMaintenance: true });
+
+      const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: 0 });
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: {
+          maxDiskBytes: maintenance.maxDiskBytes,
+          highWaterBytes: maintenance.highWaterBytes,
+        },
+        warnOnly: false,
+      });
+
+      expect(maintenance.maxDiskBytes).toBeNull();
+      expect(maintenance.highWaterBytes).toBeNull();
+      expect(result).toBeNull();
+      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
+    });
   });
 
   it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {
