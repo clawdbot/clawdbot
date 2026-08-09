@@ -1,6 +1,7 @@
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
 import fs from "node:fs";
+import { orphanModelRefsCheck } from "./doctor-core-checks.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import {
   runCoreContributionHealth,
@@ -382,6 +383,11 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       runAuthProfileHealth,
       runGatewayAuthHealth,
       runLegacyStateHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:orphan-model-refs",
+      label: "Orphan model refs",
+      healthChecks: orphanModelRefsCheck,
     }),
     ...resolveFinalDoctorHealthContributions({
       runSystemdLingerHealth,

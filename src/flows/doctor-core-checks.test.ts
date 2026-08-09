@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
@@ -16,7 +17,7 @@ import { clearHealthChecksForTest } from "./health-check-registry.js";
 import type { HealthCheck, HealthFinding, HealthRepairEffect } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
-  loadModelCatalog: vi.fn(async () => []),
+  loadModelCatalog: vi.fn(async (): Promise<ModelCatalogEntry[]> => []),
   detectExtraGatewayServiceIssues: vi.fn(async (): Promise<readonly { label: string }[]> => []),
   extraGatewayServiceToHealthFinding: vi.fn(
     (service: { label: string }): HealthFinding => ({

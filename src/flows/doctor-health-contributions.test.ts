@@ -2971,6 +2971,37 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("runs orphan model refs through structured health during normal doctor runs", async () => {
+    const contribution = requireDoctorContribution("doctor:orphan-model-refs");
+    const ctx = {
+      cfg: {},
+      cfgForPersistence: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(contribution.healthCheckIds).toEqual(["core/doctor/orphan-model-refs"]);
+    expect(contribution.healthChecks).toHaveLength(1);
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        cwd: "/tmp/openclaw-workspace",
+        configPath: "/tmp/fake-openclaw.json",
+        dryRun: true,
+      }),
+      {
+        checks: contribution.healthChecks,
+        dryRun: true,
+      },
+    );
+  });
+
   it("requires explicit health check ids for multi-check contributions", () => {
     expect(() =>
       createDoctorHealthContribution({
