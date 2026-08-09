@@ -502,6 +502,9 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".new-session-page__message").inputValue())
         .toBe(message);
+      await pollLocatorText(page.locator(".new-session-page__error")).toContain(
+        "This cloud session's setup was interrupted. Check recent sessions before starting this task again.",
+      );
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
       await expect
         .poll(() => page.getByRole("button", { name: "Remove attachment" }).isDisabled())

@@ -12,6 +12,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   ensureProfileForEmail,
+  getUserProfileDisplay,
   getUserProfileListItem,
   linkEmail,
   listProfiles,
@@ -22,6 +23,18 @@ import {
 } from "../../state/user-profiles.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+
+function refreshConnectedProfile(
+  context: GatewayRequestHandlerOptions["context"],
+  profile: { id: string; updatedAt: number },
+): ReturnType<typeof getUserProfileDisplay> {
+  const display = getUserProfileDisplay(profile.id);
+  context.refreshConnectedUserProfile?.({
+    ...display,
+    updatedAt: profile.updatedAt,
+  });
+  return display;
+}
 
 function decodeBase64(value: string): Uint8Array | undefined {
   const trimmed = value.trim();
@@ -135,7 +148,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.linkEmail": ({ params, respond }) => {
+  "users.linkEmail": ({ context, params, respond }) => {
     if (!validateUsersLinkEmailParams(params)) {
       respond(
         false,
@@ -150,12 +163,14 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      respond(true, { profile: linkEmail(email, params.targetProfileId) });
+      const profile = linkEmail(email, params.targetProfileId);
+      refreshConnectedProfile(context, profile);
+      respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setDisplayName": ({ client, params, respond }) => {
+  "users.setDisplayName": ({ client, context, params, respond }) => {
     if (!validateUsersSetDisplayNameParams(params)) {
       respond(
         false,
@@ -168,12 +183,14 @@ export const usersHandlers: GatewayRequestHandlers = {
       if (!requireProfileMutationAccess(client, params.profileId, respond)) {
         return;
       }
-      respond(true, { profile: setDisplayName(params.profileId, params.displayName) });
+      const profile = setDisplayName(params.profileId, params.displayName);
+      refreshConnectedProfile(context, profile);
+      respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setAvatar": ({ client, params, respond }) => {
+  "users.setAvatar": ({ client, context, params, respond }) => {
     if (!validateUsersSetAvatarParams(params)) {
       respond(
         false,
@@ -200,7 +217,8 @@ export const usersHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error.code));
         return;
       }
-      respond(true, { profile: result.value });
+      const display = refreshConnectedProfile(context, result.value);
+      respond(true, { profile: result.value, avatarRevision: display.avatarRevision });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

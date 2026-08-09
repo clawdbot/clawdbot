@@ -196,6 +196,7 @@ export type ChatProps = {
   readSignal?: AbortSignal;
   onPendingReadsChange?: (delta: 1 | -1) => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  onRemoveAttachment?: (attachment: ChatAttachment) => void;
   onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
@@ -253,9 +254,11 @@ export type ChatProps = {
   backgroundTasks?: BackgroundTasksProps;
   taskSuggestions?: TaskSuggestion[];
   taskSuggestionBusyIds?: ReadonlySet<string>;
+  taskSuggestionCloudProfiles?: Array<{ id: string }>;
   canAcceptTaskSuggestions?: boolean;
+  canAcceptTaskSuggestionModes?: boolean;
   canDismissTaskSuggestions?: boolean;
-  onAcceptTaskSuggestion?: (suggestion: TaskSuggestion) => void;
+  onAcceptTaskSuggestion?: Parameters<typeof renderChatTaskSuggestions>[0]["onAccept"];
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   sessionSuggestions?: readonly SessionSuggestion[];
   sessionSuggestionRole?: SessionSharingRole;
@@ -515,6 +518,7 @@ export function renderChat(props: ChatProps) {
     onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,
     onAttachmentsChange: props.onAttachmentsChange,
+    onRemoveAttachment: props.onRemoveAttachment,
   });
   const scrollToBottomButton =
     props.showNewMessages && props.onScrollToBottom
@@ -642,9 +646,12 @@ export function renderChat(props: ChatProps) {
                 ${renderChatTaskSuggestions({
                   suggestions: props.taskSuggestions ?? [],
                   busyIds: props.taskSuggestionBusyIds ?? new Set(),
+                  cloudProfiles: props.taskSuggestionCloudProfiles ?? [],
                   canAccept: props.canAcceptTaskSuggestions === true,
+                  canAcceptModes: props.canAcceptTaskSuggestionModes === true,
                   canDismiss: props.canDismissTaskSuggestions === true,
-                  onAccept: (suggestion) => props.onAcceptTaskSuggestion?.(suggestion),
+                  onAccept: (suggestion, mode, cloudProfileId) =>
+                    props.onAcceptTaskSuggestion?.(suggestion, mode, cloudProfileId),
                   onDismiss: (suggestion) => props.onDismissTaskSuggestion?.(suggestion),
                 })}
                 ${renderChatPullRequests({

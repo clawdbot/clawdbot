@@ -480,7 +480,7 @@ HEAD/worktree-bound manifest under git metadata for cutover review.
   credit from that PR's record on the same bullet.
 - Changelog entries should be user-facing, not internal release-process notes.
 - GitHub release and prerelease bodies use
-  `scripts/render-github-release-notes.mjs`. When the full matching
+  `scripts/render-github-release-notes.mts`. When the full matching
   `CHANGELOG.md` version section fits GitHub's 125,000-character limit and
   the renderer's matching 125,000-byte safety ceiling, publish the exact
   `## YYYY.M.PATCH` block through the line before the next level-2 heading,

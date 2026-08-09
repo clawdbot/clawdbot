@@ -46,6 +46,7 @@ import {
 import { startQaLabServer } from "./lab-server.js";
 import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
+import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 import { qaProfileEvidencePlan, type QaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import {
@@ -193,17 +194,14 @@ function resolveQaManualLaneModels(opts: {
   primaryModel?: string;
   alternateModel?: string;
 }) {
-  const primaryModel = opts.primaryModel?.trim() || defaultQaModelForMode(opts.providerMode);
-  const alternateModel = opts.alternateModel?.trim();
-  return {
-    primaryModel,
-    alternateModel:
-      alternateModel && alternateModel.length > 0
-        ? alternateModel
-        : opts.primaryModel?.trim()
-          ? primaryModel
-          : defaultQaModelForMode(opts.providerMode, true),
-  };
+  // `qa manual --model` is a one-model probe unless the operator also supplies
+  // `--alt-model`; materialize that contract before shared pair resolution.
+  const explicitPrimaryModel = opts.primaryModel?.trim();
+  return resolveQaRuntimeModelPair({
+    ...opts,
+    primaryModel: explicitPrimaryModel,
+    alternateModel: opts.alternateModel?.trim() || explicitPrimaryModel,
+  });
 }
 
 function parseQaThinkingLevel(

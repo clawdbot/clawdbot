@@ -141,7 +141,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
         "scripts/e2e/update-run-package-self-upgrade-docker.sh",
         "scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh",
         "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
-        "scripts/lib/docker-e2e-scenarios.mjs",
+        "scripts/lib/docker-e2e-scenarios.mts",
         "src/gateway/server-methods/update.ts",
         "src/gateway/server-methods/wizard.ts",
       ],

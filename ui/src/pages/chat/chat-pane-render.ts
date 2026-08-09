@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
@@ -9,7 +10,10 @@ import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import {
+  isGatewayCapabilityAdvertised,
+  isGatewayMethodAdvertised,
+} from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
   projectSessionObserverDigest,
@@ -19,7 +23,7 @@ import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
-import { ChatPaneHeader } from "./chat-pane-header.ts";
+import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   createChatPaneSessionActionCallbacks,
   readChatPaneMutationAccess,
@@ -74,12 +78,13 @@ import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
-export class ChatPane extends ChatPaneHeader {
+export class ChatPane extends ChatPaneBrowserAnnotationRender {
   override render() {
     const state = this.state;
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
+    void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
@@ -407,7 +412,8 @@ export class ChatPane extends ChatPaneHeader {
             state,
             selectedSession,
             agentDefaultModel,
-            mutationAccess: mutationAccess.runtimePatch,
+            modelAccess: mutationAccess.model,
+            effortAccess: mutationAccess.effort,
             preferencesBrowserOnly:
               this.context.runtimeConfig.state.connected &&
               this.context.runtimeConfig.canPatch === false,
@@ -445,11 +451,21 @@ export class ChatPane extends ChatPaneHeader {
         void this.resolveCurrentSessionSuggestion(suggestion, resolution),
       canAcceptTaskSuggestions:
         state.connected &&
-        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.accept") === true,
+      canAcceptTaskSuggestionModes:
+        isGatewayCapabilityAdvertised(
+          this.context.gateway.snapshot,
+          GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
+        ) === true,
       canDismissTaskSuggestions:
         state.connected &&
-        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
-      onAcceptTaskSuggestion: (suggestion) => void this.acceptTaskSuggestion(suggestion),
+        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.dismiss") ===
+          true,
+      taskSuggestionCloudProfiles: this.taskSuggestionCloudProfiles,
+      onAcceptTaskSuggestion: (suggestion, mode, cloudProfileId) =>
+        void this.acceptTaskSuggestion(suggestion, mode, cloudProfileId),
       onDismissTaskSuggestion: (suggestion) => void this.dismissTaskSuggestion(suggestion),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),
@@ -483,6 +499,7 @@ export class ChatPane extends ChatPaneHeader {
         state.chatAttachments = next;
         state.requestUpdate?.();
       },
+      onRemoveAttachment: this.removeBrowserAnnotation,
       onSend: () =>
         catalogKey
           ? void this.continueCatalogSession(catalogKey)

@@ -90,7 +90,7 @@ A successful upload returns the stable Beam id and a relative Control UI URL:
 {
   "ok": true,
   "beamId": "0123456789abcdef0123456789abcdef",
-  "url": "/chat?session=catalog%3Abeam%3Agateway%3A0123456789abcdef0123456789abcdef"
+  "url": "/chat/main?catalog=beam&host=gateway&thread=<beamId>"
 }
 ```
 

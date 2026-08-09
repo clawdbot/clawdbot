@@ -60,11 +60,15 @@ function parseOptions(args: string[]): ProducerOptions {
 }
 
 function buildCliStartup(repoRoot: string) {
-  const result = spawnSync(process.execPath, ["scripts/build-all.mjs", "cliStartup"], {
-    cwd: repoRoot,
-    env: process.env,
-    stdio: "inherit",
-  });
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/build-all.mts", "cliStartup"],
+    {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: "inherit",
+    },
+  );
   if (result.error) {
     throw result.error;
   }

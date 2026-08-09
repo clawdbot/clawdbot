@@ -487,7 +487,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                             <div class="context-usage__limits">
                               <div class="context-usage__limit">
                                 <div class="context-usage__limit-head">
-                                  <span class="context-usage__limit-label">Weekly · all models</span>
+                                  <span class="context-usage__limit-label">Weekly</span>
                                   <span class="context-usage__limit-meta"><strong>72%</strong></span>
                                 </div>
                                 <div class="context-usage__limit-bar"><span style="width: 72%"></span></div>

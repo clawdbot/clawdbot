@@ -44,7 +44,6 @@ import {
   loadLegacySessionStore,
   updateLegacySessionStore,
 } from "../infra/state-migrations.legacy-session-store.js";
-import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../routing/session-key.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -769,11 +768,6 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   return false;
 }
 
-function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: string): boolean {
-  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
-  return backendConfig?.backend === "qmd" && backendConfig.qmd?.sessions.enabled === true;
-}
-
 export function detectStateIntegrityHealthIssues(
   cfg: OpenClawConfig,
   params?: {
@@ -1076,9 +1070,6 @@ export async function noteStateIntegrity(
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
   const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
-  const suppressOrphanTranscriptWarning = agentId
-    ? shouldSuppressOrphanTranscriptWarning(cfg, agentId)
-    : false;
 
   if (cloudSyncedStateDir) {
     warnings.push(
@@ -1522,7 +1513,7 @@ export async function noteStateIntegrity(
       .filter(
         (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
       );
-    if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
+    if (orphanTranscriptPaths.length > 0) {
       const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
       const orphanPreview = formatFilePreview(orphanTranscriptPaths);
       warnings.push(

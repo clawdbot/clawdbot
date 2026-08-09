@@ -51,7 +51,7 @@ vi.mock("../infra/exec-approval-surface.js", () => ({
     !channel || channel === "internal" || channel === "tui",
 }));
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (context?: {
     channel?: string | null;
     to?: string | number | null;

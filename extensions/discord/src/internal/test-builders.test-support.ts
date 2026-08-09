@@ -28,14 +28,6 @@ type FakeRestClient = RequestClient & {
   enqueueResponse: (value: unknown) => void;
 };
 
-export function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve: resolve! };
-}
-
 export function createJsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
     status: 200,

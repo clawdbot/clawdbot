@@ -18,7 +18,19 @@ Native Talk is a continuous loop: listen for speech, send the transcript to the 
 
 Client-owned realtime Talk normally forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. GPT-Live WebRTC sessions delegate on a Gateway-owned sideband, and the Gateway binds each delegation to the browser or Gateway-relay Talk session that owns it. Backend WebSocket bridges use the normal relay consult path. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`; this includes GPT-Live delegations. Accepted steering queues into the active embedded run; rejected steering returns a reason such as `no_active_run`, `not_streaming`, or `compacting`. A newer GPT-Live spoken task also supersedes the running delegation.
 
-Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
+Thin audio clients can request `gateway-control-v1` in
+`talk.client.create.capabilities`. OpenAI GA Realtime supports this mode only
+with a Platform API key. Success returns `clientControl: { owner: "gateway" }`,
+a 60-second single-use `clientSecret`, and the relative offer URL
+`/plugins/openai/realtime/calls`. The client posts an audio-only SDP offer to
+that Gateway route and opens no provider data channel. The Gateway attaches the
+official OpenAI server sideband and owns tools, transcripts, steering,
+cancellation, and call cleanup while media continues directly between the
+client and OpenAI. OAuth-only setups fail visibly instead of falling back to
+client-owned control. Existing browser clients omit this capability and keep
+their current ephemeral-token and WebRTC data-channel flow.
+
+Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay and Gateway-controlled WebRTC sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
 
 Voice-originated consult runs require a new, exact spoken confirmation before high-impact actions such as sending messages, controlling nodes, browser/computer actions, service changes, destructive shell commands, or publication. The gate applies to runs started through `talk.client.toolCall`, the Gateway relay, and GPT-Live sideband delegations. The confirmation applies only to the canonical final execution arguments and is consumed once; if a policy or hook rewrites the approved action, OpenClaw blocks it until the rewritten action is confirmed. Unrelated concurrent runs remain unaffected. When a call closes, OpenClaw can send a compact **Voice call changes** digest for mutating tools to the session's last non-WebChat delivery target.
 

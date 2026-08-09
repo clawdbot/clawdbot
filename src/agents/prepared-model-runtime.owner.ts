@@ -43,6 +43,7 @@ export type {
   PreparedModelRuntimeRefreshOptions,
   PreparedModelRuntimeReplacement,
   PreparedModelRuntimeReplacementGateId,
+  PreparedReplyDispatchRuntime,
   PreparedModelRuntimeSnapshot,
   PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
@@ -460,6 +461,11 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
               params.onBuildStats,
               new Map(currentGroup.map((candidate) => [candidate.input, candidate.isCurrent])),
               params.isBuildCurrent,
+              new Set(
+                currentGroup
+                  .filter((candidate) => candidate.owner.provenance === "configured")
+                  .map((candidate) => candidate.input),
+              ),
             );
             for (const candidate of currentGroup) {
               if (params.registerEntriesAfterBuildStart === true) {
@@ -564,6 +570,7 @@ export async function publishModelRuntimeSnapshot(
     buildTimeoutMs,
     catalogMode,
     () => owner.generation === generation && owners.get(key) === owner,
+    provenance === "configured",
   );
   owner.buildCompletion = build.completion;
   void build.completion.then(() => {

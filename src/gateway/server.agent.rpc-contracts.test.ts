@@ -1,8 +1,8 @@
 // Real Gateway WebSocket proof for agent delivery fallback, response ordering, and idempotency.
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { rawDataToString } from "../infra/ws.js";
-import { createDeferred } from "../shared/deferred.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { agentCommand, installGatewayTestHooks, onceMessage } from "./test-helpers.js";
 

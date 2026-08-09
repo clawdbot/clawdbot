@@ -368,7 +368,7 @@ export type DaemonStatus = {
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
-  if (status !== "busy") {
+  if (status === undefined || status === "free") {
     return false;
   }
   if (rpcOk === true) {

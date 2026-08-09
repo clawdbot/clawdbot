@@ -37,10 +37,7 @@ import {
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
-import {
-  type GatewayMessageChannel,
-  INTERNAL_MESSAGE_CHANNEL,
-} from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { listAgentIds } from "../agent-scope.js";
 import {
@@ -439,7 +436,7 @@ async function startAgentRun(params: {
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;

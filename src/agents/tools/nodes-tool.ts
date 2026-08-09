@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
@@ -168,7 +167,7 @@ const NodesToolSchema = Type.Object({
 
 export function createNodesTool(options?: {
   agentSessionKey?: string;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   agentAccountId?: string;
   currentChannelId?: string;
   currentThreadTs?: string | number;

@@ -3,9 +3,7 @@ import { isIncognitoSessionKey } from "./incognito-session-key.js";
 
 export type SessionMutationOperatorScope = "operator.write" | "operator.admin";
 
-const SESSIONS_PATCH_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
-  "key",
-  "agentId",
+const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "label",
   "category",
   "boardFace",
@@ -13,16 +11,14 @@ const SESSIONS_PATCH_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
   "pinned",
   "archived",
   "unread",
+  "model",
 ]);
 
-const SESSIONS_PATCH_MANY_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
-  "label",
-  "category",
-  "boardFace",
-  "icon",
-  "pinned",
-  "archived",
-  "unread",
+const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set([
+  "key",
+  "agentId",
+  "expectedSessionId",
+  "expectedLifecycleRevision",
 ]);
 
 const SESSIONS_DELETE_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
@@ -38,7 +34,11 @@ function resolveSessionsPatchRequiredScope(params: unknown): SessionMutationOper
     // precise validation error instead of a misleading missing-scope error.
     return "operator.write";
   }
-  return Object.keys(params).every((key) => SESSIONS_PATCH_WRITE_SCOPE_FIELDS.has(key))
+  return Object.keys(params).every(
+    (key) =>
+      SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS.has(key) ||
+      SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key),
+  )
     ? "operator.write"
     : "operator.admin";
 }
@@ -49,7 +49,7 @@ function resolveSessionsPatchManyRequiredScope(params: unknown): SessionMutation
     // the exact closed/non-empty patch failure under the least privilege scope.
     return "operator.write";
   }
-  return Object.keys(params.patch).every((key) => SESSIONS_PATCH_MANY_WRITE_SCOPE_FIELDS.has(key))
+  return Object.keys(params.patch).every((key) => SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS.has(key))
     ? "operator.write"
     : "operator.admin";
 }

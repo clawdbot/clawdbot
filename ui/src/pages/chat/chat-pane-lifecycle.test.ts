@@ -8,8 +8,10 @@ import type {
   SessionSuggestion,
   SessionSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createBrowserAnnotationHandoff } from "../../app/browser-annotation-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -25,16 +27,6 @@ import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
-  return { promise, reject, resolve };
-}
 
 describe("chat pane composer prefill attention", () => {
   function createComposerAttentionFixture() {
@@ -120,6 +112,7 @@ describe("chat pane first-turn attachment lifecycle", () => {
       agentSelection: { state: { selectedId: "main" } },
       agents: { state: { agentsList: null } },
       initialUserMessage: createInitialUserMessageHandoff(),
+      browserAnnotationHandoff: createBrowserAnnotationHandoff(),
       sessions: {},
     } as unknown as ApplicationContext;
     prepareInitialUserMessageHandoff(

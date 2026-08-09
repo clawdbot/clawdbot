@@ -13,6 +13,7 @@ import {
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import { isQaFastModeEnabled } from "./model-selection.js";
+import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import {
   defaultQaSuiteConcurrencyForTransport,
@@ -91,6 +92,9 @@ type QaSuiteExecutionPlan = {
 
 const MAX_SHARED_FLOW_PARTITIONS = 4;
 const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
+// Three is the audited ceiling for concurrent Gateway and process-group lifecycles.
+// Raising it risks cleanup overlap and shared port/listener contention.
+const MAX_PARALLEL_SCRIPT_CONCURRENCY = 3;
 const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 1_500;
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
@@ -765,10 +769,11 @@ async function runUnifiedQaSuite(params: {
       })
     : undefined;
   progress?.start();
-  const primaryModel =
-    params.runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
-  const alternateModel =
-    params.runParams?.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
+  const { primaryModel, alternateModel } = resolveQaRuntimeModelPair({
+    providerMode,
+    primaryModel: params.runParams?.primaryModel,
+    alternateModel: params.runParams?.alternateModel,
+  });
   const fastMode =
     typeof params.runParams?.fastMode === "boolean"
       ? params.runParams.fastMode
@@ -805,7 +810,8 @@ async function runUnifiedQaSuite(params: {
   const sharedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
   const isolatedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
   const testFilePartitionTasks: QaUnifiedPartitionTask[] = [];
-  const scriptPartitionTasks: QaUnifiedPartitionTask[] = [];
+  const serialScriptPartitionTasks: QaUnifiedPartitionTask[] = [];
+  const parallelScriptPartitionTasks: QaUnifiedPartitionTask[] = [];
   const unavailableChannelCredentialDetails = new Map<string, string>();
   if (params.plan.channelGroups.length > 0) {
     const channelGroups = params.plan.channelGroups;
@@ -1137,16 +1143,32 @@ async function runUnifiedQaSuite(params: {
       testFilePartitionTasks.push(createTestFilePartitionTask(concurrentTestFileScenariosByKind));
     }
   }
-  const scriptScenarios = params.plan.testFileScenariosByKind.get("script");
+  const scriptScenarios = params.plan.testFileScenariosByKind
+    .get("script")
+    ?.filter((scenario) => scenario.execution.kind === "script");
   if (scriptScenarios?.length) {
+    const isParallelSafeScript = (scenario: QaTestFileScenario) =>
+      scenario.execution.kind === "script" && scenario.execution.parallelSafe === true;
     if (failFast) {
       for (const scenario of scriptScenarios) {
-        scriptPartitionTasks.push(createTestFilePartitionTask(new Map([["script", [scenario]]])));
+        serialScriptPartitionTasks.push(
+          createTestFilePartitionTask(new Map([["script", [scenario]]])),
+        );
       }
     } else {
-      scriptPartitionTasks.push(
-        createTestFilePartitionTask(new Map([["script", scriptScenarios]])),
-      );
+      const serialScenarios = scriptScenarios.filter((scenario) => !isParallelSafeScript(scenario));
+      if (serialScenarios.length > 0) {
+        serialScriptPartitionTasks.push(
+          createTestFilePartitionTask(new Map([["script", serialScenarios]])),
+        );
+      }
+      for (const scenario of scriptScenarios) {
+        if (isParallelSafeScript(scenario)) {
+          parallelScriptPartitionTasks.push(
+            createTestFilePartitionTask(new Map([["script", [scenario]]])),
+          );
+        }
+      }
     }
   }
   const concurrentPartitionTasks = [
@@ -1297,13 +1319,24 @@ async function runUnifiedQaSuite(params: {
       : await runWeightedUnifiedPartitionTasks(retryingTasks, maxWeight);
   };
   const concurrentPartitionResults = await runPartitionTasks(concurrentPartitionTasks, concurrency);
-  // Script scenarios may rebuild the checkout's shared dist tree. Wait until every
-  // flow Gateway has stopped so package postbuild cannot invalidate its loaded chunks.
-  const scriptPartitionResults =
+  // Unmarked scripts may rebuild shared checkout state. Run them exclusively
+  // after every flow and native partition settles, then start only audited peers.
+  const serialScriptPartitionResults =
     failFast && concurrentPartitionResults.some(partitionFailed)
       ? []
-      : await runPartitionTasks(scriptPartitionTasks, 1);
-  const partitionResults = [...concurrentPartitionResults, ...scriptPartitionResults];
+      : await runPartitionTasks(serialScriptPartitionTasks, 1);
+  const parallelScriptPartitionResults =
+    failFast && serialScriptPartitionResults.some(partitionFailed)
+      ? []
+      : await runPartitionTasks(
+          parallelScriptPartitionTasks,
+          Math.min(concurrency, MAX_PARALLEL_SCRIPT_CONCURRENCY),
+        );
+  const partitionResults = [
+    ...concurrentPartitionResults,
+    ...serialScriptPartitionResults,
+    ...parallelScriptPartitionResults,
+  ];
   for (const partitionResult of partitionResults) {
     for (const scenarioResult of partitionResult.scenarioResults) {
       const results = scenarioResultsById.get(scenarioResult.scenarioId) ?? [];
@@ -1313,10 +1346,21 @@ async function runUnifiedQaSuite(params: {
     evidenceSummaries.push(...partitionResult.evidenceSummaries);
   }
   const finishedAt = new Date();
-  const evidence = mergeQaEvidenceSummaries({
+  const mergedEvidence = mergeQaEvidenceSummaries({
     evidenceSummaries,
     generatedAt: finishedAt.toISOString(),
   });
+  const scenarioOrder = new Map(
+    params.plan.scenarios.map((scenario, index) => [scenario.id, index]),
+  );
+  const evidence = {
+    ...mergedEvidence,
+    entries: mergedEvidence.entries.toSorted(
+      (left, right) =>
+        (scenarioOrder.get(left.test.id) ?? Number.MAX_SAFE_INTEGER) -
+        (scenarioOrder.get(right.test.id) ?? Number.MAX_SAFE_INTEGER),
+    ),
+  };
   const channel = summarizeQaEvidenceChannel([evidence]);
   const scenarios = params.plan.scenarios.flatMap((scenario) => {
     const results = scenarioResultsById.get(scenario.id);

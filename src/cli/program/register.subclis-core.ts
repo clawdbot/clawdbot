@@ -195,6 +195,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerTuiCli",
     },
     {
+      commandNames: ["resume"],
+      loadModule: () => import("../resume-cli.js"),
+      exportName: "registerResumeCli",
+    },
+    {
       // automations is a commander alias on the cron command; the lazy
       // router only routes names listed here, so the alias must be owned too.
       commandNames: ["cron", "automations"],

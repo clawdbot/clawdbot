@@ -42,6 +42,7 @@ import {
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig, registerConfigWriteListener } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
@@ -758,23 +759,20 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
     const applied = await applySessionPatchProjection({
       storePath: target.storePath,
-      resolveTarget: ({ entries }) => {
-        const store = Object.fromEntries(
-          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
-        );
+      resolveTarget: ({ store }) => {
         const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key: opts.key,
-          store,
+          store: store as Record<string, SessionEntry>,
           agentId: opts.agentId,
         });
         return { primaryKey, candidateKeys: migratedTarget.storeKeys };
       },
-      project: async ({ primaryKey, existingEntry, entries }) =>
+      project: async ({ primaryKey, existingEntry, isLabelInUse }) =>
         await projectSessionsPatchEntry({
           cfg,
-          entries,
           existingEntry,
+          isLabelInUse,
           storeKey: primaryKey,
           agentId: opts.agentId,
           patch: opts,

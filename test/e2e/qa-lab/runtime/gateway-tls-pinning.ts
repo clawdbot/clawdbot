@@ -17,6 +17,7 @@ import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-h
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { normalizeFingerprint } from "../../../../src/infra/tls/fingerprint.js";
 import { loadGatewayTlsRuntime } from "../../../../src/infra/tls/gateway.js";
+import { createDeferred } from "../../../helpers/promise.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "gateway-tls-pinning";
@@ -212,16 +213,6 @@ function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
       },
     );
   });
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
 }
 
 async function connectWithExactPin(url: string, tlsFingerprint: string): Promise<boolean> {

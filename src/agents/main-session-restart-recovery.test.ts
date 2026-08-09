@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
@@ -50,7 +51,6 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { deliverAgentCommandResult } from "./command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "./embedded-agent-runner/run-state.js";

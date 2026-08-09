@@ -36,6 +36,7 @@ async function mountMenu(
     work?: SessionMenuWork | null;
     workboard?: { captured: boolean; busy: boolean } | null;
     archiveAllowed?: boolean;
+    deleteAllowed?: boolean;
     cloudWorkerStopAllowed?: boolean;
     selectionCount?: number;
     lastActive?: string;
@@ -68,6 +69,8 @@ async function mountMenu(
       .actionDisabledReasons=${options.actionDisabledReasons ?? {}}
       .forkDisabled=${false}
       .archiveAllowed=${options.archiveAllowed ?? true}
+      .deleteAllowed=${options.deleteAllowed ??
+      (session.archived || (options.archiveAllowed ?? true))}
       .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
       .groups=${options.groups ?? []}
       .canOpenChat=${options.canOpenChat ?? true}
@@ -227,11 +230,22 @@ describe("session menu", () => {
     expect(menuItem(menu, "Pin session").disabled).toBe(true);
   });
 
-  it("disables archive and delete when an active session cannot be archived", async () => {
-    const menu = await mountMenu({ archiveAllowed: false });
+  it("enables archive while preserving disabled delete for an active session", async () => {
+    const menu = await mountMenu({ archiveAllowed: true, deleteAllowed: false });
 
-    expect(menuItem(menu, "Archive session").disabled).toBe(true);
+    expect(menuItem(menu, "Archive session").disabled).toBe(false);
     expect(menuItem(menu, "Delete…").disabled).toBe(true);
+  });
+
+  it("keeps batch archive enabled while independently guarding delete", async () => {
+    const menu = await mountMenu({
+      selectionCount: 2,
+      archiveAllowed: false,
+      deleteAllowed: false,
+    });
+
+    expect(menuItem(menu, "Archive 2").disabled).toBe(false);
+    expect(menuItem(menu, "Delete 2…").disabled).toBe(true);
   });
 
   it("closes before dispatching Pin", async () => {

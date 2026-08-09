@@ -2182,7 +2182,7 @@ surfaces:
         features:
           - name: Memory Backend Storage
             coverageIds: [session-memory.memory-backend-storage]
-            description: Covers Memory Backend Storage across memory backend config, SQLite schema, vector acceleration, embedding provider selection, remote embedding fetch, QMD process/query parsing, session transcript indexing for search, extra paths, and backend security boundaries.
+            description: Covers Memory Backend Storage across built-in memory config, SQLite schema, vector acceleration, embedding provider selection, remote embedding fetch, session transcript indexing for search, extra paths, and memory security boundaries.
           - name: "Embedding Search — QA channel"
             coverageIds: [session-memory.embedding-search-qa-channel]
             description: "Exact coverage for qa channel within Embedding Search."
@@ -2248,7 +2248,6 @@ surfaces:
             description: "Exact coverage for memory recall within Active Memory."
         docs:
           - docs/reference/memory-config.md
-          - docs/concepts/memory-qmd.md
           - docs/concepts/memory.md
           - docs/channels/discord.md
         search_anchors:

@@ -32,8 +32,7 @@ import type {
 } from "./bot-message-dispatch.types.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js";
-import type { TelegramThreadSpec } from "./bot/helpers.js";
-import { resolveTelegramReplyId } from "./bot/helpers.js";
+import { resolveTelegramReplyId, type TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
@@ -266,7 +265,8 @@ export function createTelegramDeliveryController(params: {
       const durable = await durableDelivery({
         cfg: params.cfg,
         channel: "telegram",
-        to: String(context.chatId),
+        to:
+          context.ctxPayload.OriginatingTo ?? context.ctxPayload.To ?? `telegram:${context.chatId}`,
         accountId: context.route.accountId,
         agentId: context.route.agentId,
         ctxPayload: context.ctxPayload,

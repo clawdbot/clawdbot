@@ -18,6 +18,7 @@ import {
 } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { notifyChatAbortControllerRemoved } from "./chat-abort-lifecycle-internal.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import {
   createChatAbortMarker,
@@ -564,6 +565,8 @@ export function removeChatAbortControllerEntry(
     entry.onRemoved?.();
   } catch {
     // Removal owns state cleanup even if a caller-provided release hook fails.
+  } finally {
+    notifyChatAbortControllerRemoved(entry);
   }
   return true;
 }

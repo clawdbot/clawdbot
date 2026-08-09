@@ -208,6 +208,8 @@ export class ProfilePage extends OpenClawLightDomElement {
     const identityRequestId = this.identityRequestId;
     const displayNameDraft = this.displayName;
     const hasUnsavedDisplayName = displayNameDraft.trim() !== (profile.displayName ?? "");
+    const selfAvatarUrlBefore =
+      this.selfUser?.id === profile.id ? this.selfUser.avatarUrl : undefined;
     let shouldRefresh = false;
     try {
       const avatar = await processProfileAvatar(file);
@@ -229,9 +231,11 @@ export class ProfilePage extends OpenClawLightDomElement {
       const avatarUrl = userProfileAvatarUrl(
         this.context.gateway.connection.gatewayUrl,
         result.profile.id,
-        result.profile.updatedAt,
+        result.avatarRevision,
       );
-      if (avatarUrl) {
+      const presenceAvatarChanged =
+        this.selfUser?.id === result.profile.id && this.selfUser.avatarUrl !== selfAvatarUrlBefore;
+      if (avatarUrl && !presenceAvatarChanged) {
         this.context.gateway.updateSelfUser?.({ avatarUrl });
       }
       shouldRefresh = true;
@@ -284,11 +288,14 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     // The gateway route serves an uploaded avatar first and its private Gravatar
     // fallback second, while a 404 still leaves the viewer-avatar initials visible.
-    const avatarUrl = userProfileAvatarUrl(
-      this.context.gateway.connection.gatewayUrl,
-      this.ownProfile.id,
-      this.ownProfile.updatedAt,
-    );
+    const avatarUrl =
+      this.selfUser?.id === this.ownProfile.id && this.selfUser.avatarUrl
+        ? this.selfUser.avatarUrl
+        : userProfileAvatarUrl(
+            this.context.gateway.connection.gatewayUrl,
+            this.ownProfile.id,
+            this.ownProfile.updatedAt,
+          );
     return renderIdentitySection({
       profile: this.ownProfile,
       avatarUrl,

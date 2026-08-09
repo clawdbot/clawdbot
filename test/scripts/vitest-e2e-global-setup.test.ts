@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   forceKillVitestProcessGroup,
   forwardSignalToVitestProcessGroup,
-} from "../../scripts/vitest-process-group.mjs";
+} from "../../scripts/vitest-process-group.mts";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -44,7 +44,10 @@ describe("vitest E2E global setup", () => {
           OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
         },
       ],
-      [["scripts/tsdown-build.mjs", "--config", "tsdown.ai.config.ts"], process.env],
+      [
+        ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"],
+        process.env,
+      ],
     ]);
   });
 
@@ -54,7 +57,7 @@ describe("vitest E2E global setup", () => {
       .mockResolvedValueOnce(0)
       .mockResolvedValueOnce(23);
     await expect(runE2eGlobalSetup(runCommand)).rejects.toThrow(
-      "E2E setup command failed with exit code 23: scripts/tsdown-build.mjs --config tsdown.ai.config.ts",
+      "E2E setup command failed with exit code 23: --import tsx scripts/tsdown-build.mts --config tsdown.ai.config.ts",
     );
   });
 

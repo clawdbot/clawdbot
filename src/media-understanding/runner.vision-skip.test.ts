@@ -60,6 +60,7 @@ vi.mock("../agents/model-catalog.js", async () => {
 });
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: loadModelCatalog,
 }));
 

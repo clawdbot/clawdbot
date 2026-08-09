@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -16,7 +17,6 @@ import {
   setCommandLaneConcurrency,
 } from "../../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
-import { createDeferred } from "../../../shared/deferred.js";
 import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";

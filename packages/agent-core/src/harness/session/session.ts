@@ -7,6 +7,7 @@ import {
   createCustomMessage,
 } from "../messages.js";
 import type { CompactionEntry, ResetEntry, SessionContext, SessionTreeEntry } from "../types.js";
+import { selectResetKeptEntries } from "./tool-result-pairing.js";
 
 type ContextBoundary = CompactionEntry | ResetEntry;
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
@@ -60,10 +61,10 @@ function appendContextMessage(
 }
 
 function appendResetKeptMessage(messages: AgentMessage[], entry: SessionTreeEntry): void {
-  if (
-    entry.type === "message" &&
-    (entry.message.role === "user" || entry.message.role === "assistant")
-  ) {
+  if (entry.type !== "message") {
+    return;
+  }
+  if (entry.message.role === "user" || entry.message.role === "assistant") {
     const message = { ...stripStalePrefixReplay(entry.message) } as AgentMessage & {
       [SESSION_HISTORY_PRELUDE]?: true;
     };
@@ -73,6 +74,8 @@ function appendResetKeptMessage(messages: AgentMessage[], entry: SessionTreeEntr
       value: true,
     });
     messages.push(message);
+  } else if (entry.message.role === "toolResult") {
+    messages.push(entry.message);
   }
 }
 
@@ -103,9 +106,11 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
       }
     }
     const boundaryIdx = pathEntries.findIndex((entry) => entry.id === boundary.id);
-    // A reset kept tail mirrors the old cross-log replay contract: only user/assistant
-    // rows survive. Both retained-tail forms now follow rewritten prefixes, so
-    // prefix-bound checkpoints are stale.
+    const resetKeptEntries =
+      boundary.type === "reset"
+        ? new Set(selectResetKeptEntries(pathEntries.slice(0, boundaryIdx)))
+        : undefined;
+    // Both retained-tail forms follow rewritten prefixes, so prefix-bound checkpoints are stale.
     let foundFirstKept = false;
     for (const entry of pathEntries.slice(0, boundaryIdx)) {
       if (entry.id === boundary.firstKeptEntryId) {
@@ -113,7 +118,9 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
       }
       if (foundFirstKept) {
         if (boundary.type === "reset") {
-          appendResetKeptMessage(messages, entry);
+          if (resetKeptEntries?.has(entry)) {
+            appendResetKeptMessage(messages, entry);
+          }
         } else {
           appendContextMessage(messages, entry, { prefixWasRewritten: true });
         }

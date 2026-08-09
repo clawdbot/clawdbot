@@ -31,6 +31,7 @@ const MANTIS_TELEGRAM_LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.ym
 const MANTIS_WEB_UI_CHAT_PROOF_WORKFLOW = ".github/workflows/mantis-web-ui-chat-proof.yml";
 const PACKAGE_JSON = "package.json";
 const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/action.yml";
+const SETUP_RELEASE_HARNESS_ACTION = ".github/actions/setup-release-harness/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_TELEGRAM_QA_WORKFLOW = ".github/workflows/openclaw-release-telegram-qa.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
@@ -118,6 +119,7 @@ type WorkflowStep = {
   shell?: string;
   uses?: string;
   with?: Record<string, string>;
+  "working-directory"?: string;
 };
 
 type WorkflowMatrixEntry = {
@@ -1350,6 +1352,26 @@ describe("package acceptance workflow", () => {
     expect(setupPnpmAction).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(setupPnpmAction).toContain('echo "PNPM_HOME=$PNPM_HOME" >> "$GITHUB_ENV"');
 
+    const setupReleaseHarnessAction = readFileSync(SETUP_RELEASE_HARNESS_ACTION, "utf8");
+    const setupHarnessPackageManagerIndex = setupReleaseHarnessAction.indexOf(
+      "Setup trusted release harness package manager",
+    );
+    const installHarnessDependenciesIndex = setupReleaseHarnessAction.indexOf(
+      "Install trusted release harness dependencies",
+    );
+    expect(setupHarnessPackageManagerIndex).toBeGreaterThan(-1);
+    expect(installHarnessDependenciesIndex).toBeGreaterThan(setupHarnessPackageManagerIndex);
+    expect(setupReleaseHarnessAction).toContain(
+      "uses: ./.release-harness/.github/actions/setup-pnpm-store-cache",
+    );
+    expect(setupReleaseHarnessAction).toContain(
+      "package-manager-file: .release-harness/package.json",
+    );
+    expect(setupReleaseHarnessAction).toContain("working-directory: .release-harness");
+    expect(setupReleaseHarnessAction).toContain(
+      "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+    );
+
     const setupNodeAction = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
     expect(setupNodeAction).toContain("Normalize container toolcache");
     expect(setupNodeAction).toContain("ln -s /__t /opt/hostedtoolcache");
@@ -1632,7 +1654,7 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("trusted_source_id:");
     expect(workflow).toContain("TRUSTED_SOURCE_ID: ${{ inputs.trusted_source_id }}");
     expect(workflow).toContain('--trusted-source-id "$TRUSTED_SOURCE_ID"');
-    expect(workflow).toContain("scripts/resolve-openclaw-package-candidate.mjs");
+    expect(workflow).toContain("scripts/resolve-openclaw-package-candidate.mts");
     expect(workflow).toContain('--package-ref "$PACKAGE_REF"');
     expect(workflow).toContain("artifact-ids: ${{ inputs.artifact_id }}");
     expect(workflow).toContain("actions/artifacts/${ARTIFACT_ID}");
@@ -1662,7 +1684,7 @@ describe("package acceptance workflow", () => {
       workflow.indexOf("  package_integrity:"),
     );
 
-    expect(resolveJob).toContain("scripts/resolve-openclaw-package-candidate.mjs");
+    expect(resolveJob).toContain("scripts/resolve-openclaw-package-candidate.mts");
     expect(resolveJob).not.toContain("pnpm install");
   });
 
@@ -1680,7 +1702,7 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("last-stable-4");
     expect(workflow).toContain("all-since-2026.4.23");
     expect(workflow).toContain("published_upgrade_survivor_scenarios:");
-    expect(workflow).toContain("scripts/resolve-upgrade-survivor-baselines.mjs");
+    expect(workflow).toContain("scripts/resolve-upgrade-survivor-baselines.mts");
     expect(workflow).toContain("--history-count 6");
     expect(workflow).toContain("--include-version 2026.4.23");
     expect(workflow).toContain("--pre-date 2026-03-15T00:00:00Z");
@@ -1746,7 +1768,7 @@ describe("package acceptance workflow", () => {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
     });
     expectTextToIncludeAll(buildPrivateQa.run, [
-      "node scripts/build-all.mjs qaRuntime",
+      "node --import tsx scripts/build-all.mts qaRuntime",
       "test -f dist/plugin-sdk/qa-runtime.js",
       "test -f dist/extensions/qa-lab/runtime-api.js",
     ]);
@@ -2408,10 +2430,11 @@ describe("package artifact reuse", () => {
   it("lets reusable Docker E2E consume an already resolved package artifact", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const parsedWorkflow = parse(workflow) as {
+      jobs?: Record<string, WorkflowJob>;
       on?: { workflow_call?: { inputs?: Record<string, unknown> } };
     };
     const packageJson = readFileSync(PACKAGE_JSON, "utf8");
-    const scheduler = readFileSync("scripts/test-docker-all.mjs", "utf8");
+    const scheduler = readFileSync("scripts/test-docker-all.mts", "utf8");
     const publishedUpgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
 
     expect(workflow).toContain("package_artifact_name:");
@@ -2495,8 +2518,80 @@ describe("package artifact reuse", () => {
         ?.prepublish_plugin_registry_artifact_id,
     ).toContain("inputs.enable_prepublish_plugin_registry");
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
+    const setupHarnessStepName = "Setup trusted release harness";
+    const harnessJobCases = [
+      {
+        jobId: "validate_docker_e2e",
+        planStepName: "Plan Docker E2E chunk",
+        setupIf: "contains(matrix.profiles, inputs.release_test_profile)",
+      },
+      {
+        jobId: "validate_docker_lanes",
+        planStepName: "Plan targeted Docker E2E lanes",
+        setupIf: undefined,
+      },
+      {
+        jobId: "validate_docker_openwebui",
+        planStepName: "Plan Open WebUI Docker E2E chunk",
+        setupIf: undefined,
+      },
+      {
+        jobId: "prepare_docker_e2e_image",
+        planStepName: "Plan Docker E2E images",
+        setupIf: undefined,
+      },
+    ] as const;
+    const typedHarnessJobIds = Object.entries(parsedWorkflow.jobs ?? {})
+      .filter(([, job]) =>
+        (job.steps ?? []).some(
+          (step) =>
+            step.run?.includes("node .release-harness/scripts/test-docker-all.mjs") ||
+            step.run?.includes("node .release-harness/scripts/docker-e2e.mjs"),
+        ),
+      )
+      .map(([jobId]) => jobId)
+      .sort();
+    expect(typedHarnessJobIds).toEqual(harnessJobCases.map(({ jobId }) => jobId).sort());
+
+    for (const { jobId, planStepName, setupIf } of harnessJobCases) {
+      const harnessJob = workflowJob(LIVE_E2E_WORKFLOW, jobId);
+      const harnessJobSteps = harnessJob.steps ?? [];
+      const harnessJobStepNames = harnessJobSteps.map((step) => step.name);
+      const checkoutIndex = harnessJobStepNames.indexOf("Checkout trusted release harness");
+      const setupIndex = harnessJobStepNames.indexOf(setupHarnessStepName);
+      const typedHarnessIndex = harnessJobSteps.findIndex(
+        (step) =>
+          step.run?.includes("node .release-harness/scripts/test-docker-all.mjs") ||
+          step.run?.includes("node .release-harness/scripts/docker-e2e.mjs"),
+      );
+      expect(harnessJobStepNames.filter((name) => name === setupHarnessStepName)).toHaveLength(1);
+      expect(checkoutIndex).toBeGreaterThan(-1);
+      expect(setupIndex).toBeGreaterThan(checkoutIndex);
+      expect(typedHarnessIndex).toBeGreaterThan(setupIndex);
+      expect(workflowStep(harnessJob, planStepName)).toBeDefined();
+      const setupHarnessStep = workflowStep(harnessJob, setupHarnessStepName);
+      expect(setupHarnessStep).toMatchObject({
+        uses: "./.release-harness/.github/actions/setup-release-harness",
+        with: { "node-version": "${{ env.NODE_VERSION }}" },
+      });
+      expect(setupHarnessStep.if).toBe(setupIf);
+    }
+
     const prepareDockerImage = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
-    expect(workflowStep(prepareDockerImage, "Plan Docker E2E images").env).toEqual({
+    const prepareDockerImageStepNames = (prepareDockerImage.steps ?? []).map((step) => step.name);
+    const planStepName = "Plan Docker E2E images";
+    const setupCandidateStepName = "Setup Node environment";
+    expect(
+      prepareDockerImageStepNames.filter((name) => name === setupCandidateStepName),
+    ).toHaveLength(1);
+    expect(prepareDockerImageStepNames.indexOf(setupCandidateStepName)).toBeGreaterThan(
+      prepareDockerImageStepNames.indexOf(planStepName),
+    );
+    expect(workflowStep(prepareDockerImage, setupCandidateStepName)).toMatchObject({
+      if: "(steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == '') || (inputs.enable_prepublish_plugin_registry && steps.plan.outputs.needs_prepublish_plugin_registry == '1' && inputs.prepublish_plugin_registry_artifact_id == '')",
+      uses: "./.github/actions/setup-node-env",
+    });
+    expect(workflowStep(prepareDockerImage, planStepName).env).toEqual({
       INCLUDE_OPENWEBUI: "${{ inputs.include_openwebui }}",
       INCLUDE_RELEASE_PATH_SUITES: "${{ inputs.include_release_path_suites }}",
       LANES: "${{ inputs.docker_lanes }}",
@@ -2643,7 +2738,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain('"blacksmith-16vcpu-ubuntu-2404"');
     expect(workflow).toContain("vitest_max_workers:");
     expect(workflow).toContain("OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}");
-    expect(readFileSync("scripts/lib/extension-test-plan.mjs", "utf8")).toContain(
+    expect(readFileSync("scripts/lib/extension-test-plan.mts", "utf8")).toContain(
       '"test/vitest/vitest.extension-memory.config.ts": 1',
     );
   });
@@ -2907,8 +3002,8 @@ describe("package artifact reuse", () => {
   it("runs Docker live harnesses from trusted helper scripts", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const providerSuites = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_docker_provider_suites");
-    const scenarios = readFileSync("scripts/lib/docker-e2e-scenarios.mjs", "utf8");
-    const scheduler = readFileSync("scripts/test-docker-all.mjs", "utf8");
+    const scenarios = readFileSync("scripts/lib/docker-e2e-scenarios.mts", "utf8");
+    const scheduler = readFileSync("scripts/test-docker-all.mts", "utf8");
     const harness = readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8");
     const codexLiveTest = readFileSync("src/gateway/gateway-codex-harness.live.test.ts", "utf8");
     const liveDockerAuth = readFileSync("scripts/lib/live-docker-auth.sh", "utf8");
@@ -3864,7 +3959,7 @@ describe("package artifact reuse", () => {
     expect(runtimePairValidation).toContain('--target-sha "$RELEASE_CHECK_TARGET_SHA"');
     expect(runtimePairValidation).toContain('--lane "$RUNTIME_PAIR_LANE"');
     expect(runtimePairValidation).toContain(
-      'node trusted-suite-validator/scripts/validate-qa-runtime-pair-summary.mjs "${validator_args[@]}"',
+      'node --import tsx trusted-suite-validator/scripts/validate-qa-runtime-pair-summary.mts "${validator_args[@]}"',
     );
     const coreRestartRun = workflowStep(laneJob, "Run OpenClaw core restart proof").run;
     expect(coreRestartRun).toContain("--scenario gateway-restart-inflight-run");
@@ -3894,7 +3989,7 @@ describe("package artifact reuse", () => {
     );
     expect(runtimePairReport).toContain("validator_args+=(--require-explicit-gap)");
     expect(runtimePairReport).toContain(
-      "node trusted-report-validator/scripts/validate-qa-runtime-pair-summary.mjs",
+      "node --import tsx trusted-report-validator/scripts/validate-qa-runtime-pair-summary.mts",
     );
     expect(runtimePairStepNames.indexOf("Generate runtime-pair lane report")).toBeLessThan(
       runtimePairStepNames.indexOf("Checkout trusted validator after candidate report"),
@@ -4242,6 +4337,8 @@ describe("package artifact reuse", () => {
     expect(manifestStep.env).toMatchObject({
       ALLOW_UNRELEASED_CHANGELOG:
         "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}",
+      TARGET_REF:
+        "${{ startsWith(github.ref, 'refs/heads/release-ci/') && needs.resolve_target.outputs.sha || inputs.ref }}",
       NPM_TELEGRAM_PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
       NPM_TELEGRAM_PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
       NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
@@ -5602,8 +5699,8 @@ describe("package artifact reuse", () => {
 
     expect(packageJson.scripts).toMatchObject({
       "release:verify-beta": "node --import tsx scripts/release-verify-beta.ts",
-      "release:candidate": "node scripts/release-candidate-checklist.mjs",
-      "release:beta": "node scripts/release-candidate-checklist.mjs",
+      "release:candidate": "node --import tsx scripts/release-candidate-checklist.mts",
+      "release:beta": "node --import tsx scripts/release-candidate-checklist.mts",
       "release:fast-pretag-check": "bash scripts/release-fast-pretag-check.sh",
     });
     expect(workflowStep(releasePublishJob, "Setup Node environment").with).toMatchObject({

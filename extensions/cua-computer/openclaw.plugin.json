@@ -1,8 +1,5 @@
 {
   "id": "cua-computer",
-  "doctorContract": {
-    "configRepair": true
-  },
   "activation": {
     "onStartup": true
   },
@@ -12,6 +9,10 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "driverPath": {
+        "type": "string"
+      }
+    }
   }
 }

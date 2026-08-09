@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSafeGatewayRestartPreflight } from "../../infra/restart-coordinator.js";
@@ -26,7 +27,6 @@ import type {
   SystemAgentVerifiedInferenceBinding,
   SystemAgentVerifiedInferenceDeps,
 } from "../../system-agent/verified-inference.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { handleGatewayRequest } from "../server-methods.js";

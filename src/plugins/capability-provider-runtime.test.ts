@@ -1487,6 +1487,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expect(provider?.id).toBe("openai");
     expectActiveRegistryLookup(["deepgram", "openai"]);
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledOnce();
   });
 
   it("prefers a canonical provider id over an earlier provider alias", () => {
@@ -1538,6 +1539,33 @@ describe("resolvePluginCapabilityProviders", () => {
     });
 
     expectResolvedCapabilityProviderIds(providers, ["openai", "microsoft"]);
+  });
+
+  it("reuses one manifest snapshot for multiple requested speech providers", () => {
+    const loaded = createEmptyPluginRegistry();
+    addSpeechProvider(loaded, "google");
+    addSpeechProvider(loaded, "microsoft");
+    setCapabilityManifestPlugins([
+      { id: "google", contracts: { speechProviders: ["google"] } },
+      { id: "microsoft", contracts: { speechProviders: ["microsoft"] } },
+    ]);
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "speechProviders",
+      cfg: {
+        tts: {
+          provider: "google",
+          providers: { microsoft: {} },
+        },
+      } as OpenClawConfig,
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["google", "microsoft"]);
+    expectActiveRegistryLookup(["google", "microsoft"]);
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -1728,6 +1756,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
     expectInitialRuntimeRegistryLookup();
     expectActiveRegistryLookup(["microsoft"]);
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledOnce();
   });
 
   it.each([

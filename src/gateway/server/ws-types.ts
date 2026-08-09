@@ -42,6 +42,7 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
+    avatarRevision: string;
     hasAvatar: boolean;
     updatedAt: number;
   };

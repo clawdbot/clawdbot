@@ -1,5 +1,5 @@
 // Shares web-provider plugin resolution helpers without eager runtime imports.
-import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.js";
+import { resolveBundledCompatActivationInputs } from "./activation-context.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -168,15 +168,12 @@ export function resolveBundledWebProviderResolutionConfig(params: {
   activationSourceConfig?: PluginLoadOptions["config"];
   autoEnabledReasons: Record<string, string[]>;
 } {
-  const activation = resolveBundledPluginCompatibleLoadValues({
+  const activation = resolveBundledCompatActivationInputs({
     rawConfig: params.config,
     env: params.env,
     workspaceDir: params.workspaceDir,
     applyAutoEnable: true,
-    compatMode: {
-      enablement: "always",
-    },
-    resolveCompatPluginIds: (compatParams) =>
+    resolveBundledPluginIds: (compatParams) =>
       resolveBundledWebProviderCompatPluginIds({
         contract: params.contract,
         ...compatParams,

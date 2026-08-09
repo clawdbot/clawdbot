@@ -11,6 +11,7 @@ import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import {
   canArchiveSessionRow,
+  canDeleteSessionRows,
   normalizeAgentId,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
@@ -69,6 +70,9 @@ function sessionMenuActionDisabledReasons(
     requiredScope: "operator.write",
   });
   const deleteRows = batchRows ?? [session];
+  const cloudWorkerStopReason = session.cloudWorkerStopAction
+    ? reason(session.cloudWorkerStopAction)
+    : undefined;
   const deleteReason = deleteRows
     .map((row) =>
       reason({
@@ -104,14 +108,7 @@ function sessionMenuActionDisabledReasons(
                 }),
               }
             : {}),
-          ...(reason({ method: "sessions.reclaim", requiredScope: "operator.admin" })
-            ? {
-                "stop-cloud-worker": reason({
-                  method: "sessions.reclaim",
-                  requiredScope: "operator.admin",
-                }),
-              }
-            : {}),
+          ...(cloudWorkerStopReason ? { "stop-cloud-worker": cloudWorkerStopReason } : {}),
         }),
   };
 }
@@ -243,11 +240,20 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
     selection.length > 1 && selection.some((row) => row.key === session.key) ? selection : null;
   const rows = batchRows ?? [session];
   const archiveAllowed = rows.every((row) => canArchiveSessionRow(row, mainKey));
+  const deleteAllowed = canDeleteSessionRows(rows, mainKey);
   const allUnread = rows.every((row) => row.unread);
   const allArchived = rows.every((row) => row.archived === true);
   const sharedCategory = rows.every((row) => (row.category ?? null) === (rows[0]?.category ?? null))
     ? (rows[0]?.category ?? null)
     : null;
+  const cloudWorkerStopAction = session.cloudWorkerStopAction;
+  const cloudWorkerStopAllowed = Boolean(
+    !batchRows &&
+    cloudWorkerStopAction &&
+    (cloudWorkerStopAction.method !== "sessions.reclaim" || !session.hasActiveRun) &&
+    context &&
+    isGatewayMethodAdvertised(context.gateway.snapshot, cloudWorkerStopAction.method) === true,
+  );
   return keyed(
     menu,
     html`
@@ -272,13 +278,8 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         )}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
         .archiveAllowed=${archiveAllowed}
-        .cloudWorkerStopAllowed=${Boolean(
-          !batchRows &&
-          session.cloudWorkerActive &&
-          !session.hasActiveRun &&
-          context &&
-          isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.reclaim") === true,
-        )}
+        .deleteAllowed=${deleteAllowed}
+        .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
         .groups=${host.knownSessionGroups()}
         .canOpenChat=${true}
         .work=${batchRows ? null : controller.sessionMenuWork}

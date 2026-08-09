@@ -9,6 +9,17 @@ import {
   writeCloudSessionRecovery,
 } from "./cloud-recovery.ts";
 
+export type SubmissionOutcomeReason = "gateway-changed" | "cloud-interrupted";
+
+export function resolveSubmissionOutcomeReason(params: {
+  gatewayIdentityChanged: boolean;
+  cloudDraftOwned: boolean;
+}): SubmissionOutcomeReason {
+  return params.gatewayIdentityChanged || !params.cloudDraftOwned
+    ? "gateway-changed"
+    : "cloud-interrupted";
+}
+
 export function resolveScope(
   snapshot: {
     client: { recoveryScope?: string; recoveryScopeReady?: boolean } | null;
@@ -54,6 +65,8 @@ export class PendingCloudRecoveryState {
     }
   }
 
+  // Concurrent same-key replacement pages may double-clear recovery; that rare multi-tab flow is
+  // accepted in favor of ownership based only on gateway URL, recovery scope, and session key.
   owns(gatewayUrl: string, recoveryScope: string, sessionKey: string): boolean {
     return (
       this.gatewayUrl === gatewayUrl &&

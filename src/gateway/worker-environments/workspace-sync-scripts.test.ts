@@ -66,14 +66,24 @@ async function fixture() {
   };
 }
 
-async function quiesce(input: Awaited<ReturnType<typeof fixture>>) {
+async function quiesce(input: Awaited<ReturnType<typeof fixture>>, sharedHost = false) {
   const result = await runCommandWithTimeout(
-    [process.execPath, "-e", REMOTE_WORKSPACE_QUIESCE_JS, input.workspace, "10000"],
+    [
+      process.execPath,
+      "-e",
+      REMOTE_WORKSPACE_QUIESCE_JS,
+      input.workspace,
+      "10000",
+      sharedHost ? "shared-host" : "dedicated",
+    ],
     { timeoutMs: 10_000, baseEnv: input.env },
   );
   expect(result.code).toBe(0);
   const match = /^quiesced ([a-f0-9]{32})\n$/u.exec(result.stdout);
   expect(match).not.toBeNull();
+  if (sharedHost) {
+    expect(result.stderr).toContain("shared host declared; skipping process freeze sweep");
+  }
   return match![1]!;
 }
 
@@ -90,9 +100,22 @@ async function resume(input: Awaited<ReturnType<typeof fixture>>, nonce: string)
   expect(result.code).toBe(0);
 }
 
-async function renew(input: Awaited<ReturnType<typeof fixture>>, nonce: string) {
+async function renew(
+  input: Awaited<ReturnType<typeof fixture>>,
+  nonce: string,
+  sharedHost = false,
+) {
   const result = await runCommandWithTimeout(
-    [process.execPath, "-e", REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS, input.workspace, nonce, "20000"],
+    [
+      process.execPath,
+      "-e",
+      REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+      input.workspace,
+      nonce,
+      "20000",
+      "final",
+      sharedHost ? "shared-host" : "dedicated",
+    ],
     { timeoutMs: 10_000, baseEnv: input.env },
   );
   expect(result.code).toBe(0);
@@ -194,6 +217,36 @@ describe("remote workspace quiescence scripts", () => {
       expect(lease.processes.some((entry) => entry.pid === child.pid)).toBe(true);
     } finally {
       await resume(input, nonce);
+      child.kill("SIGCONT");
+      child.kill("SIGTERM");
+      if (child.exitCode === null) {
+        await once(child, "exit");
+      }
+      await fs.rm(input.extraProcessPath, { force: true });
+    }
+  });
+
+  it("keeps unrelated same-uid processes running on a declared shared host", async () => {
+    const input = await fixture();
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    expect(child.pid).toBeDefined();
+    await fs.writeFile(input.extraProcessPath, `${child.pid}\n`);
+
+    let nonce: string | undefined;
+    try {
+      nonce = await quiesce(input, true);
+      await renew(input, nonce, true);
+      const lease = JSON.parse(
+        await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
+      ) as { processes: Array<{ pid: number }>; sharedHost: boolean };
+      expect(lease).toMatchObject({ processes: [], sharedHost: true });
+      expect(() => process.kill(child.pid!, 0)).not.toThrow();
+    } finally {
+      if (nonce) {
+        await resume(input, nonce);
+      }
       child.kill("SIGCONT");
       child.kill("SIGTERM");
       if (child.exitCode === null) {
@@ -605,9 +658,16 @@ process.kill = function(pid, signal) {
     const deadPid = 2_147_483_647;
     const token = "9".repeat(32);
     await fs.mkdir(lock);
-    const ownerIdentity = ["apply", nonce, deadPid, token].join(".");
+    const invalidOwner = ["apply", nonce, deadPid, deadPid - 1, token].join(".");
+    const invalidEntry = path.join(lock, `owner.${invalidOwner}`);
+    await fs.writeFile(invalidEntry, "");
+    const rejected = await runTransaction("settle");
+    expect(rejected.code).not.toBe(0);
+    expect(rejected.stderr).toContain("invalid workspace mutation lock owner");
+    await fs.unlink(invalidEntry);
+    const ownerIdentity = ["apply", nonce, deadPid, deadPid, token].join(".");
     const reclaimToken = "a".repeat(32);
-    const reclaimerIdentity = ["settle", nonce, deadPid, reclaimToken].join(".");
+    const reclaimerIdentity = ["settle", nonce, deadPid, deadPid, reclaimToken].join(".");
     await fs.writeFile(path.join(lock, `reclaim.${ownerIdentity}.${reclaimerIdentity}`), "");
 
     const settled = await runTransaction("settle");

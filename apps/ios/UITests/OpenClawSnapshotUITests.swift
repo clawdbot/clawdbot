@@ -44,7 +44,24 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testReleaseChatScreenshot() {
-        self.captureReleaseScreenshot(Self.chatScreenshotTarget)
+        self.captureReleaseScreenshot(Self.chatScreenshotTarget) { app in
+            let input = self.chatMessageInput(in: app)
+            XCTAssertTrue(input.waitForExistence(timeout: 8))
+            input.tap()
+            let keyboard = app.keyboards.firstMatch
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                XCTAssertTrue(keyboard.waitForExistence(timeout: 3))
+            }
+            let focusProbe = "focus"
+            input.typeText(focusProbe)
+            XCTAssertEqual(input.value as? String, focusProbe)
+            input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: focusProbe.count))
+            XCTAssertEqual(input.value as? String, "")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+            if keyboard.exists {
+                XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
+            }
+        }
     }
 
     func testReleaseAgentScreenshot() {
@@ -1077,9 +1094,17 @@ extension OpenClawSnapshotUITests {
         return app
     }
 
-    private func captureReleaseScreenshot(_ target: ScreenshotTarget) {
+    private func captureReleaseScreenshot(
+        _ target: ScreenshotTarget,
+        beforeCapture: ((XCUIApplication) -> Void)? = nil)
+    {
         self.launchApp(for: target)
         self.waitForReleaseScreenshotTarget(target)
+        guard let app = self.app else {
+            XCTFail("OpenClaw is not running for screenshot target \(target.name)")
+            return
+        }
+        beforeCapture?(app)
         snapshot(target.name, timeWaitingForIdle: 5)
         self.attachScreenshot(named: target.name)
     }

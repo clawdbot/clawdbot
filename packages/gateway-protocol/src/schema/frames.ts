@@ -10,6 +10,7 @@ export const GATEWAY_SERVER_CAPS = {
   BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
+  TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
 } as const;
 
 /**
@@ -72,7 +73,7 @@ export const ConnectParamsSchema = closedObject({
   userAgent: Type.Optional(Type.String()),
 });
 
-/** Successful gateway hello response with negotiated protocol and initial state. */
+/** Successful gateway hello response with the server protocol and initial state. */
 export const HelloOkSchema = closedObject({
   type: Type.Literal("hello-ok"),
   protocol: Type.Integer({ minimum: 1 }),

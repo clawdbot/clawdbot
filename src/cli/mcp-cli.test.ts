@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
-import { createDeferred } from "../shared/deferred.js";
 import {
   cleanupMcpCliTestState,
   clearMcpOAuthCredentials,

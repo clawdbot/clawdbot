@@ -29,9 +29,6 @@ export function resolvePluginWebContentExtractors(params?: {
     env: params?.env,
     onlyPluginIds: params?.onlyPluginIds,
     contract: "webContentExtractors",
-    compatMode: {
-      enablement: "always",
-    },
   })) {
     const loaded = loadBundledWebContentExtractorEntriesFromDir({
       dirName: plugin.id,

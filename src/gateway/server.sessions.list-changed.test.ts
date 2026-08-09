@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -18,7 +19,6 @@ import {
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
   getSessionsHandlers,
-  createDeferred,
   loadSeededTranscriptEvents,
   seedSessionTranscript,
   sessionStoreEntry,
@@ -180,6 +180,9 @@ async function invokeSessionMutation({
     respond,
     context: {
       broadcastToConnIds,
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+      dedupe: new Map(),
       getSessionEventSubscriberConnIds: () => subscribedConnIds,
       loadGatewayModelCatalog: async () => ({ providers: [] }),
       getRuntimeConfig,

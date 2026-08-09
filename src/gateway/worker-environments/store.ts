@@ -1,4 +1,6 @@
+import { isAbsolute } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import {
@@ -12,7 +14,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
+import type {
+  WorkerDesktopEndpoint,
+  WorkerProfile,
+  WorkerSshEndpoint,
+} from "../../plugins/types.js";
 import { isValidSecretRef } from "../../secrets/ref-contract.js";
 import type {
   DB as StateDatabase,
@@ -43,6 +49,8 @@ type RecordIdentity = { environmentId: string; providerId: string; profileId: st
 type RecordBase = RecordIdentity & {
   profileSnapshot: WorkerEnvironmentProfileSnapshot;
   provisionOperationId: string;
+  sharedHost: boolean | null;
+  desktop: WorkerDesktopEndpoint | null;
   bootstrapReceipt: WorkerEnvironmentBootstrapReceipt | null;
   ownerEpoch: number;
   teardownTerminalState: WorkerEnvironmentTeardownTerminalState | null;
@@ -67,6 +75,8 @@ export class WorkerSessionAlreadyAttachedError extends Error {
 export type WorkerEnvironmentTransitionPatch = {
   leaseId?: string | null;
   sshEndpoint?: WorkerEnvironmentSshEndpoint | null;
+  sharedHost?: boolean;
+  desktop?: WorkerDesktopEndpoint | null;
   bootstrapReceipt?: WorkerEnvironmentBootstrapReceipt;
   attachedSessionIds?: readonly string[];
   lastError?: string | null;
@@ -271,6 +281,28 @@ export function normalizeWorkerSshEndpoint(value: Ssh): Ssh {
     keyRef: { ...value.keyRef },
   };
 }
+export function normalizeWorkerDesktopEndpoint(
+  value: WorkerDesktopEndpoint,
+): WorkerDesktopEndpoint {
+  if (!isRecord(value) || value.protocol !== "rfb") {
+    throw new Error('Worker environment desktop protocol must be "rfb"');
+  }
+  if (!Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65_535) {
+    throw new Error("Worker environment desktop port must be an integer from 1 through 65535");
+  }
+  const passwordFilePath = value.passwordFilePath;
+  if (
+    passwordFilePath !== undefined &&
+    (typeof passwordFilePath !== "string" || !isAbsolute(passwordFilePath))
+  ) {
+    throw new Error("Worker environment desktop password file path must be absolute");
+  }
+  return {
+    protocol: "rfb",
+    port: value.port,
+    ...(passwordFilePath === undefined ? {} : { passwordFilePath }),
+  };
+}
 function endpointFrom(row: Row, fallbackPorts: readonly number[]): Ssh | null {
   const {
     ssh_host: host,
@@ -290,6 +322,11 @@ function endpointFrom(row: Row, fallbackPorts: readonly number[]): Ssh | null {
     hostKey,
     keyRef: JSON.parse(encoded) as Ssh["keyRef"],
   });
+}
+function desktopFrom(row: Row): WorkerDesktopEndpoint | null {
+  return row.desktop_json === null
+    ? null
+    : normalizeWorkerDesktopEndpoint(JSON.parse(row.desktop_json) as WorkerDesktopEndpoint);
 }
 function bootstrapReceiptFrom(row: Row): WorkerEnvironmentBootstrapReceipt | null {
   const {
@@ -313,6 +350,7 @@ function assertShape(
   state: WorkerEnvironmentState,
   leaseId: string | null,
   sshEndpoint: Ssh | null,
+  desktop: WorkerDesktopEndpoint | null,
   bootstrapReceipt: WorkerEnvironmentBootstrapReceipt | null,
   attachedSessionIds: readonly string[],
 ): void {
@@ -323,7 +361,7 @@ function assertShape(
     if (!sshEndpoint) {
       throw new Error("Worker environment provider lease requires an SSH endpoint reference");
     }
-  } else if (leaseId || sshEndpoint) {
+  } else if (leaseId || sshEndpoint || desktop) {
     throw new Error(`Worker environment state ${state} cannot retain a provider lease`);
   }
   if (state === "bootstrapping" && bootstrapReceipt) {
@@ -369,8 +407,10 @@ function fromRow(row: Row, fallbackPorts: readonly number[]): WorkerEnvironmentR
     profileId: row.profile_id,
     profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerEnvironmentProfileSnapshot,
     provisionOperationId: row.provision_operation_id,
+    sharedHost: row.shared_host === null ? null : row.shared_host === 1,
     leaseId: row.lease_id,
     sshEndpoint: endpointFrom(row, fallbackPorts),
+    desktop: desktopFrom(row),
     bootstrapReceipt: bootstrapReceiptFrom(row),
     ownerEpoch: row.owner_epoch,
     teardownTerminalState: teardownTerminalStateFrom(row.teardown_terminal_state),
@@ -389,6 +429,7 @@ function fromRow(row: Row, fallbackPorts: readonly number[]): WorkerEnvironmentR
     record.state,
     record.leaseId,
     record.sshEndpoint,
+    record.desktop,
     record.bootstrapReceipt,
     record.attachedSessionIds,
   );
@@ -719,11 +760,13 @@ export function createWorkerEnvironmentStore(
                 "provision operation id",
               ),
               lease_id: null,
+              shared_host: null,
               ssh_host: null,
               ssh_port: null,
               ssh_user: null,
               ssh_host_key: null,
               ssh_key_ref_json: null,
+              desktop_json: null,
               bootstrap_bundle_hash: null,
               bootstrap_openclaw_version: null,
               bootstrap_protocol_features_json: null,
@@ -747,6 +790,30 @@ export function createWorkerEnvironmentStore(
       findCredentialByHash(read(), normalizeCredentialHash(credentialHash)),
     list: (): WorkerEnvironmentRecord[] => listRows(read(), false),
     listForReconcile: (): WorkerEnvironmentRecord[] => listRows(read(), true),
+    reconcileSharedHost(input: {
+      environmentId: string;
+      state: WorkerEnvironmentState;
+      leaseId: string;
+      sharedHost: boolean;
+    }): WorkerEnvironmentRecord {
+      const environmentId = required(input.environmentId, "id");
+      const leaseId = required(input.leaseId, "lease id");
+      return write((db) => {
+        const current = getRequired(db, environmentId);
+        if (current.state !== input.state || current.leaseId !== leaseId) {
+          throw new Error(`Worker environment ${environmentId} lease changed during inspection`);
+        }
+        if (current.sharedHost === input.sharedHost) {
+          return current;
+        }
+        // Provider inspection owns facts that may predate their durable column. Persist an
+        // explicit value before tunnel startup so upgraded leases cannot keep stale isolation.
+        return update(db, environmentId, current.state, {
+          shared_host: input.sharedHost ? 1 : 0,
+          updated_at_ms: now(),
+        });
+      });
+    },
     requestDestroy(input: {
       environmentId: string;
       state: WorkerEnvironmentState;
@@ -829,6 +896,15 @@ export function createWorkerEnvironmentStore(
             : patch.sshEndpoint === null
               ? null
               : normalizeWorkerSshEndpoint(patch.sshEndpoint);
+        const sharedHost = leaseId === null ? null : (patch.sharedHost ?? current.sharedHost);
+        const desktop =
+          leaseId === null
+            ? null
+            : patch.desktop === undefined
+              ? current.desktop
+              : patch.desktop === null
+                ? null
+                : normalizeWorkerDesktopEndpoint(patch.desktop);
         const acceptsBootstrapReceipt = from === "bootstrapping" && to === "ready";
         if (patch.bootstrapReceipt !== undefined && !acceptsBootstrapReceipt) {
           throw new Error("Bootstrap receipt can only be recorded when a worker becomes ready");
@@ -866,7 +942,7 @@ export function createWorkerEnvironmentStore(
             : patch.attachedSessionIds === undefined
               ? current.attachedSessionIds
               : normalizeAttachedSessionIds(patch.attachedSessionIds);
-        assertShape(to, leaseId, sshEndpoint, bootstrapReceipt, attachedSessionIds);
+        assertShape(to, leaseId, sshEndpoint, desktop, bootstrapReceipt, attachedSessionIds);
         const [attachedSessionId] = attachedSessionIds;
         if (to === "attached" && attachedSessionId) {
           // Change session ownership atomically with worker state.
@@ -906,11 +982,13 @@ export function createWorkerEnvironmentStore(
             : current.ownerEpoch;
         updateRow(db, environmentId, from, {
           lease_id: leaseId,
+          shared_host: sharedHost === null ? null : sharedHost ? 1 : 0,
           ssh_host: sshEndpoint?.host ?? null,
           ssh_port: sshEndpoint?.port ?? null,
           ssh_user: sshEndpoint?.user ?? null,
           ssh_host_key: sshEndpoint?.hostKey ?? null,
           ssh_key_ref_json: sshEndpoint ? json(sshEndpoint.keyRef) : null,
+          desktop_json: desktop ? json(desktop) : null,
           bootstrap_bundle_hash: bootstrapReceipt?.bundleHash ?? null,
           bootstrap_openclaw_version: bootstrapReceipt?.openclawVersion ?? null,
           bootstrap_protocol_features_json: bootstrapReceipt

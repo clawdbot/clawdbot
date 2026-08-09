@@ -269,13 +269,7 @@ export type MemoryFlushPlanResolver = (params: {
 
 export type RegisteredMemorySearchManager = MemorySearchManager;
 
-type MemoryRuntimeQmdConfig = {
-  command?: string;
-};
-
-type MemoryRuntimeBackendConfig =
-  | { backend: "builtin" }
-  | { backend: "qmd"; qmd?: MemoryRuntimeQmdConfig };
+type MemoryRuntimeBackendConfig = { backend: "builtin" };
 
 export type MemoryPluginRuntime = {
   getMemorySearchManager(params: {
@@ -285,19 +279,9 @@ export type MemoryPluginRuntime = {
   }): Promise<{
     manager: RegisteredMemorySearchManager | null;
     debug?: {
-      backend?: "builtin" | "qmd";
+      backend?: "builtin";
       purpose?: "default" | "status" | "cli";
       managerMs?: number;
-      managerCacheState?:
-        | "cached-full-hit"
-        | "cached-full-miss"
-        | "transient-cli"
-        | "transient-status"
-        | "pending-create-wait"
-        | "fallback-builtin"
-        | "recent-failure-cooldown";
-      qmdIdentityHash?: string;
-      failureCode?: "qmd-unavailable";
     };
     error?: string;
   }>;

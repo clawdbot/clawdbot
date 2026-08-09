@@ -14,7 +14,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -104,7 +103,7 @@ function hasAnyThreadAvailability(availability: SessionsSpawnThreadAvailability)
 
 function resolveSessionsSpawnThreadAvailability(opts?: {
   config?: OpenClawConfig;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   agentAccountId?: string;
 }): SessionsSpawnThreadAvailability {
   const channel = opts?.agentChannel;
@@ -269,7 +268,7 @@ export function createSessionsSpawnTool(
     requesterTurnRunId?: string;
     /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
     completionOwnerKey?: string;
-    agentChannel?: GatewayMessageChannel;
+    agentChannel?: string;
     agentAccountId?: string;
     agentTo?: string;
     agentThreadId?: string | number;

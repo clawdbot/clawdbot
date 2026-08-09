@@ -26,10 +26,30 @@ struct RemoteGatewayAdvanceDecision: Equatable {
     let shouldProbe: Bool
 }
 
+@MainActor
+@Observable
+final class OnboardingFinishState {
+    var didFinish = false
+}
+
 enum OnboardingSystemAgentResumeStore {
     struct ActivationOwner: Equatable {
         let id: String
         let routeFingerprint: String
+
+        /// Keychain-unavailable attempts carry a random per-attempt lease id
+        /// with this sentinel instead of an auth-bound fingerprint: live
+        /// matching stays attempt-exact, while relaunch reconciliation refuses
+        /// the receipt. Real fingerprints are 64-char HMAC hex, never this.
+        static let unboundFingerprint = "unbound"
+
+        static func unbound() -> ActivationOwner {
+            ActivationOwner(id: UUID().uuidString, routeFingerprint: self.unboundFingerprint)
+        }
+
+        var isUnbound: Bool {
+            self.routeFingerprint == Self.unboundFingerprint
+        }
     }
 
     enum PendingState: Equatable {
@@ -636,7 +656,7 @@ struct OnboardingView: View {
     @State var suppressRemoteProbeReset = false
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingSkillsModel = SkillsSettingsModel()
-    @State var systemAgentState = OnboardingSystemAgentChatState()
+    @State var finishState = OnboardingFinishState()
     @State var aiSetup = OnboardingAISetupModel()
     @State var configuredGatewayProbe = OnboardingConfiguredGatewayProbe()
     @State var didLoadOnboardingSkills = false
@@ -647,6 +667,7 @@ struct OnboardingView: View {
     let systemAgentDefaults: UserDefaults
     let aiSetupRouteIdentityProvider: @MainActor () -> String?
     let gatewaySelectionPersister: @MainActor () -> Bool
+    let dashboardOnboardingOpener: @MainActor () -> Void
 
     static let windowWidth: CGFloat = 630
     static let windowHeight: CGFloat = 752 // ~+10% to fit full onboarding content
@@ -809,7 +830,10 @@ struct OnboardingView: View {
         systemAgentDefaults: UserDefaults = .standard,
         aiSetupRouteIdentityProvider: (@MainActor () -> String?)? = nil,
         configuredGatewayProbeTimeoutMs: Double = 15000,
-        gatewaySelectionPersister: (@MainActor () -> Bool)? = nil)
+        gatewaySelectionPersister: (@MainActor () -> Bool)? = nil,
+        dashboardOnboardingOpener: @escaping @MainActor () -> Void = {
+            AppNavigationActions.openDashboardOnboarding()
+        })
     {
         self.state = state
         self.permissionMonitor = permissionMonitor
@@ -821,6 +845,7 @@ struct OnboardingView: View {
         self.gatewaySelectionPersister = gatewaySelectionPersister ?? {
             state.syncGatewayConfigNow()
         }
+        self.dashboardOnboardingOpener = dashboardOnboardingOpener
         _defaultsToLocalGateway = State(
             initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)
         _gatewayDiscovery = State(initialValue: discoveryModel)

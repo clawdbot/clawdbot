@@ -7,6 +7,7 @@ const WORKFLOW = ".github/workflows/mantis-web-ui-chat-proof.yml";
 
 type WorkflowStep = {
   name?: string;
+  run?: string;
   uses?: string;
   with?: Record<string, string>;
 };
@@ -63,6 +64,15 @@ describe("Mantis Web UI chat proof workflow", () => {
       "install-bun": "false",
       "install-deps": "false",
     });
+  });
+
+  it("publishes evidence with plain Node and no dependency setup", () => {
+    const job = workflowJob("publish_evidence");
+    const publish = job.steps?.find((step) => step.name === "Comment PR with inline QA evidence");
+
+    expect(job.steps?.some((step) => step.name === "Setup Node environment")).toBe(false);
+    expect(publish?.run).toContain("node scripts/mantis/publish-pr-evidence.mjs");
+    expect(publish?.run).not.toContain("--import tsx");
   });
 
   it("only treats explicit candidate assignments as PR head overrides", () => {

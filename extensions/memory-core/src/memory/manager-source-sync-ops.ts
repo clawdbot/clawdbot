@@ -4,7 +4,7 @@ import {
   buildSessionEntry,
   sessionPathForSessionIdentity,
   type SessionTranscriptCorpusEntry,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   buildFileEntry,
   listMemoryFiles,

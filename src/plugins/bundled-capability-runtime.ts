@@ -10,17 +10,6 @@ import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 const log = createSubsystemLogger("plugins");
 
-function buildBundledCapabilityRuntimeConfig(
-  pluginIds: readonly string[],
-  config?: PluginLoadOptions["config"],
-): NonNullable<PluginLoadOptions["config"]> {
-  // Only the speech owner may opt into legacy global-disable compatibility before capture.
-  if (config?.plugins?.enabled === false) {
-    return config;
-  }
-  return withBundledPluginEnablementCompat({ config, pluginIds }) ?? {};
-}
-
 function createCapabilityRegistrationRuntime(
   config: NonNullable<PluginLoadOptions["config"]>,
 ): Pick<PluginRuntime, "config"> {
@@ -45,7 +34,14 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   discovery?: PluginDiscoveryResult;
 }) {
   const env = params.env ?? process.env;
-  const config = buildBundledCapabilityRuntimeConfig(params.pluginIds, params.config);
+  // Only the speech owner may opt into legacy global-disable compatibility before capture.
+  const config =
+    params.config?.plugins?.enabled === false
+      ? params.config
+      : (withBundledPluginEnablementCompat({
+          config: params.config,
+          pluginIds: params.pluginIds,
+        }) ?? {});
   const discovery = params.discovery ?? discoverOpenClawPlugins({ env });
   const pluginIds = new Set(params.pluginIds);
   const manifestRegistry = loadPluginManifestRegistry({
