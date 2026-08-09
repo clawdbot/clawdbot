@@ -194,7 +194,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createDraftStream(api, { validateProviderMessage });
 
     stream.update("First preview");
-    await expect(stream.flush()).rejects.toBe(validationError);
+    await expect(stream.waitForInFlight()).rejects.toBe(validationError);
     stream.update("Second preview");
     await expect(stream.flush()).rejects.toBe(validationError);
 

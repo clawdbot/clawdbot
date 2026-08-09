@@ -446,10 +446,13 @@ export class ChatPane extends ChatPaneHeader {
         void this.resolveCurrentSessionSuggestion(suggestion, resolution),
       canAcceptTaskSuggestions:
         state.connected &&
-        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.accept") === true,
       canDismissTaskSuggestions:
         state.connected &&
-        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "taskSuggestions.dismiss") ===
+          true,
       onAcceptTaskSuggestion: (suggestion) => void this.acceptTaskSuggestion(suggestion),
       onDismissTaskSuggestion: (suggestion) => void this.dismissTaskSuggestion(suggestion),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),

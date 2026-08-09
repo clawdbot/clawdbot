@@ -187,7 +187,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
 
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
     expect(answerDraftStream.update).toHaveBeenCalledWith("Photo");
-    expect(partialAccepted).toBe(false);
+    expect(partialAccepted).toBe(true);
     expectDeliverRepliesParams({ mediaMaxBytes });
     expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
     expect(emitTelegramMessageSentHooks).toHaveBeenCalledTimes(1);

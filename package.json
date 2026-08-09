@@ -110,7 +110,7 @@
     "!dist/plugin-sdk/memory-core-host-engine-curated.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-embeddings.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-fs.d.ts",
-    "!dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-sessions.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-schema.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
     "!dist/plugin-sdk/memory-core-host-runtime-cli.d.ts",
@@ -307,7 +307,6 @@
     "!dist/extensions/nostr/**",
     "!dist/extensions/novita/**",
     "!dist/extensions/opencode/**",
-    "!dist/extensions/opencode-go/**",
     "!dist/extensions/parallel/**",
     "!dist/extensions/perplexity/**",
     "!dist/extensions/qianfan/**",
@@ -1229,8 +1228,8 @@
     "./plugin-sdk/memory-core-host-engine-fs": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-fs.js"
     },
-    "./plugin-sdk/memory-core-host-engine-qmd": {
-      "default": "./dist/plugin-sdk/memory-core-host-engine-qmd.js"
+    "./plugin-sdk/memory-core-host-engine-sessions": {
+      "default": "./dist/plugin-sdk/memory-core-host-engine-sessions.js"
     },
     "./plugin-sdk/memory-core-host-engine-schema": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-schema.js"
@@ -2099,6 +2098,7 @@
     "shiki": "4.3.1",
     "signal-utils": "0.21.1",
     "sigstore": "5.0.0",
+    "string-width": "8.2.2",
     "stylelint": "17.14.1",
     "stylelint-config-recommended": "18.0.0",
     "tsdown": "0.22.1",

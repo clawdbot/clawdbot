@@ -224,6 +224,17 @@ describe("resolveTuiSessionKey", () => {
     ).toBe("agent:ops:incident");
   });
 
+  it("unwraps an agent-qualified global key after agent selection", () => {
+    expect(
+      resolveTuiSessionKey({
+        raw: "AGENT:Work:GLOBAL",
+        sessionScope: "per-sender",
+        currentAgentId: "work",
+        sessionMainKey: "main",
+      }),
+    ).toBe("global");
+  });
+
   it.each([
     {
       raw: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",

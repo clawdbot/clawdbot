@@ -1260,7 +1260,6 @@
                       "concepts/user-model",
                       "concepts/standing-intents",
                       "concepts/memory-builtin",
-                      "concepts/memory-qmd",
                       "concepts/memory-honcho",
                       "concepts/memory-search",
                       "concepts/active-memory",
@@ -1888,6 +1887,7 @@
                     "pages": [
                       "cli/attach",
                       "cli/dashboard",
+                      "cli/resume",
                       "cli/tui"
                     ]
                   },

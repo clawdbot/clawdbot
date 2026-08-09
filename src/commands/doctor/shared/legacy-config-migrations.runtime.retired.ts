@@ -21,6 +21,7 @@ import {
   moveVoice,
   stripRetiredTuningKnobs,
 } from "./legacy-config-migrations.runtime.retired-media.js";
+import { LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD } from "./legacy-config-migrations.runtime.retired-memory-qmd.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
 import { visitChannelEntries } from "./legacy-config-record-shared.js";
 
@@ -419,6 +420,7 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
+  LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
   defineLegacyConfigMigration({
     id: "runtime.retired-internal-hook-handlers",
     describe: "Remove retired internal hook handler registrations",

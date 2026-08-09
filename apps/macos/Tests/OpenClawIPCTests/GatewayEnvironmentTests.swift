@@ -72,6 +72,22 @@ struct GatewayEnvironmentTests {
         #expect(version == "2026.7.29")
     }
 
+    @Test func `gateway version probe tolerates loaded host delay`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gateway = root.appendingPathComponent("openclaw")
+        try "#!/bin/sh\nsleep 2.1\necho OpenClaw 2026.7.30\n"
+            .write(to: gateway, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gateway.path)
+
+        let version = await GatewayEnvironment.installedGatewayVersion(
+            gatewayBin: gateway.path,
+            projectRoot: root,
+            searchPaths: [root.path, "/usr/bin", "/bin"])
+
+        #expect(version == "2026.7.30")
+    }
+
     @Test func `gateway launch resolution scans preferred paths once`() async throws {
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }

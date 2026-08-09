@@ -218,7 +218,6 @@ export function buildQaGatewayConfig(params: {
       lastTouchedVersion: OPENCLAW_VERSION,
     },
     memory: {
-      backend: "builtin",
       search: {
         ...mockMemorySearch,
       },

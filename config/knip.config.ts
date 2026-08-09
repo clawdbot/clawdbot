@@ -277,6 +277,8 @@ const rootToolingAndWorkspaceDependencies = [
   "oxlint",
   "oxlint-tsgolint",
   "signal-utils",
+  // Root declaration builds compile terminal-core source and resolve this package from root.
+  "string-width",
 ] as const;
 
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {

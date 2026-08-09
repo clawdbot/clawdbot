@@ -698,14 +698,13 @@ extension GatewayProcessManager {
         context: LaunchAgentStartupContext,
         startGeneration: UInt64,
         readinessWindow: TimeInterval = 6,
-        // A fresh install gets ten six-second probe windows for Local Network authorization.
-        firstInstallReadinessGraceWindows: Int = 9) async
+        // Fresh installs keep probing through the same first-run migration budget as the CLI.
+        firstInstallReadinessBudget: TimeInterval = GatewayLaunchAgentManager.startupMigrationTolerance) async
     {
         let startedAt = Date()
         var deadline = startedAt.addingTimeInterval(readinessWindow)
-        let graceWindowCount = max(0, firstInstallReadinessGraceWindows)
         let finalProbeDeadline = startedAt.addingTimeInterval(
-            readinessWindow * (Double(graceWindowCount) + 1))
+            max(readinessWindow, firstInstallReadinessBudget))
         var latestRetryDisposition: GatewayProbeFailureDisposition?
         var readinessPID = context.readinessPID
         var freshInstallGraceAuthorized = false
@@ -983,7 +982,8 @@ extension GatewayProcessManager {
         launchAgentInstalled: Bool = false) async -> Bool
     {
         let startGeneration = self.gatewayStartGeneration
-        if let result = await self.observeCurrentGatewayStart(generation: startGeneration) { return result }
+        if await self.observeCurrentGatewayStart(generation: startGeneration) == true { return true }
+        guard !Task.isCancelled, self.isCurrentGatewayStart(startGeneration) else { return false }
         let readinessCandidate = self.launchAgentReadinessCandidate
         let readinessFailure = self.launchAgentReadinessFailure
         let readinessRevision = self.launchAgentReadinessRevision
@@ -1337,7 +1337,7 @@ extension GatewayProcessManager {
         port: Int,
         pid: Int32,
         readinessWindow: TimeInterval,
-        firstInstallReadinessGraceWindows: Int)
+        firstInstallReadinessBudget: TimeInterval)
     {
         self.desiredActive = true
         self.status = .starting
@@ -1354,7 +1354,7 @@ extension GatewayProcessManager {
                     readinessRevision: readinessRevision),
                 startGeneration: generation,
                 readinessWindow: readinessWindow,
-                firstInstallReadinessGraceWindows: firstInstallReadinessGraceWindows)
+                firstInstallReadinessBudget: firstInstallReadinessBudget)
         }
     }
 }

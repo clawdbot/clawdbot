@@ -458,12 +458,12 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
 
   <Step title="Replace broad infra-runtime imports">
     `openclaw/plugin-sdk/infra-runtime` still exists for external
-    compatibility, but new code should import the focused surface it actually
+    compatibility, but new code should use the supported surface it actually
     needs:
 
-    | Need | Import |
+    | Need | Replacement |
     | --- | --- |
-    | System event queue helpers | `openclaw/plugin-sdk/system-event-runtime` |
+    | New system event producers | `api.runtime.system.enqueueSystemEvent` |
     | Heartbeat wake, event, and visibility helpers | `openclaw/plugin-sdk/heartbeat-runtime` |
     | Pending delivery queue drain | `openclaw/plugin-sdk/delivery-queue-runtime` |
     | Channel activity telemetry | `openclaw/plugin-sdk/channel-activity-runtime` |
@@ -482,6 +482,14 @@ For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
     | Numeric coercion | `openclaw/plugin-sdk/number-runtime` |
     | Process-local async lock | `openclaw/plugin-sdk/async-lock-runtime` |
     | File locks | `openclaw/plugin-sdk/file-lock` |
+
+    System event snapshot inspection and consume helpers remain available only
+    through the deprecated `openclaw/plugin-sdk/infra-runtime` compatibility
+    surface; there is no modern public replacement. Current snapshots carry an
+    opaque `id` for one queued occurrence. Preserve it through copies and
+    serialization when returning a snapshot to consume. Legacy ID-less callers
+    retain structural matching, which can be ambiguous after queue churn. Do
+    not treat the ID as persistent or valid across restarts.
 
     File-lock nesting is owner-scoped. Pass the same `reentrantOwner` only for
     nested acquisitions in one logical operation; omit it for ordinary locking.

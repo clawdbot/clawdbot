@@ -53,11 +53,6 @@ const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 type Awaitable<T> = T | Promise<T>;
 
-type GatewayMemoryStartupPolicy =
-  | { mode: "off" }
-  | { mode: "immediate" }
-  | { mode: "idle"; delayMs: number };
-
 const loadMainSessionRestartRecoveryModule = createLazyRuntimeModule(
   () => import("../agents/main-session-restart-recovery.js"),
 );
@@ -126,35 +121,6 @@ function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boole
 function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env[SKIP_STARTUP_MODEL_PREWARM_ENV]?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
-
-function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
-  void cfg;
-  return { mode: "off" };
-}
-
-function scheduleGatewayMemoryBackend(params: {
-  cfg: OpenClawConfig;
-  log: { warn: (msg: string) => void };
-  policy: GatewayMemoryStartupPolicy;
-}): void {
-  if (params.policy.mode === "off") {
-    return;
-  }
-  const start = () => {
-    void runWithGatewayIndependentRootWorkAdmission(async () => {
-      const { startGatewayMemoryBackend } = await import("./server-startup-memory.js");
-      await startGatewayMemoryBackend({ cfg: params.cfg, log: params.log });
-    }).catch((err: unknown) => {
-      params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
-    });
-  };
-  if (params.policy.mode === "immediate") {
-    setImmediate(start);
-    return;
-  }
-  const timer = setTimeout(start, params.policy.delayMs);
-  timer.unref?.();
 }
 
 function schedulePostAttachUpdateSentinelRefresh(params: {
@@ -749,14 +715,6 @@ export async function startGatewaySidecars(params: {
     });
   }
 
-  await measureStartup(params.startupTrace, "sidecars.memory", async () => {
-    const policy = resolveGatewayMemoryStartupPolicy(params.cfg);
-    if (policy.mode === "off") {
-      return;
-    }
-    scheduleGatewayMemoryBackend({ cfg: params.cfg, log: params.log, policy });
-  });
-
   let restartSentinelWake: GatewayPostReadySidecarHandle | undefined;
   postReadySidecars.push(
     schedulePostReadySidecarTask({
@@ -1143,11 +1101,9 @@ export async function startGatewayPostAttachRuntime(
   };
   await loadStartupPluginsIfNeeded();
 
-  const memoryStartupPolicy = resolveGatewayMemoryStartupPolicy(params.gatewayPluginConfigAtStart);
   const startupOutcomes = createGatewayStartupOutcomeRecorder({
     cfg: params.gatewayPluginConfigAtStart,
     gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
-    memoryStartupMode: memoryStartupPolicy.mode,
   });
 
   const startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
@@ -1432,7 +1388,6 @@ export const testing = {
   publishConfiguredModelRuntimeSnapshots,
   publishStartupModelRuntime,
   refreshLatestUpdateRestartSentinelIfPresent,
-  resolveGatewayMemoryStartupPolicy,
   scheduleProviderAuthStatePrewarm,
   scheduleRestartSentinelWakeAfterReady,
   shouldSkipStartupModelPrewarm,
