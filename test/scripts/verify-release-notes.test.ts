@@ -59,8 +59,12 @@ describe("release-note verification", () => {
 
   it("accepts only canonical commit PR suffixes", () => {
     expect(pullRequestTitleFromCommitSubject("Fix status (#102147)", 102147)).toBe("Fix status");
+    expect(pullRequestTitleFromCommitSubject("Fix status (#102147) (#102147)", 102147)).toBe(
+      "Fix status",
+    );
     expect(pullRequestTitleFromCommitSubject("Fix status(#102147)", 102147)).toBeUndefined();
     expect(pullRequestTitleFromCommitSubject("Fix status (#0102147)", 102147)).toBeUndefined();
+    expect(pullRequestTitleFromCommitSubject("Fix status (#0)", 0)).toBeUndefined();
     expect(pullRequestTitleFromCommitSubject(" Fix status (#102147)", 102147)).toBeUndefined();
     expect(pullRequestTitleFromCommitSubject("Fix status (#102147) ", 102147)).toBeUndefined();
     expect(pullRequestTitleFromCommitSubject("Fix status (#102148)", 102147)).toBeUndefined();

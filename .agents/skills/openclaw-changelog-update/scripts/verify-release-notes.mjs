@@ -684,7 +684,7 @@ export function contributionRecordTarget(section) {
 }
 
 export function pullRequestTitleFromCommitSubject(subject, number) {
-  const match = subject.match(/^(?<title>\S(?:.*\S)?) \(#(?<number>[1-9]\d*)\)$/u);
+  const match = subject.match(/^(?<title>\S(?:.*?\S)?)(?<pr> \(#(?<number>[1-9]\d*)\))\k<pr>*$/u);
   return match?.groups?.number === String(number) ? match.groups.title : undefined;
 }
 
