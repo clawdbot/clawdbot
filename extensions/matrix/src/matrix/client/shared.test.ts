@@ -1,4 +1,5 @@
 // Matrix tests cover shared plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixAuth } from "./types.js";
 
@@ -32,16 +33,6 @@ function authFor(accountId: string): MatrixAuth {
     initialSyncLimit: undefined,
     encryption: false,
   };
-}
-
-function createDeferred<T = void>() {
-  let resolve: (value: T | PromiseLike<T>) => void = () => {};
-  let reject: (reason?: unknown) => void = () => {};
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
 }
 
 function createMockClient(name: string, callOrder: string[] = []) {
@@ -223,7 +214,7 @@ describe("shared Matrix client generations", () => {
   it("runs registered monitor cleanup during forced account retirement", async () => {
     const auth = authFor("main");
     const client = createMockClient("main");
-    const waitForTasks = createDeferred();
+    const waitForTasks = createDeferred<void>();
     createMatrixClientMock.mockResolvedValue(client);
     const monitor = await acquireSharedMatrixClient({
       auth,
@@ -518,7 +509,7 @@ describe("shared Matrix client generations", () => {
 
   it("memoizes one release promise for duplicate release calls", async () => {
     const client = createMockClient("main");
-    const persist = createDeferred();
+    const persist = createDeferred<void>();
     client.stopAndPersist.mockReturnValue(persist.promise);
     createMatrixClientMock.mockResolvedValue(client);
     const lease = await acquireSharedMatrixClient({
@@ -539,7 +530,7 @@ describe("shared Matrix client generations", () => {
   it("waits abortably instead of admitting a new lease while a generation retires", async () => {
     const firstClient = createMockClient("first");
     const replacementClient = createMockClient("replacement");
-    const persist = createDeferred();
+    const persist = createDeferred<void>();
     firstClient.stopAndPersist.mockReturnValue(persist.promise);
     createMatrixClientMock
       .mockResolvedValueOnce(firstClient)
@@ -609,7 +600,7 @@ describe("shared Matrix client generations", () => {
 
   it("preserves an earlier stop requirement when the final lease requests discard", async () => {
     const cause = new Error("best-effort persistence failed");
-    const persist = createDeferred();
+    const persist = createDeferred<void>();
     const firstClient = createMockClient("first");
     const replacementClient = createMockClient("replacement");
     firstClient.stopAndPersist.mockReturnValue(persist.promise);
@@ -698,7 +689,7 @@ describe("shared Matrix client generations", () => {
   });
 
   it("aborts a first starter and waiter during forced retirement without late reuse", async () => {
-    const start = createDeferred();
+    const start = createDeferred<void>();
     const firstClient = createMockClient("first");
     const replacementClient = createMockClient("replacement");
     let startupSignal: AbortSignal | undefined;
@@ -737,7 +728,7 @@ describe("shared Matrix client generations", () => {
 
   it("does not let one aborted startup waiter remove another lease", async () => {
     const client = createMockClient("main");
-    const start = createDeferred();
+    const start = createDeferred<void>();
     client.start.mockReturnValue(start.promise);
     createMatrixClientMock.mockResolvedValue(client);
     const auth = authFor("main");

@@ -830,10 +830,7 @@ export type SessionEntryCreateWithTranscriptOptions = {
   requireWriteSuccess?: boolean;
 };
 
-export type SessionPatchProjectionSnapshot = {
-  /** Mutable-owner view exposed read-only so target lookup never rebuilds the whole store. */
-  store: Readonly<Record<string, SessionEntry>>;
-};
+export type SessionPatchProjectionSnapshot = { store: Readonly<Record<string, SessionEntry>> };
 
 export type SessionPatchProjectionTarget = {
   candidateKeys?: readonly string[];
@@ -843,7 +840,6 @@ export type SessionPatchProjectionTarget = {
 export type SessionPatchProjectionContext = SessionPatchProjectionSnapshot &
   SessionPatchProjectionTarget & {
     existingEntry?: SessionEntry;
-    /** Store-indexed label conflict check excluding this target's canonical aliases. */
     isLabelInUse: (label: string) => boolean;
   };
 

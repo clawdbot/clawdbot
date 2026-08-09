@@ -30,6 +30,7 @@ import {
   type PluginDoctorStateMigrationDetection,
 } from "../plugins/doctor-contract-registry.js";
 import { resolveLegacyInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
+import type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
 import {
   DEFAULT_ACCOUNT_ID,
   DEFAULT_MAIN_KEY,
@@ -135,7 +136,6 @@ import {
   resolveSessionStoreOwnership,
   type SessionStoreOwnership,
 } from "./state-migrations.session-store.js";
-import { resetLegacySessionSurfacesForTest } from "./state-migrations.session-surfaces.js";
 import {
   autoMigrateLegacyStateDir,
   resetAutoMigrateLegacyTaskStateSidecarsForTest,
@@ -201,7 +201,6 @@ const PLUGIN_DOCTOR_MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 export function resetAutoMigrateLegacyStateForTest(): void {
   autoMigrateChecked.clear();
   resetAutoMigrateLegacyTaskStateSidecarsForTest();
-  resetLegacySessionSurfacesForTest();
 }
 
 async function collectPluginDoctorStateMigrationPlans(params: {
@@ -345,12 +344,12 @@ export async function detectLegacyStateMigrations(params: {
   pluginSessionStoreAgentIds?: readonly string[];
   sessionStoreOwnership?: SessionStoreOwnership;
   doctorOnlyStateMigrations?: boolean;
+  legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<LegacyStateDetection> {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
-
   const targetAgentId = resolveDoctorStateMigrationAgentId(params.cfg);
   const rawMainKey = params.cfg.session?.mainKey;
   const targetMainKey =
@@ -399,16 +398,19 @@ export async function detectLegacyStateMigrations(params: {
   const targetSessionParsed = fileExists(sessionsTargetStorePath)
     ? readSessionStoreJson5(sessionsTargetStorePath)
     : { store: {}, ok: true };
-  const legacyKeys = targetSessionParsed.ok
-    ? listLegacySessionKeys({
-        store: targetSessionParsed.store,
-        agentId: targetAgentId,
-        mainKey: targetMainKey,
-        scope: targetScope,
-        preserveAmbiguousKeys: sessionStoreOwnership.preserveAmbiguousKeys,
-        preserveForeignMainAliases,
-      })
-    : [];
+  const legacySessionSurfaces = params.legacySessionSurfaces;
+  const legacyKeys =
+    targetSessionParsed.ok && legacySessionSurfaces.failures.length === 0
+      ? listLegacySessionKeys({
+          store: targetSessionParsed.store,
+          agentId: targetAgentId,
+          mainKey: targetMainKey,
+          scope: targetScope,
+          preserveAmbiguousKeys: sessionStoreOwnership.preserveAmbiguousKeys,
+          preserveForeignMainAliases,
+          legacySessionSurfaces: legacySessionSurfaces.surfaces,
+        })
+      : [];
   const hasStaleSessionFiles =
     targetSessionParsed.ok &&
     Object.values(targetSessionParsed.store).some((entry) =>
@@ -807,7 +809,7 @@ export async function detectLegacyStateMigrations(params: {
     subagentRegistry,
     rescuePending,
     channelPairing,
-    warnings: pluginPlanWarnings,
+    warnings: [...pluginPlanWarnings, ...legacySessionSurfaces.failures],
     notices: [],
     preview,
   };
@@ -1002,6 +1004,7 @@ type LegacyStateMigrationPlan = {
   recoverCorruptTargetStore?: boolean;
   doctorOnlyStateMigrations?: boolean;
   skipAgentScopedMigrations?: boolean;
+  legacySessionSurfaces: PreparedLegacySessionSurfaces;
 };
 
 function buildLegacyStateMigrationSteps(
@@ -1152,6 +1155,7 @@ function buildLegacyStateMigrationSteps(
       finalStep(() =>
         migrateLegacySessions(detected, now, {
           recoverCorruptTargetStore: params.recoverCorruptTargetStore,
+          legacySessionSurfaces: params.legacySessionSurfaces,
         }),
       ),
       {
@@ -1161,6 +1165,7 @@ function buildLegacyStateMigrationSteps(
             env: isDoctor ? { ...env, OPENCLAW_STATE_DIR: stateDir } : env,
             now,
             ...(isDoctor ? {} : { pluginSessionStoreAgentIds: params.pluginSessionStoreAgentIds }),
+            legacySessionSurfaces: params.legacySessionSurfaces,
           }),
         ),
         kind: "acp-session-metadata",
@@ -1206,9 +1211,12 @@ export async function runLegacyStateMigrations(params: {
   now?: () => number;
   recoverCorruptTargetStore?: boolean;
   doctorOnlyStateMigrations?: boolean;
+  legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<MigrationMessages> {
   const detected = params.detected;
   const env = params.env ?? process.env;
+  const config = params.config ?? ({} as OpenClawConfig);
+  const legacySessionSurfaces = params.legacySessionSurfaces;
   const stateSchema = migrateLegacyStateSchema(detected, env);
   if (detected.stateSchema.hasLegacy && stateSchema.warnings.length > 0) {
     return stateSchema;
@@ -1218,11 +1226,12 @@ export async function runLegacyStateMigrations(params: {
     buildLegacyStateMigrationSteps({
       mode: "doctor",
       detected,
-      config: params.config ?? ({} as OpenClawConfig),
+      config,
       env,
       now: params.now,
       recoverCorruptTargetStore: params.recoverCorruptTargetStore,
       doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+      legacySessionSurfaces,
     }),
   );
   const notices = mergeNotices([
@@ -1232,9 +1241,11 @@ export async function runLegacyStateMigrations(params: {
   return {
     changes: [...stateSchema.changes, ...migrations.sources.flatMap((source) => source.changes)],
     warnings: [
-      ...stateSchema.warnings,
-      ...detected.warnings,
-      ...migrations.sources.flatMap((source) => source.warnings),
+      ...new Set([
+        ...stateSchema.warnings,
+        ...detected.warnings,
+        ...migrations.sources.flatMap((source) => source.warnings),
+      ]),
     ],
     ...(notices.length > 0 ? { notices } : {}),
   };
@@ -1260,6 +1271,7 @@ export async function autoMigrateLegacyState(params: {
   now?: () => number;
   recoverCorruptTargetStore?: boolean;
   doctorOnlyStateMigrations?: boolean;
+  legacySessionSurfaces?: PreparedLegacySessionSurfaces;
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -1338,6 +1350,12 @@ export async function autoMigrateLegacyState(params: {
     env,
     pluginIds: collectRelevantDoctorPluginIds(pluginDoctorConfig),
   });
+  const legacySessionSurfaces =
+    params.legacySessionSurfaces ??
+    (await import("../plugins/legacy-session-surfaces.js")).prepareLegacySessionSurfaces({
+      config: params.cfg,
+      env,
+    });
   // Capture ownership before orphan-key rewrites. Atomic replacement can split
   // a configured filesystem alias from the standard target pathname.
   const sessionStoreOwnership = resolveSessionStoreOwnership({
@@ -1354,6 +1372,7 @@ export async function autoMigrateLegacyState(params: {
     cfg: params.cfg,
     env,
     additionalAgentIds: pluginSessionStoreAgentIds,
+    legacySessionSurfaces,
   });
 
   const logMigrationResults = (changes: string[], warnings: string[], notices: string[]) => {
@@ -1383,6 +1402,7 @@ export async function autoMigrateLegacyState(params: {
     env,
     homedir: params.homedir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+    legacySessionSurfaces,
   });
   const deviceAuth = await migrateLegacyDeviceAuth({
     detected: detected.deviceAuth,
@@ -1412,6 +1432,7 @@ export async function autoMigrateLegacyState(params: {
     pluginSessionStoreAgentIds,
     recoverCorruptTargetStore: params.recoverCorruptTargetStore,
     skipAgentScopedMigrations: Boolean(hasCustomAgentDir),
+    legacySessionSurfaces,
   });
   const initialMigrationSources = [
     stateDirResult,
@@ -1463,10 +1484,12 @@ export async function autoMigrateLegacyState(params: {
     ];
     const changes = completedSources.flatMap((source) => source.changes);
     const warnings = [
-      ...initialMigrationWarnings,
-      ...[acpSessionMetadata, deviceAuth, deviceIdentity, meetingTranscripts].flatMap(
-        (source) => source.warnings,
-      ),
+      ...new Set([
+        ...initialMigrationWarnings,
+        ...[acpSessionMetadata, deviceAuth, deviceIdentity, meetingTranscripts].flatMap(
+          (source) => source.warnings,
+        ),
+      ]),
     ];
     const notices = mergeNotices([stateDirResult, detected, deviceAuth, deviceIdentity]);
     logMigrationResults(changes, warnings, notices);
@@ -1490,12 +1513,14 @@ export async function autoMigrateLegacyState(params: {
   ];
   const changes = completedSources.flatMap((source) => source.changes);
   const warnings = [
-    ...initialMigrationWarnings,
-    ...migrations.sharedSources.flatMap((source) => source.warnings),
-    ...deviceAuth.warnings,
-    ...deviceIdentity.warnings,
-    ...(hasCustomAgentDir ? [] : meetingTranscripts.warnings),
-    ...migrations.finalSources.flatMap((source) => source.warnings),
+    ...new Set([
+      ...initialMigrationWarnings,
+      ...migrations.sharedSources.flatMap((source) => source.warnings),
+      ...deviceAuth.warnings,
+      ...deviceIdentity.warnings,
+      ...(hasCustomAgentDir ? [] : meetingTranscripts.warnings),
+      ...migrations.finalSources.flatMap((source) => source.warnings),
+    ]),
   ];
   const notices = mergeNotices([
     stateDirResult,

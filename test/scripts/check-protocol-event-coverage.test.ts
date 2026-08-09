@@ -7,7 +7,7 @@ import {
   extractKotlinHandledEvents,
   extractSwiftHandledEvents,
   extractSwiftStaticStringConstants,
-} from "../../scripts/check-protocol-event-coverage.mjs";
+} from "../../scripts/check-protocol-event-coverage.mts";
 
 const GATEWAY_LIST_FIXTURE = `
 export const GATEWAY_EVENTS = [

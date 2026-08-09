@@ -63,10 +63,16 @@ function renderControl(
   control: NewSessionModelControl,
   context: ApplicationContext,
   agentId = "main",
+  agent: GatewayAgentRow | null = {
+    id: "main",
+    model: { primary: "openai/gpt-5.6-luna" },
+    thinkingDefault: "medium",
+  },
 ) {
   const container = document.createElement("div");
   render(
     control.render({
+      ...(agent ? { agent } : {}),
       agentId,
       context,
       sending: false,
@@ -219,6 +225,96 @@ describe("new-session model runtime", () => {
     ).toBe("true");
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     pending.resolve({ models: [] });
+  });
+
+  it("waits for selected-agent defaults after chat metadata resolves", async () => {
+    const { context, request } = contextWith([
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
+    ]);
+    const notify = vi.fn();
+    const control = new NewSessionModelControl(notify);
+
+    control.load(context, "main", true);
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledOnce();
+      expect(notify).toHaveBeenCalledTimes(2);
+    });
+
+    let container = renderControl(control, context, "main", null);
+    const loadingModelTrigger = container.querySelector('[data-chat-model-select="true"]');
+    expect(loadingModelTrigger?.textContent).toContain("Loading models");
+    expect(loadingModelTrigger?.textContent).not.toContain("Default model");
+    expect(container.querySelector('[data-chat-thinking-select="true"]')?.textContent).toContain(
+      "Medium",
+    );
+    expect(control.selected).toBe("");
+    expect(control.thinkingLevel).toBe("");
+
+    container = renderControl(control, context, "main", {
+      id: "main",
+      model: { primary: "openai/gpt-5.6-sol" },
+      thinkingDefault: "high",
+    });
+    expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
+      "GPT-5.6 Sol",
+    );
+    expect(container.querySelector('[data-chat-thinking-select="true"]')?.textContent).toContain(
+      "High",
+    );
+    expect(control.selected).toBe("");
+    expect(control.thinkingLevel).toBe("");
+  });
+
+  it("shows Medium for a hydrated agent without a projected thinking default", async () => {
+    const { context, request } = contextWith([
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
+    ]);
+    const notify = vi.fn();
+    const control = new NewSessionModelControl(notify);
+
+    control.load(context, "main", true);
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledOnce();
+      expect(notify).toHaveBeenCalledTimes(2);
+    });
+
+    const container = renderControl(control, context, "main", {
+      id: "main",
+      model: { primary: "openai/gpt-5.6-sol" },
+    });
+    expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
+      "GPT-5.6 Sol",
+    );
+    expect(container.querySelector('[data-chat-thinking-select="true"]')?.textContent).toContain(
+      "Medium",
+    );
+    expect(control.selected).toBe("");
+    expect(control.thinkingLevel).toBe("");
+  });
+
+  it("preserves an explicitly remembered Off effort", async () => {
+    const agent = {
+      id: "main",
+      model: { primary: "openai/gpt-5.6-sol" },
+      thinkingDefault: "high",
+    } satisfies GatewayAgentRow;
+    const { context } = contextWith([
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+
+    control.load(context, "main", true, {
+      agent,
+      preference: { thinkingLevel: "off" },
+    });
+
+    await vi.waitFor(() => expect(control.thinkingLevel).toBe("off"));
+    const container = renderControl(control, context, "main", agent);
+    expect(container.querySelector('[data-chat-thinking-select="true"]')?.textContent).toContain(
+      "Off",
+    );
+    expect(control.selected).toBe("");
   });
 
   it.each([

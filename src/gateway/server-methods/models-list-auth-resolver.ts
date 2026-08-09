@@ -1,3 +1,4 @@
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credentials.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
@@ -39,6 +40,7 @@ export function createModelsListAuthResolver(params: {
   includeOpenAIExternalProfiles: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
   preparedAuthStore?: AuthProfileStore;
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   workspaceDir: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
 }): ModelAuthAvailabilityResolver {
@@ -50,6 +52,9 @@ export function createModelsListAuthResolver(params: {
     loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
       allowKeychainPrompt: false,
     });
+  // A prepared projection must hydrate from its own auth-store generation. Reading the global
+  // snapshot can mix generations; treating this store as persisted loses resolved SecretRefs.
+  const preparedRuntimeAuthStore = params.preparedAuthStore;
   return createModelAuthAvailabilityResolver({
     cfg: params.cfg,
     authStore,
@@ -57,11 +62,12 @@ export function createModelsListAuthResolver(params: {
     workspaceDir: params.workspaceDir,
     env: process.env,
     metadataSnapshot: params.metadataSnapshot,
+    preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
     skipSetupProviderFallback: true,
     syntheticAuthProviderRefs: listEnabledSyntheticAuthProviderRefs(params),
     externalCliProviderIds:
       !params.preparedAuthStore && params.includeOpenAIExternalProfiles ? ["openai"] : [],
-    ...(params.preparedAuthStore ? { allowPreparedRuntimeAuth: false } : {}),
+    ...(preparedRuntimeAuthStore ? { preparedRuntimeAuthStore } : {}),
     routeResolverFactory: params.routeResolverFactory,
   });
 }

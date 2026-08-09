@@ -304,6 +304,11 @@ export function acknowledgeNotifyOnExit(record: {
   record.notifyOnExitRemoval = undefined;
 }
 
+/** Reports owner-tracked process liveness even after visibility is removed. */
+export function hasActiveBackgroundExecSession(sessionId: string): boolean {
+  return activeBackgroundExecSessionIds.has(sessionId);
+}
+
 /** Returns the number of live background exec sessions without exposing process details. */
 export function getActiveBackgroundExecSessionCount(): number {
   return activeBackgroundExecSessionIds.size;

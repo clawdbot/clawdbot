@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -91,29 +92,11 @@ type PostCompactionSyncParams = {
   sessions?: Array<{ agentId: string; sessionId: string; sessionKey?: string }>;
 };
 type PostCompactionSync = (params?: unknown) => Promise<void>;
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-};
-
-function createDeferred<T>(): Deferred<T> {
-  // Tests use manual deferreds to prove queued compaction waits at the exact
-  // lifecycle boundary instead of racing transcript updates.
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  if (!resolve) {
-    throw new Error("Expected compaction deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
-
 function mockPendingContextEngineCompaction() {
   const pending = {
     signal: undefined as AbortSignal | undefined,
-    started: createDeferred<void>(),
-    release: createDeferred<void>(),
+    started: createDeferred(),
+    release: createDeferred(),
   };
   contextEngineCompactMock.mockImplementationOnce(async (...args: unknown[]) => {
     const [params] = args;
@@ -133,7 +116,7 @@ function mockPendingContextEngineCompaction() {
 function mockPendingNativeCompaction() {
   const pending = {
     signal: undefined as AbortSignal | undefined,
-    started: createDeferred<void>(),
+    started: createDeferred(),
     terminal: createDeferred<{ ok: false; compacted: false; reason: string }>(),
   };
   maybeCompactAgentHarnessSessionMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -2071,7 +2054,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("awaits post-compaction memory sync in await mode when postCompactionForce is true", async () => {
     const syncStarted = createDeferred<PostCompactionSyncParams>();
-    const syncRelease = createDeferred<void>();
+    const syncRelease = createDeferred();
     const sync = vi.fn<PostCompactionSync>(async (params) => {
       syncStarted.resolve(params as PostCompactionSyncParams);
       await syncRelease.promise;
@@ -2115,7 +2098,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("fires post-compaction memory sync without awaiting it in async mode", async () => {
     const sync = vi.fn<PostCompactionSync>(async () => {});
-    const managerRequested = createDeferred<void>();
+    const managerRequested = createDeferred();
     const managerGate = createDeferred<{ manager: { sync: PostCompactionSync } }>();
     const syncStarted = createDeferred<PostCompactionSyncParams>();
     sync.mockImplementation(async (params) => {
@@ -2353,7 +2336,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       typeof import("./compaction-safety-timeout.js")
     >("./compaction-safety-timeout.js");
     const controller = new AbortController();
-    const compactStarted = createDeferred<void>();
+    const compactStarted = createDeferred();
 
     const resultPromise = compactWithSafetyTimeout(
       async () => {

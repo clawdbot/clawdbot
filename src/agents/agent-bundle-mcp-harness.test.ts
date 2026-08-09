@@ -594,6 +594,29 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
     await guest!.dispose();
   });
 
+  it("removes direct-policy-denied tools from executable and advertised requester catalogs", async () => {
+    mocks.setResolveImpl(async (params) =>
+      makeRuntime({
+        sessionId: params.sessionId,
+        requesterSenderId: params.requesterSenderId ?? "authed",
+      }),
+    );
+
+    const result = await materializeRequesterScopedMcpToolsForHarnessRun({
+      sessionId: "session-policy",
+      workspaceDir: "/workspace",
+      requesterSenderId: "authed",
+      policyContext: {
+        conversationToolPolicy: { deny: ["user-mail__inbox"] },
+      },
+    });
+
+    expect(result).toBeDefined();
+    expect(result!.tools).toEqual([]);
+    expect(result!.advertisedTools).toEqual([]);
+    await result!.dispose();
+  });
+
   it("routes authed calls to that sender's runtime only", async () => {
     mocks.setResolveImpl(async (params) => {
       const senderId =

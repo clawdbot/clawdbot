@@ -1,6 +1,7 @@
 // Cron model override forwarding tests cover passing overrides into agent runs.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearCliSessionMock,
   clearFastTestEnv,
@@ -100,16 +101,6 @@ function captureModelFallbackRun(provider = "google", model = "gemini-2.0-flash"
     },
   );
   return captured;
-}
-
-function createDeferred<T = void>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");

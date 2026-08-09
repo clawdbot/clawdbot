@@ -240,6 +240,8 @@ async function defaultBuildProjection(params: {
     snapshot: params.facts.owner.modelCatalog,
     metadataSnapshot: params.facts.owner.metadataSnapshot,
     preparedAuthStore: params.facts.authStore,
+    // The owner records usable auth at discovery; metadata must share that exact generation fact.
+    preparedRuntimeAuthModes: params.facts.owner.authModes,
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
     ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
   });

@@ -78,12 +78,23 @@ export type WorkerSshIdentityRequest = {
   keyRef: SecretRef;
 };
 
+/** Optional interactive desktop endpoint provisioned with the lease (warm-time capability). */
+export type WorkerDesktopEndpoint = {
+  /** Desktop service protocol on the worker loopback; "rfb" is the only phase-1 value. */
+  protocol: "rfb";
+  /** Loopback port on the worker (e.g. 5900). */
+  port: number;
+  /** Absolute on-box path to the per-lease password file; read over SSH, never persisted as plaintext. */
+  passwordFilePath?: string;
+};
+
 /** Durable lease identity and endpoint returned by a successful provision operation. */
 export type WorkerLease = {
   leaseId: string;
   ssh: WorkerSshEndpoint;
   /** The SSH account also owns processes unrelated to this worker lease. */
   sharedHost?: boolean;
+  desktop?: WorkerDesktopEndpoint;
 };
 
 /** Authoritative inspection result for an already-known worker lease. */

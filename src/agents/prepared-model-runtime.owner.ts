@@ -43,6 +43,7 @@ export type {
   PreparedModelRuntimeRefreshOptions,
   PreparedModelRuntimeReplacement,
   PreparedModelRuntimeReplacementGateId,
+  PreparedReplyDispatchRuntime,
   PreparedModelRuntimeSnapshot,
   PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.types.js";
@@ -146,17 +147,6 @@ export function hasConfiguredOwnerMatching(
   rawInput: PreparedModelRuntimeInput,
 ): boolean {
   return findConfiguredOwnerCandidates(owners, rawInput).length > 0;
-}
-
-/** Resolves the unique configured owner for one Gateway agent identity. */
-export function resolveConfiguredOwnerByAgentId(
-  owners: Map<string, PreparedModelRuntimeOwner>,
-  agentId: string,
-): PreparedModelRuntimeOwner | undefined {
-  const candidates = [...owners.values()].filter(
-    (owner) => owner.provenance === "configured" && owner.input.agentId === agentId,
-  );
-  return candidates.length === 1 ? candidates[0] : undefined;
 }
 
 export function rebindInputToCommittedConfiguredOwner(

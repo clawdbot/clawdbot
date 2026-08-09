@@ -749,6 +749,23 @@ function assertNpmPluginRemoved() {
   }
 }
 
+function assertNpmPluginRetained() {
+  const installPath = fs.readFileSync(scratchFile("plugins-npm-install-path.txt"), "utf8").trim();
+  const dependencyPackagePath = fs
+    .readFileSync(scratchFile("plugins-npm-dependency-path.txt"), "utf8")
+    .trim();
+  assertPluginRemoved({
+    pluginId: "demo-plugin-npm",
+    listFile: scratchFile("plugins-npm-retained.json"),
+  });
+  if (!fs.existsSync(installPath)) {
+    throw new Error(`npm managed package was deleted by --keep-files: ${installPath}`);
+  }
+  if (!fs.existsSync(dependencyPackagePath)) {
+    throw new Error(`npm managed dependency was deleted by --keep-files: ${dependencyPackagePath}`);
+  }
+}
+
 function assertInvalidOpenClawExtensionsRejected() {
   const pluginId = "demo-plugin-invalid-metadata";
   for (const expected of ["openclaw.extensions[1]", "non-empty string"]) {
@@ -1025,6 +1042,7 @@ const commands = {
   "plugin-file-removed": assertPluginFileRemoved,
   "plugin-npm": assertNpmPlugin,
   "plugin-npm-update": assertNpmPluginUpdateUnchanged,
+  "plugin-npm-retained": assertNpmPluginRetained,
   "plugin-npm-removed": assertNpmPluginRemoved,
   "invalid-openclaw-extensions": assertInvalidOpenClawExtensionsRejected,
   "bundle-disabled": assertClaudeBundleDisabled,

@@ -28,7 +28,10 @@ import {
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
 import { createReplyDispatchEvent } from "./dispatch-from-config.events.js";
-import { readAskUserQuestionId } from "./dispatch-from-config.payloads.js";
+import {
+  hasExecApprovalPayload,
+  requiresDurableToolResultDelivery,
+} from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import {
@@ -133,25 +136,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     ctx.InboundEventKind !== "room_event" &&
     !sendPolicyDenied;
   let finalReplyDeliveryStarted = false;
-  const hasExecApprovalPayload = (payload: ReplyPayload) => {
-    const execApproval =
-      payload.channelData &&
-      typeof payload.channelData === "object" &&
-      !Array.isArray(payload.channelData)
-        ? payload.channelData.execApproval
-        : undefined;
-    return execApproval && typeof execApproval === "object" && !Array.isArray(execApproval);
-  };
-  const hasAskUserPayload = (payload: ReplyPayload) => {
-    const askUser = payload.channelData?.askUser;
-    return askUser && typeof askUser === "object" && !Array.isArray(askUser);
-  };
   const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
     if (!finalReplyDeliveryStarted) {
       return false;
     }
-    const reply = resolveSendableOutboundReplyParts(payload);
-    return !reply.hasMedia && !hasExecApprovalPayload(payload) && !hasAskUserPayload(payload);
+    return !requiresDurableToolResultDelivery(payload);
   };
   // Durable inter-tool commentary lane: with verbose progress on, preamble
   // items become standalone progress messages like tool summaries. The latest
@@ -694,9 +683,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     shouldDeliverVerboseProgressDespiteSourceSuppression,
     shouldDeliverForcedToolProgressDespiteSourceSuppression,
     shouldDeliverFastModeAutoProgressDespiteSourceSuppression,
-    hasExecApprovalPayload,
-    hasAskUserPayload,
-    readAskUserQuestionId,
     shouldSuppressLateTextOnlyToolProgress,
     flushPendingCommentaryProgress,
     noteCommentaryProgress,

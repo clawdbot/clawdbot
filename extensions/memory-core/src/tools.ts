@@ -26,7 +26,6 @@ import {
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { asRecord } from "./dreaming-shared.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import {
@@ -411,7 +410,6 @@ export function createMemorySearchTool(options: {
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
 }) {
   return createMemoryTool({
     options,
@@ -505,7 +503,6 @@ export function createMemorySearchTool(options: {
                           agentId,
                           purpose: memoryManagerPurpose,
                           acquireLocalService: options.acquireLocalService,
-                          withLease: options.withLease,
                         }),
                       );
                       return { context };
@@ -618,7 +615,6 @@ export function createMemorySearchTool(options: {
                         agentId,
                         purpose: memoryManagerPurpose,
                         acquireLocalService: options.acquireLocalService,
-                        withLease: options.withLease,
                       }),
                     ),
                   );
@@ -799,7 +795,6 @@ export function createMemoryGetTool(options: {
   agentSessionKey?: string;
   sandboxed?: boolean;
   acquireLocalService?: MemoryCoreAcquireLocalService;
-  withLease?: PluginStateLeaseRunner;
 }) {
   return createMemoryTool({
     options,

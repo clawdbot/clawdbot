@@ -1,8 +1,8 @@
 // Doctor TUI last-session migration tests cover strict import and source cleanup.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -17,13 +17,7 @@ import {
 
 type TuiLastSessionTestDatabase = Pick<OpenClawStateKyselyDatabase, "tui_last_sessions">;
 
-const tempDirs: string[] = [];
-
-function makeStateDir(): string {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tui-migration-"));
-  tempDirs.push(stateDir);
-  return stateDir;
-}
+const tempDirs = createTempDirTracker();
 
 function legacyTuiLastSessionPath(stateDir: string): string {
   return path.join(stateDir, "tui", "last-session.json");
@@ -77,14 +71,12 @@ function seedPointer(params: {
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
 });
 
 describe("legacy TUI last-session migration", () => {
   it("runs only through explicit doctor detection and discards heartbeat pointers", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-tui-migration-");
     const sourcePath = writeLegacyStore(stateDir, {
       terminal: { sessionKey: "agent:main:tui-123", updatedAt: 100 },
       heartbeat: { sessionKey: "agent:main:telegram:direct:123:heartbeat", updatedAt: 200 },
@@ -126,7 +118,7 @@ describe("legacy TUI last-session migration", () => {
       { terminal: { sessionKey: "agent:main:tui-123", updatedAt: 100, extra: true } },
     ],
   ])("retains malformed source: %s", async (_label, value) => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-tui-migration-");
     const sourcePath = writeLegacyStore(stateDir, value);
 
     const result = migrate(stateDir);
@@ -138,7 +130,7 @@ describe("legacy TUI last-session migration", () => {
   });
 
   it("keeps a newer SQLite pointer and removes its superseded source", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-tui-migration-");
     const sourcePath = writeLegacyStore(stateDir, {
       terminal: { sessionKey: "agent:main:legacy", updatedAt: 100 },
     });
@@ -162,7 +154,7 @@ describe("legacy TUI last-session migration", () => {
   });
 
   it("fails closed on equal-timestamp divergence", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-tui-migration-");
     const sourcePath = writeLegacyStore(stateDir, {
       terminal: { sessionKey: "agent:main:legacy", updatedAt: 100 },
     });
@@ -186,7 +178,7 @@ describe("legacy TUI last-session migration", () => {
   });
 
   it("retains a source that changes before verification", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-tui-migration-");
     const sourcePath = writeLegacyStore(stateDir, {
       terminal: { sessionKey: "agent:main:first", updatedAt: 100 },
     });
@@ -209,7 +201,7 @@ describe("legacy TUI last-session migration", () => {
   });
 
   it("does not delete a replacement written after verification", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-tui-migration-");
     const sourcePath = writeLegacyStore(stateDir, {
       terminal: { sessionKey: "agent:main:first", updatedAt: 100 },
     });
@@ -241,7 +233,7 @@ describe("legacy TUI last-session migration", () => {
   });
 
   it("retries source cleanup without overwriting the verified row", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-tui-migration-");
     const sourcePath = writeLegacyStore(stateDir, {
       terminal: { sessionKey: "agent:main:tui-123", updatedAt: 100 },
     });

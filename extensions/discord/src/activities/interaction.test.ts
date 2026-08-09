@@ -1,10 +1,10 @@
 import { ComponentType, InteractionResponseType } from "discord-api-types/v10";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ButtonInteraction } from "../internal/discord.js";
 import { createInteraction } from "../internal/interactions.js";
 import {
   attachRestMock,
-  createDeferred,
   createInternalComponentInteractionPayload,
   createInternalTestClient,
 } from "../internal/test-builders.test-support.js";

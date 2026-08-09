@@ -1225,43 +1225,64 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.groupRequireMention).toBe(true);
   });
 
-  it("drops bot messages without mention when allowBots=mentions", async () => {
-    const channelId = "channel-bot-mentions-off";
-    const guildId = "guild-bot-mentions-off";
-    const message = createDiscordMessage({
-      id: "m-bot-mentions-off",
-      channelId,
+  it.each<{
+    name: string;
+    channelId: string;
+    guildId: string;
+    messageId: string;
+    content: string;
+    mentioned?: boolean;
+    accepted: boolean;
+  }>([
+    {
+      name: "drops bot messages without mention when allowBots=mentions",
+      channelId: "channel-bot-mentions-off",
+      guildId: "guild-bot-mentions-off",
+      messageId: "m-bot-mentions-off",
       content: "relay chatter",
-      author: {
-        id: "relay-bot-1",
-        bot: true,
-        username: "Relay",
-      },
-    });
-
-    const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
-
-    expect(result).toBeNull();
-  });
-
-  it("allows bot messages with explicit mention when allowBots=mentions", async () => {
-    const channelId = "channel-bot-mentions-on";
-    const guildId = "guild-bot-mentions-on";
-    const message = createDiscordMessage({
-      id: "m-bot-mentions-on",
-      channelId,
+      accepted: false,
+    },
+    {
+      name: "allows bot messages with explicit mention when allowBots=mentions",
+      channelId: "channel-bot-mentions-on",
+      guildId: "guild-bot-mentions-on",
+      messageId: "m-bot-mentions-on",
       content: "hi <@openclaw-bot>",
-      mentionedUsers: [{ id: "openclaw-bot" }],
-      author: {
-        id: "relay-bot-1",
-        bot: true,
-        username: "Relay",
-      },
+      mentioned: true,
+      accepted: true,
+    },
+    {
+      name: "still drops bot control commands without a real mention when allowBots=mentions",
+      channelId: "channel-bot-command-no-mention",
+      guildId: "guild-bot-command-no-mention",
+      messageId: "m-bot-command-no-mention",
+      content: "/new incident room",
+      accepted: false,
+    },
+    {
+      name: "still allows bot control commands with an explicit mention when allowBots=mentions",
+      channelId: "channel-bot-command-with-mention",
+      guildId: "guild-bot-command-with-mention",
+      messageId: "m-bot-command-with-mention",
+      content: "<@openclaw-bot> /new incident room",
+      mentioned: true,
+      accepted: true,
+    },
+  ])("$name", async ({ channelId, guildId, messageId, content, mentioned, accepted }) => {
+    const message = createDiscordMessage({
+      id: messageId,
+      channelId,
+      content,
+      ...(mentioned ? { mentionedUsers: [{ id: "openclaw-bot" }] } : {}),
+      author: { id: "relay-bot-1", bot: true, username: "Relay" },
     });
-
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
-    expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-on");
+    if (!accepted) {
+      expect(result).toBeNull();
+      return;
+    }
+    expect(expectPreflightResult(result).message.id).toBe(messageId);
   });
 
   it("hydrates mention metadata from REST when bot mention syntax is present but mentions are missing", async () => {
@@ -1451,45 +1472,6 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(result).toBeNull();
-  });
-
-  it("still drops bot control commands without a real mention when allowBots=mentions", async () => {
-    const channelId = "channel-bot-command-no-mention";
-    const guildId = "guild-bot-command-no-mention";
-    const message = createDiscordMessage({
-      id: "m-bot-command-no-mention",
-      channelId,
-      content: "/new incident room",
-      author: {
-        id: "relay-bot-1",
-        bot: true,
-        username: "Relay",
-      },
-    });
-
-    const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
-
-    expect(result).toBeNull();
-  });
-
-  it("still allows bot control commands with an explicit mention when allowBots=mentions", async () => {
-    const channelId = "channel-bot-command-with-mention";
-    const guildId = "guild-bot-command-with-mention";
-    const message = createDiscordMessage({
-      id: "m-bot-command-with-mention",
-      channelId,
-      content: "<@openclaw-bot> /new incident room",
-      mentionedUsers: [{ id: "openclaw-bot" }],
-      author: {
-        id: "relay-bot-1",
-        bot: true,
-        username: "Relay",
-      },
-    });
-
-    const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
-
-    expect(expectPreflightResult(result).message.id).toBe("m-bot-command-with-mention");
   });
 
   it("routes ordinary guild text control commands through authorization instead of dropping them", async () => {

@@ -17,6 +17,7 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credentials.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import { resolveExternalCliAuthProfiles } from "./auth-profiles/external-cli-sync.js";
 import {
@@ -119,6 +120,8 @@ type CreateModelAuthAvailabilityResolverParams = {
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   allowPreparedRuntimeAuth?: boolean;
+  preparedRuntimeAuthStore?: AuthProfileStore;
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
 };
 
 type AuthTarget = ModelAuthAvailabilityRef & {
@@ -175,9 +178,10 @@ export function createModelAuthAvailabilityResolver(
       }
     : params.authStore;
   const runtimeStore =
-    params.allowPreparedRuntimeAuth !== false
+    params.preparedRuntimeAuthStore ??
+    (params.allowPreparedRuntimeAuth !== false
       ? getRuntimeAuthProfileStoreSnapshot(params.agentDir)
-      : undefined;
+      : undefined);
   const hydratedProfileIds = new Set<string>();
   const sameSecretRef = (
     left: ReturnType<typeof coerceSecretRef>,
@@ -592,6 +596,14 @@ export function createModelAuthAvailabilityResolver(
         availability: modeAllowed(provider, target, "aws-sdk"),
         selectedAuthMode: "aws-sdk",
         evidence: "aws-sdk",
+      };
+    }
+    const preparedRuntimeAuthMode = params.preparedRuntimeAuthModes?.[normalizeProvider(provider)];
+    if (preparedRuntimeAuthMode) {
+      return {
+        availability: modeAllowed(provider, target, preparedRuntimeAuthMode),
+        selectedAuthMode: preparedRuntimeAuthMode,
+        evidence: "runtime",
       };
     }
     const environment = envAuth(provider);

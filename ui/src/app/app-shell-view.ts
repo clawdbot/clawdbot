@@ -20,7 +20,7 @@ import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveTerminalThemeMode } from "./app-root.ts";
-import { isBrowserPanelAvailable } from "./app-shell-chrome.ts";
+import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./app-shell-chrome.ts";
 import type { OutboxStoreRuntime, StoredOutboxScopeHost } from "./app-shell-gateway.ts";
 import { findInlineApproval } from "./approval-presentation.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
@@ -115,6 +115,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     context.config.current.terminalEnabled ?? false,
   );
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
+  const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const custodianPanelAvailable =
     gatewayConnected && isGatewayMethodAdvertised(gatewaySnapshot, "openclaw.chat") === true;
   const activeRoute = host.routeState.routeId ?? "chat";
@@ -477,6 +478,11 @@ export function renderApplicationShell(host: ShellViewHost) {
           password: context.gateway.connection.password,
         })}
       ></openclaw-browser-panel>
+      <openclaw-desktop-panel
+        .client=${gatewayConnected ? gatewaySnapshot.client : null}
+        .available=${desktopPanelAvailable}
+        .suppressed=${settingsTakeover}
+      ></openclaw-desktop-panel>
       <openclaw-custodian-panel
         .available=${custodianPanelAvailable}
         .suppressed=${activeRoute === "custodian"}

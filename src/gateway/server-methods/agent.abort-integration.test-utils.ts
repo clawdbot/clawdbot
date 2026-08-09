@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { createAgentTurnIo } from "../agent-turn/io.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { prepareAgentRunDispatch } from "./agent-run-admission-phase.js";
@@ -1654,7 +1655,7 @@ describe("gateway agent handler chat.abort integration", () => {
         agentDedupeKeys: [`agent:${runId}`],
         context,
         client: null,
-        respond: vi.fn(),
+        io: createAgentTurnIo(vi.fn()),
         abortForLifecycleRotation: () => false,
         acquireGatewayWorkAdmission: async () => {
           markAcquireStarted();

@@ -548,6 +548,8 @@ describe("prepared model runtime snapshots", () => {
 
     expect(second).toBe(first);
     expect(Object.isFrozen(first)).toBe(true);
+    expect(first.authModes).toEqual({ custom: "api_key" });
+    expect(Object.isFrozen(first.authModes)).toBe(true);
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
     expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(1);
     expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);

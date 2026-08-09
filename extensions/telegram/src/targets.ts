@@ -107,32 +107,23 @@ function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown"
 
 export function parseTelegramTarget(to: string): TelegramTarget {
   const normalized = stripTelegramInternalPrefixes(to);
-  const directMatch = /^(.+?):direct-topic:(\d+)$/.exec(normalized);
-  if (directMatch) {
-    const chatId = directMatch[1];
-    const topicIdText = directMatch[2];
-    if (chatId !== undefined && topicIdText !== undefined) {
-      const directMessagesTopicId = parseStrictPositiveInteger(topicIdText);
-      if (directMessagesTopicId !== undefined) {
-        return { chatId, directMessagesTopicId, chatType: resolveTelegramChatType(chatId) };
-      }
-    }
-    return { chatId: normalized, chatType: "unknown" };
-  }
-  const match = /^(.+?):topic:(\d+)$/.exec(normalized) ?? /^(.+):(\d+)$/.exec(normalized);
-  if (match) {
-    const chatId = match[1];
-    const threadIdText = match[2];
-    if (chatId !== undefined && threadIdText !== undefined) {
-      const messageThreadId = parseStrictNonNegativeInteger(threadIdText);
-      if (messageThreadId !== undefined) {
-        return { chatId, messageThreadId, chatType: resolveTelegramChatType(chatId) };
-      }
+  const match = /^(.+?):(?:(direct-topic|topic):)?(\d+)$/.exec(normalized);
+  const chatId = match?.[1];
+  const topicIdText = match?.[3];
+  if (chatId && topicIdText) {
+    const directTopic = match[2] === "direct-topic";
+    const topicId = directTopic
+      ? parseStrictPositiveInteger(topicIdText)
+      : parseStrictNonNegativeInteger(topicIdText);
+    if (topicId !== undefined) {
+      return directTopic
+        ? { chatId, directMessagesTopicId: topicId, chatType: resolveTelegramChatType(chatId) }
+        : { chatId, messageThreadId: topicId, chatType: resolveTelegramChatType(chatId) };
     }
   }
   return {
     chatId: normalized,
-    chatType: resolveTelegramChatType(normalized),
+    chatType: match ? "unknown" : resolveTelegramChatType(normalized),
   };
 }
 
