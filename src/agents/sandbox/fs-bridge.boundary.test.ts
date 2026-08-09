@@ -34,6 +34,32 @@ describe("sandbox fs bridge boundary validation", () => {
     expect(mockedExecDockerRaw).not.toHaveBeenCalled();
   });
 
+  it.each(["ro", "none"] as const)(
+    "allows explicit writable binds when workspace access is %s",
+    async (workspaceAccess) => {
+      await withTempDir("openclaw-fs-bridge-writable-bind-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        const bindRoot = path.join(stateDir, "shared");
+        await fs.mkdir(workspaceDir);
+        await fs.mkdir(bindRoot);
+        const bridge = createSandboxFsBridge({
+          sandbox: createSandbox({
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+            workspaceAccess,
+            docker: {
+              ...createSandbox().docker,
+              binds: [`${bindRoot}:/shared:rw`],
+            },
+          }),
+        });
+
+        await expect(bridge.mkdirp({ filePath: "/shared/attachments" })).resolves.toBeUndefined();
+        expect(findCallByDockerArg(1, "mkdirp")).toBeDefined();
+      });
+    },
+  );
+
   it("allows mkdirp for existing in-boundary subdirectories", async () => {
     await expectMkdirpAllowsExistingDirectory();
   });
