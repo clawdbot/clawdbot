@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { buildControlUiSessionPath } from "./index.js";
 import { parseControlUiSessionPath, type ControlUiSessionPathTarget } from "./parse.js";
 
-type ParseCase = readonly [string, string, ControlUiSessionPathTarget, (string | undefined)?];
+type ParseCase = {
+  name: string;
+  pathname: string;
+  expected: ControlUiSessionPathTarget;
+  basePath?: string;
+};
 type BuildCase = readonly [
   Parameters<typeof buildControlUiSessionPath>[0],
   ControlUiSessionPathTarget,
@@ -10,81 +15,85 @@ type BuildCase = readonly [
 
 describe("parseControlUiSessionPath", () => {
   it.each([
-    ["main", "/chat/main", { namespace: "chat", kind: "main", agentId: "main" }],
-    [
-      "base path",
-      "/control/dashboard/OPS-Team",
-      { namespace: "dashboard", kind: "main", agentId: "ops-team" },
-      "/control",
-    ],
-    [
-      "short ref",
-      "/dashboard/main/12345678",
-      { namespace: "dashboard", kind: "short", agentId: "main", shortId: "12345678" },
-    ],
-    [
-      "slugged short ref",
-      "/chat/wrong/wrong-slug-1234567890AB",
-      {
+    {
+      name: "main",
+      pathname: "/chat/main",
+      expected: { namespace: "chat", kind: "main", agentId: "main" },
+    },
+    {
+      name: "base path",
+      pathname: "/control/dashboard/OPS-Team",
+      expected: { namespace: "dashboard", kind: "main", agentId: "ops-team" },
+      basePath: "/control",
+    },
+    {
+      name: "short ref",
+      pathname: "/dashboard/main/12345678",
+      expected: { namespace: "dashboard", kind: "short", agentId: "main", shortId: "12345678" },
+    },
+    {
+      name: "slugged short ref",
+      pathname: "/chat/wrong/wrong-slug-1234567890AB",
+      expected: {
         namespace: "chat",
         kind: "short",
         agentId: "wrong",
         shortId: "1234567890ab",
         slugHint: "wrong-slug",
       },
-    ],
-    [
-      "literal",
-      "/chat/main/not-a-short-id",
-      {
+    },
+    {
+      name: "literal",
+      pathname: "/chat/main/not-a-short-id",
+      expected: {
         namespace: "chat",
         kind: "literal",
         agentId: "main",
         sessionKey: "agent:main:not-a-short-id",
         slugCandidate: "not-a-short-id",
       },
-    ],
-    [
-      "multi-segment literal",
-      "/chat/ops/cron/nightly/run/8821",
-      {
+    },
+    {
+      name: "multi-segment literal",
+      pathname: "/chat/ops/cron/nightly/run/8821",
+      expected: {
         namespace: "chat",
         kind: "literal",
         agentId: "ops",
         sessionKey: "agent:ops:cron:nightly:run:8821",
       },
-    ],
-    [
-      "forced literal",
-      "/chat/main/~key/release-deadbeef",
-      {
+    },
+    {
+      name: "forced literal",
+      pathname: "/chat/main/~key/release-deadbeef",
+      expected: {
         namespace: "chat",
         kind: "literal",
         agentId: "main",
         sessionKey: "agent:main:release-deadbeef",
       },
-    ],
-    [
-      "dot escapes",
-      "/chat/main/cron/~dot/~dotdot/run",
-      {
+    },
+    {
+      name: "dot escapes",
+      pathname: "/chat/main/cron/~dot/~dotdot/run",
+      expected: {
         namespace: "chat",
         kind: "literal",
         agentId: "main",
         sessionKey: "agent:main:cron:.:..:run",
       },
-    ],
-    [
-      "tilde escape",
-      "/chat/main/channel/~~dot",
-      {
+    },
+    {
+      name: "tilde escape",
+      pathname: "/chat/main/channel/~~dot",
+      expected: {
         namespace: "chat",
         kind: "literal",
         agentId: "main",
         sessionKey: "agent:main:channel:~dot",
       },
-    ],
-  ] satisfies readonly ParseCase[])("parses $0", (_name, pathname, expected, basePath) => {
+    },
+  ] satisfies readonly ParseCase[])("parses $name", ({ pathname, expected, basePath }) => {
     expect(parseControlUiSessionPath(pathname, basePath)).toEqual(expected);
   });
 
@@ -129,7 +138,7 @@ describe("parseControlUiSessionPath", () => {
   });
 
   it("round-trips main, literal, and slugged UUID paths", () => {
-    const cases = [
+    const cases: readonly BuildCase[] = [
       [
         { namespace: "chat", sessionKey: "agent:research:workspace", mainKey: "workspace" },
         { namespace: "chat", kind: "main", agentId: "research" },
@@ -158,7 +167,7 @@ describe("parseControlUiSessionPath", () => {
           slugHint: "deploy-monitor",
         },
       ],
-    ] satisfies readonly BuildCase[];
+    ];
 
     for (const [params, expected] of cases) {
       const path = buildControlUiSessionPath(params);
