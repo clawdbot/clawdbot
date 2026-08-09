@@ -2980,6 +2980,12 @@ jobs:
         if: needs.preflight.outputs.run_format_check == 'true'
         run: pnpm format:check
 
+      - name: Guard bundled skills against removed TaskFlow aliases
+        # Docs-only skill changes (skills/**/SKILL.md) skip the architecture
+        # job, so run the alias rule here to prevent reintroducing the removed
+        # api.runtime.tasks.flow / api.runtime.taskFlow surfaces.
+        run: node scripts/check-deprecated-api-usage.mts --rule=bundled-skills-removed-taskflow-aliases
+
       - name: Checkout ClawHub docs source
         run: |
           set -euo pipefail

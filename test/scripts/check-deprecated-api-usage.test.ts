@@ -35,6 +35,24 @@ function runFacadeImportRule(sourceByRepoPath: Record<string, string>) {
   }
 }
 
+function runBundledSkillsTaskFlowAliasRule(sourceByRepoPath: Record<string, string>) {
+  const fixtureRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "deprecated-guard-")));
+  try {
+    for (const [repoPath, source] of Object.entries(sourceByRepoPath)) {
+      const filePath = path.join(fixtureRoot, repoPath);
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, source);
+    }
+    return spawnSync(
+      process.execPath,
+      [GUARD_SCRIPT_PATH, "--rule=bundled-skills-removed-taskflow-aliases"],
+      { cwd: fixtureRoot, encoding: "utf8" },
+    );
+  } finally {
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
 describe("scripts/check-deprecated-api-usage", () => {
   it("bans every curated deprecated public plugin SDK subpath", () => {
     const specifiers = new Set(buildDeprecatedPluginSdkModuleSpecifiers());
@@ -114,6 +132,41 @@ describe("scripts/check-deprecated-api-usage", () => {
         'export { runChannelInboundEvent } from "./channel-inbound.js";',
       "src/plugin-sdk/channel-message.test.ts":
         'const mod = await import("openclaw/plugin-sdk/channel-message");',
+    });
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
+  it("flags removed TaskFlow aliases reintroduced in bundled skill docs", () => {
+    const result = runBundledSkillsTaskFlowAliasRule({
+      "skills/taskflow/SKILL.md": [
+        "# TaskFlow skill",
+        "Use `api.runtime.tasks.flow.fromToolContext(ctx)` to bind a flow.",
+        "The canonical surface is `api.runtime.taskFlow`.",
+      ].join("\n"),
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "skills/taskflow/SKILL.md:2: api.runtime.tasks.flow",
+    );
+    expect(result.stderr).toContain(
+      "skills/taskflow/SKILL.md:3: api.runtime.taskFlow",
+    );
+  });
+
+  it("passes bundled skill docs that use the canonical managedFlows/flows surfaces", () => {
+    const result = runBundledSkillsTaskFlowAliasRule({
+      "skills/taskflow/SKILL.md": [
+        "# TaskFlow skill",
+        "Mutations go through `api.runtime.tasks.managedFlows`.",
+        "Read-only views use `api.runtime.tasks.flows`.",
+      ].join("\n"),
+      "skills/taskflow-inbox-triage/SKILL.md": [
+        "# Inbox triage skill",
+        "Call `api.runtime.tasks.managedFlows.fromToolContext(ctx)`.",
+      ].join("\n"),
     });
 
     expect(result.stderr).toBe("");

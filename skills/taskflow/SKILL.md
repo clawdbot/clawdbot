@@ -29,15 +29,18 @@ It does **not** own branching or business logic. Put that in Lobster, acpx, or t
 
 ## Current runtime shape
 
-Canonical plugin/runtime entrypoint:
+Managed TaskFlow lifecycle entrypoint:
 
-- `api.runtime.tasks.flow`
-- `api.runtime.taskFlow` still exists as an alias, but `api.runtime.tasks.flow` is the canonical shape
+- `api.runtime.tasks.managedFlows` — create, drive, and cancel managed TaskFlows
+
+DTO read surface:
+
+- `api.runtime.tasks.flows` — read-only listing and status lookups
 
 Binding:
 
-- `api.runtime.tasks.flow.fromToolContext(ctx)` when you already have trusted tool context with `sessionKey`
-- `api.runtime.tasks.flow.bindSession({ sessionKey, requesterOrigin })` when your binding layer already resolved the session and delivery context
+- `api.runtime.tasks.managedFlows.fromToolContext(ctx)` when you already have trusted tool context with `sessionKey`
+- `api.runtime.tasks.managedFlows.bindSession({ sessionKey, requesterOrigin })` when your binding layer already resolved the session and delivery context
 
 Managed-flow lifecycle:
 
@@ -59,7 +62,7 @@ Managed-flow lifecycle:
 ## Example shape
 
 ```ts
-const taskFlow = api.runtime.tasks.flow.fromToolContext(ctx);
+const taskFlow = api.runtime.tasks.managedFlows.fromToolContext(ctx);
 
 const created = taskFlow.createManaged({
   controllerId: "my-plugin/inbox-triage",

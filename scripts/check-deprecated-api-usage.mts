@@ -143,6 +143,53 @@ function collectRuleViolations(rule: DeprecatedRule) {
   return collectIdentifierRuleViolations(rule);
 }
 
+function* walkMarkdown(dir) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      yield* walkMarkdown(entryPath);
+      continue;
+    }
+    if (entry.isFile() && entry.name.endsWith(".md")) {
+      yield entryPath;
+    }
+  }
+}
+
+function collectBundledSkillsRemovedTaskFlowAliasViolations() {
+  const skillRoot = path.join(repoRoot, "skills");
+  const patterns = [
+    { regex: /api\.runtime\.tasks\.flow\b/gu, name: "api.runtime.tasks.flow" },
+    { regex: /api\.runtime\.taskFlow\b/gu, name: "api.runtime.taskFlow" },
+  ];
+  const violations = [];
+
+  if (!fs.existsSync(skillRoot)) {
+    return violations;
+  }
+
+  for (const entry of fs.readdirSync(skillRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const skillPath = path.join(skillRoot, entry.name);
+    for (const filePath of walkMarkdown(skillPath)) {
+      const repoPath = toRepoPath(filePath);
+      const source = fs.readFileSync(filePath, "utf8");
+      for (const { regex, name } of patterns) {
+        for (const match of source.matchAll(regex)) {
+          const line = source.slice(0, match.index).split("\n").length;
+          violations.push(
+            `${repoPath}:${line}: ${name} (use api.runtime.tasks.managedFlows or api.runtime.tasks.flows)`,
+          );
+        }
+      }
+    }
+  }
+
+  return violations;
+}
+
 const internalFacadeImportPatterns = [
   /\bimport\s+(?:type\s+)?(?:[^"']+?\s+from\s+)?["']([^"']+)["']/gu,
   /\bexport\s+(?:type\s+)?(?:\*\s+(?:as\s+\w+\s+)?from\s+|[^"']+?\s+from\s+)["']([^"']+)["']/gu,
@@ -217,6 +264,10 @@ const rules: Array<DeprecatedRule & { id: string }> = [
     // must not reach them via package specifier or relative import.
     id: "facade-internal-imports",
     collect: () => collectBannedInternalFacadeImportViolations({ roots: ["src", "extensions"] }),
+  },
+  {
+    id: "bundled-skills-removed-taskflow-aliases",
+    collect: () => collectBundledSkillsRemovedTaskFlowAliasViolations(),
   },
   {
     id: "message-api",
