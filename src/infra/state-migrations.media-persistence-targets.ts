@@ -57,20 +57,20 @@ export function resolveAgentDatabaseMediaMigrationTargets(params: {
       `Failed enumerating registered agent databases for media migration: ${String(error)}`,
     );
   }
-  // Explicit config owns identity; disk layout is a fallback heuristic, and
-  // registry rows are last because copied or renamed state can leave them stale.
+  // Owner authority is explicit config, then the recorded registry fact, then
+  // directory-name inference. Recorded identity must beat a stale directory basename.
   const candidates: CandidateTarget[] = [
     ...params.configuredAgentDatabaseTargets.map((target) => ({
       agentId: target.agentId,
       path: target.path,
       source: "configured" as const,
     })),
-    ...listDefaultAgentDatabaseTargets(params.env, params.warnings),
     ...registered.map((entry) => ({
       agentId: entry.agentId,
       path: entry.path,
       source: "registry" as const,
     })),
+    ...listDefaultAgentDatabaseTargets(params.env, params.warnings),
   ];
   const activeStateDir = resolveStateDir(params.env);
   let activeStateDirRealPath: string | undefined;

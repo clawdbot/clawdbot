@@ -115,6 +115,26 @@ describe("media persistence migration targets", () => {
     ).toEqual([expect.objectContaining({ agentId: "renamed", path: databasePath })]);
   });
 
+  it("prefers a recorded owner over the default-layout directory name", () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-recorded-owner-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = path.join(stateDir, "agents", "dirname", "agent", "openclaw-agent.sqlite");
+    createLegacyAgentDatabase({ agentId: "recorded", env, path: databasePath });
+
+    const result = migrateLegacyMediaPersistence({ env });
+
+    expect(result.warnings).toEqual([]);
+    expect(readUserVersion(databasePath)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+    expect(
+      listOpenClawRegisteredAgentDatabases({
+        env,
+        includeIncompatibleSchemaVersions: true,
+      }),
+    ).toEqual([expect.objectContaining({ agentId: "recorded", path: databasePath })]);
+  });
+
   it("preserves filesystem traversal for registered paths containing dot-dot segments", () => {
     const stateDir = fs.realpathSync.native(
       makeTempDir(tempDirs, "media-persistence-symlink-path-"),
