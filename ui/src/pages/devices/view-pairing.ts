@@ -6,7 +6,9 @@ import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import type { DevicePairSetup, DevicePairSetupAccess } from "../../lib/device-pair-setup.ts";
 
-const PAIRING_DOCS_URL = "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing";
+const MOBILE_PAIRING_DOCS_URL =
+  "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended";
+const NODE_PAIRING_DOCS_URL = "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing";
 
 function formatPairingSetupCountdown(expiresAtMs: number, nowMs: number): string {
   const totalSeconds = Math.max(0, Math.ceil((expiresAtMs - nowMs) / 1_000));
@@ -40,6 +42,7 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
   const pendingCount = props.pendingCount;
   const gatewayUrls = setup?.gatewayUrls ?? (setup ? [setup.gatewayUrl] : []);
   const isNodeSetup = props.access === "node";
+  const pairingDocsUrl = isNodeSetup ? NODE_PAIRING_DOCS_URL : MOBILE_PAIRING_DOCS_URL;
   const pairUrl = setup ? `oc-pair://${setup.setupCode}` : "";
   const nodeCommand = pairUrl ? `openclaw node run --pair "${pairUrl}"` : "";
   const setupExpired = typeof setup?.expiresAtMs === "number" && setup.expiresAtMs <= props.nowMs;
@@ -249,7 +252,7 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
         </div>
 
         <footer class="device-pair-setup__footer">
-          <a href=${PAIRING_DOCS_URL} target="_blank" rel="noreferrer">
+          <a href=${pairingDocsUrl} target="_blank" rel="noreferrer">
             ${t("devices.pairing.help")}
           </a>
           <button class="btn btn--ghost" type="button" @click=${props.onManageDevices}>
