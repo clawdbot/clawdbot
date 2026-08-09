@@ -18,6 +18,8 @@ import {
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+const ATTACHMENT_ID = "00000000-0000-4000-8000-000000000001";
+
 function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
     runId: "run-1",
@@ -249,13 +251,69 @@ describe("safeRemoveAttachmentsDir", () => {
     }
   });
 
+  it("refuses an arbitrary descendant that is not a generated attachment receipt", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-shape-"));
+    const arbitraryDir = path.join(rootDir, "other", ATTACHMENT_ID);
+    await fs.mkdir(arbitraryDir, { recursive: true });
+    await fs.writeFile(path.join(arbitraryDir, "sentinel.txt"), "unchanged");
+    try {
+      await expect(
+        safeRemoveAttachmentsDir(
+          createRunEntry({ attachmentsDir: arbitraryDir, attachmentsRootDir: rootDir }),
+        ),
+      ).resolves.toBe(false);
+      await expect(fs.readFile(path.join(arbitraryDir, "sentinel.txt"), "utf8")).resolves.toBe(
+        "unchanged",
+      );
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("reconstructs a persisted sandbox boundary for cleanup", async () => {
-    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-sandbox-"));
-    const attachmentsDir = path.join(rootDir, "receipt");
-    await fs.mkdir(attachmentsDir);
+    const sandboxWorkspaceDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-attachments-sandbox-"),
+    );
+    const targetWorkspaceDir = path.join(sandboxWorkspaceDir, "worker");
+    const attachmentsDir = path.join(targetWorkspaceDir, ".openclaw", "attachments", ATTACHMENT_ID);
+    await fs.mkdir(attachmentsDir, { recursive: true });
     const remove = vi.fn(async () => {
       await fs.rm(attachmentsDir, { recursive: true, force: true });
     });
+    const resolveSandbox = vi.fn(async () => ({ fsBridge: { remove } }) as never);
+    try {
+      await expect(
+        safeRemoveAttachmentsDir(
+          createRunEntry({
+            attachmentsDir,
+            attachmentsRootDir: targetWorkspaceDir,
+            attachmentsSandboxSessionKey: "agent:main:main",
+            attachmentsSandboxAgentId: "main",
+            attachmentsSandboxWorkspaceDir: sandboxWorkspaceDir,
+          }),
+          {
+            config: {},
+            resolveSandbox,
+          },
+        ),
+      ).resolves.toBe(true);
+      expect(resolveSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceDir: sandboxWorkspaceDir }),
+      );
+      expect(remove).toHaveBeenCalledWith({
+        filePath: attachmentsDir,
+        recursive: true,
+        force: true,
+      });
+    } finally {
+      await fs.rm(sandboxWorkspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses sandbox cleanup without its persisted mutation workspace", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-boundary-"));
+    const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
+    await fs.mkdir(attachmentsDir, { recursive: true });
     try {
       await expect(
         safeRemoveAttachmentsDir(
@@ -265,17 +323,9 @@ describe("safeRemoveAttachmentsDir", () => {
             attachmentsSandboxSessionKey: "agent:main:main",
             attachmentsSandboxAgentId: "main",
           }),
-          {
-            config: {},
-            resolveSandbox: async () => ({ fsBridge: { remove } }) as never,
-          },
         ),
-      ).resolves.toBe(true);
-      expect(remove).toHaveBeenCalledWith({
-        filePath: attachmentsDir,
-        recursive: true,
-        force: true,
-      });
+      ).resolves.toBe(false);
+      await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
@@ -311,8 +361,8 @@ describe("safeRemoveAttachmentsDir", () => {
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachments-symlink-"));
       const rootDir = path.join(tempDir, "root");
       const outsideDir = path.join(tempDir, "outside");
-      const linkedDir = path.join(rootDir, "receipt");
-      await fs.mkdir(rootDir);
+      const linkedDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
+      await fs.mkdir(path.dirname(linkedDir), { recursive: true });
       await fs.mkdir(outsideDir);
       await fs.writeFile(path.join(outsideDir, "sentinel.txt"), "unchanged");
       await fs.symlink(outsideDir, linkedDir, "dir");
@@ -366,8 +416,8 @@ describe("reconcileOrphanedRun", () => {
 
   it("keeps the orphan row until rooted attachment cleanup settles", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-orphan-owner-"));
-    const attachmentsDir = path.join(rootDir, "receipt");
-    await fs.mkdir(attachmentsDir);
+    const attachmentsDir = path.join(rootDir, ".openclaw", "attachments", ATTACHMENT_ID);
+    await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "attachment.txt"), "private");
     const entry = createRunEntry({
       cleanup: "delete",

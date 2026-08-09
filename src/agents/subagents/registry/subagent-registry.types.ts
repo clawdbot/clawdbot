@@ -280,6 +280,7 @@ export type SubagentRunRecord = {
   /** Original sandbox boundary used for attachment staging and cleanup. */
   attachmentsSandboxSessionKey?: string;
   attachmentsSandboxAgentId?: string;
+  attachmentsSandboxWorkspaceDir?: string;
   retainAttachmentsOnKeep?: boolean;
   /** Collector-mode runs remain waitable and never announce to the requester. */
   collect?: boolean;

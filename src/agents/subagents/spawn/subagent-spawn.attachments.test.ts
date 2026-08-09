@@ -239,7 +239,7 @@ describe("spawnSubagentDirect filename validation", () => {
       getRuntimeConfig: () => configOverride,
       updateSessionStoreMock,
       workspaceDir: workspaceDirOverride,
-      resolveSandboxRuntimeStatus: () => ({ sandboxed: true }),
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
       resolveSandboxContext: async () => ({ fsBridge: bridge }),
       registerSubagentRunMock,
     });
@@ -261,9 +261,80 @@ describe("spawnSubagentDirect filename validation", () => {
       expect.objectContaining({
         attachmentsSandboxSessionKey: ctx.agentSessionKey,
         attachmentsSandboxAgentId: "main",
+        attachmentsSandboxWorkspaceDir: workspaceDirOverride,
       }),
     );
     expect(callGatewayMock).toHaveBeenCalled();
+  });
+
+  it("uses the requester bridge for a nested cross-agent workspace", async () => {
+    const workerWorkspaceDir = path.join(workspaceDirOverride, "worker");
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      agents: {
+        defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } },
+        list: [
+          {
+            id: "main",
+            workspace: workspaceDirOverride,
+            subagents: { allowAgents: ["worker"] },
+          },
+          { id: "worker", workspace: workerWorkspaceDir },
+        ],
+      },
+    });
+    const bridgeCalls: string[] = [];
+    const bridge = {
+      mkdirp: async ({ filePath }: { filePath: string }) => {
+        bridgeCalls.push(`mkdir:${filePath}`);
+        await fs.promises.mkdir(filePath, { recursive: true, mode: 0o700 });
+      },
+      createFileExclusive: async ({
+        filePath,
+        data,
+      }: {
+        filePath: string;
+        data: Buffer | string;
+      }) => {
+        bridgeCalls.push(`create:${filePath}`);
+        await fs.promises.writeFile(filePath, data, { flag: "wx", mode: 0o600 });
+        return "created" as const;
+      },
+      remove: async ({ filePath }: { filePath: string }) => {
+        await fs.promises.rm(filePath, { recursive: true, force: true });
+      },
+    };
+    const resolveSandboxContext = vi.fn(async () => ({ fsBridge: bridge }));
+    const registerSubagentRunMock = vi.fn();
+    const sandboxedSpawnModule = await loadSubagentSpawnModuleForTest({
+      callGatewayMock,
+      getRuntimeConfig: () => configOverride,
+      updateSessionStoreMock,
+      workspaceDir: workspaceDirOverride,
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
+      resolveSandboxContext,
+      registerSubagentRunMock,
+    });
+
+    const result = await sandboxedSpawnModule.spawnSubagentDirect(
+      {
+        task: "test",
+        agentId: "worker",
+        attachments: [{ name: "file.txt", content: validContent, encoding: "base64" }],
+      },
+      ctx,
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(resolveSandboxContext).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: workspaceDirOverride }),
+    );
+    expect(bridgeCalls.some((call) => call.includes(workerWorkspaceDir))).toBe(true);
+    expect(registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachmentsSandboxAgentId: "main",
+        attachmentsSandboxWorkspaceDir: workspaceDirOverride,
+      }),
+    );
   });
 
   it("keeps attachments available to a read-only sandbox workspace", async () => {
@@ -280,7 +351,7 @@ describe("spawnSubagentDirect filename validation", () => {
       getRuntimeConfig: () => configOverride,
       updateSessionStoreMock,
       workspaceDir: workspaceDirOverride,
-      resolveSandboxRuntimeStatus: () => ({ sandboxed: true }),
+      resolveSandboxRuntimeStatus: () => ({ sandboxed: true, agentId: "main" }) as never,
     });
 
     const result = await sandboxedSpawnModule.spawnSubagentDirect(

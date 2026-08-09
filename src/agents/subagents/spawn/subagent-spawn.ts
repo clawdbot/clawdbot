@@ -170,7 +170,7 @@ export async function spawnSubagentDirect(
       incognito,
       childSessionKey,
       childRuntimeSandboxed,
-      requesterSandboxWorkspaceWritable,
+      requesterSandboxMutationWorkspaceDir,
       targetAgentDir,
       modelPlan: plan,
       launchAuthorization,
@@ -307,13 +307,15 @@ export async function spawnSubagentDirect(
     let attachmentAbsDir: string | undefined;
     let attachmentRootDir: string | undefined;
     let attachmentSandboxFsBridge: SandboxFsBridge | undefined;
-    if (params.attachments?.length && requesterSandboxWorkspaceWritable) {
+    if (params.attachments?.length && requesterSandboxMutationWorkspaceDir) {
       try {
         const requesterSandbox = await getSubagentSpawnDeps().resolveSandboxContext({
           config: cfg,
           agentId: requesterAgentId,
           sessionKey: requesterInternalKey,
-          workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
+          // Re-enter the requester's actual writable mount. The target workspace
+          // may be a nested cross-agent workspace addressed through that bridge.
+          workspaceDir: requesterSandboxMutationWorkspaceDir,
         });
         attachmentSandboxFsBridge = requesterSandbox?.fsBridge;
       } catch (error) {
@@ -556,6 +558,9 @@ export async function spawnSubagentDirect(
             ? requesterInternalKey
             : undefined,
           attachmentsSandboxAgentId: attachmentSandboxFsBridge ? requesterAgentId : undefined,
+          attachmentsSandboxWorkspaceDir: attachmentSandboxFsBridge
+            ? requesterSandboxMutationWorkspaceDir
+            : undefined,
           retainAttachmentsOnKeep: retainOnSessionKeep,
         };
       },

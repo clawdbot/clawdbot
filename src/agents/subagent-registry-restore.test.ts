@@ -26,7 +26,7 @@ describe("createSubagentRegistryRestorer", () => {
       completion: { required: false },
       delivery: { status: "not_required" },
       attachmentsRootDir: "/workspace",
-      attachmentsDir: "/workspace/.openclaw/attachments/receipt",
+      attachmentsDir: "/workspace/.openclaw/attachments/00000000-0000-4000-8000-000000000001",
     };
     const runs = new Map([[run.runId, run]]);
     const persist = vi.fn();

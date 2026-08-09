@@ -74,8 +74,13 @@ describe("subagent registry persistence resume", () => {
 
   it("resumes a replacement after stale orphan attachment cleanup settles", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    const attachmentsRootDir = path.join(tempStateDir, "attachments");
-    const attachmentsDir = path.join(attachmentsRootDir, "orphan");
+    const attachmentsRootDir = tempStateDir;
+    const attachmentsDir = path.join(
+      attachmentsRootDir,
+      ".openclaw",
+      "attachments",
+      "00000000-0000-4000-8000-000000000002",
+    );
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
     const runId = "run-replaced-during-orphan-cleanup";
@@ -288,8 +293,13 @@ describe("subagent registry persistence resume", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const endedAt = Date.now();
       const requesterTurnRunId = "run-requester-mixed-restore";
-      const attachmentsRootDir = path.join(stateDir, "attachments");
-      const attachmentsDir = path.join(attachmentsRootDir, "orphan");
+      const attachmentsRootDir = stateDir;
+      const attachmentsDir = path.join(
+        attachmentsRootDir,
+        ".openclaw",
+        "attachments",
+        "00000000-0000-4000-8000-000000000003",
+      );
       await fs.mkdir(attachmentsDir, { recursive: true });
       await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
       const orphan: SubagentRunRecord = {

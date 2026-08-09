@@ -1,8 +1,11 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isPathInside } from "../../../infra/fs-safe.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
-import { resolveAgentDir } from "../../agent-scope-config.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agent-scope-config.js";
 import { findModelCatalogEntry } from "../../model-catalog-lookup.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
@@ -91,7 +94,7 @@ type ResolvedSubagentChildPlan = {
   incognito: boolean;
   childSessionKey: string;
   childRuntimeSandboxed: boolean;
-  requesterSandboxWorkspaceWritable: boolean;
+  requesterSandboxMutationWorkspaceDir?: string;
   targetAgentDir: string;
   modelPlan: Extract<ReturnType<typeof resolveSubagentModelAndThinkingPlan>, { status: "ok" }>;
   launchAuthorization?: SubagentLaunchAuthorization;
@@ -101,6 +104,26 @@ type ResolvedSubagentChildPlan = {
 type ResolveSubagentChildPlanResult =
   | { ok: false; result: SpawnSubagentResult }
   | { ok: true; resolved: ResolvedSubagentChildPlan };
+
+async function isWorkspaceWithinRequesterMutationRoot(params: {
+  requesterWorkspaceDir: string;
+  targetWorkspaceDir: string;
+}): Promise<boolean> {
+  const requesterWorkspaceDir = path.resolve(params.requesterWorkspaceDir);
+  const targetWorkspaceDir = path.resolve(params.targetWorkspaceDir);
+  if (isPathInside(requesterWorkspaceDir, targetWorkspaceDir)) {
+    return true;
+  }
+  try {
+    const [requesterReal, targetReal] = await Promise.all([
+      fs.realpath(requesterWorkspaceDir),
+      fs.realpath(targetWorkspaceDir),
+    ]);
+    return isPathInside(requesterReal, targetReal);
+  } catch {
+    return false;
+  }
+}
 
 export async function resolveSubagentChildPlan(params: {
   request: SpawnSubagentParams;
@@ -158,10 +181,23 @@ export async function resolveSubagentChildPlan(params: {
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,
   });
-  const requesterSandboxWorkspaceWritable =
+  const requesterSandboxConfig = resolveSandboxConfigForAgent(params.cfg, requesterRuntime.agentId);
+  const requesterWorkspaceDir = resolveUserPath(
+    toolSpawnMetadata.workspaceDir ??
+      resolveAgentWorkspaceDir(params.cfg, requesterRuntime.agentId),
+  );
+  const targetWorkspaceDir = resolveUserPath(
+    spawnedCwd ?? spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(params.cfg, params.targetAgentId),
+  );
+  const requesterSandboxMutationWorkspaceDir =
     requesterRuntime.sandboxed &&
-    params.requesterAgentId === params.targetAgentId &&
-    resolveSandboxConfigForAgent(params.cfg, requesterRuntime.agentId).workspaceAccess === "rw";
+    requesterSandboxConfig.workspaceAccess === "rw" &&
+    (await isWorkspaceWithinRequesterMutationRoot({
+      requesterWorkspaceDir,
+      targetWorkspaceDir,
+    }))
+      ? requesterWorkspaceDir
+      : undefined;
   const childRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: childSessionKey,
@@ -260,7 +296,7 @@ export async function resolveSubagentChildPlan(params: {
       incognito,
       childSessionKey,
       childRuntimeSandboxed: childRuntime.sandboxed,
-      requesterSandboxWorkspaceWritable,
+      requesterSandboxMutationWorkspaceDir,
       targetAgentDir,
       modelPlan,
       launchAuthorization,

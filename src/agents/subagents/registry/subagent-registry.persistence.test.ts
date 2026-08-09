@@ -925,8 +925,13 @@ describe("subagent registry persistence", () => {
   it("removes attachments when pruning orphaned restored runs", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
-    const attachmentsRootDir = path.join(tempStateDir, "attachments");
-    const attachmentsDir = path.join(attachmentsRootDir, "ghost");
+    const attachmentsRootDir = tempStateDir;
+    const attachmentsDir = path.join(
+      attachmentsRootDir,
+      ".openclaw",
+      "attachments",
+      "00000000-0000-4000-8000-000000000004",
+    );
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
 

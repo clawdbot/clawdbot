@@ -194,12 +194,15 @@ export async function safeRemoveAttachmentsDir(
   }
   let sandboxFsBridge;
   if (entry.attachmentsSandboxSessionKey) {
+    if (!entry.attachmentsSandboxWorkspaceDir) {
+      return false;
+    }
     try {
       const sandbox = await (options?.resolveSandbox ?? resolveSandboxContext)({
         config: options?.config ?? getRuntimeConfig(),
         agentId: entry.attachmentsSandboxAgentId ?? entry.requesterAgentId,
         sessionKey: entry.attachmentsSandboxSessionKey,
-        workspaceDir: entry.attachmentsRootDir,
+        workspaceDir: entry.attachmentsSandboxWorkspaceDir,
       });
       sandboxFsBridge = sandbox?.fsBridge;
     } catch {

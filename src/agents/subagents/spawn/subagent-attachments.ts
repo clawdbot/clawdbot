@@ -294,6 +294,30 @@ export function resolveAcpSessionsSpawnImageAttachments(params: {
   }
 }
 
+const GENERATED_ATTACHMENT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isGeneratedSubagentAttachmentDir(params: {
+  rootDir: string;
+  relativePath: string;
+}): boolean {
+  const segments = params.relativePath.split(path.sep);
+  const attachmentId = segments.at(-1);
+  if (!attachmentId || !GENERATED_ATTACHMENT_ID_PATTERN.test(attachmentId)) {
+    return false;
+  }
+  if (segments.length === 3 && segments[0] === ".openclaw" && segments[1] === "attachments") {
+    return true;
+  }
+  // Tagged releases persisted the attachments directory itself as the cleanup
+  // root. Keep those UUID receipts removable without accepting arbitrary descendants.
+  return (
+    segments.length === 1 &&
+    path.basename(params.rootDir) === "attachments" &&
+    path.basename(path.dirname(params.rootDir)) === ".openclaw"
+  );
+}
+
 /** Best-effort removal that refuses attachment paths outside their recorded workspace root. */
 export async function removeSubagentAttachmentsDir(params: {
   rootDir: string;
@@ -304,7 +328,11 @@ export async function removeSubagentAttachmentsDir(params: {
     const rootDir = path.resolve(params.rootDir);
     const absDir = path.resolve(params.absDir);
     const relativePath = path.relative(rootDir, absDir);
-    if (!relativePath || !isPathInside(rootDir, absDir)) {
+    if (
+      !relativePath ||
+      !isPathInside(rootDir, absDir) ||
+      !isGeneratedSubagentAttachmentDir({ rootDir, relativePath })
+    ) {
       return false;
     }
     if (params.sandboxFsBridge) {
