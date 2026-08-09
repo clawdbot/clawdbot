@@ -89,8 +89,5 @@ export function resolveSlackDeferredActionTeamId(params: {
   if (!teamId) {
     throw new Error("Slack Enterprise Grid deferred action is missing a workspace team ID");
   }
-  if (!/^T[A-Z0-9]+$/i.test(teamId)) {
-    throw new Error("Slack Enterprise Grid deferred action has an invalid workspace team ID");
-  }
   return teamId;
 }
