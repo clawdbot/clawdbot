@@ -145,7 +145,7 @@ function resolveModalSessionRouting(params: {
         channelId: metadata.channelId,
         channelType: metadata.channelType,
         senderId: params.userId,
-        ...(params.eventScope ? { eventScope: params.eventScope } : {}),
+        eventScope: params.eventScope,
       }),
       channelId: metadata.channelId,
       channelType: metadata.channelType,
@@ -155,7 +155,7 @@ function resolveModalSessionRouting(params: {
     sessionKey: params.ctx.resolveSlackSystemEventSessionKey({
       channelType: "im",
       senderId: params.userId,
-      ...(params.eventScope ? { eventScope: params.eventScope } : {}),
+      eventScope: params.eventScope,
     }),
   };
 }
