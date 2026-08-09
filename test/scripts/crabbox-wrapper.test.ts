@@ -99,6 +99,7 @@ const optionValue = (name) => {
   return index >= 0 ? args[index + 1] || "" : assigned?.slice(assigned.indexOf("=") + 1) || "";
 };
 async function main() {
+  if (process.env.OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG) fs.appendFileSync(process.env.OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG, JSON.stringify(args) + "\n");
   if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.22.1"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "doctor") {
@@ -107,14 +108,23 @@ async function main() {
     if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE && windowsMode !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE) { process.stderr.write("doctor windows mode mismatch: got=" + windowsMode + "\n"); process.exit(64); }
     const malformed = new Set((process.env.OPENCLAW_FAKE_CRABBOX_MALFORMED_DOCTOR_PROVIDERS || "").split(",").filter(Boolean));
     if (malformed.has(provider)) { process.stdout.write("{not-json\n"); process.exit(1); }
+    const invalid = new Set((process.env.OPENCLAW_FAKE_CRABBOX_INVALID_DOCTOR_PROVIDERS || "").split(",").filter(Boolean));
+    if (invalid.has(provider)) { process.stdout.write(JSON.stringify({ ok: true, provider, checks: [{ status: "ok" }] }) + "\n"); return; }
+    const mismatched = new Set((process.env.OPENCLAW_FAKE_CRABBOX_MISMATCHED_DOCTOR_PROVIDERS || "").split(",").filter(Boolean));
+    if (mismatched.has(provider)) { process.stdout.write(JSON.stringify({ ok: true, provider: "wrong-provider", checks: [{ status: "ok", check: "broker" }] }) + "\n"); return; }
+    const managed = new Set(["aws", "azure", "daytona"]).has(provider);
+    const missingBroker = new Set((process.env.OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS || "").split(",").filter(Boolean));
     const providerUnauthorized = new Set((process.env.OPENCLAW_FAKE_CRABBOX_PROVIDER_UNAUTHORIZED_PROVIDERS || "").split(",").filter(Boolean));
-    if (providerUnauthorized.has(provider)) { process.stdout.write(JSON.stringify({ ok: false, provider, checks: [{ status: "failed", check: "provider", message: "class=broker_auth hint=crabbox_login unauthorized", details: { class: "broker_auth", hint: "crabbox_login" } }] }) + "\n"); process.exit(1); }
+    if (providerUnauthorized.has(provider)) { process.stdout.write(JSON.stringify({ ok: false, provider, checks: [{ status: "ok", check: "broker" }, { status: "failed", check: "provider", message: "class=broker_auth hint=crabbox_login unauthorized", details: { class: "broker_auth", hint: "crabbox_login" } }] }) + "\n"); process.exit(1); }
     const legacyUnauthorized = new Set((process.env.OPENCLAW_FAKE_CRABBOX_LEGACY_UNAUTHORIZED_PROVIDERS || "").split(",").filter(Boolean));
     if (legacyUnauthorized.has(provider)) { process.stdout.write(JSON.stringify({ ok: false, provider, checks: [{ status: "failed", check: "broker", message: "coordinator GET /v1/whoami: http 401: unauthorized" }] }) + "\n"); process.exit(1); }
     const unauthorized = new Set((process.env.OPENCLAW_FAKE_CRABBOX_UNAUTHORIZED_PROVIDERS || "").split(",").filter(Boolean));
     if (unauthorized.has(provider)) { process.stdout.write(JSON.stringify({ ok: false, provider, checks: [{ status: "failed", check: "broker", message: "class=broker_auth hint=crabbox_login unauthorized", details: { class: "broker_auth", hint: "crabbox_login" } }] }) + "\n"); process.exit(1); }
     const unready = new Set((process.env.OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS || "").split(",").filter(Boolean));
-    const ready = !unready.has(provider); process.stdout.write(JSON.stringify({ ok: ready, provider }) + "\n");
+    const ready = !unready.has(provider); const checks = [];
+    if (managed && !missingBroker.has(provider)) checks.push({ status: "ok", check: "broker", details: { auth: "token" } });
+    checks.push({ status: ready ? "ok" : "failed", check: "provider", details: { provider } });
+    process.stdout.write(JSON.stringify({ ok: ready, provider, checks }) + "\n");
     process.exit(ready ? 0 : 1);
   }
   if (args[0] === "run" || args[0] === "warmup") { ${stampClaimScript} }
@@ -387,6 +397,20 @@ type FakeCrabboxOutput = {
 
 function parseFakeCrabboxOutput(result: ReturnType<typeof runWrapper>): FakeCrabboxOutput {
   return JSON.parse(result.stdout.trim()) as FakeCrabboxOutput;
+}
+
+function makeInvocationLog(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-invocations-"));
+  tempDirs.push(dir);
+  return path.join(dir, "invocations.jsonl");
+}
+
+function readInvocations(logPath: string): string[][] {
+  return readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as string[]);
 }
 
 type ParsedWrapperRun = {
@@ -968,20 +992,27 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("chain=aws");
   });
 
-  it("uses doctor readiness when the standalone whoami probe is slow", () => {
+  it("runs one doctor per candidate and never calls standalone whoami", () => {
+    const invocationLog = makeInvocationLog();
     const { output, result } = runSuccessfulBrokerWrapper(
       ["run", "--workload", "desktop", "--", "echo ok"],
       {
-        configJson: managedBrokerConfig("azure", {
-          target: "linux",
-          windowsMode: "normal",
-        }),
-        env: { OPENCLAW_FAKE_CRABBOX_WHOAMI_DELAY_MS: "5500" },
+        env: {
+          OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
+          OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "azure",
+          OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
+        },
       },
     );
 
-    expect(output.args).toContain("azure");
-    expect(result.stderr).not.toContain("managed Crabbox broker auth unavailable");
+    expect(output.args).toContain("aws");
+    expect(result.stderr).toContain("selected=aws chain=azure,aws");
+    const invocations = readInvocations(invocationLog);
+    expect(invocations.filter(([command]) => command === "doctor").map((args) => args[2])).toEqual([
+      "azure",
+      "aws",
+    ]);
+    expect(invocations.filter(([command]) => command === "whoami")).toEqual([]);
   });
 
   it("falls through a doctor-reported auth failure to the next provider", () => {
@@ -1002,59 +1033,81 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=aws failed readiness for OpenClaw proof");
-    expect(result.stderr).toContain("class=broker_auth hint=crabbox_login unauthorized");
+    expect(result.stderr).toContain(
+      "provider=aws requires managed Crabbox broker authentication for OpenClaw proof",
+    );
+    expect(result.stderr).toContain("login --url https://crabbox.openclaw.ai");
   });
 
-  it("retains the legacy auth check for pre-structured Crabbox doctor output", () => {
+  it("fails closed on legacy doctor broker failure", () => {
     const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
       env: {
         OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.1",
         OPENCLAW_FAKE_CRABBOX_LEGACY_UNAUTHORIZED_PROVIDERS: "aws",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "provider=aws requires managed Crabbox broker authentication for OpenClaw proof",
+    );
+  });
+
+  it.each([
+    { help: defaultProviderHelp, provider: "aws" },
+    { help: azureProviderHelp, provider: "azure" },
+  ])("trusts healthy legacy doctor readiness for $provider", ({ help, provider }) => {
+    const invocationLog = makeInvocationLog();
+    const result = runWrapper(help, ["run", "--provider", provider, "--", "echo ok"], {
+      configStatus: 1,
+      env: {
+        OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
+        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.1",
         OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
       },
+    });
+
+    expect(result.status).toBe(0);
+    expect(readInvocations(invocationLog).filter(([command]) => command === "whoami")).toEqual([]);
+  });
+
+  it("keeps Blacksmith independent from broker auth probes", () => {
+    const invocationLog = makeInvocationLog();
+    const result = runDefaultWrapper(["run", "--provider", "blacksmith-testbox", "--", "echo ok"], {
+      env: {
+        OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog,
+        OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
+      },
+    });
+
+    expect(result.status).toBe(0);
+    const invocations = readInvocations(invocationLog);
+    expect(invocations.filter(([command]) => command === "doctor")).toEqual([]);
+    expect(invocations.filter(([command]) => command === "whoami")).toEqual([]);
+  });
+
+  it("allows explicit provider runs when broker is ready but another doctor check fails", () => {
+    const { output } = runSuccessfulBrokerWrapper(["run", "--provider", "aws", "--", "echo ok"], {
+      env: { OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "aws" },
+    });
+
+    expect(output.args).toContain("aws");
+  });
+
+  it.each([
+    ["malformed JSON", "OPENCLAW_FAKE_CRABBOX_MALFORMED_DOCTOR_PROVIDERS"],
+    ["malformed schema", "OPENCLAW_FAKE_CRABBOX_INVALID_DOCTOR_PROVIDERS"],
+    ["provider mismatch", "OPENCLAW_FAKE_CRABBOX_MISMATCHED_DOCTOR_PROVIDERS"],
+    ["missing broker check", "OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS"],
+  ])("fails closed on %s", (_name, envName) => {
+    const result = runBrokerWrapper(["run", "--provider", "aws", "--", "echo ok"], {
+      env: { [envName]: "aws" },
     });
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("provider=aws failed readiness for OpenClaw proof");
-    expect(result.stderr).toContain("coordinator GET /v1/whoami: http 401");
-  });
-
-  it("fails closed when legacy whoami fails after a successful doctor check", () => {
-    const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
-      env: {
-        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.1",
-        OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
-      },
-    });
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("whoami exited 1");
-    expect(result.stderr).toContain("login --url https://crabbox.openclaw.ai");
-  });
-
-  it("preserves an old explicit provider when legacy whoami succeeds", () => {
-    const { output } = runSuccessfulDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
-      env: {
-        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.22.1",
-        OPENCLAW_FAKE_CRABBOX_UNREADY_PROVIDERS: "aws",
-      },
-    });
-
-    expect(output.args).toContain("aws");
-  });
-
-  it("does not infer auth failure from malformed current doctor JSON", () => {
-    const { output } = runSuccessfulBrokerWrapper(["run", "--provider", "aws", "--", "echo ok"], {
-      env: {
-        OPENCLAW_FAKE_CRABBOX_MALFORMED_DOCTOR_PROVIDERS: "aws",
-        OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
-      },
-    });
-
-    expect(output.args).toContain("aws");
   });
 
   it("accepts managed broker token-command auth when doctor is healthy", () => {
@@ -1109,18 +1162,19 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stdout).toBe("");
   });
 
-  it("rejects authenticated registered mode for broker-only cloud routing", () => {
-    const result = runBrokerWrapper(["run", "--workload", "desktop", "--", "echo ok"], {
-      configJson: managedBrokerConfig("azure", {
-        target: "linux",
-        windowsMode: "normal",
-        brokerMode: "registered",
-      }),
-    });
+  it("trusts doctor readiness over stale local broker mode", () => {
+    const { output } = runSuccessfulBrokerWrapper(
+      ["run", "--workload", "desktop", "--", "echo ok"],
+      {
+        configJson: managedBrokerConfig("azure", {
+          target: "linux",
+          windowsMode: "normal",
+          brokerMode: "registered",
+        }),
+      },
+    );
 
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain("managed Crabbox broker auth unavailable");
-    expect(result.stdout).toBe("");
+    expect(output.args).toContain("azure");
   });
 
   it("falls through Blacksmith when the Crabbox binary is too old", () => {
@@ -1141,13 +1195,14 @@ describe("scripts/crabbox-wrapper", () => {
       configJson: { coordinator: "", brokerAuth: "missing" },
       env: {
         OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+        OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS: "azure,aws",
       },
     });
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("no ready provider for workload=desktop");
-    expect(result.stderr).toContain("managed Crabbox broker auth unavailable");
+    expect(result.stderr).toContain("provider readiness azure:doctor exited 0");
   });
 
   it("does not treat an injected Azure Windows default as direct intent", () => {
@@ -1155,12 +1210,13 @@ describe("scripts/crabbox-wrapper", () => {
       configJson: directBrokerConfig("blacksmith-testbox"),
       env: {
         OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+        OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS: "azure",
       },
     });
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=azure requires a configured managed Crabbox broker");
+    expect(result.stderr).toContain("provider=azure failed readiness for OpenClaw proof");
   });
 
   it("keeps workload configuration away from administrative commands", () => {
@@ -1224,12 +1280,13 @@ describe("scripts/crabbox-wrapper", () => {
       ["run", "--provider", "azure", "--workload", "desktop", "--", "echo ok"],
       {
         configJson: directBrokerConfig("azure"),
+        env: { OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS: "azure" },
       },
     );
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=azure requires a configured managed Crabbox broker");
+    expect(result.stderr).toContain("provider=azure failed readiness for OpenClaw proof");
   });
 
   it.each(["aws", "azure", "daytona"])(
@@ -1239,14 +1296,14 @@ describe("scripts/crabbox-wrapper", () => {
         configJson: managedBrokerConfig(provider, { brokerAuth: "missing" }),
         env: {
           OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
-          OPENCLAW_FAKE_CRABBOX_WHOAMI_STATUS: "1",
+          OPENCLAW_FAKE_CRABBOX_UNAUTHORIZED_PROVIDERS: provider,
         },
       });
 
       expect(result.status).toBe(2);
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(
-        `provider=${provider} requires a configured managed Crabbox broker`,
+        `provider=${provider} requires managed Crabbox broker authentication`,
       );
     },
   );
@@ -1305,12 +1362,13 @@ describe("scripts/crabbox-wrapper", () => {
     (provider) => {
       const result = runBrokerWrapper(["run", "--provider", provider, "--", "echo ok"], {
         configJson: directBrokerConfig(provider),
+        env: { OPENCLAW_FAKE_CRABBOX_UNAUTHORIZED_PROVIDERS: provider },
       });
 
       expect(result.status).toBe(2);
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(
-        `provider=${provider} requires a configured managed Crabbox broker`,
+        `provider=${provider} requires managed Crabbox broker authentication`,
       );
       expect(result.stderr).toContain(
         `direct ${provider} debugging requires an original \`--provider ${provider}\`, no \`--workload\``,
@@ -1326,14 +1384,13 @@ describe("scripts/crabbox-wrapper", () => {
         env: {
           CRABBOX_PROVIDER: provider,
           OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+          OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS: provider,
         },
       });
 
       expect(result.status).toBe(2);
       expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(
-        `provider=${provider} requires a configured managed Crabbox broker`,
-      );
+      expect(result.stderr).toContain(`provider=${provider} failed readiness for OpenClaw proof`);
     },
   );
 
@@ -1366,13 +1423,14 @@ describe("scripts/crabbox-wrapper", () => {
       configJson: { coordinator: "", brokerAuth: "missing" },
       env: {
         OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD: "1",
+        OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS: "daytona,azure,aws",
       },
     });
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("no ready provider for workload=interactive");
-    expect(result.stderr).toContain("managed Crabbox broker auth unavailable");
+    expect(result.stderr).toContain("provider readiness daytona:doctor exited 0");
   });
 
   it("fails closed when no policy provider is ready", () => {
@@ -1386,7 +1444,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("no ready provider for workload=ci-fast");
     expect(result.stderr).toContain("provider readiness");
-    expect(result.stderr).toContain('{"ok":false,"provider":"blacksmith-testbox"}');
+    expect(result.stderr).toContain('{"ok":false,"provider":"blacksmith-testbox","checks":');
     expect(result.stderr).toMatch(
       /recovery: run `\S+crabbox doctor --provider blacksmith-testbox --json`/u,
     );
@@ -2007,14 +2065,13 @@ describe("scripts/crabbox-wrapper", () => {
   it("fails closed for AWS proof when broker auth is missing", () => {
     const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
       configJson: { coordinator: "", brokerAuth: "missing" },
+      env: { OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS: "aws" },
     });
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=aws requires a configured managed Crabbox broker");
-    expect(result.stderr).toContain("login --url https://crabbox.openclaw.ai");
-    expect(result.stderr).not.toContain("--provider aws");
-    expect(result.stderr).not.toContain("OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD");
+    expect(result.stderr).toContain("provider=aws failed readiness for OpenClaw proof");
+    expect(result.stderr).toMatch(/recovery: run `\S+crabbox doctor --provider aws --json`/u);
   });
 
   it("fails closed for AWS proof when broker auth is stale", () => {
@@ -2028,21 +2085,24 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("doctor exited 1");
-    expect(result.stderr).toContain("class=broker_auth hint=crabbox_login unauthorized");
-    expect(result.stderr).toMatch(/recovery: run `\S+crabbox doctor --provider aws --json`/u);
-    expect(result.stderr).not.toContain("managed Crabbox broker auth unavailable");
+    expect(result.stderr).toContain(
+      "provider=aws requires managed Crabbox broker authentication for OpenClaw proof",
+    );
+    expect(result.stderr).toContain("login --url https://crabbox.openclaw.ai");
   });
 
   it("ignores the legacy direct AWS override", () => {
     const result = runDefaultWrapper(["run", "--provider", "aws", "--", "echo ok"], {
       configJson: { coordinator: "", brokerAuth: "missing" },
-      env: { OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "1" },
+      env: {
+        OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "1",
+        OPENCLAW_FAKE_CRABBOX_MISSING_BROKER_PROVIDERS: "aws",
+      },
     });
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("provider=aws requires a configured managed Crabbox broker");
+    expect(result.stderr).toContain("provider=aws failed readiness for OpenClaw proof");
   });
 
   it("defaults AWS macOS warmups to on-demand capacity", () => {
