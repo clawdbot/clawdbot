@@ -18070,21 +18070,25 @@ public struct UpdateStatusParams: Codable, Sendable {}
 public struct UpdateStatusResult: Codable, Sendable {
     public let sentinel: AnyCodable
     public let updateavailable: AnyCodable
+    public let effectivechannel: AnyCodable?
     public let schedule: UpdateScheduleState?
 
     public init(
         sentinel: AnyCodable,
         updateavailable: AnyCodable,
+        effectivechannel: AnyCodable? = nil,
         schedule: UpdateScheduleState? = nil)
     {
         self.sentinel = sentinel
         self.updateavailable = updateavailable
+        self.effectivechannel = effectivechannel
         self.schedule = schedule
     }
 
     private enum CodingKeys: String, CodingKey {
         case sentinel
         case updateavailable = "updateAvailable"
+        case effectivechannel = "effectiveChannel"
         case schedule
     }
 }

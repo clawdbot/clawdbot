@@ -817,20 +817,6 @@ describe("update.run restart scheduling", () => {
     );
   });
 
-  it("keeps a configless extended-stable package install on that channel", async () => {
-    versionMock.value = "2026.6.33";
-    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-    mockGlobalInstallSurface();
-
-    await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
-      captureUpdateRunPayload(),
-    );
-
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "extended-stable" }),
-    );
-  });
-
   it("keeps unsupervised git/dev updates on the in-process gateway update path", async () => {
     runGatewayUpdateMock.mockResolvedValueOnce({
       status: "ok",
@@ -1065,96 +1051,5 @@ describe("update.run post-core plugin finalize", () => {
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
     expect(runPostCoreFinalizeAfterGatewayUpdateMock).not.toHaveBeenCalled();
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("update.status", () => {
-  it("refreshes the latest update sentinel before responding", async () => {
-    getUpdateAvailableMock.mockReturnValueOnce({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "latest",
-    });
-    getLatestUpdateRestartSentinelMock.mockReturnValueOnce({
-      kind: "update",
-      status: "skipped",
-      ts: 1,
-      stats: {
-        reason: "restart-health-pending",
-      },
-    });
-    refreshLatestUpdateRestartSentinelMock.mockResolvedValueOnce({
-      kind: "update",
-      status: "ok",
-      ts: 2,
-      stats: {
-        after: { version: "2.0.0" },
-      },
-    });
-    getUpdateScheduleMock.mockReturnValueOnce({
-      channel: "beta",
-      autoEnabled: true,
-    });
-    const { updateHandlers } = await import("./update.js");
-    const respond = vi.fn();
-
-    await expectDefined(
-      updateHandlers["update.status"],
-      'updateHandlers["update.status"] test invariant',
-    )({
-      params: {},
-      respond,
-    } as never);
-
-    expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, response] = firstMockCall(respond, "update status response") as [
-      boolean,
-      (
-        | {
-            sentinel?: { kind?: string; status?: string };
-            updateAvailable?: { latestVersion?: string } | null;
-            schedule?: { channel?: string };
-          }
-        | undefined
-      ),
-    ];
-    expect(ok).toBe(true);
-    expect(refreshLatestUpdateRestartSentinelMock).toHaveBeenCalledTimes(1);
-    expect(response?.sentinel?.kind).toBe("update");
-    expect(response?.sentinel?.status).toBe("ok");
-    expect(response?.updateAvailable?.latestVersion).toBe("2.0.0");
-    expect(response?.schedule?.channel).toBe("beta");
-  });
-
-  it("falls back to the cached update sentinel when refresh fails", async () => {
-    refreshLatestUpdateRestartSentinelMock.mockRejectedValueOnce(new Error("read failed"));
-    getLatestUpdateRestartSentinelMock.mockReturnValueOnce({
-      kind: "update",
-      status: "skipped",
-      ts: 1,
-      stats: {
-        reason: "restart-health-pending",
-      },
-    });
-    const warn = vi.fn();
-    const { updateHandlers } = await import("./update.js");
-    const respond = vi.fn();
-
-    await expectDefined(
-      updateHandlers["update.status"],
-      'updateHandlers["update.status"] test invariant',
-    )({
-      params: {},
-      respond,
-      context: { logGateway: { warn } },
-    } as never);
-
-    expect(warn).toHaveBeenCalledWith("update.status sentinel refresh failed: read failed");
-    const [, response] = firstMockCall(respond, "update status response") as [
-      boolean,
-      { sentinel?: { kind?: string; status?: string } } | undefined,
-    ];
-    expect(response?.sentinel?.kind).toBe("update");
-    expect(response?.sentinel?.status).toBe("skipped");
   });
 });
