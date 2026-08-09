@@ -157,12 +157,12 @@ const boundaryChecker = createExtensionImportBoundaryChecker({
 });
 
 /** Cached inventory of src/plugins imports that cross into bundled extensions. */
-export const collectPluginExtensionImportBoundaryInventory = boundaryChecker.collectInventory;
+const collectPluginExtensionImportBoundaryInventory = boundaryChecker.collectInventory;
 
 /**
  * Cached expected plugin-extension import inventory baseline.
  */
-export const readExpectedInventory = createCachedAsync(
+const readExpectedInventory = createCachedAsync(
   async (): Promise<PluginExtensionInventoryEntry[]> =>
     JSON.parse(await fs.readFile(baselinePath, "utf8")),
 );
@@ -170,7 +170,7 @@ export const readExpectedInventory = createCachedAsync(
 /**
  * Diffs expected and actual plugin-extension boundary inventory entries.
  */
-export function diffInventory(
+function diffInventory(
   expected: PluginExtensionInventoryEntry[],
   actual: PluginExtensionInventoryEntry[],
 ) {

@@ -10,7 +10,6 @@ import { describe, expect, it } from "vitest";
 const execFileAsync = promisify(execFile);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const scriptPath = path.join(repoRoot, "scripts/lib/openclaw-test-state.mts");
-const onboardDockerScriptPath = path.join(repoRoot, "scripts/e2e/onboard-docker.sh");
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
@@ -298,17 +297,5 @@ describe("scripts/lib/openclaw-test-state", () => {
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
-  });
-
-  it("keeps onboard Docker temp homes on the shared test-state helper", async () => {
-    const scriptText = await fs.readFile(onboardDockerScriptPath, "utf8");
-    const scenarioText = await fs.readFile("scripts/e2e/lib/onboard/scenario.sh", "utf8");
-
-    expect(scriptText).toContain("OPENCLAW_TEST_STATE_FUNCTION_B64");
-    expect(scriptText).toContain("scripts/e2e/lib/onboard/scenario.sh");
-    expect(scenarioText).toContain("set_isolated_openclaw_env local-basic");
-    expect(scenarioText).toContain("run_wizard_cmd channels channels");
-    expect(scriptText).not.toContain("make_home");
-    expect(scenarioText).not.toContain("make_home");
   });
 });

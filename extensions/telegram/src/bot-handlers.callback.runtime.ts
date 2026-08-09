@@ -189,7 +189,6 @@ export function registerTelegramCallbackQueryHandler(
       const actions = createTelegramCallbackMessageActions({
         bot,
         callbackMessage,
-        isGroup,
         isForum,
       });
       const approvalRuntime = createTelegramCallbackApprovalRuntime({

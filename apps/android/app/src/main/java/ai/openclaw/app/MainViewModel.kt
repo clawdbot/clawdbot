@@ -1065,6 +1065,15 @@ class MainViewModel private constructor(
     _requestedHomeDestination.value = destination
   }
 
+  internal fun openConversationNotification(target: ConversationNotificationTarget) {
+    resumeNodeServiceForConnection()
+    viewModelScope.launch(Dispatchers.Default) {
+      if (ensureRuntime().openConversationNotificationTarget(target)) {
+        _requestedHomeDestination.value = HomeDestination.Chat
+      }
+    }
+  }
+
   internal fun consumeChatDraft(
     expected: ChatDraft,
     owner: ChatComposerOwner,

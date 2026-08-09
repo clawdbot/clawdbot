@@ -5503,7 +5503,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "persist-credentials": false,
       },
     });
-    expect(existsSync("scripts/ci-run-node-test-shard.mts")).toBe(true);
+    // Non-cone sparse-checkout ignores missing paths silently, so a renamed
+    // script would surface only as a runtime module-not-found on the frozen
+    // lane. Require every listed path to exist at this revision.
+    const sparseCheckoutPaths = String(trustedRunnerStep?.with?.["sparse-checkout"] ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    expect(sparseCheckoutPaths).toContain("scripts/ci-run-node-test-shard.mts");
+    for (const sparsePath of sparseCheckoutPaths) {
+      expect({ sparsePath, exists: existsSync(sparsePath) }).toEqual({ sparsePath, exists: true });
+    }
   });
 
   it("emits one final CI gate after every selected lane", () => {

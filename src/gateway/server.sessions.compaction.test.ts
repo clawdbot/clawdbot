@@ -1596,7 +1596,7 @@ test("sessions.compact refuses real compaction while a worker inference owns the
   expectNoSessionQueueCleanup();
 });
 
-test("sessions.patch rejects archive while terminal compaction owns the session", async () => {
+test("sessions.patch waits for terminal compaction before archiving the session", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:compact-race";
   await seedSessionEntry({
@@ -1627,9 +1627,15 @@ test("sessions.patch rejects archive while terminal compaction owns the session"
   await vi.waitFor(() => {
     expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
   });
-  const archived = await rpcReq(ws, "sessions.patch", { key: sessionKey, archived: true });
-  expect(archived.ok).toBe(false);
-  expect(archived.error?.message).toContain("active run");
+  let archiveSettled = false;
+  const archiveResult = rpcReq(ws, "sessions.patch", { key: sessionKey, archived: true }).then(
+    (result) => {
+      archiveSettled = true;
+      return result;
+    },
+  );
+  await Promise.resolve();
+  expect(archiveSettled).toBe(false);
 
   compaction.resolve({
     ok: true,
@@ -1642,6 +1648,7 @@ test("sessions.patch rejects archive while terminal compaction owns the session"
     },
   });
   expect((await compactResult).ok).toBe(true);
+  expect((await archiveResult).ok).toBe(true);
   ws.close();
 });
 

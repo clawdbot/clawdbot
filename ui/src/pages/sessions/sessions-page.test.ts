@@ -342,6 +342,30 @@ describe("sessions page lifecycle", () => {
     expect(menu.querySelector<HTMLButtonElement>('[data-shortcut="f"]')?.disabled).toBe(true);
   });
 
+  it("enables Archive but keeps Delete disabled for an active non-main row", async () => {
+    const row = {
+      key: "agent:main:running",
+      kind: "direct",
+      hasActiveRun: true,
+    } as GatewaySessionRow;
+    const result = { count: 1, sessions: [row] } as SessionsListResult;
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createRenderedPage(createContext(gateway, createSessions()), result);
+
+    page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
+    await page.updateComplete;
+
+    const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("Expected sessions page menu");
+    }
+    await menu.updateComplete;
+    expect(menu.querySelector<HTMLButtonElement>('[value="toggle-archived"]')?.disabled).toBe(
+      false,
+    );
+    expect(menu.querySelector<HTMLButtonElement>('[value="delete"]')?.disabled).toBe(true);
+  });
+
   it.each([
     {
       name: "offers capture when only an archived Workboard card matches",

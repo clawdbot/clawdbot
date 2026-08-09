@@ -193,7 +193,9 @@ describe("accepted workspace publication", () => {
         const lock = path.join(path.dirname(workspace), `.openclaw-accepted-lock-${workspaceKey}`);
         const [ownerName] = await fs.readdir(lock);
         const receiverPid = Number(
-          /^owner\.receiver\.[a-f0-9]{32}\.([1-9][0-9]*)\./u.exec(ownerName!)?.[1],
+          /^owner\.receiver\.[a-f0-9]{32}\.([1-9][0-9]*)\.[1-9][0-9]*\.[a-f0-9]{32}$/u.exec(
+            ownerName!,
+          )?.[1],
         );
         expect(Number.isSafeInteger(receiverPid)).toBe(true);
         await waitForDead(receiverPid, 10_000);
