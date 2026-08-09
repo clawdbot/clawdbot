@@ -395,7 +395,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
       if (source.archived) {
         changes.push(
-          `Preserved ${MSTEAMS_PLUGIN_ID} conversation recovery archive ${source.filePath}`,
+          `Preserved ${source.archivePaths.length} ${MSTEAMS_PLUGIN_ID} conversation recovery ${source.archivePaths.length === 1 ? "archive" : "archives"}`,
         );
         return { changes, warnings };
       }

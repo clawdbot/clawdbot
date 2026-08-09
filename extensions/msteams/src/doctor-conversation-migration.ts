@@ -10,8 +10,15 @@ import type { StoredConversationReference } from "./conversation-store.js";
 
 type LegacyConversationMigrationSource = {
   filePath: string;
+  archivePaths: string[];
   state: MSTeamsLegacyConversationStoreData;
   archived: boolean;
+};
+
+type ArchivedConversationStore = {
+  filePath: string;
+  generation: bigint;
+  state: MSTeamsLegacyConversationStoreData;
 };
 
 function parseLegacyConversationStore(value: unknown): MSTeamsLegacyConversationStoreData | null {
@@ -34,17 +41,73 @@ async function readLegacyConversationStore(
   }
 }
 
+function parseArchiveGeneration(filename: string): bigint | null {
+  const prefix = `${MSTEAMS_CONVERSATIONS_LEGACY_FILENAME}.migrated`;
+  if (filename === prefix) {
+    return 1n;
+  }
+  if (!filename.startsWith(`${prefix}.`)) {
+    return null;
+  }
+  const suffix = filename.slice(prefix.length + 1);
+  if (!/^[1-9][0-9]*$/u.test(suffix)) {
+    return null;
+  }
+  const generation = BigInt(suffix);
+  return generation >= 2n ? generation : null;
+}
+
+async function readArchivedConversationStores(
+  stateDir: string,
+): Promise<ArchivedConversationStore[]> {
+  let filenames: string[];
+  try {
+    filenames = await fs.readdir(stateDir);
+  } catch {
+    return [];
+  }
+  const candidates = filenames.flatMap((filename) => {
+    const generation = parseArchiveGeneration(filename);
+    return generation == null ? [] : [{ filePath: path.join(stateDir, filename), generation }];
+  });
+  const stores = await Promise.all(
+    candidates.map(async ({ filePath, generation }) => {
+      const state = await readLegacyConversationStore(filePath);
+      return state ? { filePath, generation, state } : null;
+    }),
+  );
+  return stores
+    .filter((entry): entry is ArchivedConversationStore => entry !== null)
+    .toSorted((a, b) => (a.generation < b.generation ? 1 : a.generation > b.generation ? -1 : 0));
+}
+
 export async function resolveLegacyConversationMigrationSource(
   stateDir: string,
 ): Promise<LegacyConversationMigrationSource | null> {
   const filePath = path.join(stateDir, MSTEAMS_CONVERSATIONS_LEGACY_FILENAME);
   const activeState = await readLegacyConversationStore(filePath);
   if (activeState) {
-    return { filePath, state: activeState, archived: false };
+    return { filePath, archivePaths: [], state: activeState, archived: false };
   }
   // Broken shipped migrations may have archived the only recoverable source before
-  // canonical rows were visible. Doctor may reread that snapshot, but never removes it.
-  const archivedPath = `${filePath}.migrated`;
-  const archivedState = await readLegacyConversationStore(archivedPath);
-  return archivedState ? { filePath: archivedPath, state: archivedState, archived: true } : null;
+  // canonical rows were visible. Newer rotated snapshots win, and Doctor keeps all archives.
+  const archivedStores = await readArchivedConversationStores(stateDir);
+  const [newest] = archivedStores;
+  if (!newest) {
+    return null;
+  }
+  const conversations: Record<string, StoredConversationReference> = {};
+  for (const archivedStore of archivedStores) {
+    for (const [rawConversationId, reference] of Object.entries(
+      archivedStore.state.conversations,
+    )) {
+      conversations[rawConversationId] ??= reference;
+    }
+  }
+  return {
+    filePath: newest.filePath,
+    archivePaths: archivedStores.map((entry) => entry.filePath),
+    state: { version: 1, conversations },
+    archived: true,
+  };
 }

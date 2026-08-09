@@ -221,9 +221,11 @@ describe("msteams doctor state migration", () => {
     );
   });
 
-  it("recovers canonical conversation rows from an already migrated archive", async () => {
+  it("recovers canonical conversation rows from rotated migration archives", async () => {
     const filePath = path.join(stateDir, "msteams-conversations.json");
     const archivedPath = `${filePath}.migrated`;
+    const rotatedArchivedPath = `${filePath}.migrated.2`;
+    const laterRotatedArchivedPath = `${filePath}.migrated.10`;
     const conversationId = "19:archived-recovery@thread.tacv2";
     const legacyKey = "legacy-outer-key";
     const ref: StoredConversationReference = {
@@ -236,6 +238,28 @@ describe("msteams doctor state migration", () => {
       archivedPath,
       `${JSON.stringify({
         version: 1,
+        conversations: {
+          [legacyKey]: { ...ref, serviceUrl: "https://older-service.example.com" },
+          "19:already-present@thread.tacv2": {
+            ...ref,
+            conversation: { ...ref.conversation, id: "19:already-present@thread.tacv2" },
+          },
+        },
+      } satisfies MSTeamsLegacyConversationStoreData)}\n`,
+    );
+    await fs.writeFile(
+      rotatedArchivedPath,
+      `${JSON.stringify({
+        version: 1,
+        conversations: {
+          [legacyKey]: { ...ref, serviceUrl: "https://intermediate-service.example.com" },
+        },
+      } satisfies MSTeamsLegacyConversationStoreData)}\n`,
+    );
+    await fs.writeFile(
+      laterRotatedArchivedPath,
+      `${JSON.stringify({
+        version: 1,
         conversations: { [legacyKey]: ref },
       } satisfies MSTeamsLegacyConversationStoreData)}\n`,
     );
@@ -245,6 +269,10 @@ describe("msteams doctor state migration", () => {
     const store = context.openPluginStateKeyedStore<StoredConversationReference>({
       namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
       maxEntries: 2000,
+    });
+    await store.register(buildMSTeamsConversationStateKey("19:already-present@thread.tacv2"), {
+      ...ref,
+      conversation: { ...ref.conversation, id: "19:already-present@thread.tacv2" },
     });
     await store.register(buildMSTeamsConversationStateKey(legacyKey), ref);
 
@@ -271,13 +299,18 @@ describe("msteams doctor state migration", () => {
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
       expect.stringContaining("Recovered 1 Microsoft Teams conversation entry"),
-      expect.stringContaining("Preserved Microsoft Teams conversation recovery archive"),
+      expect.stringContaining("Preserved 3 Microsoft Teams conversation recovery archives"),
     ]);
     await expect(fs.access(filePath)).rejects.toThrow();
-    await expect(fs.readFile(archivedPath, "utf8")).resolves.toContain(conversationId);
+    await expect(fs.readFile(archivedPath, "utf8")).resolves.toContain(
+      "19:already-present@thread.tacv2",
+    );
+    await expect(fs.readFile(rotatedArchivedPath, "utf8")).resolves.toContain(legacyKey);
+    await expect(fs.readFile(laterRotatedArchivedPath, "utf8")).resolves.toContain(conversationId);
     await expect(store.lookup(buildMSTeamsConversationStateKey(conversationId))).resolves.toEqual(
       expect.objectContaining({
         conversation: expect.objectContaining({ id: conversationId }),
+        serviceUrl: "https://service.example.com",
         user: expect.objectContaining({ id: "user-archived-recovery" }),
       }),
     );
